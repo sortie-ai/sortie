@@ -71,9 +71,7 @@ var _ domain.AgentAdapter = (*CopilotAdapter)(nil)
 // CLI subprocesses. One adapter instance serves all concurrent
 // sessions; per-session state is held in [sessionState] via the
 // [domain.Session] Internal field.
-type CopilotAdapter struct {
-	passthrough passthroughConfig
-}
+type CopilotAdapter struct{}
 
 // sessionState is adapter-internal state stored in [domain.Session]
 // Internal. It tracks the Copilot CLI session ID and per-turn scan
@@ -81,6 +79,7 @@ type CopilotAdapter struct {
 type sessionState struct {
 	target           agentcore.LaunchTarget
 	copilotSessionID string
+	passthrough      passthroughConfig
 	agentConfig      domain.AgentConfig
 	baseLogger       *slog.Logger
 
@@ -255,22 +254,20 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) *agentcore.RecoveredUsa
 	return &agentcore.RecoveredUsage{Run: agentcore.SubtractUsage(current, s.baseline), Model: model}
 }
 
-// NewCopilotAdapter creates a [CopilotAdapter] from adapter
-// configuration. The config parameter is the raw map from the
-// "copilot-cli" sub-object in WORKFLOW.md. Command resolution is
-// deferred to [CopilotAdapter.StartSession].
-func NewCopilotAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt, fault := parsePassthroughConfig(config)
-	if fault != nil {
-		return nil, fault
-	}
-	return &CopilotAdapter{passthrough: pt}, nil
+// NewCopilotAdapter creates a [CopilotAdapter]. Settings and command
+// resolution are deferred to [CopilotAdapter.StartSession].
+func NewCopilotAdapter() (domain.AgentAdapter, error) {
+	return &CopilotAdapter{}, nil
 }
 
-// StartSession validates the workspace path, resolves the copilot binary, and
-// initializes per-session state. No subprocess is spawned; that happens in
-// [CopilotAdapter.RunTurn].
+// StartSession parses the session's settings, validates the workspace path,
+// resolves the copilot binary, and initializes per-session state. No
+// subprocess is spawned; that happens in [CopilotAdapter.RunTurn].
 func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	pt, fault := parsePassthroughConfig(params.Settings)
+	if fault != nil {
+		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
+	}
 	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -315,6 +312,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	state := &sessionState{
 		target:                 target,
 		copilotSessionID:       copilotSessionID,
+		passthrough:            pt,
 		agentConfig:            params.AgentConfig,
 		baseLogger:             slog.Default().With(slog.String("component", "copilot-adapter")),
 		mcpConfigPath:          params.MCPConfigPath,
@@ -326,7 +324,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 	hooks := agentcore.ForkPerTurnHooks{
 		BuildArgs: func(turn int, prompt string) []string {
-			return buildArgs(state, turn, prompt, a.passthrough)
+			return buildArgs(state, turn, prompt, state.passthrough)
 		},
 		ParseLine: func(line []byte, emit func(domain.AgentEvent), pid string) (any, error) {
 			now := time.Now().UTC()
@@ -524,7 +522,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 					ev.TerminalMessage = "raise copilot-cli.max_autopilot_continues if the turn needs more steps"
 					state.logger().Warn("copilot turn ended without a task-completion report",
 						slog.Int("autopilot_continuations_observed", state.turnContinuations),
-						slog.Int("max_autopilot_continues", effectiveMaxAutopilotContinues(a.passthrough)))
+						slog.Int("max_autopilot_continues", effectiveMaxAutopilotContinues(state.passthrough)))
 				case !state.turnCompletionSuccess:
 					ev.Terminal = agentcore.TerminalFailure
 					ev.TerminalErrorKind = domain.ErrTurnFailed

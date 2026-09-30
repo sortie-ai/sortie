@@ -58,7 +58,7 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 	if err != nil {
 		t.Fatalf("registry.Agents.Get(opencode): %v", err)
 	}
-	a, err := factory(integrationConfig())
+	a, err := factory()
 	if err != nil {
 		t.Fatalf("factory(): %v", err)
 	}
@@ -69,7 +69,12 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 // in a fresh workspace.
 func mustStartIntegrationSession(t *testing.T, a domain.AgentAdapter) domain.Session {
 	t.Helper()
-	return mustStartIntegrationSessionIn(t, a, "", t.TempDir())
+	return mustStartIntegrationSessionWith(t, a, integrationConfig())
+}
+
+func mustStartIntegrationSessionWith(t *testing.T, a domain.AgentAdapter, settings map[string]any) domain.Session {
+	t.Helper()
+	return mustStartIntegrationSessionIn(t, a, "", t.TempDir(), settings)
 }
 
 // mustStartIntegrationSessionIn starts a session in the given workspace.
@@ -77,7 +82,7 @@ func mustStartIntegrationSession(t *testing.T, a domain.AgentAdapter) domain.Ses
 // migrations that can run for over 30 seconds on first launch. Resuming a
 // session requires the workspace the session was created in: opencode replays
 // a --session only when the run executes in that same project directory.
-func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID, workspacePath string) domain.Session {
+func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID, workspacePath string, settings map[string]any) domain.Session {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -89,6 +94,7 @@ func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID
 			ReadTimeoutMS: 3 * 60 * 1000, // 3 minutes: absorbs cold-start SQLite migration
 		},
 		ResumeSessionID: resumeID,
+		Settings:        settings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession(): %v", err)
@@ -169,7 +175,7 @@ func TestIntegration_SessionResume(t *testing.T) {
 	workspace := t.TempDir()
 
 	a := mustNewAdapter(t)
-	session := mustStartIntegrationSessionIn(t, a, "", workspace)
+	session := mustStartIntegrationSessionIn(t, a, "", workspace, integrationConfig())
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
 
 	_, result1 := collectAllEvents(t, a, session, "Say: turn one")
@@ -181,12 +187,13 @@ func TestIntegration_SessionResume(t *testing.T) {
 		t.Fatal("turn 1 SessionID is empty")
 	}
 
-	// Resume from a fresh adapter (a new process) but the same workspace.
-	a2 := mustNewAdapter(t)
-	session2 := mustStartIntegrationSessionIn(t, a2, sessionID, workspace)
-	t.Cleanup(func() { _ = a2.StopSession(context.Background(), session2) })
+	resumedSettings := integrationConfig()
+	resumedSettings["model"] = "opencode/gpt-5-nano"
+	resumedSettings["effort"] = "low"
+	session2 := mustStartIntegrationSessionIn(t, a, sessionID, workspace, resumedSettings)
+	t.Cleanup(func() { _ = a.StopSession(context.Background(), session2) })
 
-	_, result2 := collectAllEvents(t, a2, session2, "What did I say in the previous message?")
+	_, result2 := collectAllEvents(t, a, session2, "What did I say in the previous message?")
 	if result2.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("resumed turn ExitReason = %q, want completed", result2.ExitReason)
 	}
@@ -198,16 +205,9 @@ func TestIntegration_InvalidModelFailure(t *testing.T) {
 	cfg := integrationConfig()
 	cfg["model"] = "nonexistent/nonexistent"
 
-	factory, err := registry.Agents.Get("opencode")
-	if err != nil {
-		t.Fatalf("registry.Agents.Get: %v", err)
-	}
-	a, err := factory(cfg)
-	if err != nil {
-		t.Fatalf("factory(): %v", err)
-	}
+	a := mustNewAdapter(t)
 
-	session := mustStartIntegrationSession(t, a)
+	session := mustStartIntegrationSessionWith(t, a, cfg)
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
 
 	events, result := collectAllEvents(t, a, session, "Reply with exactly: hello")
@@ -239,16 +239,9 @@ func TestIntegration_PermissionDeny(t *testing.T) {
 	cfg := integrationConfig()
 	cfg["dangerously_skip_permissions"] = false
 
-	factory, err := registry.Agents.Get("opencode")
-	if err != nil {
-		t.Fatalf("registry.Agents.Get: %v", err)
-	}
-	a, err := factory(cfg)
-	if err != nil {
-		t.Fatalf("factory(): %v", err)
-	}
+	a := mustNewAdapter(t)
 
-	session := mustStartIntegrationSession(t, a)
+	session := mustStartIntegrationSessionWith(t, a, cfg)
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
 
 	// The prompt explicitly names the tool so the model is compelled to invoke
@@ -353,14 +346,7 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	cfg := integrationConfig()
 	cfg["allowed_tools"] = []any{"read", "glob"}
 
-	factory, err := registry.Agents.Get("opencode")
-	if err != nil {
-		t.Fatalf("registry.Agents.Get: %v", err)
-	}
-	a, err := factory(cfg)
-	if err != nil {
-		t.Fatalf("factory(): %v", err)
-	}
+	a := mustNewAdapter(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -371,6 +357,7 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 			ReadTimeoutMS: 3 * 60 * 1000,
 		},
 		MCPConfigPath: mcpConfigPath,
+		Settings:      cfg,
 	})
 	if err != nil {
 		t.Fatalf("StartSession(): %v", err)
@@ -476,14 +463,7 @@ func TestIntegration_ToolServerIdentity(t *testing.T) {
 		t.Fatalf("WriteFile(mcp.json): %v", err)
 	}
 
-	factory, err := registry.Agents.Get("opencode")
-	if err != nil {
-		t.Fatalf("registry.Agents.Get: %v", err)
-	}
-	a, err := factory(integrationConfig())
-	if err != nil {
-		t.Fatalf("factory(): %v", err)
-	}
+	a := mustNewAdapter(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -497,6 +477,7 @@ func TestIntegration_ToolServerIdentity(t *testing.T) {
 				ReadTimeoutMS: 3 * 60 * 1000,
 			},
 			MCPConfigPath: mcpConfigPath,
+			Settings:      integrationConfig(),
 		})
 		if startErr != nil {
 			sessionDone <- startErr
@@ -646,6 +627,7 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 			ReadTimeoutMS: 3 * 60 * 1000,
 		},
 		MCPConfigPath: mcpConfigPath,
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession(): %v", err)
@@ -684,6 +666,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	params := domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+		Settings:      integrationConfig(),
 	}
 	credentialtest.VerifyLiveUsage(t, "opencode", adapter, params, integrationConfig())
 

@@ -417,7 +417,7 @@ func firstEventOfType(events []domain.AgentEvent, t domain.AgentEventType) (doma
 func TestRunTurn_InvalidInternalType(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	session := domain.Session{Internal: "not-a-session-state"}
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		OnEvent: func(domain.AgentEvent) {},
@@ -429,7 +429,7 @@ func TestRunTurn_SuccessfulTurn(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -484,7 +484,7 @@ func TestRunTurn_TokenUsageUpdated(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -529,7 +529,7 @@ func TestAssertUsageReporting(t *testing.T) {
 
 	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
 	state.model = "gpt-6-astra"
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -566,7 +566,7 @@ func TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline(t *testing.T) {
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -610,7 +610,7 @@ func TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification(t *testing
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-777\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -645,7 +645,7 @@ func TestRunTurn_TokenUsageUpdated_StampsStoredModel(t *testing.T) {
 
 	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
 	state.model = "gpt-5.6-sol"
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -680,7 +680,7 @@ func TestRunTurn_ModelRerouted(t *testing.T) {
 
 	state := makeTestState(t, []byte(fixture))
 	state.model = "gpt-5.6-sol"
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -727,7 +727,7 @@ func TestRunTurn_ModelRerouted_MalformedPayload(t *testing.T) {
 
 	state := makeTestState(t, []byte(fixture))
 	state.model = "gpt-5.6-sol"
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -781,7 +781,7 @@ func TestRunTurn_ModelRerouted_EmptyToModel(t *testing.T) {
 
 	state := makeTestState(t, []byte(fixture))
 	state.model = "gpt-5.6-sol"
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -815,7 +815,7 @@ func TestRunTurn_FirstTurnEmitsSessionStarted(t *testing.T) {
 
 	// turnCount=0 -> incremented to 1 inside RunTurn -> EventSessionStarted.
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	session := fakeSession(state)
 
 	var events []domain.AgentEvent
@@ -843,7 +843,7 @@ func TestRunTurn_SubsequentTurnEmitsNotification(t *testing.T) {
 	// Pre-set turnCount=1 so the adapter sees this as the second turn.
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	state.turnCount = 1
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -862,7 +862,7 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_failed.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -904,7 +904,7 @@ func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	// is closed directly, right after turn/started, before turn/completed
 	// would arrive.
 	state := gatedTurnStartState(t, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	type outcome struct {
 		result domain.TurnResult
@@ -948,7 +948,7 @@ func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
 	// Empty fixture: the inbox closes before any turn/start response arrives.
 	// Tests the !ok path in the session-scoped response-wait loop.
 	state := makeTestState(t, nil)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
@@ -967,7 +967,7 @@ func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 	// turn/start response carries an error; RunTurn should return ErrTurnFailed.
 	fixture := "{\"id\":1,\"error\":{\"code\":-32000,\"message\":\"thread not found\"}}\n"
 	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -999,7 +999,7 @@ func TestRunTurn_CancelledContextReturnsError(t *testing.T) {
 	cancel() // cancel immediately
 
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	_, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
@@ -1033,7 +1033,7 @@ func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
 	finished := make(chan struct{})
 	started := make(chan struct{})
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	go func() {
 		defer close(finished)
 		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
@@ -1109,7 +1109,7 @@ func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *test
 	started := make(chan struct{})
 
 	var events []domain.AgentEvent
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	go func() {
 		defer close(finished)
 		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
@@ -1164,7 +1164,7 @@ func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_items.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1192,7 +1192,7 @@ func TestRunTurn_AgentMessageTextEmitsNotification(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_agent_message.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1218,7 +1218,7 @@ func TestRunTurn_MiscNotifications(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_misc_notifications.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1256,7 +1256,7 @@ func TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
 	state := makeTestState(t, loadFixture(t, "runturn_mcp_startup_failed.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1327,7 +1327,7 @@ func TestRunTurn_PermissionRequestDeniedContinues(t *testing.T) {
 
 			stdin := &capturingWriteCloser{}
 			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 				Prompt:  "go",
@@ -1377,7 +1377,7 @@ func TestRunTurn_LegacyPermissionRequestDeniedContinues(t *testing.T) {
 
 			stdin := &capturingWriteCloser{}
 			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 				Prompt:  "go",
@@ -1413,7 +1413,7 @@ func TestRunTurn_PermissionRequestEmitsNotification(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, runTurnFixtureWithServerRequest(24, "item/commandExecution/requestApproval", turnCompletedLine))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1481,7 +1481,7 @@ func TestRunTurn_HumanInputRequestEndsAttempt(t *testing.T) {
 
 			stdin := &capturingWriteCloser{}
 			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method), stdin)
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 				Prompt:  "go",
@@ -1527,7 +1527,7 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 	finished := make(chan struct{})
 	started := make(chan struct{})
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	go func() {
 		defer close(finished)
 		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
@@ -1575,7 +1575,7 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 func TestStopSession_InvalidInternalType(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	err := adapter.StopSession(context.Background(), domain.Session{Internal: "wrong"})
 	if err == nil {
 		t.Fatal("StopSession() expected error for wrong internal type, got nil")
@@ -1595,7 +1595,7 @@ func TestRunTurn_MultiTurnNoRace(t *testing.T) {
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	session := fakeSession(state)
 
 	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -1630,7 +1630,7 @@ func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 	// only resolve via that closed connection, since no response was
 	// ever scripted for it to race.
 	state := gatedTurnStartState(t, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	session := fakeSession(state)
 
 	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)})
@@ -1662,7 +1662,7 @@ func TestStopSession_NilState(t *testing.T) {
 		stdin:  nopWriteCloser{},
 		waitCh: nil,
 	}
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	err := adapter.StopSession(context.Background(), domain.Session{Internal: state})
 	if err != nil {
 		t.Fatalf("StopSession() error = %v", err)
@@ -1790,7 +1790,7 @@ func TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn(t *testing.T) {
 
 	drainHandshakeMessages(state, discardTestLogger())
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
@@ -1821,7 +1821,7 @@ func TestRunTurn_StdoutParseFailureBeforeResponse(t *testing.T) {
 		"not valid json",
 		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
 	)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1969,7 +1969,7 @@ func TestRunTurn_NullIDApprovalRequestIsNotAnswered(t *testing.T) {
 
 	stdin := &capturingWriteCloser{}
 	state := makeTestStateWithStdin(t, fixture, stdin)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -2026,7 +2026,7 @@ func TestRunTurn_CancelledApprovalRequestReportsCancelled(t *testing.T) {
 	started := make(chan struct{})
 
 	var events []domain.AgentEvent
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	go func() {
 		defer close(finished)
 		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,77 +44,46 @@ func requireAgentError(t *testing.T, err error, wantKind domain.AgentErrorKind) 
 func TestNewCodexAdapter(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil config returns adapter", func(t *testing.T) {
-		t.Parallel()
-		adapter, err := NewCodexAdapter(nil)
-		if err != nil {
-			t.Fatalf("NewCodexAdapter(nil) error = %v", err)
-		}
-		if adapter == nil {
-			t.Fatal("adapter is nil")
-		}
-	})
+	adapter, err := NewCodexAdapter()
+	if err != nil {
+		t.Fatalf("NewCodexAdapter() error = %v", err)
+	}
+	if adapter == nil {
+		t.Fatal("adapter is nil")
+	}
+}
 
-	t.Run("empty config returns adapter", func(t *testing.T) {
-		t.Parallel()
-		adapter, err := NewCodexAdapter(map[string]any{})
-		if err != nil {
-			t.Fatalf("NewCodexAdapter(empty) error = %v", err)
-		}
-		if adapter == nil {
-			t.Fatal("adapter is nil")
-		}
-	})
+func TestStartSession_SettingsArePerSession(t *testing.T) {
+	t.Parallel()
 
-	t.Run("all passthrough fields stored", func(t *testing.T) {
-		t.Parallel()
-		adapter, err := NewCodexAdapter(map[string]any{
-			"model":           "o4-mini",
-			"effort":          "high",
-			"approval_policy": "never",
-			"thread_sandbox":  "workspaceWrite",
-			"personality":     "helpful",
-		})
-		if err != nil {
-			t.Fatalf("NewCodexAdapter() error = %v", err)
-		}
-		a := adapter.(*CodexAdapter)
-		if a.passthrough.Model != "o4-mini" {
-			t.Errorf("passthrough.Model = %q, want %q", a.passthrough.Model, "o4-mini")
-		}
-		if a.passthrough.Effort != "high" {
-			t.Errorf("passthrough.Effort = %q, want %q", a.passthrough.Effort, "high")
-		}
-		if a.passthrough.ApprovalPolicy != "never" {
-			t.Errorf("passthrough.ApprovalPolicy = %q, want %q", a.passthrough.ApprovalPolicy, "never")
-		}
-		if a.passthrough.ThreadSandbox != "workspaceWrite" {
-			t.Errorf("passthrough.ThreadSandbox = %q, want %q", a.passthrough.ThreadSandbox, "workspaceWrite")
-		}
-		if a.passthrough.Personality != "helpful" {
-			t.Errorf("passthrough.Personality = %q, want %q", a.passthrough.Personality, "helpful")
-		}
-	})
+	adapter := &CodexAdapter{}
+	first := startRecordingSession(t, adapter, map[string]any{
+		"model": "model-a", "effort": "high", "approval_policy": "never", "thread_sandbox": "workspaceWrite",
+		"personality": "helpful", "turn_sandbox_policy": map[string]any{"type": "readOnly"},
+	}, "")
+	resumed := startRecordingSession(t, adapter, map[string]any{"model": "model-b"}, "thread-prior")
+	runRecordedTurns(t, adapter, first, 1)
+	runRecordedTurns(t, adapter, resumed, 2)
 
-	t.Run("tool_registry config key is not read", func(t *testing.T) {
-		t.Parallel()
-		reg := domain.NewToolRegistry()
-		withKey, err := NewCodexAdapter(map[string]any{
-			"tool_registry": reg,
-		})
-		if err != nil {
-			t.Fatalf("NewCodexAdapter() error = %v", err)
+	if pt := first.state.passthrough; pt.Model != "model-a" || pt.Effort != "high" || pt.ApprovalPolicy != "never" || pt.ThreadSandbox != "workspaceWrite" || pt.Personality != "helpful" {
+		t.Errorf("first session settings = %+v, want every key parsed", pt)
+	}
+	firstTurn := first.recorded(t, "turn/start")[0]
+	if policy, _ := firstTurn.Params["sandboxPolicy"].(map[string]any); firstTurn.Params["model"] != "model-a" || policy["type"] != "readOnly" {
+		t.Errorf("first session turn/start model, sandboxPolicy = %v, %v, want model-a and type readOnly", firstTurn.Params["model"], firstTurn.Params["sandboxPolicy"])
+	}
+	if got := resumed.recorded(t, "thread/resume"); len(got) != 1 {
+		t.Fatalf("resumed session thread/resume frames = %d, want 1", len(got))
+	}
+	turns := resumed.recorded(t, "turn/start")
+	if len(turns) != 2 {
+		t.Fatalf("resumed session turn/start frames = %d, want 2", len(turns))
+	}
+	for i, turn := range turns {
+		if policy, _ := turn.Params["sandboxPolicy"].(map[string]any); turn.Params["model"] != "model-b" || policy["type"] == "readOnly" {
+			t.Errorf("resumed session turn/start %d model, sandboxPolicy = %v, %v, want model-b and not the first session's policy", i+1, turn.Params["model"], turn.Params["sandboxPolicy"])
 		}
-		without, err := NewCodexAdapter(map[string]any{})
-		if err != nil {
-			t.Fatalf("NewCodexAdapter() error = %v", err)
-		}
-		a := withKey.(*CodexAdapter)
-		b := without.(*CodexAdapter)
-		if !reflect.DeepEqual(a.passthrough, b.passthrough) {
-			t.Errorf("adapter constructed with tool_registry present = %+v, want identical to %+v", a.passthrough, b.passthrough)
-		}
-	})
+	}
 }
 
 func TestRegistration(t *testing.T) {
@@ -125,7 +93,7 @@ func TestRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf(`registry.Agents.Get("codex") error = %v`, err)
 	}
-	adapter, err := factory(map[string]any{})
+	adapter, err := factory()
 	if err != nil {
 		t.Fatalf("factory() error = %v", err)
 	}
@@ -137,7 +105,7 @@ func TestRegistration(t *testing.T) {
 func TestStartSession_EmptyWorkspace(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{})
 	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
 }
@@ -145,7 +113,7 @@ func TestStartSession_EmptyWorkspace(t *testing.T) {
 func TestStartSession_NonexistentPath(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: "/nonexistent/path/that/does/not/exist/codex-test",
 		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
@@ -160,7 +128,7 @@ func TestStartSession_WorkspaceIsFile(t *testing.T) {
 	if err := os.WriteFile(tmpFile, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpFile,
 		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
@@ -177,7 +145,7 @@ func TestStartSession_WorkspaceIsSymlink(t *testing.T) {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: link,
 		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
@@ -196,7 +164,7 @@ func TestStartSession_WorkspaceIsSymlink(t *testing.T) {
 func TestStartSession_BinaryNotFound(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: "sortie-nonexistent-codex-binary-99999"},
@@ -211,7 +179,7 @@ func TestRunTurn_UsageMeasured_AbsentWhenNoTokenUsageNotification(t *testing.T) 
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_misc_notifications.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -232,7 +200,7 @@ func TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "do something",
@@ -254,7 +222,7 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	t.Parallel()
 
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "do something",
@@ -391,7 +359,7 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 			}
 			outcomeCh := make(chan outcome, 1)
 
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 			go func() {
 				result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
 					Prompt:  "go",
@@ -474,7 +442,7 @@ func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 			}
 			outcomeCh := make(chan outcome, 1)
 
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 			go func() {
 				result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
 					Prompt:  "go",
@@ -534,7 +502,7 @@ func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
 
 			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" + tt.fixture
 			state := makeTestState(t, []byte(fixture))
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 				Prompt:  "go",
@@ -587,7 +555,7 @@ func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" +
 				`{"method":"turn/completed","params":` + tt.params + `}` + "\n"
 			state := makeTestState(t, []byte(fixture))
-			adapter, _ := NewCodexAdapter(map[string]any{})
+			adapter, _ := NewCodexAdapter()
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 				Prompt:  "go",
@@ -626,7 +594,7 @@ func TestRunTurn_StdoutParseFailure(t *testing.T) {
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"not valid json\n"
 	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -761,6 +729,8 @@ const (
 	// scenarioHandshakeBurstThread writes a burst, then thread/started,
 	// before ever answering thread/start.
 	scenarioHandshakeBurstThread = "handshake-burst-thread"
+
+	scenarioRecordFrames = "record-frames"
 )
 
 // burstCount is a burst of at least 4096 notifications totaling at
@@ -786,6 +756,9 @@ var fakeScenarios = map[string]agenttest.Scenario{
 	scenarioHandshakeBurstThread: agenttest.Typed(func(_ []string, _ struct{}) int {
 		return serveHandshakeBurstThread(newFakeAppServerScanner(), os.Stdout)
 	}),
+	scenarioRecordFrames: agenttest.Typed(func(_ []string, params recordFramesParams) int {
+		return serveRecordFrames(newFakeAppServerScanner(), os.Stdout, params.RecordPath)
+	}),
 }
 
 func TestMain(m *testing.M) {
@@ -795,6 +768,43 @@ func TestMain(m *testing.M) {
 // burstBetweenTurnsParams parameterizes scenarioBurstBetweenTurns.
 type burstBetweenTurnsParams struct {
 	MarkerPath string `json:"markerPath,omitempty"`
+}
+
+type recordFramesParams struct {
+	RecordPath string `json:"recordPath"`
+}
+
+func serveRecordFrames(client *bufio.Scanner, out io.Writer, recordPath string) int {
+	if !answerPreThreadHandshake(client, out) {
+		return 1
+	}
+	record, err := os.OpenFile(recordPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return 1
+	}
+	defer func() { _ = record.Close() }()
+
+	for turn := 1; client.Scan(); {
+		var frame fakeFrame
+		if json.Unmarshal(client.Bytes(), &frame) != nil {
+			return 1
+		}
+		var result, completed any
+		switch frame.Method {
+		case "thread/start", "thread/resume":
+			result, completed = map[string]any{"thread": map[string]any{"id": "fake-thread-1"}}, rpcNotification{Method: "thread/started"}
+		case "turn/start":
+			id := fmt.Sprintf("t%d", turn)
+			turn++
+			result, completed = map[string]any{"turn": map[string]any{"id": id}}, rpcNotification{Method: "turn/completed", Params: map[string]any{"turn": map[string]any{"id": id, "status": "completed"}}}
+		default:
+			continue
+		}
+		if _, err := fmt.Fprintf(record, "%s\n", client.Bytes()); err != nil || !writeJSON(out, rpcResult{ID: frame.ID, Result: result}) || !writeJSON(out, completed) {
+			return 1
+		}
+	}
+	return 0
 }
 
 // fakeAppServer builds a fake runtime executable serving scenario with

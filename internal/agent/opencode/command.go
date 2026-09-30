@@ -71,7 +71,7 @@ var knownPermissionKeys = map[string]struct{}{
 // rather than defaulting; [checkCrossField] holds the allowed_tools and
 // denied_tools overlap check.
 func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
-	model, fault := typeutil.StringField(config, "model")
+	model, fault := registry.ModelSetting(config)
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}
@@ -113,8 +113,8 @@ func (pt passthroughConfig) variantSlot() (value, key string) {
 }
 
 // variantConflictMessage returns the byte-identical message both
-// [validateConfig] and [NewOpenCodeAdapter] report when effort and variant
-// are both set, or "" otherwise.
+// [validateConfig] and [OpenCodeAdapter.StartSession] report when effort
+// and variant are both set, or "" otherwise.
 func variantConflictMessage(pt passthroughConfig) string {
 	if pt.Effort == "" || pt.Variant == "" {
 		return ""

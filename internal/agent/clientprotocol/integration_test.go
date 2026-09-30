@@ -236,7 +236,7 @@ func gitInitWorkspace(t *testing.T) string {
 // fails the test immediately.
 func mustNewClientProtocolAdapter(t *testing.T) *ClientProtocolAdapter {
 	t.Helper()
-	a, err := NewClientProtocolAdapter(map[string]any{})
+	a, err := NewClientProtocolAdapter()
 	if err != nil {
 		t.Fatalf("NewClientProtocolAdapter: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
 	passthrough := map[string]any{}
-	adapter, err := NewClientProtocolAdapter(passthrough)
+	adapter, err := NewClientProtocolAdapter()
 	if err != nil {
 		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 	}
@@ -520,7 +520,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 func TestIntegration_EarlyExit(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
-	adapter, err := NewClientProtocolAdapter(map[string]any{})
+	adapter, err := NewClientProtocolAdapter()
 	if err != nil {
 		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // clientProtocolMaxLineBytes raises the connection's line bound from the shared
@@ -245,6 +246,10 @@ func readTimeout(state *sessionState) time.Duration {
 // handshake supports, up to maxSessionStarts starts in all. Only the final
 // start reaches session/new.
 func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams, usage *agentcore.TurnEndUsage) (domain.Session, error) {
+	if _, fault := typeutil.StringField(params.Settings, mcpConfigKey); fault != nil {
+		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
+	}
+
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr

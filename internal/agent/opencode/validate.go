@@ -13,9 +13,10 @@ import (
 // returns diagnostics for the sortie validate pipeline. It does not
 // construct an adapter instance or launch a subprocess. It shares the
 // overlap check and the effort and variant conflict check with
-// [NewOpenCodeAdapter], which reaches them through [checkCrossField], so
-// the constructor's refusal and the offline verdict report each fault
-// identically. The warning below has no constructor counterpart.
+// [OpenCodeAdapter.StartSession], which reaches them through
+// [checkCrossField], so the session-start refusal and the offline verdict
+// report each fault identically. The warning below has no session-start
+// counterpart.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
@@ -56,7 +57,7 @@ func validateSkipPermissions(passthrough map[string]any) []registry.ValidationDi
 
 // validateToolOverlap reports an error when allowed_tools and
 // denied_tools name at least one of the same tools, mirroring the check
-// [checkCrossField] used to enforce inline at construction.
+// [checkCrossField] enforces at session start.
 func validateToolOverlap(passthrough map[string]any) []registry.ValidationDiag {
 	message := overlapMessage(
 		typeutil.ExtractStringSlice(passthrough["allowed_tools"]),
@@ -89,8 +90,8 @@ func validateVariantConflict(pt passthroughConfig) []registry.ValidationDiag {
 }
 
 // overlapMessage returns the byte-identical message both [validateConfig]
-// and [NewOpenCodeAdapter] report when allowed and denied name at least
-// one common tool, or "" when they do not overlap.
+// and [OpenCodeAdapter.StartSession] report when allowed and denied name at
+// least one common tool, or "" when they do not overlap.
 func overlapMessage(allowed, denied []string) string {
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, key := range allowed {

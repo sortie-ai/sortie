@@ -158,7 +158,7 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 		t.Fatalf("induction session workspace %s belongs to no run: a session started outside a run's own launch workspace can be neither stopped nor measured by it", workspace)
 	}
 
-	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
+	adapter, err := clientprotocol.NewClientProtocolAdapter()
 	if err != nil {
 		return nil, domain.Session{}, fmt.Errorf("construct the induction adapter: %w", err)
 	}

@@ -18,7 +18,7 @@ const (
 	usageTestKindUndeclared  = "agenttest-usage-undeclared"
 )
 
-func usageTestConstructor(map[string]any) (domain.AgentAdapter, error) {
+func usageTestConstructor() (domain.AgentAdapter, error) {
 	return nil, errors.New("agenttest: usage fixture kind has no real adapter")
 }
 

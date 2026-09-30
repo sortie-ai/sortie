@@ -31,7 +31,7 @@ type passthroughConfig struct {
 // present with a non-string value for a string field reports a fault
 // rather than defaulting.
 func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
-	model, fault := typeutil.StringField(config, "model")
+	model, fault := registry.ModelSetting(config)
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}

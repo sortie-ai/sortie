@@ -25,12 +25,9 @@ type TrackerConstructor func(config map[string]any) (domain.TrackerAdapter, erro
 // the orchestrator resolves adapters via [Registry.Get] at runtime.
 var Trackers = NewRegistry[TrackerConstructor, TrackerMeta]("tracker")
 
-// AgentConstructor creates a [domain.AgentAdapter] from opaque
-// adapter-specific configuration. The config parameter is the raw map
-// from the adapter's pass-through config sub-object. Implementations
-// must validate their config and return an error if required fields
-// are missing.
-type AgentConstructor func(config map[string]any) (domain.AgentAdapter, error)
+// AgentConstructor creates a [domain.AgentAdapter] that holds no
+// settings: each session reads [domain.StartSessionParams.Settings].
+type AgentConstructor func() (domain.AgentAdapter, error)
 
 // Agents is the default agent adapter registry. Adapter packages
 // register themselves via [Registry.Register] in their init functions;

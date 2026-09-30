@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -25,26 +26,42 @@ func flagValue(args []string, flag string) string {
 }
 
 func opencodeEffortProbe(major runtimeMajor) agenttest.EffortProbe {
-	return func(t *testing.T, passthrough map[string]any, verification bool, turns int) ([]string, error) {
+	version := "1.18.33"
+	if major == major2 {
+		version = "2.0.18"
+	}
+	return func(t *testing.T, settings map[string]any, verification, resumed bool, turns int) ([]string, error) {
 		t.Helper()
 
-		config := maps.Clone(passthrough)
+		config := maps.Clone(settings)
 		if major == major2 {
 			config["model"] = effortProbeModel
 		}
-		adapter, err := NewOpenCodeAdapter(config)
-		if err != nil {
-			return nil, err
+		dir := t.TempDir()
+		command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: version})
+		adapter, _ := NewOpenCodeAdapter()
+		resumeID := ""
+		if resumed {
+			resumeID = "ses_probe"
 		}
-		pt := adapter.(*OpenCodeAdapter).passthrough
+		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath:          dir,
+			AgentConfig:            domain.AgentConfig{Command: command},
+			ResumeSessionID:        resumeID,
+			CredentialVerification: verification,
+			Settings:               config,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("StartSession: %w", err)
+		}
+		state := session.Internal.(*sessionState)
 
 		carried := make([]string, 0, turns)
 		for turn := 1; turn <= turns; turn++ {
-			state := &sessionState{major: major, credentialVerification: verification}
 			if turn > 1 {
 				state.sessionID = "ses_probe"
 			}
-			args := buildRunArgs(state, "probe prompt", pt)
+			args := buildRunArgs(state, "probe prompt", state.passthrough)
 			if major == major2 {
 				_, suffix, _ := strings.Cut(flagValue(args, "--model"), "#")
 				carried = append(carried, suffix)
@@ -97,21 +114,22 @@ func TestEffortVariantConflict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, constructErr := NewOpenCodeAdapter(tt.passthrough)
+			startErr, launched := startRefusedSession(t, tt.passthrough)
 			diags := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: tt.passthrough})
 			diag := hasCheck(diags, wantCheck)
 
 			if !tt.wantConflict {
-				if constructErr != nil {
-					t.Errorf("NewOpenCodeAdapter(%v) error = %v, want nil", tt.passthrough, constructErr)
+				if !launched {
+					t.Errorf("StartSession(%v) refused before launch with %v, want the settings accepted", tt.passthrough, startErr)
 				}
 				if diag != nil {
 					t.Errorf("validateConfig(%v) reported %+v, want no %q", tt.passthrough, diag, wantCheck)
 				}
 				return
 			}
-			if constructErr == nil {
-				t.Fatalf("NewOpenCodeAdapter(%v) error = nil, want the conflict refusal", tt.passthrough)
+			var agentErr *domain.AgentError
+			if !errors.As(startErr, &agentErr) {
+				t.Fatalf("StartSession(%v) error = %v, want the conflict refusal as a *domain.AgentError", tt.passthrough, startErr)
 			}
 			if diag == nil {
 				t.Fatalf("validateConfig(%v) = %+v, want check %q", tt.passthrough, diags, wantCheck)
@@ -119,11 +137,14 @@ func TestEffortVariantConflict(t *testing.T) {
 			if diag.Severity != "error" {
 				t.Errorf("validateConfig(%v) %q Severity = %q, want %q", tt.passthrough, wantCheck, diag.Severity, "error")
 			}
-			if constructErr.Error() != wantMessage {
-				t.Errorf("NewOpenCodeAdapter(%v) error = %q, want %q", tt.passthrough, constructErr.Error(), wantMessage)
+			if agentErr.Message != wantMessage {
+				t.Errorf("StartSession(%v) Message = %q, want %q", tt.passthrough, agentErr.Message, wantMessage)
 			}
-			if diag.Message != constructErr.Error() {
-				t.Errorf("validateConfig(%v) %q Message = %q, want the constructor's text %q", tt.passthrough, wantCheck, diag.Message, constructErr.Error())
+			if diag.Message != agentErr.Message {
+				t.Errorf("validateConfig(%v) %q Message = %q, want the session-start text %q", tt.passthrough, wantCheck, diag.Message, agentErr.Message)
+			}
+			if launched {
+				t.Errorf("StartSession(%v) launched the runtime, want the refusal before any launch", tt.passthrough)
 			}
 		})
 	}
@@ -199,11 +220,11 @@ func TestEffortWrongType(t *testing.T) {
 
 	passthrough := map[string]any{registry.EffortKey: 7}
 
-	_, constructErr := NewOpenCodeAdapter(passthrough)
+	startErr, _ := startRefusedSession(t, passthrough)
 	diags := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: passthrough})
 
-	if _, ok := errors.AsType[*typeutil.TypeFault](constructErr); !ok {
-		t.Fatalf("NewOpenCodeAdapter(%v) error = %v, want a *typeutil.TypeFault", passthrough, constructErr)
+	if _, ok := errors.AsType[*typeutil.TypeFault](startErr); !ok {
+		t.Fatalf("StartSession(%v) error = %v, want a wrapped *typeutil.TypeFault", passthrough, startErr)
 	}
 	wantCheck := "opencode." + registry.EffortKey + ".wrong_type"
 	diag := hasCheck(diags, wantCheck)
@@ -213,7 +234,7 @@ func TestEffortWrongType(t *testing.T) {
 	if diag.Severity != "error" {
 		t.Errorf("validateConfig(%v) %q Severity = %q, want %q", passthrough, wantCheck, diag.Severity, "error")
 	}
-	if diag.Message != constructErr.Error() {
-		t.Errorf("validateConfig(%v) %q Message = %q, want the constructor's text %q", passthrough, wantCheck, diag.Message, constructErr.Error())
+	if agentErr, ok := errors.AsType[*domain.AgentError](startErr); !ok || diag.Message != agentErr.Message {
+		t.Errorf("validateConfig(%v) %q Message = %q, want the text StartSession refused with: %v", passthrough, wantCheck, diag.Message, startErr)
 	}
 }

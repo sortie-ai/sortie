@@ -56,8 +56,6 @@ var _ domain.AgentAdapter = (*CodexAdapter)(nil)
 // concurrent sessions; per-session state is held in [sessionState] via
 // the [domain.Session] Internal field.
 type CodexAdapter struct {
-	passthrough passthroughConfig
-
 	// drainGrace bounds the post-reap release goroutine's wait for the
 	// connection's own reader to end normally, once StartSession copies
 	// it into sessionState.drainGrace. A non-positive value resolves to
@@ -74,6 +72,8 @@ type sessionState struct {
 	target      agentcore.LaunchTarget
 	agentConfig domain.AgentConfig
 	turnCount   int
+
+	passthrough passthroughConfig
 
 	threadID string
 
@@ -372,24 +372,21 @@ func reportMCPStartupFailure(msg jsonrpc.Message, logger *slog.Logger) {
 	}
 }
 
-// NewCodexAdapter creates a [CodexAdapter] from adapter configuration.
-// The config parameter is the raw map from the "codex" sub-object in
-// WORKFLOW.md. Command resolution is deferred to
-// [CodexAdapter.StartSession].
-func NewCodexAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt, fault := parsePassthroughConfig(config)
-	if fault != nil {
-		return nil, fault
-	}
-	adapter := &CodexAdapter{passthrough: pt}
-
-	return adapter, nil
+// NewCodexAdapter creates a [CodexAdapter]. Settings and command
+// resolution are deferred to [CodexAdapter.StartSession].
+func NewCodexAdapter() (domain.AgentAdapter, error) {
+	return &CodexAdapter{}, nil
 }
 
-// StartSession validates the workspace path, resolves the codex binary,
-// launches the app-server subprocess, performs the initialization handshake,
-// authenticates if needed, and starts or resumes a thread.
+// StartSession parses the session's settings, validates the workspace path,
+// resolves the codex binary, launches the app-server subprocess, performs
+// the initialization handshake, authenticates if needed, and starts or
+// resumes a thread.
 func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	pt, fault := parsePassthroughConfig(params.Settings)
+	if fault != nil {
+		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
+	}
 	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -418,6 +415,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	state := &sessionState{
 		target:                 target,
 		agentConfig:            params.AgentConfig,
+		passthrough:            pt,
 		acc:                    agentcore.NewRunUsage(),
 		credentialVerification: params.CredentialVerification,
 	}
@@ -602,7 +600,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			logger.Warn("thread resume failed, starting new thread",
 				slog.String("resume_id", params.ResumeSessionID),
 				slog.Any("error", resumeErr))
-			tid, startedModel, startErr := startThread(ctx, state, a.passthrough, logger)
+			tid, startedModel, startErr := startThread(ctx, state, pt, logger)
 			if startErr != nil {
 				observation := earlyExitObservation(ctx, startErr, target, state)
 				state.closeConn()
@@ -626,7 +624,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			model = resumedModel
 		}
 	} else {
-		tid, startedModel, startErr := startThread(ctx, state, a.passthrough, logger)
+		tid, startedModel, startErr := startThread(ctx, state, pt, logger)
 		if startErr != nil {
 			observation := earlyExitObservation(ctx, startErr, target, state)
 			state.closeConn()
@@ -711,14 +709,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		"cwd":      state.target.WorkspacePath,
 	}
 
-	if state.turnCount == 1 || a.passthrough.TurnSandboxPolicy != nil {
-		turnParams["sandboxPolicy"] = buildSandboxPolicy(state, a.passthrough)
+	if state.turnCount == 1 || state.passthrough.TurnSandboxPolicy != nil {
+		turnParams["sandboxPolicy"] = buildSandboxPolicy(state, state.passthrough)
 	}
-	if a.passthrough.Model != "" {
-		turnParams["model"] = a.passthrough.Model
+	if state.passthrough.Model != "" {
+		turnParams["model"] = state.passthrough.Model
 	}
-	if a.passthrough.Effort != "" {
-		turnParams["effort"] = a.passthrough.Effort
+	if state.passthrough.Effort != "" {
+		turnParams["effort"] = state.passthrough.Effort
 	}
 
 	resp, err := state.conn.Call(ctx, "turn/start", turnParams)

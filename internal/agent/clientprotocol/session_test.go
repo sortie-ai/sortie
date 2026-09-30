@@ -13,7 +13,35 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
+
+func TestStartSessionWrongTypedMCPConfigFailsBeforeLaunch(t *testing.T) {
+	t.Parallel()
+
+	settings := map[string]any{mcpConfigKey: 123}
+	adapter, _ := NewClientProtocolAdapter()
+
+	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: "sortie-never-launched"},
+		Settings:      settings,
+	})
+
+	agentErr, ok := errors.AsType[*domain.AgentError](err)
+	if !ok || agentErr.Kind != domain.ErrAgentNotFound {
+		t.Fatalf("StartSession(mcp_config=123) error = %v, want *domain.AgentError of kind %q", err, domain.ErrAgentNotFound)
+	}
+	fault, ok := errors.AsType[*typeutil.TypeFault](err)
+	if !ok || fault.Key != mcpConfigKey {
+		t.Fatalf("StartSession(mcp_config=123) error = %v, want a wrapped *typeutil.TypeFault on %q", err, mcpConfigKey)
+	}
+	diags := validateConfig(registry.AgentConfigFields{Kind: "agent-client-protocol", Passthrough: settings})
+	if len(diags) != 1 || diags[0].Message != agentErr.Message {
+		t.Errorf("validateConfig(mcp_config=123) = %+v, want one diagnostic carrying the text StartSession refused with: %q", diags, agentErr.Message)
+	}
+}
 
 func TestRunTurnFinalize(t *testing.T) {
 	t.Parallel()

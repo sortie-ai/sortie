@@ -39,7 +39,7 @@ func TestCredentialVerification(t *testing.T) {
 	verifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", versionAwareScenario, versionAwareParams{Stdout: successJSONL, ExitCode: 0})
 	unverifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", versionAwareScenario, versionAwareParams{Stdout: resultExitOneJSONL, ExitCode: 1})
 
-	adapter, err := NewCopilotAdapter(map[string]any{})
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter() error = %v", err)
 	}

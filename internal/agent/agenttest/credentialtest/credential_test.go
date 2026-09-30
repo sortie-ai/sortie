@@ -19,7 +19,7 @@ const (
 	credentialTestKindUsage          = "agenttest-credential-usage"
 )
 
-func credentialTestConstructor(map[string]any) (domain.AgentAdapter, error) {
+func credentialTestConstructor() (domain.AgentAdapter, error) {
 	return nil, errors.New("credentialtest: fixture kind has no real adapter")
 }
 

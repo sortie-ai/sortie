@@ -236,7 +236,7 @@ func TestRunTurn_UnrecognizedRequestAnsweredMethodNotFoundOnce(t *testing.T) {
 		`{"method":"turn/completed","params":{"turn":{"id":"t1","status":"completed"}}}`,
 	}, "\n")
 	state := makeTestStateWithStdin(t, []byte(fixture), recorder)
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",

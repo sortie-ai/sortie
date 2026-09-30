@@ -38,7 +38,7 @@ const (
 // else.
 type Binding struct {
 	Kind          string         // a registered kind requiring an agent command
-	Passthrough   map[string]any // the adapter configuration map
+	Passthrough   map[string]any // the settings block handed to the session
 	CredentialEnv []string       // names given the sentinel beyond the kind's declared credential names
 	Read          func(path string) ToolChoice
 	Finish        ToolChoice // the turn's last answer; nil answers with text
@@ -166,14 +166,14 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	if err != nil {
 		t.Fatalf("registry.Agents.Get(%q) error = %v", b.Kind, err)
 	}
-	adapter, err := newAdapter(b.Passthrough)
+	adapter, err := newAdapter()
 	if err != nil {
 		t.Fatalf("construct %q adapter error = %v", b.Kind, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
 	defer cancel()
-	session, err := adapter.StartSession(ctx, domain.StartSessionParams{WorkspacePath: workspace, AgentConfig: launch.Config})
+	session, err := adapter.StartSession(ctx, domain.StartSessionParams{WorkspacePath: workspace, AgentConfig: launch.Config, Settings: b.Passthrough})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(server.Exchanges()))
 	}

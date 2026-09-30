@@ -1959,7 +1959,7 @@ func TestValidateEffortNotForwardedText(t *testing.T) {
 
 var registerDeprecatedOrderFixture = sync.OnceFunc(func() {
 	registry.Agents.RegisterWithMeta("deprecated-order-fixture",
-		func(map[string]any) (domain.AgentAdapter, error) {
+		func() (domain.AgentAdapter, error) {
 			return nil, errors.New("fixture kind is never constructed")
 		},
 		registry.AgentMeta{Deprecation: &registry.AgentDeprecation{Replacement: "mock"}})

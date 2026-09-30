@@ -21,7 +21,7 @@ func TestCredentialVerification(t *testing.T) {
 	verifiedBin := writeRunFixtureScript(t, t.TempDir(), "simple_turn.jsonl")
 	unverifiedBin := writeRunFixtureScript(t, t.TempDir(), "logical_failure_exit0.jsonl")
 
-	adapter, err := NewOpenCodeAdapter(map[string]any{})
+	adapter, err := NewOpenCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRunTurn_SSHExit255WithoutForkPerTurn(t *testing.T) {
 			tmpDir := t.TempDir()
 			script := writeSSHExit255Script(t, tmpDir, tt.runOutput)
 
-			a, _ := NewOpenCodeAdapter(map[string]any{})
+			a, _ := NewOpenCodeAdapter()
 			session := mustBuildSSHSessionWithLocalScript(t, tmpDir, script, "example.test")
 
 			_, result, err := collectEvents(t, a, session, "work")

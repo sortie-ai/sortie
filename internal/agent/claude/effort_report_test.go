@@ -28,14 +28,15 @@ func effortReports(t *testing.T, passthrough map[string]any, verification bool, 
 
 	dir := t.TempDir()
 	command := agenttest.FakeRuntime(t, dir, "fake-claude", agenttest.OutputScenario, out)
-	adapter, err := NewClaudeCodeAdapter(passthrough)
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
-		t.Fatalf("NewClaudeCodeAdapter(%v) error = %v", passthrough, err)
+		t.Fatalf("NewClaudeCodeAdapter() error = %v", err)
 	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:          dir,
 		AgentConfig:            domain.AgentConfig{Command: command},
 		CredentialVerification: verification,
+		Settings:               passthrough,
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)

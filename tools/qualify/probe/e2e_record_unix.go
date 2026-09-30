@@ -35,7 +35,7 @@ func buildProtocolLaunch(coords Coordinates) (string, domain.AgentAdapter, error
 	}
 	fullCommand := append([]string{coords.CommandPath}, argv...)
 
-	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
+	adapter, err := clientprotocol.NewClientProtocolAdapter()
 	if err != nil {
 		return "", nil, err
 	}

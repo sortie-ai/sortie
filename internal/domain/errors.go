@@ -176,9 +176,10 @@ type AgentError struct {
 }
 
 // Error returns a human-readable diagnostic including the error
-// category and message.
+// category and message. The cause is left out when its text is the
+// message, so a wrapper that restates its cause reads once.
 func (e *AgentError) Error() string {
-	if e.Err != nil {
+	if e.Err != nil && e.Err.Error() != e.Message {
 		return fmt.Sprintf("agent: %s: %s: %v", e.Kind, e.Message, e.Err)
 	}
 	return fmt.Sprintf("agent: %s: %s", e.Kind, e.Message)

@@ -13,7 +13,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 const mcpConfigKey = "mcp_config"
@@ -64,15 +63,11 @@ type ClientProtocolAdapter struct {
 	sources *registry.Registry[usagesource.Constructor, struct{}]
 }
 
-// NewClientProtocolAdapter constructs a [ClientProtocolAdapter] from the kind's
-// configuration block. It reads mcp_config without keeping its value: the path
-// a session uses arrives per session through StartSessionParams.MCPConfigPath.
-// It refuses construction only when mcp_config is present with the wrong YAML
-// type.
-func NewClientProtocolAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	if _, fault := typeutil.StringField(config, mcpConfigKey); fault != nil {
-		return nil, fault
-	}
+// NewClientProtocolAdapter constructs a [ClientProtocolAdapter]. The kind's
+// settings arrive per session; the only one it reads is mcp_config, and only
+// to check its type: the path a session uses arrives through
+// StartSessionParams.MCPConfigPath.
+func NewClientProtocolAdapter() (domain.AgentAdapter, error) {
 	return &ClientProtocolAdapter{}, nil
 }
 

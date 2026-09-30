@@ -1,9 +1,13 @@
 package copilot
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // wantAllowedToolsDiagMessage is the exact diagnostic message
@@ -12,23 +16,21 @@ const wantAllowedToolsDiagMessage = "copilot-cli.allowed_tools replaces the --al
 	"is approved; every other permissioned call is denied without a prompt, the turn continues, " +
 	"and a turn whose calls were all denied still reports success"
 
-// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
-// wrong-typed value for a key the constructor reads fails
-// NewCopilotAdapter with a plain error carrying the fault message, and
-// validateConfig reports the identical fault text under a
-// "copilot-cli.<key>.wrong_type" check for the same input, so the two
-// surfaces cannot diverge on what counts as a type fault.
 func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	t.Parallel()
 
 	config := map[string]any{"allowed_tools": 123}
+	adapter, _ := NewCopilotAdapter()
 
-	_, constructErr := NewCopilotAdapter(config)
-	if constructErr == nil {
-		t.Fatal("NewCopilotAdapter(allowed_tools=123) error = nil, want non-nil")
-	}
-	if constructErr.Error() != "allowed_tools: expected string, got integer" {
-		t.Errorf("NewCopilotAdapter(allowed_tools=123) error = %q, want %q", constructErr.Error(), "allowed_tools: expected string, got integer")
+	_, startErr := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: fakeCopilotBinary(t)},
+		Settings:      config,
+	})
+	var agentErr *domain.AgentError
+	var fault *typeutil.TypeFault
+	if !errors.As(startErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound || !errors.As(startErr, &fault) || fault.Key != "allowed_tools" {
+		t.Fatalf("StartSession(allowed_tools=123) error = %v, want an agent_not_found *domain.AgentError wrapping a *typeutil.TypeFault for %q", startErr, "allowed_tools")
 	}
 
 	diags := validateConfig(registry.AgentConfigFields{Kind: "copilot-cli", Passthrough: config})
@@ -39,8 +41,8 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	if diags[0].Check != "copilot-cli.allowed_tools.wrong_type" {
 		t.Errorf("validateConfig(allowed_tools=123)[0].Check = %q, want %q", diags[0].Check, "copilot-cli.allowed_tools.wrong_type")
 	}
-	if diags[0].Message != constructErr.Error() {
-		t.Errorf("validateConfig(allowed_tools=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	if diags[0].Message != agentErr.Message {
+		t.Errorf("validateConfig(allowed_tools=123)[0].Message = %q, want the text StartSession refused with: %q", diags[0].Message, agentErr.Message)
 	}
 }
 

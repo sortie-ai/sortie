@@ -193,7 +193,7 @@ func conformanceRunCases[S any](t *testing.T, property string, cases []conforman
 
 func conformanceRegisterKinds() {
 	conformanceKindsOnce.Do(func() {
-		refuse := func(map[string]any) (domain.AgentAdapter, error) { return nil, errConformanceFactory }
+		refuse := func() (domain.AgentAdapter, error) { return nil, errConformanceFactory }
 		registry.Agents.RegisterWithMeta(conformanceCommandKind, refuse, registry.AgentMeta{
 			RequiresCommand: true,
 			CredentialEnv:   registry.DeclareCredentialEnv(conformanceDeclaredToken),

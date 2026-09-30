@@ -8,9 +8,8 @@ import (
 // validateConfig checks this kind's own configuration constraints and
 // returns diagnostics for the sortie validate pipeline. It does not
 // construct an adapter instance or launch a subprocess: it reports the
-// same fault [NewClientProtocolAdapter] would raise, so the
-// constructor's refusal and the offline verdict carry byte-identical
-// text.
+// same fault a session start would raise, so the session-start refusal and
+// the offline verdict carry byte-identical text.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	_, fault := typeutil.StringField(fields.Passthrough, mcpConfigKey)
 	if fault == nil {

@@ -63,7 +63,7 @@ func TestCredentialVerification(t *testing.T) {
 	verifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioCredentialFullTurn, credentialFullTurnParams{Status: "completed"})
 	unverifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioCredentialFullTurn, credentialFullTurnParams{Status: "failed"})
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter() error = %v", err)
 	}

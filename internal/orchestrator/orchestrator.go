@@ -228,6 +228,11 @@ type Orchestrator struct {
 	preflightParams PreflightParams
 	observers       []Observer
 
+	// startupConfig is the configuration in force when the orchestrator
+	// was built. A session takes its kind's settings block from it, so a
+	// block edit reaches the agent only after a restart.
+	startupConfig config.ServiceConfig
+
 	// drainTimeout overrides the worker-drain wait when positive. Zero
 	// resolves to the ceiling [Orchestrator.drainRunningWorkers] derives
 	// from the current configuration.
@@ -355,7 +360,9 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 
 	handoffParkingLabel := defaultHandoffParkingLabel
 	var ciTriage config.ReactionTriageConfig
+	var startupConfig config.ServiceConfig
 	if params.WorkflowManager != nil {
+		startupConfig = params.WorkflowManager.Config()
 		handoffParkingLabel = resolveHandoffParkingLabel(params.WorkflowManager.Config().Reactions)
 		ciTriage = params.WorkflowManager.Config().CIFeedback.Triage
 	}
@@ -367,6 +374,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		agentAdapter:                      params.AgentAdapter,
 		agentAdapterByKind:                agentAdapterByKind,
 		workflowManager:                   params.WorkflowManager,
+		startupConfig:                     startupConfig,
 		store:                             params.Store,
 		metrics:                           metrics,
 		workerExitCh:                      make(chan WorkerResult, exitBuf),
@@ -960,6 +968,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			TemplateID:             templateID,
 			AgentKind:              agentKind,
 			UsageArrival:           usageArrival,
+			AgentSettings:          config.ResolveAgentSettings(o.startupConfig, agentKind, filepath.Dir(o.workflowManager.WorkflowAbsPath())),
 			OnEvent: func(issueID string, event domain.AgentEvent) {
 				select {
 				case o.agentEventCh <- agentEventMsg{IssueID: issueID, Event: event}:

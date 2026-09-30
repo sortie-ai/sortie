@@ -275,7 +275,7 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates, envWrapper strin
 		t.Fatalf("build the published-posture probe argv: %v", err)
 	}
 
-	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
+	adapter, err := clientprotocol.NewClientProtocolAdapter()
 	if err != nil {
 		t.Fatalf("construct the published-posture probe adapter: %v", err)
 	}

@@ -166,11 +166,9 @@ func makeEventCollector(t *testing.T) (onEvent func(domain.AgentEvent), collecte
 	return onEvent, collected
 }
 
-// mustNewAdapter creates a CodexAdapter from integrationConfig or fails the
-// test immediately.
 func mustNewAdapter(t *testing.T) *CodexAdapter {
 	t.Helper()
-	a, err := NewCodexAdapter(integrationConfig())
+	a, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter: %v", err)
 	}
@@ -184,6 +182,7 @@ func mustStartSession(t *testing.T, ctx context.Context, adapter *CodexAdapter, 
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -206,6 +205,7 @@ func TestIntegration_StartSession(t *testing.T) {
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -247,6 +247,7 @@ func TestIntegration_StopSession(t *testing.T) {
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -356,6 +357,7 @@ func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 	session, err := adapter.StartSession(outerCtx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -503,6 +505,7 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	session1, err := adapter1.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 	})
 	if err != nil {
 		t.Fatalf("StartSession (original): %v", err)
@@ -528,26 +531,28 @@ func TestIntegration_ResumeSession(t *testing.T) {
 		t.Fatalf("StopSession (original): %v", err)
 	}
 
-	// Resume via a fresh adapter and StartSession with the captured thread ID.
-	adapter2 := mustNewAdapter(t)
-	session2, err := adapter2.StartSession(ctx, domain.StartSessionParams{
+	resumedSettings := integrationConfig()
+	resumedSettings["model"] = "gpt-5.4"
+	resumedSettings["effort"] = "low"
+
+	session2, err := adapter1.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:   workspace,
 		AgentConfig:     integrationAgentConfig(),
 		ResumeSessionID: originalThreadID,
+		Settings:        resumedSettings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession (resume): %v", err)
 	}
-	t.Cleanup(func() { _ = adapter2.StopSession(context.Background(), session2) })
+	t.Cleanup(func() { _ = adapter1.StopSession(context.Background(), session2) })
 
-	// The resumed session must carry the same thread ID.
 	if session2.ID != originalThreadID {
 		t.Errorf("resumed session.ID = %q, want %q (provided ResumeSessionID)", session2.ID, originalThreadID)
 	}
 
 	// A turn on the resumed session must complete successfully.
 	onEvent, collected := makeEventCollector(t)
-	result2, err := adapter2.RunTurn(ctx, session2, domain.RunTurnParams{
+	result2, err := adapter1.RunTurn(ctx, session2, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
 		OnEvent: onEvent,
 	})
@@ -666,6 +671,7 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
+		Settings:      integrationConfig(),
 		MCPConfigPath: mcpConfigPath,
 	})
 	if err != nil {
@@ -701,12 +707,12 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
 	passthrough := map[string]any{}
-	adapter, err := NewCodexAdapter(passthrough)
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter: %v", err)
 	}
 	params := func(t *testing.T) domain.StartSessionParams {
-		return domain.StartSessionParams{WorkspacePath: gitInitWorkspace(t), AgentConfig: integrationAgentConfig()}
+		return domain.StartSessionParams{WorkspacePath: gitInitWorkspace(t), AgentConfig: integrationAgentConfig(), Settings: passthrough}
 	}
 
 	t.Run("working credential verifies", func(t *testing.T) {
@@ -725,7 +731,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 func TestIntegration_EarlyExit(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter: %v", err)
 	}

@@ -36,7 +36,7 @@ const (
 )
 
 func init() {
-	registry.Agents.RegisterWithMeta(fixtureNotifyAgentKind, func(map[string]any) (domain.AgentAdapter, error) {
+	registry.Agents.RegisterWithMeta(fixtureNotifyAgentKind, func() (domain.AgentAdapter, error) {
 		return nil, fmt.Errorf("%s is resolved through AgentAdapterByKind, never constructed from the registry", fixtureNotifyAgentKind)
 	}, registry.AgentMeta{
 		UsageArrival:     registry.UsageArrivalIncremental,

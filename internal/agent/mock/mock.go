@@ -26,9 +26,8 @@ func init() {
 		EffortForwarding: registry.EffortNotForwarded,
 		UsageSessionRules: []registry.UsageSessionRule{
 			{
-				// Reuses the constructor's own boolFromConfig read so
-				// the declaration and NewMockAdapter cannot read
-				// report_token_usage two ways.
+				// Shares the session's own read of report_token_usage so
+				// the two cannot disagree.
 				When: func(passthrough map[string]any, remote bool) bool {
 					return !boolFromConfig(passthrough, "report_token_usage", true)
 				},
@@ -36,10 +35,9 @@ func init() {
 				Attribution: registry.UsageAttributionNone,
 			},
 			{
-				// Reuses the constructor's own string-assertion read
-				// of model_name; ordered after the report_token_usage
-				// rule, because no usage event is emitted for a model
-				// to ride on when both keys are set.
+				// Ordered after the report_token_usage rule: no usage
+				// event is emitted for a model to ride on when both
+				// keys are set.
 				When: func(passthrough map[string]any, remote bool) bool {
 					v, ok := passthrough["model_name"].(string)
 					return ok && v != ""
@@ -56,9 +54,16 @@ var _ domain.AgentAdapter = (*MockAdapter)(nil)
 
 // MockAdapter is a configurable agent adapter for testing. It emits
 // canned events and returns pre-configured outcomes without launching
-// any subprocess. All fields except [MockAdapter.turnIndex] are
-// read-only after construction.
+// any subprocess. Each session carries its own settings; only the turn
+// cursor is shared by every session.
 type MockAdapter struct {
+	// mu guards turnIndex for concurrent RunTurn calls.
+	mu        sync.Mutex
+	turnIndex int
+}
+
+// mockSettings is one session's parsed settings block.
+type mockSettings struct {
 	sessionID              string
 	agentPID               string
 	startError             string
@@ -74,13 +79,10 @@ type MockAdapter struct {
 	toolCalls              []mockToolCall
 	reportTokenUsage       bool
 	credentialError        string
-
-	// mu guards turnIndex for concurrent RunTurn calls.
-	mu        sync.Mutex
-	turnIndex int
 }
 
 type mockSessionState struct {
+	mockSettings
 	credentialVerification bool
 }
 
@@ -92,26 +94,32 @@ type mockToolCall struct {
 	Error      bool
 }
 
-// NewMockAdapter creates a [MockAdapter] from adapter configuration.
-// All config keys are optional with safe defaults. A zero-config map
-// produces a mock that starts successfully, emits 3 notifications plus
-// token_usage and turn_completed per turn, and stops cleanly.
+// NewMockAdapter creates a [MockAdapter]. Every settings key is optional
+// with a safe default; an empty block produces a mock that starts
+// successfully, emits 3 notifications plus token_usage and turn_completed
+// per turn, and stops cleanly.
 //
-// Accepted config keys: session_id, agent_pid, start_error,
+// Accepted settings keys: session_id, agent_pid, start_error,
 // turn_outcomes, events_per_turn, input_tokens_per_turn,
 // output_tokens_per_turn, turn_delay_ms, stop_error,
 // report_token_usage. input_tokens_per_turn counts all input including
 // cache reads, so cache_read_tokens_per_turn is a subset of it rather
 // than an addition to it. The adapter reports run-cumulative counts by
 // construction: each turn's contribution accrues onto the totals of
-// every prior turn in the same session. report_token_usage defaults to
-// true; when false, the adapter emits no token_usage event, leaves
-// [domain.TurnResult] Usage at the zero value, and reports
-// UsageMeasured false, simulating a runtime that reported nothing.
-// A verification session's turn emits no event, consumes no
-// turn_outcomes entry, and fails with credential_error when it is set.
-func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	m := &MockAdapter{
+// every prior turn the adapter ran, whichever session ran it.
+// report_token_usage defaults to true; when false, the adapter emits no
+// token_usage event, leaves [domain.TurnResult] Usage at the zero
+// value, and reports UsageMeasured false, simulating a runtime that
+// reported nothing. A verification session's turn emits no event,
+// consumes no turn_outcomes entry, and fails with credential_error when
+// it is set.
+func NewMockAdapter() (domain.AgentAdapter, error) {
+	return &MockAdapter{}, nil
+}
+
+// parseSettings reads a session's settings block.
+func parseSettings(config map[string]any) mockSettings {
+	m := mockSettings{
 		sessionID:           "mock-session-001",
 		eventsPerTurn:       3,
 		inputTokensPerTurn:  100,
@@ -180,17 +188,18 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 		}
 	}
 
-	return m, nil
+	return m
 }
 
-// StartSession returns a canned [domain.Session] or an error when
-// configured with start_error. Validates that
+// StartSession returns a canned [domain.Session] or an error when the
+// session's settings carry start_error. Validates that
 // [domain.StartSessionParams.WorkspacePath] is non-empty.
 func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	if m.startError != "" {
+	settings := parseSettings(params.Settings)
+	if settings.startError != "" {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
-			Message: m.startError,
+			Message: settings.startError,
 		}
 	}
 
@@ -202,9 +211,9 @@ func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSession
 	}
 
 	return domain.Session{
-		ID:       m.sessionID,
-		AgentPID: m.agentPID,
-		Internal: &mockSessionState{credentialVerification: params.CredentialVerification},
+		ID:       settings.sessionID,
+		AgentPID: settings.agentPID,
+		Internal: &mockSessionState{mockSettings: settings, credentialVerification: params.CredentialVerification},
 	}, nil
 }
 
@@ -216,20 +225,23 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		panic("mock: OnEvent must be non-nil")
 	}
 
-	state, _ := session.Internal.(*mockSessionState)
-	verifying := state != nil && state.credentialVerification
+	state, ok := session.Internal.(*mockSessionState)
+	if !ok {
+		state = &mockSessionState{mockSettings: parseSettings(nil)}
+	}
+	verifying := state.credentialVerification
 
 	if verifying {
 		result := domain.TurnResult{
 			SessionID:     session.ID,
 			ExitReason:    domain.EventTurnCompleted,
-			UsageMeasured: m.reportTokenUsage,
+			UsageMeasured: state.reportTokenUsage,
 		}
-		if m.credentialError != "" {
+		if state.credentialError != "" {
 			result.ExitReason = domain.EventTurnFailed
 			return result, &domain.AgentError{
 				Kind:    domain.ErrTurnFailed,
-				Message: m.credentialError,
+				Message: state.credentialError,
 			}
 		}
 		return result, nil
@@ -239,12 +251,12 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	m.mu.Lock()
 	currentIndex := m.turnIndex
 	m.turnIndex++
-	outcome := m.outcomeAt(currentIndex)
+	outcome := state.outcomeAt(currentIndex)
 	m.mu.Unlock()
 
 	// Artificial delay (outside lock).
-	if m.turnDelayMS > 0 {
-		timer := time.NewTimer(time.Duration(m.turnDelayMS) * time.Millisecond)
+	if state.turnDelayMS > 0 {
+		timer := time.NewTimer(time.Duration(state.turnDelayMS) * time.Millisecond)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
@@ -264,12 +276,12 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	params.OnEvent(domain.AgentEvent{
 		Type:      domain.EventSessionStarted,
 		Timestamp: time.Now().UTC(),
-		AgentPID:  m.agentPID,
-		SessionID: m.sessionID,
+		AgentPID:  state.agentPID,
+		SessionID: state.sessionID,
 		Message:   "mock session started",
 	})
 
-	for i := range m.eventsPerTurn {
+	for i := range state.eventsPerTurn {
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventNotification,
 			Timestamp: time.Now().UTC(),
@@ -278,10 +290,10 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	}
 
 	var usage domain.TokenUsage
-	if m.reportTokenUsage {
-		cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
-		cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
-		cumulativeCacheRead := int64(currentIndex+1) * int64(m.cacheReadTokensPerTurn)
+	if state.reportTokenUsage {
+		cumulativeInput := int64(currentIndex+1) * int64(state.inputTokensPerTurn)
+		cumulativeOutput := int64(currentIndex+1) * int64(state.outputTokensPerTurn)
+		cumulativeCacheRead := int64(currentIndex+1) * int64(state.cacheReadTokensPerTurn)
 		usage = domain.TokenUsage{
 			InputTokens:     cumulativeInput,
 			OutputTokens:    cumulativeOutput,
@@ -293,16 +305,16 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 			Type:      domain.EventTokenUsage,
 			Timestamp: time.Now().UTC(),
 			Usage:     usage,
-			Model:     m.modelName,
+			Model:     state.modelName,
 			Message:   "mock token usage",
 		}
-		if m.apiDurationMS > 0 {
-			tokenEvt.APIDurationMS = m.apiDurationMS
+		if state.apiDurationMS > 0 {
+			tokenEvt.APIDurationMS = state.apiDurationMS
 		}
 		params.OnEvent(tokenEvt)
 	}
 
-	for _, tc := range m.toolCalls {
+	for _, tc := range state.toolCalls {
 		params.OnEvent(domain.AgentEvent{
 			Type:           domain.EventToolResult,
 			Timestamp:      time.Now().UTC(),
@@ -321,7 +333,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		meta := agentcore.TurnMeta{
 			SessionID:     session.ID,
 			Usage:         usage,
-			UsageMeasured: m.reportTokenUsage,
+			UsageMeasured: state.reportTokenUsage,
 		}
 		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta)
 	}
@@ -334,7 +346,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		meta := agentcore.TurnMeta{
 			SessionID:     session.ID,
 			Usage:         usage,
-			UsageMeasured: m.reportTokenUsage,
+			UsageMeasured: state.reportTokenUsage,
 		}
 		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta)
 	}
@@ -350,7 +362,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		SessionID:     session.ID,
 		ExitReason:    exitReason,
 		Usage:         usage,
-		UsageMeasured: m.reportTokenUsage,
+		UsageMeasured: state.reportTokenUsage,
 	}
 
 	if isError {
@@ -363,10 +375,12 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	return turnResult, nil
 }
 
-// StopSession returns nil or an error when configured with stop_error.
-func (m *MockAdapter) StopSession(_ context.Context, _ domain.Session) error {
-	if m.stopError != "" {
-		return fmt.Errorf("mock stop: %s", m.stopError)
+// StopSession returns nil or an error when the session's settings carry
+// stop_error.
+func (m *MockAdapter) StopSession(_ context.Context, session domain.Session) error {
+	state, ok := session.Internal.(*mockSessionState)
+	if ok && state.stopError != "" {
+		return fmt.Errorf("mock stop: %s", state.stopError)
 	}
 	return nil
 }
@@ -374,9 +388,9 @@ func (m *MockAdapter) StopSession(_ context.Context, _ domain.Session) error {
 // outcomeAt returns the outcome string for the given turn index.
 // Falls back to "completed" when the index exceeds the configured
 // turn_outcomes slice.
-func (m *MockAdapter) outcomeAt(index int) string {
-	if index < len(m.turnOutcomes) {
-		return m.turnOutcomes[index]
+func (s mockSettings) outcomeAt(index int) string {
+	if index < len(s.turnOutcomes) {
+		return s.turnOutcomes[index]
 	}
 	return "completed"
 }
