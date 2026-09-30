@@ -264,6 +264,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Preflight and `sortie validate` report `agent.command`, naming the selector, exactly for each reached kind that would launch no executable: a rule selecting a kind with no default command beside a different default kind fails both, and a default kind with a default command and no `agent.command` passes both
 - A retry driven through the orchestrator's run loop, with an adapter per kind recording its start parameters so that dropping the retry selection wiring fails the test, dispatches, keeps or clears its resume session identifier, and carries its continuation as §5.3.9 states; the cases are every row of the frozen-selection table, a kind move for a timer retry and for a retry row recovered at startup, a frozen `agent.kind` selection whose issue the rules now route elsewhere, a fresh dispatch through a rule naming a kind other than the default kind, `agent.command` changed under the same `agent.kind`, a retired fixture kind under each governance row and under no record, a failed adapter lookup that later succeeds and reschedules meanwhile, and a review reaction on an issue in the handoff state, which dispatches instead of being dropped
 
+- After a reload that changes a top-level block, a retry of a held claim keeps kind, template, and resume identifier and starts with the new block, and an in-flight session keeps its settings
+- An attempt whose resolved block fails an error-severity settings check starts no session on either lane: the first dispatch releases the host, records an error dispatch, and writes no run-history row; the retry reschedules with backoff and `retry agent settings refused`, keeping claim, continuation, and session identifier
+
 ### 17.5 Coding-Agent Adapter Client
 
 - Launch command uses workspace cwd and execs the resolved binary directly with an argument vector

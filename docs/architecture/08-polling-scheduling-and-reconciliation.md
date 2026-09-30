@@ -107,6 +107,12 @@ retry_selection(cfg, template_held, frozen, issue):
 - A selection that differs from the frozen one in kind or template clears the resume session identifier, because session identifiers are adapter-specific; the continuation context, reaction kind, attempt number, and last SSH host carry over. A changed selection is logged once at `Info` (Section 13.1).
 - When the adapter for the selected kind is unavailable because its construction failed at startup, the handler logs the failure, releases the acquired host, and reschedules with the backoff of the next attempt instead of releasing the claim. The claim and the continuation stay until a restart constructs the adapter. Releasing the claim would drop a reaction that a reconciler already consumed, and no poll dispatches an issue in the handoff state.
 
+Settings per attempt:
+
+- The selection is frozen per claim; the settings are not. Every dispatch resolves its attempt's settings on the event loop from the one configuration snapshot its lane reads: the top-level settings block of the selection's kind. The resolution also yields the usage-reporting disposition the running entry freezes and the error-severity settings checks the block fails. A reload therefore reaches the next attempt of a held claim, and a running session never changes settings.
+- An attempt whose block fails an error-severity check starts no session. The first dispatch releases the acquired host, logs an `Error` record (Section 13.1), and skips the candidate for the tick. The retry handler releases the acquired host, logs an `Error` record, and reschedules with the backoff of the next attempt under the error text `retry agent settings refused`, keeping its claim, its continuation context, and its session identifier. This gate exists because a retry or continuation never passes the per-tick preflight, so a reload could otherwise carry a block into a session that preflight refuses.
+- A change in the resolved settings never clears the resume session identifier; only a changed kind or template does. The resumed attempt delivers its settings on every turn, the first included (Section 10.1).
+
 Per-issue effort budget (defense-in-depth):
 
 - When `agent.max_sessions > 0`, two lanes evaluate it: the retry handler counts completed sessions for the issue from `run_history` before fetching candidates, once per retry; the poll tick's rebuild runs the same count as one batch query over the whole candidate set, once per tick, before dispatch (see the rebuild bullet below).
