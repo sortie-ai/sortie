@@ -104,6 +104,10 @@ type SSHOptions struct {
 	// reaches the remote shell on the SSH session's standard input,
 	// never in a process argument list.
 	Env []EnvVar
+
+	// Unset lists variable names the remote shell unsets before it runs
+	// the agent command.
+	Unset []string
 }
 
 // Format implements [fmt.Formatter], rendering StrictHostKeyChecking
@@ -280,15 +284,34 @@ func endsInEscape(s string) bool {
 // import step requires the completion marker the preamble sets last.
 // BuildSSHLaunch neither reorders nor deduplicates opts.Env.
 //
-// BuildSSHLaunch panics when an opts.Env entry's Name fails
-// [IsEnvName] or is one [IsReservedEnvName] reports; the panic message
-// names the entry's index and carries neither its Name nor its Value.
+// With a non-empty opts.Unset, the remote shell also unsets each named
+// variable after the import step, when there is one, and before the
+// agent command runs, so the agent does not inherit a variable the
+// remote host's login environment sets.
+//
+// BuildSSHLaunch panics when an opts.Env entry's Name or an opts.Unset
+// name fails [IsEnvName] or is one [IsReservedEnvName] reports; the
+// panic message names the entry's index and carries neither its Name
+// nor its Value.
 func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []string, opts SSHOptions) SSHLaunch {
 	sshOpts := buildSSHOpts(host, opts)
 
+	for i, name := range opts.Unset {
+		switch {
+		case !IsEnvName(name):
+			panic(fmt.Sprintf("sshutil: BuildSSHLaunch: invalid environment variable name at Unset[%d]", i))
+		case IsReservedEnvName(name):
+			panic(fmt.Sprintf("sshutil: BuildSSHLaunch: reserved environment variable name at Unset[%d]", i))
+		}
+	}
+	agent := agentGroup(remoteCommand, agentArgs)
+	if len(opts.Unset) > 0 {
+		agent = "unset " + strings.Join(opts.Unset, " ") + " && " + agent
+	}
+
 	if len(opts.Env) == 0 {
 		remoteCmd := strings.Join([]string{
-			"cd", "--", shellQuote(workspacePath), "&&", agentGroup(remoteCommand, agentArgs),
+			"cd", "--", shellQuote(workspacePath), "&&", agent,
 		}, " ")
 		return SSHLaunch{Args: append(sshOpts, remoteCmd)}
 	}
@@ -312,7 +335,7 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	importStep := fmt.Sprintf(`unset %[1]s && _sortie_env=$(dd bs=1 count=%[2]d 2>/dev/null) && eval "$_sortie_env" && [ "${%[1]s-}" = 1 ]`, completionMarkerName, len(preamble))
 
 	remoteCmd := strings.Join([]string{
-		"cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&", agentGroup(remoteCommand, agentArgs),
+		"cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&", agent,
 	}, " ")
 
 	return SSHLaunch{

@@ -3,6 +3,7 @@ package claude
 import (
 	"strconv"
 
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -40,7 +41,7 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}
-	effort, fault := typeutil.StringField(config, "effort")
+	effort, fault := registry.EffortSetting(config)
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}

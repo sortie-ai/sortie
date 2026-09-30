@@ -50,6 +50,7 @@ func init() {
 		UsageArrival:        registry.UsageArrivalTurnEnd,
 		UsageAttribution:    registry.UsageAttributionPerModel,
 		CredentialEnv:       registry.DeclareCredentialEnv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+		EffortForwarding:    registry.EffortForwarded,
 		UsageSessionRules: []registry.UsageSessionRule{
 			{
 				// Mirrors sessionState.recoverUsage's own remote

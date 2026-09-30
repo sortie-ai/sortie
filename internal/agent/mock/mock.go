@@ -23,6 +23,7 @@ func init() {
 		UsageArrival:     registry.UsageArrivalIncremental,
 		UsageAttribution: registry.UsageAttributionSessionTotal,
 		CredentialEnv:    registry.DeclareCredentialEnv(),
+		EffortForwarding: registry.EffortNotForwarded,
 		UsageSessionRules: []registry.UsageSessionRule{
 			{
 				// Reuses the constructor's own boolFromConfig read so

@@ -121,6 +121,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			samplePassthrough      map[string]any
 			wantKey                string
 			wantCredentialEnvNames []string
+			wantEffortForwarding   registry.EffortForwarding
 		}{
 			{
 				name:                   "agent-client-protocol requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
@@ -130,6 +131,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalTurnEnd,
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
+				wantEffortForwarding:   registry.EffortNotForwarded,
 			},
 			{
 				name:                   "claude-code requires command, declares MCP injection supported, declares incremental/per_model usage, declares session_persistence as a resume blocker, and declares its Anthropic credential names",
@@ -142,6 +144,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				samplePassthrough:      map[string]any{"session_persistence": false},
 				wantKey:                "session_persistence",
 				wantCredentialEnvNames: []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
+				wantEffortForwarding:   registry.EffortForwarded,
 			},
 			{
 				name:                   "copilot-cli requires command, declares MCP injection supported, declares turn_end/per_model usage, declares no resume blocker, and declares its GitHub-token credential names",
@@ -151,6 +154,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalTurnEnd,
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
+				wantEffortForwarding:   registry.EffortForwarded,
 			},
 			{
 				name:                   "codex requires command, declares MCP injection translated, declares incremental/per_model usage, declares no resume blocker, and declares no credential names",
@@ -160,6 +164,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalIncremental,
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
+				wantEffortForwarding:   registry.EffortForwarded,
 			},
 			{
 				name:                   "opencode requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
@@ -169,6 +174,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalTurnEnd,
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
+				wantEffortForwarding:   registry.EffortForwarded,
 			},
 			{
 				name:                   "mock requires nothing, declares MCP injection unsupported, declares incremental/session_total usage, declares no resume blocker, and declares no credential names",
@@ -177,6 +183,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalIncremental,
 				wantUsageAttribution:   registry.UsageAttributionSessionTotal,
 				wantCredentialEnvNames: nil,
+				wantEffortForwarding:   registry.EffortNotForwarded,
 			},
 		}
 
@@ -228,6 +235,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				}
 				if got := meta.CredentialEnv.Names(); !slices.Equal(got, tt.wantCredentialEnvNames) {
 					t.Errorf("Agents.Meta(%q).CredentialEnv.Names() = %v, want %v", tt.kind, got, tt.wantCredentialEnvNames)
+				}
+
+				if meta.EffortForwarding != tt.wantEffortForwarding {
+					t.Errorf("Agents.Meta(%q).EffortForwarding = %q, want %q", tt.kind, meta.EffortForwarding, tt.wantEffortForwarding)
 				}
 
 				if meta.Deprecation != nil {

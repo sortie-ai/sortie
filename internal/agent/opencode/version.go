@@ -159,21 +159,23 @@ func checkMajorSettings(pt passthroughConfig, major runtimeMajor) *domain.AgentE
 		return nil
 	}
 
+	slot, slotKey := pt.variantSlot()
+
 	switch {
 	case pt.Pure:
 		return &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
 			Message: "opencode.pure is not supported by OpenCode 2.x; remove it or install a 1.x release",
 		}
-	case pt.Variant != "" && pt.Model == "":
+	case slot != "" && pt.Model == "":
 		return &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
-			Message: "opencode.variant needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.variant",
+			Message: fmt.Sprintf("opencode.%[1]s needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.%[1]s", slotKey),
 		}
-	case pt.Variant != "" && strings.Contains(pt.Model, "#"):
+	case slot != "" && strings.Contains(pt.Model, "#"):
 		return &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
-			Message: "opencode.model already names a variant after #; remove that suffix or remove opencode.variant",
+			Message: fmt.Sprintf("opencode.model already names a variant after #; remove that suffix or remove opencode.%s", slotKey),
 		}
 	default:
 		return nil

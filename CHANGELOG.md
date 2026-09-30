@@ -10,13 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The command that starts your agent (`agent.command`) can now also be written as a list with one part per line, so a program path or an agent name that contains a space reaches the agent intact. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 
+- The `copilot-cli` and `opencode` agent kinds now take an `effort` setting that sets the agent's reasoning level on every turn, as `claude-code` and `codex` already do, and an unset `effort` leaves the agent's default level. ([#1182](https://github.com/sortie-ai/sortie/issues/1182))
+
+- `sortie validate` and the run log now warn when `effort` is set for an agent kind that passes no reasoning level on, such as `agent-client-protocol`, whose users write the agent's own reasoning option in `agent.command`. ([#1182](https://github.com/sortie-ai/sortie/issues/1182))
+
 ### Changed
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 
+- A set `claude-code.effort` now takes precedence over a `CLAUDE_CODE_EFFORT_LEVEL` variable in Sortie's environment or on an SSH worker host, that variable keeps its effect while `effort` is unset, and a level Claude Code does not recognize now logs a warning. ([#1182](https://github.com/sortie-ai/sortie/issues/1182))
+
 ### Deprecated
 
-- Running the `opencode` agent kind on OpenCode 1.x is deprecated, and a later release removes it: runs on 1.x keep working and each logs a warning naming the installed version. OpenCode 2.x is published on npm as `@opencode/cli`, while `opencode-ai` ships only 1.x, so uninstall `opencode-ai` before installing `@opencode/cli`, and before switching remove `opencode.pure` and give any `opencode.variant` an `opencode.model` without a `#` suffix, or 2.x refuses the session. The OpenCode Docker example now installs 2.x. ([#1178](https://github.com/sortie-ai/sortie/issues/1178))
+- Running the `opencode` agent kind on OpenCode 1.x is deprecated, and a later release removes it: runs on 1.x keep working and each logs a warning naming the installed version. OpenCode 2.x is published on npm as `@opencode/cli`, while `opencode-ai` ships only 1.x, so uninstall `opencode-ai` before installing `@opencode/cli`, and before switching remove `opencode.pure` and give any `opencode.effort` or `opencode.variant` an `opencode.model` without a `#` suffix, or 2.x refuses the session. The OpenCode Docker example now installs 2.x. ([#1178](https://github.com/sortie-ai/sortie/issues/1178))
 
 ### Removed
 

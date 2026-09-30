@@ -61,6 +61,11 @@ type LaunchTarget struct {
 	// a remote session, passed through from StartSessionParams. Empty
 	// in local mode.
 	SSHEnvNames []string
+
+	// WithheldEnv lists environment variable names no launch through this
+	// target carries: a local launch runs without them, and a remote launch
+	// neither carries them nor lets the remote shell pass them to the agent.
+	WithheldEnv []string
 }
 
 // ResolveLaunchTarget resolves the workspace path and agent binary for a
@@ -202,9 +207,15 @@ func breaksWhitespaceSplit(arg string) bool {
 // t.SSHEnvNames. SSHOptions calls os.LookupEnv on every call, so
 // calling it once per launch reflects the orchestrator's environment
 // at that moment.
+//
+// A name in t.WithheldEnv is never carried, whether t.SSHEnvNames or a
+// settings entry names it, and is returned as the options' Unset list.
 func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions {
 	var carried []sshutil.EnvVar
-	skip := make(map[string]bool, len(t.SSHEnvNames)+len(settings))
+	skip := make(map[string]bool, len(t.WithheldEnv)+len(t.SSHEnvNames)+len(settings))
+	for _, name := range t.WithheldEnv {
+		skip[name] = true
+	}
 	for _, entry := range settings {
 		skip[entry.Name] = true
 	}
@@ -223,7 +234,7 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 
 	added := make(map[string]bool, len(settings))
 	for _, entry := range settings {
-		if entry.Value == "" || added[entry.Name] {
+		if entry.Value == "" || added[entry.Name] || slices.Contains(t.WithheldEnv, entry.Name) {
 			continue
 		}
 		added[entry.Name] = true
@@ -233,6 +244,7 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 	return sshutil.SSHOptions{
 		StrictHostKeyChecking: t.SSHStrictHostKeyChecking,
 		Env:                   carried,
+		Unset:                 slices.Clone(t.WithheldEnv),
 	}
 }
 
@@ -240,7 +252,8 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 // cmd.Dir to it, sets cmd.Env to os.Environ() when it is nil, and
 // replaces every PWD entry already in cmd.Env with one naming the same
 // verified path, so a subprocess that trusts PWD over its own working
-// directory still lands in the workspace. On failure cmd.Dir and
+// directory still lands in the workspace. It also removes every entry
+// named in t.WithheldEnv from cmd.Env. On failure cmd.Dir and
 // cmd.Env are left untouched and the verification error is returned;
 // the caller must not start cmd.
 //
@@ -255,8 +268,22 @@ func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
+	cmd.Env = dropEnvNames(cmd.Env, t.WithheldEnv)
 	cmd.Env = setPWD(cmd.Env, absPath)
 	return nil
+}
+
+// dropEnvNames returns env without the entries named in names, compared
+// as [isEnvEntryNamed] compares.
+func dropEnvNames(env, names []string) []string {
+	if len(names) == 0 {
+		return env
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(entry string) bool {
+		return slices.ContainsFunc(names, func(name string) bool {
+			return isEnvEntryNamed(entry, name)
+		})
+	})
 }
 
 // setPWD returns env with every entry named PWD removed (case-
@@ -274,18 +301,23 @@ func setPWD(env []string, value string) []string {
 	return append(filtered, "PWD="+value)
 }
 
-// isPWDEntry reports whether entry is an env-slice assignment of PWD,
-// comparing case-insensitively on Windows to match that platform's own
-// environment-variable name resolution.
+// isPWDEntry reports whether entry is an env-slice assignment of PWD.
 func isPWDEntry(entry string) bool {
+	return isEnvEntryNamed(entry, "PWD")
+}
+
+// isEnvEntryNamed reports whether entry is an env-slice assignment of
+// name, comparing case-insensitively on Windows to match that platform's
+// own environment-variable name resolution.
+func isEnvEntryNamed(entry, name string) bool {
 	key, _, found := strings.Cut(entry, "=")
 	if !found {
 		return false
 	}
 	if runtime.GOOS == "windows" {
-		return strings.EqualFold(key, "PWD")
+		return strings.EqualFold(key, name)
 	}
-	return key == "PWD"
+	return key == name
 }
 
 // AuxiliaryCommand builds a one-shot runtime subcommand run in the

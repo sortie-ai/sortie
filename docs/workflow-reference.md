@@ -1888,7 +1888,9 @@ An entry keyed to a kind whose usage-reporting declaration resolves to no token 
 
 Each adapter (tracker or agent) may define configuration in a top-level object named after its `kind` value. These values are passed through to the adapter without validation by the orchestrator core.
 
-A session reads the block belonging to the agent kind it was dispatched on, and reads it again on every attempt of that session. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.10](#210-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind.
+A session uses the block belonging to the agent kind it was dispatched on. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.10](#210-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind. An agent adapter reads its block when Sortie starts, so a change to a block takes effect at the next restart; `mcp_config` is the exception, because it is resolved again for each new session.
+
+**Reasoning effort:** `effort` is an optional string key that means the same in the block of every agent kind that reads it. An absent key, a YAML null, and an empty string leave the level unset, and the agent runs at its own default. Any other string is the level, delivered exactly as written: Sortie does not trim it, change its case, or check it against a list of names, because the names a runtime accepts depend on its version and on the model. A set level rides every turn of every session, credential verification included, and outranks every host setting that names a level, `CLAUDE_CODE_EFFORT_LEVEL` included. A cap a runtime's own settings impose, such as Claude Code's `maxEffortLevel`, still applies. The runtime judges the name, and it takes one of three courses with a name it does not accept: it refuses the run before any work, it runs at its default level with a warning in Sortie's log, or it runs at another level and reports nothing. The table of each adapter below states which course its runtime takes. A value of any other YAML type fails construction and, offline, is reported by `sortie validate` under the check `<kind>.effort.wrong_type`. The `claude-code`, `codex`, `copilot-cli`, and `opencode` kinds forward the level. The `agent-client-protocol` and `mock` kinds pass none, and a workflow that reaches either one with `effort` set in its block draws the advisory `agent.effort.not_forwarded`.
 
 **File tracker adapter:**
 
@@ -1924,7 +1926,7 @@ claude-code:
   session_persistence: true
 ```
 
-The `claude-code` block is forwarded to the Claude Code adapter, which runs `claude -p --output-format stream-json --verbose` once per turn and maps these fields to CLI flags. Two keys are checked before a run starts, `permission_mode` and `session_persistence`; the preflight refuses a value it cannot support, while the adapter itself refuses nothing and would launch on either. Every other value reaches the CLI as written, except `mcp_config`, which the generated configuration the worker writes supersedes. What the CLI does with an invalid value differs per flag: `--effort` falls back to the default effort with a warning, and an unknown model name reaches the API and fails there. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `claude-code.<key>.wrong_type`.
+The `claude-code` block is forwarded to the Claude Code adapter, which runs `claude -p --output-format stream-json --verbose` once per turn and maps these fields to CLI flags. Two keys are checked before a run starts, `permission_mode` and `session_persistence`; the preflight refuses a value it cannot support, while the adapter itself refuses nothing and would launch on either. Every other value reaches the CLI as written, except `mcp_config`, which the generated configuration the worker writes supersedes. What the CLI does with an invalid value differs per flag: `--effort` with a name Claude Code does not recognize falls back to the model's default level and writes a warning to Claude Code's standard error, which Sortie logs as a warning, and an unknown model name reaches the API and fails there. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `claude-code.<key>.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -1933,7 +1935,7 @@ The `claude-code` block is forwarded to the Claude Code adapter, which runs `cla
 | `claude-code.fallback_model` | string | _(absent)_ | Forwarded to `--fallback-model`. Accepts one model or a comma-separated chain. Covers model availability only; see the fallback note below. |
 | `claude-code.max_turns` | integer | _(absent)_ | Forwarded to `--max-turns` when greater than zero. Claude Code's own agentic turn budget within one invocation. |
 | `claude-code.max_budget_usd` | number | _(absent)_ | Forwarded to `--max-budget-usd` when greater than zero. Spend cap for one invocation. The counter restarts on every turn, including resumed ones, so the ceiling for a whole session is this value times `agent.max_turns`. |
-| `claude-code.effort` | string | _(absent)_ | Forwarded to `--effort`. Values: `low`, `medium`, `high`, `xhigh`, `max`, and `ultracode`, which starts the session at `xhigh` with ultracode enabled. The accepted set depends on the model. |
+| `claude-code.effort` | string | _(absent)_ | Forwarded to `--effort` on every turn; see the reasoning effort paragraph above. Values: `low`, `medium`, `high`, `xhigh`, `max`, and `ultracode`, which starts the session at `xhigh` with ultracode enabled. The accepted set depends on the model. A set key outranks `CLAUDE_CODE_EFFORT_LEVEL`: every launch of the session runs without that variable, locally and over SSH, and an unset key leaves it in effect. A `maxEffortLevel` cap in Claude Code's settings still applies. An unrecognized name, `auto` included, runs at the model's default level, and Sortie logs Claude Code's warning once per session. A level the model lacks runs at the highest level the model supports below it, and a model without levels runs with none; neither is reported. |
 | `claude-code.allowed_tools` | string | _(absent)_ | Forwarded to `--allowedTools` as a single argument. A comma- or space-separated list of tools that run without a permission prompt, including scoped rules such as `Bash(git diff *)`. |
 | `claude-code.disallowed_tools` | string | _(absent)_ | Forwarded to `--disallowedTools` as a single argument. A comma- or space-separated deny list. A bare tool name removes that tool from the model's context; a scoped rule leaves the tool available and denies only matching calls. |
 | `claude-code.system_prompt` | string | _(absent)_ | Forwarded to `--append-system-prompt`. The text is appended to the default system prompt rather than replacing it. Claude Code's built-in tool instructions stay in effect. |
@@ -1951,6 +1953,7 @@ The `claude-code` block is forwarded to the Claude Code adapter, which runs `cla
 ```yaml
 copilot-cli:
   model: gpt-5-mini
+  effort: high
   max_autopilot_continues: 100
   agent: coding-agent
   allowed_tools: shell
@@ -1966,6 +1969,7 @@ The `copilot-cli` block is forwarded to the Copilot CLI adapter, which runs `cop
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `copilot-cli.model` | string | _(absent)_ | Forwarded to `--model`. The accepted model identifiers depend on the installed CLI and the account; `copilot --help` lists the set. |
+| `copilot-cli.effort` | string | _(absent)_ | Forwarded to `--reasoning-effort` on every turn, credential verification included; see the reasoning effort paragraph above. `copilot --help` lists the names the installed CLI accepts. The flag outranks `effortLevel` in the user and repository Copilot settings, and no environment variable carries a level. The CLI exits with status 1 before any model request on an unknown name, on a level the chosen model does not list, and on any level for a model without levels. Sortie reports the runtime's text on the credential-verification session, before any working turn, and retries with exponential backoff. With a custom provider (`COPILOT_PROVIDER_BASE_URL`) the CLI skips the model check, so the name reaches the provider as written. |
 | `copilot-cli.max_autopilot_continues` | integer | `50` | Forwarded to `--max-autopilot-continues`, the ceiling on autopilot continuation steps inside one turn. The flag is always passed. An absent key, a non-integer value, and any value of zero or less all send `50`. Reaching the ceiling ends the turn without the runtime's task-completion report, which the adapter reports as a failed turn with error kind `turn_incomplete`: the attempt ends there and the scheduled retry resumes the same session with a fresh ceiling. |
 | `copilot-cli.agent` | string | _(absent)_ | Forwarded to `--agent`. Selects a named Copilot agent persona for the turn. |
 | `copilot-cli.allowed_tools` | string | _(absent)_ | Forwarded to `--allow-tool` as a single argument. A non-whitespace value replaces `--allow-all`, so it changes what the launch approves. See the tool-scoping note below. Each rule takes the form `kind(argument)`, with the argument optional, so a bare kind names the whole kind; for example `write` or `shell(git:*)`. |
@@ -1986,7 +1990,7 @@ The `copilot-cli` block is forwarded to the Copilot CLI adapter, which runs `cop
 ```yaml
 codex:
   model: o3                       # Model override (e.g., "gpt-5.4", "o3")
-  effort: medium                  # Reasoning effort: "low", "medium", "high"
+  effort: medium                  # Reasoning effort: the model's own level name, for example "low", "medium", "high"
   approval_policy: never          # "never" is the only value the preflight allows
   thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
   personality: concise            # Personality preset
@@ -2002,7 +2006,7 @@ The Codex adapter uses a persistent subprocess model: the app-server is launched
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `codex.model` | string | _(absent)_ | Forwarded to both `thread/start`'s `model` field and `turn/start`'s `model` field when non-empty. |
-| `codex.effort` | string | _(absent)_ | Forwarded to `turn/start`'s `effort` field when non-empty. Not sent on `thread/start`. |
+| `codex.effort` | string | _(absent)_ | Forwarded to `turn/start`'s `effort` field on every turn when non-empty; see the reasoning effort paragraph above. The value overrides the configured `model_reasoning_effort` for that turn and later turns of the thread. Codex sends the name as written, so the provider refuses an unknown name or a level the model lacks with HTTP 400, and the turn fails with its text, the credential-verification turn first. Not sent on `thread/start`. |
 | `codex.approval_policy` | string | `never` | Forwarded to `thread/start`'s `approvalPolicy` field, defaulting to `never` when absent. `never` is the only value that survives the dispatch preflight; every other non-empty value fails the check `codex.approval_policy.interactive` and no agent is dispatched while that value stands. See the note below. |
 | `codex.thread_sandbox` | string | `workspaceWrite` | Reaches two protocol fields: normalized to kebab-case (`workspace-write`, `read-only`, `danger-full-access`, `external-sandbox`) for `thread/start`'s `sandbox` field, and denormalized back to camelCase for `turn/start`'s `sandboxPolicy.type` field. Values: `workspaceWrite`, `readOnly`, `dangerFullAccess`, `externalSandbox`. |
 | `codex.turn_sandbox_policy` | map | _(absent)_ | Merged over the default `sandboxPolicy` sent on `turn/start` (`writableRoots` defaulting to the workspace path, `networkAccess` defaulting to `false`); a key here replaces the matching default key, including `writableRoots` and `networkAccess`. Sent on the first turn of every session, and on every later turn once it is set. |
@@ -2019,7 +2023,7 @@ The Codex adapter uses a persistent subprocess model: the app-server is launched
 opencode:
   model: anthropic/claude-sonnet-4-5
   agent: build
-  variant: high
+  effort: high
   thinking: true
   pure: false
   dangerously_skip_permissions: true
@@ -2033,15 +2037,16 @@ opencode:
 
 The `opencode` block is forwarded to the OpenCode adapter, which supports OpenCode 1.x and 2.x and detects which one `agent.command` names by querying its version at the start of each session, refusing a version it cannot read and any major other than 1 or 2. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `opencode.<key>.wrong_type`.
 
-Support for OpenCode 1.x is deprecated, and a later Sortie release removes it. A run on 1.x works unchanged and logs one warning when its agent session starts, reading `support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli` with the detected version in `version`. OpenCode 2.x is published on npm as `@opencode/cli`, and the `opencode-ai` package ships only 1.x. Both packages install the `opencode` command, so run `npm uninstall -g opencode-ai` before a global install of `@opencode/cli`, which npm otherwise refuses with `EEXIST`. A workflow moving to 2.x first clears the settings that the `opencode.pure` and `opencode.variant` rows of the table below say fail session start on that major. `sortie validate` does not report the deprecation, because it never runs `agent.command`.
+Support for OpenCode 1.x is deprecated, and a later Sortie release removes it. A run on 1.x works unchanged and logs one warning when its agent session starts, reading `support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli` with the detected version in `version`. OpenCode 2.x is published on npm as `@opencode/cli`, and the `opencode-ai` package ships only 1.x. Both packages install the `opencode` command, so run `npm uninstall -g opencode-ai` before a global install of `@opencode/cli`, which npm otherwise refuses with `EEXIST`. A workflow moving to 2.x first clears `opencode.pure`, and gives `opencode.effort` or `opencode.variant`, whichever it sets, an `opencode.model` without a `#` suffix, because the rows of the table below say those settings fail session start on that major otherwise. `sortie validate` does not report the deprecation, because it never runs `agent.command`.
 
 On 1.x the adapter runs `opencode run --format json --dir <workspace>` once per turn with the prompt as the final positional argument, appends `--session <session_id>` when continuing a session, and recovers final token usage with `opencode export --sanitize <session_id>` when the session ID is known. On 2.x it runs `opencode run --format json --standalone` with the prompt on standard input instead, and recovers usage with `opencode session export --standalone --sanitize <session_id>`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model` on both majors. On 2.x, a non-empty `opencode.variant` is appended after a `#`. |
+| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model` on both majors. On 2.x, a non-empty `opencode.effort` or `opencode.variant` is appended after a `#`. |
 | `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent` on both majors. Selects the OpenCode agent profile for the turn. |
-| `opencode.variant` | string | _(absent)_ | On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. |
+| `opencode.effort` | string | _(absent)_ | Fills OpenCode's model-variant slot on every turn, credential verification included; see the reasoning effort paragraph above. On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. A variant the model does not define is refused on 2.x before any model request, with `Variant unavailable for <provider>/<model>: <variant>`, and the turn fails with that text, the credential-verification session first. On 1.x the run proceeds without a variant, exits 0, and reports nothing. Setting it together with `opencode.variant` fails under `opencode.effort.conflict`. |
+| `opencode.variant` | string | _(absent)_ | Fills the same slot as `opencode.effort`; setting both fails construction and, offline, is reported by `sortie validate` under the check `opencode.effort.conflict`. On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. |
 | `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command on both majors. |
 | `opencode.pure` | boolean | `false` | Adds `--pure` to the run command on 1.x. OpenCode 2.x accepts no equivalent switch, so a `true` value fails session start on that major. |
 | `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`, on both majors. When `false`, the runtime refuses every permissioned tool call instead of performing it; OpenCode 2.x also ends the turn at the first refusal. |
@@ -2052,6 +2057,7 @@ On 1.x the adapter runs `opencode run --format json --dir <workspace>` once per 
 **Validation rules:**
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
+- `opencode.effort` and `opencode.variant` MUST NOT both be set, because both fill the model-variant slot.
 - The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one for the detected major. The configuration document the adapter writes disables OpenCode's title agent on both majors, so a local turn makes no title request and a session keeps OpenCode's default title.
 
 **Removed `kiro` kind:**
@@ -2071,7 +2077,7 @@ agent-client-protocol:
   mcp_config: ./mcp-servers.json
 ```
 
-The `agent-client-protocol` block is forwarded to the Agent Client Protocol adapter. `mcp_config` is the block's only key. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `agent-client-protocol.mcp_config.wrong_type`.
+The `agent-client-protocol` block is forwarded to the Agent Client Protocol adapter. `mcp_config` is the block's only key. The kind carries no reasoning setting. Write the runtime's own reasoning option in `agent.command`, for example `copilot --acp --reasoning-effort high` or `kiro-cli acp -a --effort high`; a runtime without one runs at its own default. The option and its value are the operator's call, and Sortie checks neither. An `effort` key in this block draws the advisory `agent.effort.not_forwarded`. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `agent-client-protocol.mcp_config.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2651,6 +2657,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `reactions.merge_conflicts.*`                   | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.label_commands.*`                    | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.merge_completion.*`                  | **No effect.** Requires restart. The reaction config, `target_state` included, is built once at construction. |
+| `claude-code.*`, `codex.*`, `copilot-cli.*`, `opencode.*`, `agent-client-protocol.*` | **No effect.** Requires restart. Each adapter reads its block once at process start, except `mcp_config`, which applies to the next session. |
 | `notifications`                        | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
@@ -2726,6 +2733,7 @@ These offline checks never contact Linear and never log the API key value. State
 | `reactions.label_commands.fix_branch_missing`               | `reactions.label_commands` names a provider, the fix label is non-empty, and the prompt template has no `label_fix` branch. |
 | `agent.kind.deprecated`                                     | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) is registered as deprecated. |
 | `agent.kind.retired`                                        | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) was removed and converted onto its replacement kind. The warning names the converted fields, the launch the replacement kind performs, and the settings not carried, and states that the conversion is temporary. |
+| `agent.effort.not_forwarded`                                | A kind the configuration reaches whose adapter passes no reasoning level (`agent-client-protocol`, `mock`) has a non-empty `effort` in its settings block, or a value of another type there. |
 | `token_rates`                                               | `token_rates` or one of its entries is not a map, an entry has an empty agent kind, a rate is not a finite, non-negative number, an entry names a key Sortie does not recognize, or an entry lacks `input_per_mtok` or `output_per_mtok`. |
 
 ---

@@ -557,6 +557,48 @@ func TestLaunchTarget_SSHOptions(t *testing.T) {
 	})
 }
 
+func TestLaunchTarget_SSHOptions_WithheldEnv(t *testing.T) {
+	// Not parallel: sets process environment via t.Setenv.
+	t.Setenv("SSH_WITHHELD_TEST_KEPT", "kept-value")
+	t.Setenv("SSH_WITHHELD_TEST_HELD", "held-value")
+	t.Setenv("SSH_WITHHELD_TEST_SETTING", "held-setting-value")
+
+	withheld := []string{"SSH_WITHHELD_TEST_HELD", "SSH_WITHHELD_TEST_SETTING", "SSH_WITHHELD_TEST_ABSENT"}
+	target := LaunchTarget{
+		SSHEnvNames: []string{"SSH_WITHHELD_TEST_KEPT", "SSH_WITHHELD_TEST_HELD", "SSH_WITHHELD_TEST_SETTING"},
+		WithheldEnv: slices.Clone(withheld),
+	}
+	settings := []sshutil.EnvVar{
+		{Name: "SSH_WITHHELD_TEST_SETTING", Value: "managed"},
+		{Name: "SSH_WITHHELD_TEST_OTHER", Value: "other"},
+	}
+
+	got := target.SSHOptions(settings...)
+
+	wantEnv := []sshutil.EnvVar{
+		{Name: "SSH_WITHHELD_TEST_KEPT", Value: "kept-value"},
+		{Name: "SSH_WITHHELD_TEST_OTHER", Value: "other"},
+	}
+	if !slices.Equal(got.Env, wantEnv) {
+		t.Errorf("SSHOptions(...).Env = %+v, want %+v", got.Env, wantEnv)
+	}
+	if !slices.Equal(got.Unset, withheld) {
+		t.Errorf("SSHOptions(...).Unset = %v, want %v", got.Unset, withheld)
+	}
+
+	got.Unset[0] = "MUTATED"
+	if !slices.Equal(target.WithheldEnv, withheld) {
+		t.Errorf("LaunchTarget.WithheldEnv = %v after the caller edited Unset, want %v", target.WithheldEnv, withheld)
+	}
+
+	t.Run("no withheld names yields nil Unset", func(t *testing.T) {
+		var empty LaunchTarget
+		if got := empty.SSHOptions(); got.Unset != nil {
+			t.Errorf("SSHOptions() Unset = %v, want nil", got.Unset)
+		}
+	})
+}
+
 func TestLaunchTarget_BindWorkspace(t *testing.T) {
 	t.Parallel()
 
@@ -604,6 +646,64 @@ func TestLaunchTarget_BindWorkspace(t *testing.T) {
 		want := setPWD(os.Environ(), ws)
 		if !slices.Equal(cmd.Env, want) {
 			t.Errorf("BindWorkspace().Env = %v, want os.Environ() plus PWD=%s", cmd.Env, ws)
+		}
+	})
+
+	t.Run("withheld entries are removed and exactly one PWD remains", func(t *testing.T) {
+		t.Parallel()
+		ws := t.TempDir()
+		target := LaunchTarget{WorkspacePath: ws, WithheldEnv: []string{"HELD", "ABSENT"}}
+		env := []string{"FOO=bar", "HELD=1", "PWD=/some/other/path", "HELD=2", "HELD_NOT=3"}
+		original := slices.Clone(env)
+		cmd := exec.Command("true")
+		cmd.Env = env
+
+		if agentErr := target.BindWorkspace(cmd); agentErr != nil {
+			t.Fatalf("BindWorkspace() error = %v, want nil", agentErr)
+		}
+
+		want := []string{"FOO=bar", "HELD_NOT=3", "PWD=" + ws}
+		if !slices.Equal(cmd.Env, want) {
+			t.Errorf("BindWorkspace().Env = %v, want %v", cmd.Env, want)
+		}
+		if !slices.Equal(env, original) {
+			t.Errorf("caller's env slice = %v after BindWorkspace, want it unchanged: %v", env, original)
+		}
+	})
+
+	t.Run("nil Env drops withheld names from the inherited environment", func(t *testing.T) {
+		t.Parallel()
+		ws := t.TempDir()
+		const name = "PATH"
+		if _, ok := os.LookupEnv(name); !ok {
+			t.Skipf("%s is not set in the test environment", name)
+		}
+		target := LaunchTarget{WorkspacePath: ws, WithheldEnv: []string{name}}
+		cmd := exec.Command("true")
+
+		if agentErr := target.BindWorkspace(cmd); agentErr != nil {
+			t.Fatalf("BindWorkspace() error = %v, want nil", agentErr)
+		}
+
+		if slices.ContainsFunc(cmd.Env, func(entry string) bool { return isEnvEntryNamed(entry, name) }) {
+			t.Errorf("BindWorkspace().Env still holds an entry named %s", name)
+		}
+	})
+
+	t.Run("failed verification leaves Env untouched", func(t *testing.T) {
+		t.Parallel()
+		target := LaunchTarget{WorkspacePath: filepath.Join(t.TempDir(), "missing"), WithheldEnv: []string{"HELD"}}
+		env := []string{"FOO=bar", "HELD=1", "PWD=/some/other/path"}
+		cmd := exec.Command("true")
+		cmd.Env = slices.Clone(env)
+
+		agentErr := target.BindWorkspace(cmd)
+
+		if agentErr == nil {
+			t.Fatal("BindWorkspace(missing workspace) error = nil, want non-nil")
+		}
+		if !slices.Equal(cmd.Env, env) {
+			t.Errorf("BindWorkspace().Env = %v after a failed bind, want %v", cmd.Env, env)
 		}
 	})
 
@@ -744,5 +844,36 @@ func TestAuxiliaryTimeout(t *testing.T) {
 		if got := AuxiliaryTimeout(domain.AgentConfig{ReadTimeoutMS: tt.readTimeoutMS}); got != tt.want {
 			t.Errorf("AuxiliaryTimeout(ReadTimeoutMS=%d) = %v, want %v", tt.readTimeoutMS, got, tt.want)
 		}
+	}
+}
+
+func TestIsEnvEntryNamed(t *testing.T) {
+	t.Parallel()
+
+	foldsCase := runtime.GOOS == "windows"
+
+	tests := []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{name: "exact name", entry: "HELD=1", want: true},
+		{name: "empty value", entry: "HELD=", want: true},
+		{name: "value containing equals", entry: "HELD=a=b", want: true},
+		{name: "other case", entry: "held=1", want: foldsCase},
+		{name: "longer name", entry: "HELD_NOT=1", want: false},
+		{name: "prefix of the name", entry: "HEL=1", want: false},
+		{name: "no equals sign", entry: "HELD", want: false},
+		{name: "name only in the value", entry: "OTHER=HELD", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isEnvEntryNamed(tt.entry, "HELD"); got != tt.want {
+				t.Errorf("isEnvEntryNamed(%q, %q) = %v, want %v", tt.entry, "HELD", got, tt.want)
+			}
+		})
 	}
 }

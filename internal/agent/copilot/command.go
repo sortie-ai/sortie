@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -12,6 +13,7 @@ import (
 // with zero-value meaning "not configured."
 type passthroughConfig struct {
 	Model                 string
+	Effort                string
 	MaxAutopilotContinues int
 	Agent                 string
 	AllowedTools          string
@@ -30,6 +32,10 @@ type passthroughConfig struct {
 // rather than defaulting.
 func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
 	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	effort, fault := registry.EffortSetting(config)
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}
@@ -60,6 +66,7 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 
 	return passthroughConfig{
 		Model:                 model,
+		Effort:                effort,
 		MaxAutopilotContinues: typeutil.IntFrom(config, "max_autopilot_continues", 0),
 		Agent:                 agent,
 		AllowedTools:          allowedTools,
@@ -101,6 +108,9 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 
 	if pt.Model != "" {
 		args = append(args, "--model", pt.Model)
+	}
+	if pt.Effort != "" {
+		args = append(args, "--reasoning-effort", pt.Effort)
 	}
 	if pt.Agent != "" {
 		args = append(args, "--agent", pt.Agent)

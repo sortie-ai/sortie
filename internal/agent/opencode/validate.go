@@ -12,14 +12,15 @@ import (
 // validateConfig checks opencode-specific configuration constraints and
 // returns diagnostics for the sortie validate pipeline. It does not
 // construct an adapter instance or launch a subprocess. It shares the
-// overlap check with [NewOpenCodeAdapter], which reaches it through
-// [checkCrossField], so the constructor's refusal and the offline
-// verdict report that fault identically. The warning below has no
-// constructor counterpart.
+// overlap check and the effort and variant conflict check with
+// [NewOpenCodeAdapter], which reaches them through [checkCrossField], so
+// the constructor's refusal and the offline verdict report each fault
+// identically. The warning below has no constructor counterpart.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
-	if _, fault := parsePassthroughConfig(fields.Passthrough); fault != nil {
+	pt, fault := parsePassthroughConfig(fields.Passthrough)
+	if fault != nil {
 		diags = append(diags, registry.ValidationDiag{
 			Severity: "error",
 			Check:    "opencode." + fault.Key + ".wrong_type",
@@ -29,6 +30,7 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 
 	diags = append(diags, validateSkipPermissions(fields.Passthrough)...)
 	diags = append(diags, validateToolOverlap(fields.Passthrough)...)
+	diags = append(diags, validateVariantConflict(pt)...)
 
 	return diags
 }
@@ -67,6 +69,21 @@ func validateToolOverlap(passthrough map[string]any) []registry.ValidationDiag {
 	return []registry.ValidationDiag{{
 		Severity: "error",
 		Check:    "opencode.allowed_tools.overlap",
+		Message:  message,
+	}}
+}
+
+// validateVariantConflict reports an error when effort and variant are
+// both set, since both fill the runtime's one model-variant slot.
+func validateVariantConflict(pt passthroughConfig) []registry.ValidationDiag {
+	message := variantConflictMessage(pt)
+	if message == "" {
+		return nil
+	}
+
+	return []registry.ValidationDiag{{
+		Severity: "error",
+		Check:    "opencode." + registry.EffortKey + ".conflict",
 		Message:  message,
 	}}
 }
