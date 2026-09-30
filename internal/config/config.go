@@ -449,6 +449,18 @@ func ResolveAgentSettings(cfg ServiceConfig, selection SettingsSelection, workfl
 	}
 }
 
+// overlaySettings lays block over base in place: a written key replaces
+// the inherited value whole, a null key removes it.
+func overlaySettings(base, block map[string]any) {
+	for key, value := range block {
+		if value == nil {
+			delete(base, key)
+		} else {
+			base[key] = value
+		}
+	}
+}
+
 // overlayRuleSettings lays the block of the rule selection names over
 // passthrough: a written key replaces the inherited value whole, a null
 // key removes it. It returns the rule's name when a block applied, else "".
@@ -463,13 +475,7 @@ func overlayRuleSettings(passthrough map[string]any, rules []DispatchRule, selec
 		if rule.SettingsKind != selection.Kind {
 			return ""
 		}
-		for key, value := range rule.Settings {
-			if value == nil {
-				delete(passthrough, key)
-			} else {
-				passthrough[key] = value
-			}
-		}
+		overlaySettings(passthrough, rule.Settings)
 		return rule.Name
 	}
 	return ""

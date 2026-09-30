@@ -861,6 +861,7 @@ func TestRetiredConversion_RuleBlockConvertsWithItsKind(t *testing.T) {
 	}{
 		{name: "block is converted and replaced under the replacement kind", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"model": "m1", "extra": "zz"}), top(), nil), wantModern: modern, wantNotCarry: "not carried: dispatch.rules[0].legacy.extra", wantRuleAgent: replacementKind},
 		{name: "a key the rule already sets under the replacement kind wins", raw: retiredRuleRaw(plainKind, own, top(), nil), wantModern: map[string]any{"mode": "own", "literal": "$NOT_RESOLVED_AGAIN"}, wantRuleAgent: replacementKind},
+		{name: "rule block inherits the top-level keys it does not write", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"extra": "zz"}), top(), nil), wantModern: modern, wantNotCarry: "not carried: dispatch.rules[0].legacy.extra", wantRuleAgent: replacementKind},
 		{name: "rule takes its kind from dispatch.default.agent", raw: retiredRuleRaw(plainKind, retiredRule(false, top()), top(), map[string]any{"agent": retiredKind}), wantModern: modern},
 		{name: "no top-level block and an empty rule block leave the command unchanged", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{}), nil, nil), wantModern: modern, wantRuleAgent: replacementKind},
 		{name: "conversion that does not govern sessions is advisory only", raw: retiredRuleRaw(replacementKind, retiredRule(true, map[string]any{"model": "m2"}), top(), nil), wantModern: modern, wantRuleAgent: replacementKind},
@@ -899,6 +900,7 @@ func TestRetiredConversion_RuleBlockRefusals(t *testing.T) {
 	}{
 		{name: "rule block converts to a different command than the top-level block", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"model": "m2"}), top(), nil), wantField: "dispatch.rules[0].legacy", wantMsg: changesCommand},
 		{name: "rule block changes the command when no top-level block exists", raw: retiredRuleRaw(plainKind, retiredRule(true, top()), nil, nil), wantField: "dispatch.rules[0].legacy", wantMsg: changesCommand},
+		{name: "rule block removes an inherited key the command carries", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"model": nil}), top(), nil), wantField: "dispatch.rules[0].legacy", wantMsg: changesCommand},
 		{name: "conversion fault in the rule block", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"bad": true}), top(), nil), wantField: "dispatch.rules[0].legacy.bad", wantMsg: `agent kind "legacy" was removed and this configuration cannot be converted to agent kind "modern": bad is refused`},
 	}
 

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -318,9 +319,10 @@ func (g *retiredGroup) convertSettings(settings map[string]any, field string) (l
 	return local, remote, nil
 }
 
-// convertRuleBlocks converts every rule block of the retired kind. A rule
-// cannot set a command, so a conversion that changes the replacement's
-// command fails the load. It leaves raw untouched.
+// convertRuleBlocks converts every rule block of the retired kind as it
+// applies, laid over the kind's top-level block. A rule cannot set a
+// command, so a conversion that changes the replacement's command fails
+// the load. It leaves raw untouched.
 func (g *retiredGroup) convertRuleBlocks(raw map[string]any, defaultKind string) error {
 	for i, rule := range dispatchRuleMaps(raw) {
 		kind := defaultKind
@@ -338,7 +340,12 @@ func (g *retiredGroup) convertRuleBlocks(raw map[string]any, defaultKind string)
 
 		field := fmt.Sprintf("dispatch.rules[%d].%s", i, g.kind)
 		settings, _ := block.(map[string]any)
-		local, remote, err := g.convertSettings(settings, field)
+		effective := maps.Clone(g.settings)
+		if effective == nil {
+			effective = map[string]any{}
+		}
+		overlaySettings(effective, settings)
+		local, remote, err := g.convertSettings(effective, field)
 		if err != nil {
 			return err
 		}
