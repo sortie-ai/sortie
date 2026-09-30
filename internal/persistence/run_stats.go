@@ -18,6 +18,10 @@ type RunHistoryCapabilities struct {
 	HasTokens           bool // migration 011: the four token columns
 	HasTokenMeasurement bool // migration 012: tokens_measured
 	HasCacheWriteTokens bool // migration 020
+
+	// HasConfiguredSettings is outside [RunHistoryCapabilities.Full];
+	// [RunHistoryCapabilities.ModelBreakdown] depends on it.
+	HasConfiguredSettings bool
 }
 
 // Full reports whether the database carries every optional run_history
@@ -28,6 +32,12 @@ type RunHistoryCapabilities struct {
 // an exceptional one.
 func (c RunHistoryCapabilities) Full() bool {
 	return c.HasTurnsCompleted && c.HasReviewMetadata && c.HasRuleRouting && c.HasTokens && c.HasTokenMeasurement
+}
+
+// ModelBreakdown reports whether a read can group runs by configured
+// model: Full plus the configured-settings columns.
+func (c RunHistoryCapabilities) ModelBreakdown() bool {
+	return c.Full() && c.HasConfiguredSettings
 }
 
 // RunStatsRow is the narrow run_history projection the aggregate read
@@ -47,25 +57,25 @@ type RunStatsRow struct {
 	CacheReadTokens  int64
 	CacheWriteTokens int64 // 0 when the database lacks the column
 	TokensMeasured   bool
+
+	// ConfiguredModel is empty when the run named none or
+	// [RunHistoryCapabilities.ModelBreakdown] reports false.
+	ConfiguredModel string
 }
 
-// runStatsSelectFull projects every RunStatsRow field except
-// CacheWriteTokens. It is used when RunHistoryCapabilities.Full reports
-// true and HasCacheWriteTokens reports false.
-const runStatsSelectFull = `SELECT status, agent_adapter, rule_name, template_id, started_at, completed_at,
-	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured
-FROM run_history`
+// runStatsColumnsFull is the column list when Full reports true and
+// HasCacheWriteTokens false.
+const runStatsColumnsFull = `SELECT status, agent_adapter, rule_name, template_id, started_at, completed_at,
+	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured`
 
-// runStatsSelectFullWithCacheWrite projects every RunStatsRow field. It is
-// used when RunHistoryCapabilities.Full and HasCacheWriteTokens both
-// report true.
-const runStatsSelectFullWithCacheWrite = `SELECT status, agent_adapter, rule_name, template_id, started_at, completed_at,
-	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured
-FROM run_history`
+// runStatsColumnsFullWithCacheWrite is the column list when Full and
+// HasCacheWriteTokens both report true.
+const runStatsColumnsFullWithCacheWrite = `SELECT status, agent_adapter, rule_name, template_id, started_at, completed_at,
+	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured`
 
-// runStatsSelectBase projects only the base columns every schema version
-// carries. It is used when RunHistoryCapabilities.Full reports false.
-const runStatsSelectBase = `SELECT status, agent_adapter, started_at, completed_at FROM run_history`
+// runStatsColumnsBase is the column list every schema version carries,
+// used when Full reports false.
+const runStatsColumnsBase = `SELECT status, agent_adapter, started_at, completed_at`
 
 // RunHistoryCapabilities reports which optional run_history column groups
 // this store's database carries, by reading the table's live column set
@@ -110,6 +120,8 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 			columns["total_tokens"] && columns["cache_read_tokens"],
 		HasTokenMeasurement: columns["tokens_measured"],
 		HasCacheWriteTokens: columns["cache_write_tokens"],
+		HasConfiguredSettings: columns["configured_model"] && columns["configured_effort"] &&
+			columns["reported_model"],
 	}, nil
 }
 
@@ -134,13 +146,18 @@ func (s *Store) ScanRunHistoryRange(
 	visit func(RunStatsRow) error,
 ) error {
 	full := caps.Full()
-	query := runStatsSelectBase
+	breakdown := caps.ModelBreakdown()
+	query := runStatsColumnsBase
 	switch {
 	case full && caps.HasCacheWriteTokens:
-		query = runStatsSelectFullWithCacheWrite
+		query = runStatsColumnsFullWithCacheWrite
 	case full:
-		query = runStatsSelectFull
+		query = runStatsColumnsFull
 	}
+	if breakdown {
+		query += ", configured_model"
+	}
+	query += "\nFROM run_history"
 
 	var args []any
 	where := ""
@@ -167,34 +184,32 @@ func (s *Store) ScanRunHistoryRange(
 	for rows.Next() {
 		var row RunStatsRow
 		var reviewMeta sql.NullString
+		var dest []any
 		switch {
 		case full && caps.HasCacheWriteTokens:
-			if err := rows.Scan(
+			dest = []any{
 				&row.Status, &row.AgentAdapter, &row.RuleName, &row.TemplateID,
 				&row.StartedAt, &row.CompletedAt, &row.TurnsCompleted, &reviewMeta,
 				&row.InputTokens, &row.OutputTokens, &row.TotalTokens, &row.CacheReadTokens, &row.CacheWriteTokens,
 				&row.TokensMeasured,
-			); err != nil {
-				return fmt.Errorf("scan run history range: %w", err)
-			}
-			if reviewMeta.Valid {
-				row.ReviewMetadata = new(reviewMeta.String)
 			}
 		case full:
-			if err := rows.Scan(
+			dest = []any{
 				&row.Status, &row.AgentAdapter, &row.RuleName, &row.TemplateID,
 				&row.StartedAt, &row.CompletedAt, &row.TurnsCompleted, &reviewMeta,
 				&row.InputTokens, &row.OutputTokens, &row.TotalTokens, &row.CacheReadTokens, &row.TokensMeasured,
-			); err != nil {
-				return fmt.Errorf("scan run history range: %w", err)
-			}
-			if reviewMeta.Valid {
-				row.ReviewMetadata = new(reviewMeta.String)
 			}
 		default:
-			if err := rows.Scan(&row.Status, &row.AgentAdapter, &row.StartedAt, &row.CompletedAt); err != nil {
-				return fmt.Errorf("scan run history range: %w", err)
-			}
+			dest = []any{&row.Status, &row.AgentAdapter, &row.StartedAt, &row.CompletedAt}
+		}
+		if breakdown {
+			dest = append(dest, &row.ConfiguredModel)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return fmt.Errorf("scan run history range: %w", err)
+		}
+		if reviewMeta.Valid {
+			row.ReviewMetadata = new(reviewMeta.String)
 		}
 
 		if err := visit(row); err != nil {

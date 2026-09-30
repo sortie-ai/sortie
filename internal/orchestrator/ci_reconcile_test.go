@@ -514,6 +514,9 @@ func TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation(
 	if store.runHistories[0].Status != "ci_failed" {
 		t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "ci_failed")
 	}
+	if row := store.runHistories[0]; row.ConfiguredModel != "" || row.ConfiguredEffort != "" || row.ReportedModel != "" {
+		t.Errorf("ci_failed row configured model, effort, reported model = %q, %q, %q, want all empty", row.ConfiguredModel, row.ConfiguredEffort, row.ReportedModel)
+	}
 	retryEntry, ok := state.RetryAttempts[issueID]
 	if !ok {
 		t.Fatal("continuation not scheduled after the later head failed; want scheduled")

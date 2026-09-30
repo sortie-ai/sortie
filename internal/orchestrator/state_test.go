@@ -966,6 +966,27 @@ func TestRuntimeSnapshot(t *testing.T) {
 	})
 }
 
+func TestRuntimeSnapshot_ConfiguredSettingsBesideTheReportedModel(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
+	state.Running["ISS-1"] = &RunningEntry{
+		Issue: domain.Issue{ID: "ISS-1"}, StartedAt: now, RuleName: "cheap",
+		ConfiguredModel: "configured-model", ConfiguredEffort: "low", ModelName: "reported-model",
+	}
+
+	result := RuntimeSnapshot(state, now)
+
+	if len(result.Running) != 1 {
+		t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+	}
+	if got := result.Running[0]; got.RuleName != "cheap" || got.ConfiguredModel != "configured-model" || got.ConfiguredEffort != "low" || got.ModelName != "reported-model" {
+		t.Errorf("snapshot rule, configured model, configured effort, model_name = %q, %q, %q, %q, want %q, %q, %q, %q",
+			got.RuleName, got.ConfiguredModel, got.ConfiguredEffort, got.ModelName, "cheap", "configured-model", "low", "reported-model")
+	}
+}
+
 func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {
 	t.Parallel()
 

@@ -43,6 +43,7 @@ type statsReport struct {
 	ByAdapter    []statsGroup     `json:"by_adapter"`
 	ByRule       []statsGroup     `json:"by_rule"`
 	ByTemplate   []statsGroup     `json:"by_template"`
+	ByModel      []statsGroup     `json:"by_model"`
 	SelfReview   *statsSelfReview `json:"self_review"`
 }
 
@@ -83,8 +84,8 @@ type statsTokens struct {
 	CacheWrite int64 `json:"cache_write"`
 }
 
-// statsGroup is one row of a by_status, by_adapter, by_rule, or
-// by_template breakdown. MeanTurns, Tokens, CostUSD, and
+// statsGroup is one row of a by_status, by_adapter, by_rule,
+// by_template, or by_model breakdown. MeanTurns, Tokens, CostUSD, and
 // CostPerSucceededRunUSD are null on the base schema tier; CostUSD and
 // CostPerSucceededRunUSD are also null when the group holds no priced
 // run. In by_status, Succeeded and SuccessRate are structural rather
@@ -287,6 +288,7 @@ type statsAggregator struct {
 	byAdapter  map[string]*statsGroupAccum
 	byRule     map[string]*statsGroupAccum
 	byTemplate map[string]*statsGroupAccum
+	byModel    map[string]*statsGroupAccum
 
 	selfReview statsSelfReviewAccum
 }
@@ -304,6 +306,7 @@ func newStatsAggregator(caps persistence.RunHistoryCapabilities, rates server.To
 		byAdapter:       make(map[string]*statsGroupAccum),
 		byRule:          make(map[string]*statsGroupAccum),
 		byTemplate:      make(map[string]*statsGroupAccum),
+		byModel:         make(map[string]*statsGroupAccum),
 		selfReview:      statsSelfReviewAccum{byVerdict: make(map[string]int)},
 	}
 }
@@ -345,6 +348,9 @@ func (a *statsAggregator) add(row persistence.RunStatsRow) error {
 			bumpStatsGroup(a.byRule, label(row.RuleName), isSucceeded),
 			bumpStatsGroup(a.byTemplate, label(row.TemplateID), isSucceeded),
 		)
+		if a.caps.ModelBreakdown() {
+			bumped = append(bumped, bumpStatsGroup(a.byModel, label(row.ConfiguredModel), isSucceeded))
+		}
 
 		for _, g := range bumped {
 			g.turnSum += row.TurnsCompleted
@@ -469,6 +475,7 @@ func (a *statsAggregator) report(
 		ByAdapter:    a.groupSlice(a.byAdapter, full),
 		ByRule:       []statsGroup{},
 		ByTemplate:   []statsGroup{},
+		ByModel:      []statsGroup{},
 	}
 	if since != nil {
 		rpt.Since = new(since.UTC().Format(time.RFC3339))
@@ -479,6 +486,9 @@ func (a *statsAggregator) report(
 	if full {
 		rpt.ByRule = a.groupSlice(a.byRule, full)
 		rpt.ByTemplate = a.groupSlice(a.byTemplate, full)
+		if a.caps.ModelBreakdown() {
+			rpt.ByModel = a.groupSlice(a.byModel, full)
+		}
 		rpt.SelfReview = a.selfReviewReport()
 	}
 
@@ -605,6 +615,7 @@ func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
 		{caps.HasRuleRouting, "dispatch-rule routing"},
 		{caps.HasTokens, "tokens and cost"},
 		{caps.HasTokenMeasurement, "which runs the coding agent could measure"},
+		{caps.HasConfiguredSettings, "the model each run was configured with"},
 	}
 
 	var unrecorded, dropped []string
@@ -628,6 +639,11 @@ func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
 			"Run sortie once with this workflow to get the full report.",
 		strings.Join(unrecorded, ", "), strings.Join(dropped, ", "))
 }
+
+// modelBreakdownWarning explains the missing by_model breakdown.
+const modelBreakdownWarning = "this database was written before sortie recorded the model each run was configured with, " +
+	"so the report leaves out the breakdown by configured model. " +
+	"Run sortie once with this workflow to add it."
 
 // formatShare renders a 0..1 fraction as a one-decimal percentage.
 func formatShare(v float64) string {
@@ -871,6 +887,10 @@ func renderStatsText(stdout, stderr io.Writer, report statsReport) {
 		renderStatsGroupTable(stdout, "by dispatch rule", "rule", report.ByRule, full, false)
 		fmt.Fprintln(stdout) //nolint:errcheck // stdout write failure is unrecoverable
 		renderStatsGroupTable(stdout, "by prompt template", "template", report.ByTemplate, full, false)
+		if len(report.ByModel) > 0 {
+			fmt.Fprintln(stdout) //nolint:errcheck // stdout write failure is unrecoverable
+			renderStatsGroupTable(stdout, "by configured model", "model", report.ByModel, full, false)
+		}
 		fmt.Fprintln(stdout) //nolint:errcheck // stdout write failure is unrecoverable
 		renderStatsSelfReview(stdout, report.SelfReview)
 	}
@@ -989,8 +1009,11 @@ func runStats(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	warnings := rateWarnings
-	if !caps.Full() {
+	switch {
+	case !caps.Full():
 		warnings = append([]string{degradedSchemaWarning(caps)}, warnings...)
+	case !caps.ModelBreakdown():
+		warnings = append([]string{modelBreakdownWarning}, warnings...)
 	}
 
 	report := agg.report(statsNow().UTC(), path, dbPath, since, until, warnings)

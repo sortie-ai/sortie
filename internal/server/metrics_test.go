@@ -150,6 +150,16 @@ func TestNewPromMetrics(t *testing.T) {
 		}
 	}
 
+	for name, family := range families {
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if strings.Contains(label.GetName(), "model") || strings.Contains(label.GetName(), "effort") {
+					t.Errorf("metric %q carries label %q, want no model or effort label on any series", name, label.GetName())
+				}
+			}
+		}
+	}
+
 	// Verify Go runtime and process collectors are registered.
 	var hasGo, hasProcess bool
 	for name := range families {

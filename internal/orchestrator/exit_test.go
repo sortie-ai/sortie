@@ -9876,6 +9876,46 @@ func requireRuleFlagCarried(t *testing.T, got bool) {
 	}
 }
 
+func TestHandleWorkerExit_RecordsConfiguredAndReportedSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		entryModel   string
+		workerModel  string
+		wantReported string
+	}{
+		{name: "runtime reported a different model", entryModel: "reported-on-event", wantReported: "reported-on-event"},
+		{name: "worker mirror carries the last reported model", workerModel: "reported-by-worker", wantReported: "reported-by-worker"},
+		{name: "runtime reported none"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &mockExitStore{}
+			state := exitState(t, "REC-1", nil)
+			entry := state.Running["REC-1"]
+			entry.RuleName, entry.ConfiguredModel, entry.ConfiguredEffort, entry.ModelName = "cheap", "configured-model", "low", tt.entryModel
+
+			HandleWorkerExit(state, WorkerResult{IssueID: "REC-1", Identifier: "REC-1-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock", ModelName: tt.workerModel}, defaultExitParams(t, store))
+
+			if len(store.runHistories) != 1 {
+				t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+			}
+			row := store.runHistories[0]
+			if row.ConfiguredModel != "configured-model" || row.ConfiguredEffort != "low" || row.RuleName != "cheap" || row.ReportedModel != tt.wantReported {
+				t.Errorf("run_history configured model, effort, rule, reported model = %q, %q, %q, %q, want %q, %q, %q, %q: a reported model never overwrites a configured one",
+					row.ConfiguredModel, row.ConfiguredEffort, row.RuleName, row.ReportedModel, "configured-model", "low", "cheap", tt.wantReported)
+			}
+			if retry := state.RetryAttempts["REC-1"]; retry != nil && retry.TimerHandle != nil {
+				retry.TimerHandle.Stop()
+			}
+		})
+	}
+}
+
 func TestHandleWorkerExit_CarriesTheRuleSettingsFlagThroughRetries(t *testing.T) {
 	t.Parallel()
 
