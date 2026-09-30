@@ -140,9 +140,8 @@ const unreachedRuleIndex = -1
 func assertUsageReporting(t contractReporter, kind string, cases []UsageReportingCase) {
 	t.Helper()
 
-	meta, registered := registry.Agents.Meta(kind)
+	meta, registered := lookupAgentMeta(t, kind)
 	if !registered {
-		t.Errorf("kind %q is not registered", kind)
 		return
 	}
 	if len(cases) == 0 {
@@ -215,26 +214,43 @@ func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arr
 			t.Errorf("case %q: declared %s, the turn reported no measurement", tc.Name, arrival)
 		}
 		if arrival == registry.UsageArrivalTurnEnd {
-			for i, event := range tc.Events {
-				// The ordering rule binds every token_usage event,
-				// including one carrying an all-zero figure, which a
-				// genuine zero spend produces.
-				if event.Type == domain.EventTokenUsage && !followedByTerminalEvent(tc.Events, i) {
-					t.Errorf("case %q: event %d: declared turn_end, the usage event has no later turn-terminal event",
-						tc.Name, i)
-				}
-				if event.Usage == (domain.TokenUsage{}) {
-					continue
-				}
-				if !dominates(tc.Result.Usage, event.Usage) {
-					t.Errorf("case %q: event %d: declared turn_end, result.Usage %+v does not dominate a figure the turn reported %+v",
-						tc.Name, i, tc.Result.Usage, event.Usage)
-				}
-			}
+			assertTurnEndFigures(t, tc)
 		}
 	default:
 		t.Errorf("case %q: arrival %q is a value outside the declared set", tc.Name, arrival)
 	}
+
+	assertUsageAttribution(t, tc, arrival, attribution)
+}
+
+// assertTurnEndFigures checks the two rules a turn_end arrival adds to
+// the events of one case: every usage event precedes a turn-terminal
+// event, and the turn's final result dominates every figure it reported.
+func assertTurnEndFigures(t contractReporter, tc UsageReportingCase) {
+	t.Helper()
+
+	for i, event := range tc.Events {
+		// The ordering rule binds every token_usage event,
+		// including one carrying an all-zero figure, which a
+		// genuine zero spend produces.
+		if event.Type == domain.EventTokenUsage && !followedByTerminalEvent(tc.Events, i) {
+			t.Errorf("case %q: event %d: declared turn_end, the usage event has no later turn-terminal event",
+				tc.Name, i)
+		}
+		if event.Usage == (domain.TokenUsage{}) {
+			continue
+		}
+		if !dominates(tc.Result.Usage, event.Usage) {
+			t.Errorf("case %q: event %d: declared turn_end, result.Usage %+v does not dominate a figure the turn reported %+v",
+				tc.Name, i, tc.Result.Usage, event.Usage)
+		}
+	}
+}
+
+// assertUsageAttribution checks the events of one case against the
+// attribution the kind declared for it.
+func assertUsageAttribution(t contractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution) {
+	t.Helper()
 
 	switch attribution {
 	case registry.UsageAttributionUndeclared:
@@ -263,6 +279,106 @@ func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arr
 	default:
 		t.Errorf("case %q: attribution %q is a value outside the declared set", tc.Name, attribution)
 	}
+}
+
+// AssertUsageReportingCase fails t unless tc agrees with the pair kind
+// resolves for it, applying the per-case check [AssertUsageReporting]
+// applies to each of its cases. Unlike it, it requires no declared pair
+// or session rule to be reached, so one case suffices.
+func AssertUsageReportingCase(t *testing.T, kind string, tc UsageReportingCase) {
+	t.Helper()
+	assertUsageReportingCase(t, kind, tc)
+}
+
+func assertUsageReportingCase(t contractReporter, kind string, tc UsageReportingCase) {
+	t.Helper()
+
+	meta, registered := lookupAgentMeta(t, kind)
+	if !registered {
+		return
+	}
+	arrival, attribution := meta.UsageDisposition(tc.Passthrough, tc.Remote)
+	assertResolvedUsageReporting(kindReporter{contractReporter: t, kind: kind}, tc, arrival, attribution)
+}
+
+// AssertLiveUsageCase fails t unless tc, the verification turn of a
+// suite's working-credential case, agrees with the pair kind resolves
+// for it. Under arrival none it asserts no measurement. Under a
+// figure-reporting arrival a measured turn must report positive input
+// and output tokens and satisfy the usage contract, and an unmeasured
+// turn must flag its spend unaccounted and carry no measurement. Unlike
+// [AssertUsageReportingCase] it does not require a tool result or a
+// second usage event, which a verification turn does not produce.
+func AssertLiveUsageCase(t *testing.T, kind string, tc UsageReportingCase) {
+	t.Helper()
+	assertLiveUsageCase(t, kind, tc)
+}
+
+func assertLiveUsageCase(t contractReporter, kind string, tc UsageReportingCase) {
+	t.Helper()
+
+	meta, registered := lookupAgentMeta(t, kind)
+	if !registered {
+		return
+	}
+	t = kindReporter{contractReporter: t, kind: kind}
+	arrival, attribution := meta.UsageDisposition(tc.Passthrough, tc.Remote)
+
+	switch arrival {
+	case registry.UsageArrivalUndeclared:
+		t.Errorf("case %q: want a kind that declares a usage arrival", tc.Name)
+	case registry.UsageArrivalNone:
+		assertMeasurementAbsent(t, tc.Events, tc.Result)
+	case registry.UsageArrivalIncremental, registry.UsageArrivalTurnEnd:
+		if !tc.Result.UsageMeasured {
+			assertUnaccountedSpend(t, tc)
+			return
+		}
+		if tc.Result.Usage.InputTokens <= 0 || tc.Result.Usage.OutputTokens <= 0 {
+			t.Errorf("case %q: declared %s, result.Usage = %+v, want positive input and output tokens", tc.Name, arrival, tc.Result.Usage)
+		}
+		assertUsageContract(t, tc.Events)
+		if arrival == registry.UsageArrivalTurnEnd {
+			assertTurnEndFigures(t, tc)
+		}
+		assertUsageAttribution(t, tc, arrival, attribution)
+	default:
+		t.Errorf("case %q: arrival %q is a value outside the declared set", tc.Name, arrival)
+	}
+}
+
+// assertUnaccountedSpend checks a turn no usage source measured: it
+// must say so through SpendUnaccounted, and must not leak a measurement.
+func assertUnaccountedSpend(t contractReporter, tc UsageReportingCase) {
+	t.Helper()
+
+	if !tc.Result.SpendUnaccounted {
+		t.Errorf("case %q: the turn reported no measurement and did not flag its spend unaccounted", tc.Name)
+	}
+	assertMeasurementAbsent(t, tc.Events, tc.Result)
+}
+
+// lookupAgentMeta resolves kind's registered metadata, reporting an
+// unregistered kind through t.
+func lookupAgentMeta(t contractReporter, kind string) (registry.AgentMeta, bool) {
+	t.Helper()
+
+	meta, registered := registry.Agents.Meta(kind)
+	if !registered {
+		t.Errorf("kind %q is not registered", kind)
+	}
+	return meta, registered
+}
+
+// kindReporter names the kind in every failure a check reports.
+type kindReporter struct {
+	contractReporter
+	kind string
+}
+
+func (r kindReporter) Errorf(format string, args ...any) {
+	r.Helper()
+	r.contractReporter.Errorf("kind %q: "+format, append([]any{r.kind}, args...)...)
 }
 
 // dominates reports whether result is componentwise greater than or

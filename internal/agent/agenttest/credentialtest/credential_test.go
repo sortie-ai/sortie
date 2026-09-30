@@ -3,6 +3,7 @@ package credentialtest
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 const (
 	credentialTestKindWithCommand    = "agenttest-credential-with-command"
 	credentialTestKindWithoutCommand = "agenttest-credential-without-command"
+	credentialTestKindUsage          = "agenttest-credential-usage"
 )
 
 func credentialTestConstructor(map[string]any) (domain.AgentAdapter, error) {
@@ -27,6 +29,22 @@ func init() {
 	})
 	registry.Agents.RegisterWithMeta(credentialTestKindWithoutCommand, credentialTestConstructor, registry.AgentMeta{
 		RequiresCommand: false,
+	})
+	registry.Agents.RegisterWithMeta(credentialTestKindUsage, credentialTestConstructor, registry.AgentMeta{
+		UsageArrival:     registry.UsageArrivalIncremental,
+		UsageAttribution: registry.UsageAttributionPerModel,
+		UsageSessionRules: []registry.UsageSessionRule{
+			{
+				When:        func(_ map[string]any, remote bool) bool { return remote },
+				Arrival:     registry.UsageArrivalNone,
+				Attribution: registry.UsageAttributionNone,
+			},
+			{
+				When:        func(passthrough map[string]any, _ bool) bool { return passthrough["usage"] == "off" },
+				Arrival:     registry.UsageArrivalNone,
+				Attribution: registry.UsageAttributionNone,
+			},
+		},
 	})
 }
 
@@ -103,6 +121,50 @@ func (a *callTrackingAdapter) RunTurn(context.Context, domain.Session, domain.Ru
 func (a *callTrackingAdapter) StopSession(context.Context, domain.Session) error {
 	a.calls = append(a.calls, "stop")
 	return a.stopErr
+}
+
+type usageAdapter struct {
+	events []domain.AgentEvent
+	result domain.TurnResult
+	runErr error
+}
+
+var _ domain.AgentAdapter = (*usageAdapter)(nil)
+
+func (a *usageAdapter) StartSession(context.Context, domain.StartSessionParams) (domain.Session, error) {
+	return domain.Session{ID: "sess-usage"}, nil
+}
+
+func (a *usageAdapter) RunTurn(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	for _, event := range a.events {
+		params.OnEvent(event)
+	}
+	return a.result, a.runErr
+}
+
+func (a *usageAdapter) StopSession(context.Context, domain.Session) error { return nil }
+
+func measuredUsageAdapter(model string) *usageAdapter {
+	usage := domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
+	return &usageAdapter{
+		events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usage, Model: model}},
+		result: domain.TurnResult{SessionID: "sess-usage", ExitReason: domain.EventTurnCompleted, Usage: usage, UsageMeasured: true},
+	}
+}
+
+// runOnStandIn drives fn against a *testing.T whose failures stay
+// invisible to the enclosing test. It runs fn on its own goroutine
+// because Fatalf and Skipf end the goroutine they run on.
+func runOnStandIn(fn func(stand *testing.T)) (stand *testing.T, returned bool) {
+	stand = new(testing.T)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn(stand)
+		returned = true
+	}()
+	<-done
+	return stand, returned
 }
 
 func TestRunWorkingLive(t *testing.T) {
@@ -214,4 +276,167 @@ func TestAssertCredentialVerification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyLiveUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		adapter     *usageAdapter
+		params      domain.StartSessionParams
+		passthrough map[string]any
+		wantFatal   bool
+		wantFailed  bool
+	}{
+		{
+			name:    "measured turn naming a model passes",
+			adapter: measuredUsageAdapter("gpt-6-astra"),
+		},
+		{
+			name: "verification error is fatal",
+			adapter: &usageAdapter{
+				runErr: &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "refused"},
+			},
+			wantFatal:  true,
+			wantFailed: true,
+		},
+		{
+			name:       "measured turn whose events name no model fails under per_model",
+			adapter:    measuredUsageAdapter(""),
+			wantFailed: true,
+		},
+		{
+			name:       "ssh session resolves the remote rule",
+			adapter:    measuredUsageAdapter("gpt-6-astra"),
+			params:     domain.StartSessionParams{SSHHost: "user@stand-in-host"},
+			wantFailed: true,
+		},
+		{
+			name:        "passthrough reaches the session rule",
+			adapter:     measuredUsageAdapter("gpt-6-astra"),
+			passthrough: map[string]any{"usage": "off"},
+			wantFailed:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got domain.TurnResult
+			stand, returned := runOnStandIn(func(stand *testing.T) {
+				got = VerifyLiveUsage(stand, credentialTestKindUsage, tt.adapter, tt.params, tt.passthrough)
+			})
+
+			if stand.Failed() != tt.wantFailed {
+				t.Errorf("VerifyLiveUsage() failed = %v, want %v", stand.Failed(), tt.wantFailed)
+			}
+			if returned == tt.wantFatal {
+				t.Errorf("VerifyLiveUsage() returned = %v, want %v", returned, !tt.wantFatal)
+			}
+			if returned && got != tt.adapter.result {
+				t.Errorf("VerifyLiveUsage() = %+v, want %+v", got, tt.adapter.result)
+			}
+		})
+	}
+}
+
+func TestCredentialNames(t *testing.T) {
+	const envVar = "SORTIE_TEST_CREDENTIAL_NAMES"
+
+	tests := []struct {
+		name  string
+		value string
+		unset bool
+		want  []string
+	}{
+		{name: "unset variable", unset: true},
+		{name: "empty value"},
+		{name: "separators and blanks only", value: " , ,, "},
+		{name: "single name", value: "API_KEY", want: []string{"API_KEY"}},
+		{name: "order is kept", value: "ZED,ALPHA,MIDDLE", want: []string{"ZED", "ALPHA", "MIDDLE"}},
+		{name: "whitespace trimmed and empty elements dropped", value: " ONE , ,TWO,, THREE ,", want: []string{"ONE", "TWO", "THREE"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envVar, tt.value)
+			if tt.unset {
+				if err := os.Unsetenv(envVar); err != nil {
+					t.Fatalf("Unsetenv(%q) = %v, want nil", envVar, err)
+				}
+			}
+
+			got := CredentialNames(envVar)
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("CredentialNames(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+			if (got == nil) != (tt.want == nil) {
+				t.Errorf("CredentialNames(%q) nil = %v, want %v", tt.value, got == nil, tt.want == nil)
+			}
+		})
+	}
+}
+
+func TestSetRefusedCredential(t *testing.T) {
+	const (
+		envVar = "SORTIE_TEST_REFUSED_CREDENTIAL_ENV"
+		first  = "SORTIE_TEST_REFUSED_FIRST"
+		second = "SORTIE_TEST_REFUSED_SECOND"
+	)
+	xdgRoots := []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}
+	originalHome := os.Getenv("HOME")
+
+	t.Run("unset variable skips the case and sets nothing", func(t *testing.T) {
+		t.Setenv(envVar, "")
+		if err := os.Unsetenv(envVar); err != nil {
+			t.Fatalf("Unsetenv(%q) = %v, want nil", envVar, err)
+		}
+
+		stand, returned := runOnStandIn(func(stand *testing.T) { SetRefusedCredential(stand, envVar) })
+
+		if !stand.Skipped() || returned {
+			t.Errorf("SetRefusedCredential(unset) skipped = %v, returned = %v, want skipped and not returned", stand.Skipped(), returned)
+		}
+		if os.Getenv("HOME") != originalHome {
+			t.Errorf("HOME = %q after a skipped call, want %q", os.Getenv("HOME"), originalHome)
+		}
+	})
+
+	t.Run("listed names are invalidated and every root points at one empty directory", func(t *testing.T) {
+		t.Setenv(envVar, " "+first+" , ,"+second)
+		t.Run("call", func(t *testing.T) {
+			SetRefusedCredential(t, envVar)
+
+			for _, name := range []string{first, second} {
+				if got := os.Getenv(name); got != "sortie-invalid-credential" {
+					t.Errorf("%s = %q, want %q", name, got, "sortie-invalid-credential")
+				}
+			}
+			emptyRoot := os.Getenv("HOME")
+			if emptyRoot == originalHome {
+				t.Errorf("HOME = %q, want a directory other than the original", emptyRoot)
+			}
+			for _, name := range xdgRoots {
+				if got := os.Getenv(name); got != emptyRoot {
+					t.Errorf("%s = %q, want %q", name, got, emptyRoot)
+				}
+			}
+			entries, err := os.ReadDir(emptyRoot)
+			if err != nil || len(entries) != 0 {
+				t.Errorf("ReadDir(%q) = %d entries, %v, want an empty directory", emptyRoot, len(entries), err)
+			}
+		})
+
+		for _, name := range []string{first, second} {
+			if _, present := os.LookupEnv(name); present {
+				t.Errorf("%s is still set after the call's test ended, want it restored", name)
+			}
+		}
+		if os.Getenv("HOME") != originalHome {
+			t.Errorf("HOME = %q after the call's test ended, want %q", os.Getenv("HOME"), originalHome)
+		}
+	})
 }
