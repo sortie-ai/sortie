@@ -9,7 +9,7 @@ import (
 
 func TestEarlyExitConformance(t *testing.T) {
 	// Not parallel: AssertEarlyExitReport sets PATH through t.Setenv.
-	adapter, err := NewCopilotAdapter(map[string]any{})
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter() error = %v", err)
 	}

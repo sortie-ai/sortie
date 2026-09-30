@@ -279,11 +279,8 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 	})
 }
 
-// dummyAgentConstructor returns an AgentConstructor whose construction
-// result is never inspected by these tests; only its registration and
-// retrieval matter.
 func dummyAgentConstructor() AgentConstructor {
-	return func(map[string]any) (domain.AgentAdapter, error) { return nil, nil }
+	return func() (domain.AgentAdapter, error) { return nil, nil }
 }
 
 // TestRegisterWithMeta_AndMeta_AgentValidateAgentConfig pins that
@@ -517,7 +514,7 @@ func TestAgentRegistry(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry[AgentConstructor, AgentMeta]("agent")
-	r.Register("mock", func(_ map[string]any) (domain.AgentAdapter, error) {
+	r.Register("mock", func() (domain.AgentAdapter, error) {
 		return &mockAgentAdapter{}, nil
 	})
 
@@ -526,7 +523,7 @@ func TestAgentRegistry(t *testing.T) {
 		t.Fatalf("Get(%q) unexpected error: %v", "mock", err)
 	}
 
-	adapter, err := constructor(nil)
+	adapter, err := constructor()
 	if err != nil {
 		t.Fatalf("AgentConstructor() unexpected error: %v", err)
 	}

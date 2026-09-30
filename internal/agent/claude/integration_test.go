@@ -55,7 +55,7 @@ func integrationCommand(t *testing.T) string {
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -63,6 +63,7 @@ func TestIntegration_StartSession(t *testing.T) {
 	workspace := t.TempDir()
 
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      singleTurnIntegrationConfig(t),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
 	})
@@ -82,7 +83,7 @@ func TestIntegration_StartSession(t *testing.T) {
 func TestIntegration_StopSession(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -90,6 +91,7 @@ func TestIntegration_StopSession(t *testing.T) {
 	workspace := t.TempDir()
 
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      singleTurnIntegrationConfig(t),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
 	})
@@ -105,12 +107,13 @@ func TestIntegration_StopSession(t *testing.T) {
 func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
 
 	_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      singleTurnIntegrationConfig(t),
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: "sortie-nonexistent-binary-99999"},
 	})
@@ -174,7 +177,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -185,6 +188,7 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	}
 
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      singleTurnIntegrationConfig(t),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
 	})
@@ -229,13 +233,6 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestIntegration_SessionResume drives two real turns against the live
-// claude-code binary in the same workspace: a first turn to completion,
-// then a second turn from a freshly constructed adapter that resumes the
-// first turn's session ID, asserting the resumed turn also completes.
-// It builds its own config with session persistence left at its
-// default, rather than calling singleTurnIntegrationConfig, because
-// that helper disables the persistence this test exercises.
 func TestIntegration_SessionResume(t *testing.T) {
 	skipUnlessIntegration(t)
 
@@ -243,12 +240,13 @@ func TestIntegration_SessionResume(t *testing.T) {
 	if model == "" {
 		model = "claude-haiku-4-5"
 	}
-	cfg := map[string]any{"model": model}
+	firstSettings := map[string]any{"model": model}
+	resumedSettings := map[string]any{"model": "claude-sonnet-4-5", "effort": "low"}
 
 	workspace := t.TempDir()
 	noopEvent := func(domain.AgentEvent) {}
 
-	adapter, err := NewClaudeCodeAdapter(cfg)
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -256,6 +254,7 @@ func TestIntegration_SessionResume(t *testing.T) {
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
+		Settings:      firstSettings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession (first turn): %v", err)
@@ -279,25 +278,21 @@ func TestIntegration_SessionResume(t *testing.T) {
 		t.Fatal("first turn TurnResult.SessionID is empty")
 	}
 
-	adapter2, err := NewClaudeCodeAdapter(cfg)
-	if err != nil {
-		t.Fatalf("NewClaudeCodeAdapter (resumed turn): %v", err)
-	}
-
-	session2, err := adapter2.StartSession(context.Background(), domain.StartSessionParams{
+	session2, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   workspace,
 		AgentConfig:     domain.AgentConfig{Command: integrationCommand(t)},
 		ResumeSessionID: result1.SessionID,
+		Settings:        resumedSettings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession (resumed turn): %v", err)
 	}
-	t.Cleanup(func() { _ = adapter2.StopSession(context.Background(), session2) })
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session2) })
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel2()
 
-	result2, err := adapter2.RunTurn(ctx2, session2, domain.RunTurnParams{
+	result2, err := adapter.RunTurn(ctx2, session2, domain.RunTurnParams{
 		Prompt:  "What did I say in the previous message?",
 		OnEvent: noopEvent,
 	})
@@ -322,7 +317,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessIntegration(t)
 
 	passthrough := map[string]any{}
-	adapter, err := NewClaudeCodeAdapter(passthrough)
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -330,6 +325,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		return domain.StartSessionParams{
 			WorkspacePath: t.TempDir(),
 			AgentConfig:   domain.AgentConfig{Command: integrationCommand(t), ReadTimeoutMS: 30000},
+			Settings:      passthrough,
 		}
 	}
 
@@ -349,7 +345,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 func TestIntegration_EarlyExit(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(map[string]any{})
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -378,12 +374,13 @@ func TestIntegration_ToolServerIdentity(t *testing.T) {
 	skipUnlessIntegration(t)
 
 	agenttest.AssertToolServerIdentity(t, func(ctx context.Context, workspacePath, mcpConfigPath string) error {
-		adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
+		adapter, err := NewClaudeCodeAdapter()
 		if err != nil {
 			return err
 		}
 
 		session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+			Settings:      singleTurnIntegrationConfig(t),
 			WorkspacePath: workspacePath,
 			AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
 			MCPConfigPath: mcpConfigPath,

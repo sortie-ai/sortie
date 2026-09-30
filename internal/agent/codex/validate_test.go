@@ -1,28 +1,37 @@
 package codex
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
-// wrong-typed value for a key the constructor reads fails NewCodexAdapter
-// with a plain error carrying the fault message, and validateConfig
-// reports the identical fault text under a "codex.<key>.wrong_type" check
-// for the same input, so the two surfaces cannot diverge on what counts
-// as a type fault.
 func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	t.Parallel()
 
 	config := map[string]any{"approval_policy": 123}
+	recordPath := filepath.Join(t.TempDir(), "frames")
+	command := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioRecordFrames, recordFramesParams{RecordPath: recordPath})
 
-	_, constructErr := NewCodexAdapter(config)
-	if constructErr == nil {
-		t.Fatal("NewCodexAdapter(approval_policy=123) error = nil, want non-nil")
+	_, startErr := (&CodexAdapter{}).StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: command},
+		Settings:      config,
+	})
+	var agentErr *domain.AgentError
+	var fault *typeutil.TypeFault
+	if !errors.As(startErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound || !errors.As(startErr, &fault) || fault.Key != "approval_policy" {
+		t.Fatalf("StartSession(approval_policy=123) error = %v, want an agent_not_found *domain.AgentError wrapping a *typeutil.TypeFault for %q", startErr, "approval_policy")
 	}
-	if constructErr.Error() != "approval_policy: expected string, got integer" {
-		t.Errorf("NewCodexAdapter(approval_policy=123) error = %q, want %q", constructErr.Error(), "approval_policy: expected string, got integer")
+	if _, statErr := os.Stat(recordPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("StartSession(approval_policy=123) launched the runtime: stat %q error = %v, want not exist", recordPath, statErr)
 	}
 
 	diags := validateConfig(registry.AgentConfigFields{Kind: "codex", Passthrough: config})
@@ -33,14 +42,11 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	if diags[0].Check != "codex.approval_policy.wrong_type" {
 		t.Errorf("validateConfig(approval_policy=123)[0].Check = %q, want %q", diags[0].Check, "codex.approval_policy.wrong_type")
 	}
-	if diags[0].Message != constructErr.Error() {
-		t.Errorf("validateConfig(approval_policy=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	if diags[0].Message != agentErr.Message {
+		t.Errorf("validateConfig(approval_policy=123)[0].Message = %q, want the text StartSession refused with: %q", diags[0].Message, agentErr.Message)
 	}
 }
 
-// TestValidateConfig covers codex.approval_policy: absent or "never"
-// draws no diagnostic, and any other value draws an error-severity
-// diagnostic checked "codex.approval_policy.interactive".
 func TestValidateConfig(t *testing.T) {
 	t.Parallel()
 

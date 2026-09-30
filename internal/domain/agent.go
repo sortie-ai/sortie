@@ -228,6 +228,10 @@ type StartSessionParams struct {
 	// use the operator-configured mcp_config passthrough.
 	MCPConfigPath string
 
+	// Settings is the resolved settings block of the session's agent
+	// kind. It is read-only, and nil reads as an empty block.
+	Settings map[string]any
+
 	// CredentialVerification marks a session that carries only the
 	// request proving the runtime's credential works.
 	CredentialVerification bool

@@ -93,7 +93,7 @@ func TestStartSession_VersionCanaryHeldDescendantHoldingOutput(t *testing.T) {
 		ChildPIDPath: pidPath,
 	})
 
-	adapter, err := NewCopilotAdapter(map[string]any{})
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter() error = %v", err)
 	}

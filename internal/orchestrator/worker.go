@@ -287,6 +287,9 @@ type WorkerDeps struct {
 	// admits every figure.
 	UsageArrival registry.UsageArrival
 
+	// AgentSettings is the settings block of the attempt's agent kind.
+	AgentSettings config.AgentSettings
+
 	// OnEvent relays agent events to the serialized event loop. Called from
 	// the worker goroutine; must be concurrency-safe.
 	OnEvent func(issueID string, event domain.AgentEvent)
@@ -986,6 +989,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
 		SSHEnvNames:              sshEnvNames,
 		MCPConfigPath:            mcpConfigPath,
+		Settings:                 deps.AgentSettings.Passthrough,
 	}
 
 	deps.OnEvent(issue.ID, domain.AgentEvent{

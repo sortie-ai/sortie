@@ -111,6 +111,11 @@ func TestAgentError_Error(t *testing.T) {
 			want: "agent: port_exit: agent subprocess died: status 137",
 		},
 		{
+			name: "wrapped error restating the message prints once",
+			err:  AgentError{Kind: ErrAgentNotFound, Message: "bad setting", Err: fmt.Errorf("bad setting")},
+			want: "agent: agent_not_found: bad setting",
+		},
+		{
 			name: "agent not found",
 			err:  AgentError{Kind: ErrAgentNotFound, Message: "command not in PATH"},
 			want: "agent: agent_not_found: command not in PATH",

@@ -37,7 +37,7 @@ import (
 const fixtureAgentKind = "qualification-e2e-fixture"
 
 func init() {
-	registry.Agents.RegisterWithMeta(fixtureAgentKind, func(map[string]any) (domain.AgentAdapter, error) {
+	registry.Agents.RegisterWithMeta(fixtureAgentKind, func() (domain.AgentAdapter, error) {
 		return nil, fmt.Errorf("%s is resolved through AgentAdapterByKind, never constructed from the registry", fixtureAgentKind)
 	}, registry.AgentMeta{RequiresCommand: true})
 }

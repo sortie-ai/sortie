@@ -1,10 +1,13 @@
 package copilot
 
 import (
+	"context"
+	"fmt"
 	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -18,22 +21,32 @@ func reasoningEffortValue(args []string) string {
 	return args[i+1]
 }
 
-func copilotEffortProbe(t *testing.T, passthrough map[string]any, verification bool, turns int) ([]string, error) {
+func copilotEffortProbe(t *testing.T, settings map[string]any, verification, resumed bool, turns int) ([]string, error) {
 	t.Helper()
 
-	adapter, err := NewCopilotAdapter(passthrough)
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		return nil, err
 	}
-	pt := adapter.(*CopilotAdapter).passthrough
-	state := &sessionState{
-		copilotSessionID:       "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f",
-		credentialVerification: verification,
+	resumeID := ""
+	if resumed {
+		resumeID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
 	}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:          t.TempDir(),
+		AgentConfig:            domain.AgentConfig{Command: fakeCopilotBinary(t)},
+		ResumeSessionID:        resumeID,
+		CredentialVerification: verification,
+		Settings:               settings,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("StartSession: %w", err)
+	}
+	state := session.Internal.(*sessionState)
 
 	carried := make([]string, 0, turns)
 	for turn := 1; turn <= turns; turn++ {
-		carried = append(carried, reasoningEffortValue(buildArgs(state, turn, "probe prompt", pt)))
+		carried = append(carried, reasoningEffortValue(buildArgs(state, turn, "probe prompt", state.passthrough)))
 	}
 	return carried, nil
 }
@@ -67,12 +80,12 @@ func TestEffortFlagPosition(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			adapter, err := NewCopilotAdapter(tt.passthrough)
-			if err != nil {
-				t.Fatalf("NewCopilotAdapter(%v) error = %v", tt.passthrough, err)
+			pt, fault := parsePassthroughConfig(tt.passthrough)
+			if fault != nil {
+				t.Fatalf("parsePassthroughConfig(%v) fault = %v", tt.passthrough, fault)
 			}
 
-			args := buildArgs(&sessionState{}, 1, "p", adapter.(*CopilotAdapter).passthrough)
+			args := buildArgs(&sessionState{}, 1, "p", pt)
 
 			modelAt := slices.Index(args, "--model")
 			agentAt := slices.Index(args, "--agent")

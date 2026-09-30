@@ -41,7 +41,7 @@ func induceProtocolContinuation(t *testing.T, coords Coordinates, fixture *share
 		seed := transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "could not resolve the protocol entry point"})
 		return seed, unmetRecall
 	}
-	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
+	adapter, err := clientprotocol.NewClientProtocolAdapter()
 	if err != nil {
 		seed := transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "could not construct the induction adapter"})
 		return seed, unmetRecall

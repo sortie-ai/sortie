@@ -42,7 +42,7 @@ func TestRunTurn_EndsOnCtxDeadlineAgainstAStalledWriter(t *testing.T) {
 	state.conn = jsonrpc.NewConn(outW, inR, jsonrpc.Deliver(inbox, identity))
 	go watchTermination(state)
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 

@@ -1,28 +1,31 @@
 package claude
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
-// wrong-typed value for a key the constructor reads fails
-// NewClaudeCodeAdapter with a plain error carrying the fault message, and
-// validateConfig reports the identical fault text under a
-// "claude-code.<key>.wrong_type" check for the same input, so the two
-// surfaces cannot diverge on what counts as a type fault.
 func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	t.Parallel()
 
 	config := map[string]any{"model": 123}
+	adapter, _ := NewClaudeCodeAdapter()
 
-	_, constructErr := NewClaudeCodeAdapter(config)
-	if constructErr == nil {
-		t.Fatal("NewClaudeCodeAdapter(model=123) error = nil, want non-nil")
-	}
-	if constructErr.Error() != "model: expected string, got integer" {
-		t.Errorf("NewClaudeCodeAdapter(model=123) error = %q, want %q", constructErr.Error(), "model: expected string, got integer")
+	_, startErr := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: fakeClaude(t, t.TempDir(), agenttest.Output{})},
+		Settings:      config,
+	})
+	var agentErr *domain.AgentError
+	var fault *typeutil.TypeFault
+	if !errors.As(startErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound || !errors.As(startErr, &fault) || fault.Key != "model" {
+		t.Fatalf("StartSession(model=123) error = %v, want an agent_not_found *domain.AgentError wrapping a *typeutil.TypeFault for %q", startErr, "model")
 	}
 
 	diags := validateConfig(registry.AgentConfigFields{Kind: "claude-code", Passthrough: config})
@@ -33,8 +36,8 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	if diags[0].Check != "claude-code.model.wrong_type" {
 		t.Errorf("validateConfig(model=123)[0].Check = %q, want %q", diags[0].Check, "claude-code.model.wrong_type")
 	}
-	if diags[0].Message != constructErr.Error() {
-		t.Errorf("validateConfig(model=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	if diags[0].Message != agentErr.Message {
+		t.Errorf("validateConfig(model=123)[0].Message = %q, want the text StartSession refused with: %q", diags[0].Message, agentErr.Message)
 	}
 }
 

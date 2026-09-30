@@ -23,7 +23,7 @@ import (
 const ceilingAgentKind = "qualification-e2e-ceiling-fixture"
 
 func init() {
-	registry.Agents.RegisterWithMeta(ceilingAgentKind, func(map[string]any) (domain.AgentAdapter, error) {
+	registry.Agents.RegisterWithMeta(ceilingAgentKind, func() (domain.AgentAdapter, error) {
 		return nil, fmt.Errorf("%s is resolved through AgentAdapterByKind, never constructed from the registry", ceilingAgentKind)
 	}, registry.AgentMeta{
 		RequiresCommand:  true,

@@ -1,10 +1,34 @@
 package opencode
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
+
+func startRefusedSession(t *testing.T, settings map[string]any) (err error, launched bool) {
+	t.Helper()
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "launched")
+	command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.RecordedEnvScenario, agenttest.RecordedEnv{Path: marker, Names: []string{"PATH"}})
+	a, _ := NewOpenCodeAdapter()
+
+	_, err = a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: dir,
+		AgentConfig:   domain.AgentConfig{Command: command},
+		Settings:      settings,
+	})
+	_, statErr := os.Stat(marker)
+	return err, statErr == nil
+}
 
 // hasCheck reports whether diags carries a diagnostic with the given
 // check name.
@@ -96,23 +120,16 @@ func TestValidateConfig_ToolOverlap(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
-// wrong-typed value for a key the constructor reads fails
-// NewOpenCodeAdapter with a plain error carrying the fault message, and
-// validateConfig reports the identical fault text under an
-// "opencode.<key>.wrong_type" check for the same input, so the two
-// surfaces cannot diverge on what counts as a type fault.
 func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	t.Parallel()
 
 	config := map[string]any{"model": 123}
 
-	_, constructErr := NewOpenCodeAdapter(config)
-	if constructErr == nil {
-		t.Fatal("NewOpenCodeAdapter(model=123) error = nil, want non-nil")
-	}
-	if constructErr.Error() != "model: expected string, got integer" {
-		t.Errorf("NewOpenCodeAdapter(model=123) error = %q, want %q", constructErr.Error(), "model: expected string, got integer")
+	startErr, launched := startRefusedSession(t, config)
+	var agentErr *domain.AgentError
+	fault, _ := errors.AsType[*typeutil.TypeFault](startErr)
+	if !errors.As(startErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound || fault == nil || fault.Key != "model" || launched {
+		t.Fatalf("StartSession(model=123) error, launched = %v, %v, want an agent_not_found *domain.AgentError wrapping a *typeutil.TypeFault for %q, no launch", startErr, launched, "model")
 	}
 
 	got := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: config})
@@ -121,17 +138,11 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	if diag == nil {
 		t.Fatalf("validateConfig(model=123) missing check %q; got %+v", "opencode.model.wrong_type", got)
 	}
-	if diag.Message != constructErr.Error() {
-		t.Errorf("validateConfig(model=123) check %q Message = %q, want the same text the constructor failed with: %q", diag.Check, diag.Message, constructErr.Error())
+	if diag.Message != agentErr.Message {
+		t.Errorf("validateConfig(model=123) check %q Message = %q, want the text StartSession refused with: %q", diag.Check, diag.Message, agentErr.Message)
 	}
 }
 
-// TestValidateConfig_TypeFaultAndToolOverlapBothReported covers the combination:
-// a passthrough carrying both a mistyped string key and an overlapping
-// allowed_tools/denied_tools pair fails NewOpenCodeAdapter with the type
-// fault (parsePassthroughConfig runs before checkCrossField), while
-// validateConfig, which does not gate the overlap check on the funnel's
-// fault, reports both diagnostics offline.
 func TestValidateConfig_TypeFaultAndToolOverlapBothReported(t *testing.T) {
 	t.Parallel()
 
@@ -141,12 +152,9 @@ func TestValidateConfig_TypeFaultAndToolOverlapBothReported(t *testing.T) {
 		"denied_tools":  []any{"bash"},
 	}
 
-	_, constructErr := NewOpenCodeAdapter(config)
-	if constructErr == nil {
-		t.Fatal("NewOpenCodeAdapter(model=123, overlapping tools) error = nil, want the type fault")
-	}
-	if constructErr.Error() != "model: expected string, got integer" {
-		t.Errorf("NewOpenCodeAdapter(model=123, overlapping tools) error = %q, want the type fault, not the overlap error", constructErr.Error())
+	startErr, _ := startRefusedSession(t, config)
+	if _, ok := errors.AsType[*typeutil.TypeFault](startErr); !ok {
+		t.Errorf("StartSession(model=123, overlapping tools) error = %v, want the type fault, not the overlap error", startErr)
 	}
 
 	got := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: config})

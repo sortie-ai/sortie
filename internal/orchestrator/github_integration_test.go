@@ -236,9 +236,7 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registry.Agents.Get(%q): %v", "mock", err)
 	}
-	agentAdapter, err := agentFactory(map[string]any{
-		"max_turns": 1,
-	})
+	agentAdapter, err := agentFactory()
 	if err != nil {
 		t.Fatalf("NewMockAdapter: %v", err)
 	}

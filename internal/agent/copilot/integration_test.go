@@ -103,13 +103,14 @@ func collectEvents(t *testing.T) (onEvent func(domain.AgentEvent), collected fun
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
 
 	workspace := t.TempDir()
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 	})
@@ -128,13 +129,14 @@ func TestIntegration_StartSession(t *testing.T) {
 func TestIntegration_StopSession(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
 
 	workspace := t.TempDir()
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 	})
@@ -151,12 +153,13 @@ func TestIntegration_StopSession(t *testing.T) {
 func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
 
 	_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: "sortie-nonexistent-copilot-99999"},
 	})
@@ -221,7 +224,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -232,6 +235,7 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	}
 
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 	})
@@ -275,7 +279,7 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 func TestIntegration_ResumeSession(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -285,6 +289,7 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	defer cancel()
 
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 	})
@@ -336,7 +341,7 @@ func TestIntegration_ResumeSession(t *testing.T) {
 func TestIntegration_ResumeSessionID(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -347,6 +352,7 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 
 	// Establish real session ID from turn 1.
 	session1, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 	})
@@ -369,6 +375,7 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 		WorkspacePath:   workspace,
 		AgentConfig:     domain.AgentConfig{Command: integrationCommand()},
 		ResumeSessionID: result1.SessionID,
+		Settings:        map[string]any{"model": "gpt-5", "effort": "low", "max_autopilot_continues": float64(5)},
 	})
 	if err != nil {
 		t.Fatalf("StartSession (resume): %v", err)
@@ -401,7 +408,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
 	passthrough := map[string]any{}
-	adapter, err := NewCopilotAdapter(passthrough)
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -409,6 +416,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		return domain.StartSessionParams{
 			WorkspacePath: t.TempDir(),
 			AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+			Settings:      passthrough,
 		}
 	}
 
@@ -440,7 +448,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 func TestIntegration_EarlyExit(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(map[string]any{})
+	adapter, err := NewCopilotAdapter()
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -469,12 +477,13 @@ func TestIntegration_ToolServerIdentity(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
 	agenttest.AssertToolServerIdentity(t, func(ctx context.Context, workspacePath, mcpConfigPath string) error {
-		adapter, err := NewCopilotAdapter(integrationConfig())
+		adapter, err := NewCopilotAdapter()
 		if err != nil {
 			return err
 		}
 
 		session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+			Settings:      integrationConfig(),
 			WorkspacePath: workspacePath,
 			AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
 			MCPConfigPath: mcpConfigPath,

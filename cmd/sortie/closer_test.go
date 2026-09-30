@@ -35,6 +35,10 @@ var (
 	agentCloseFlags   sync.Map // token string -> *int32
 )
 
+// A constructor receives no settings, so the test that constructs the agent
+// hands it the token here and cannot run in parallel.
+var agentCloseToken atomic.Value
+
 // closeTokenSeq generates monotonically unique token strings.
 var closeTokenSeq atomic.Int64
 
@@ -89,16 +93,16 @@ func (c *closeableMockAgent) Close() error { //nolint:unparam // io.Closer requi
 	return nil
 }
 
-func newCloseableMockAgent(cfg map[string]any) (domain.AgentAdapter, error) {
+func newCloseableMockAgent() (domain.AgentAdapter, error) {
 	mockCtor, err := registry.Agents.Get("mock")
 	if err != nil {
 		return nil, fmt.Errorf("closeable-mock: %w", err)
 	}
-	inner, err := mockCtor(cfg)
+	inner, err := mockCtor()
 	if err != nil {
 		return nil, err
 	}
-	token, _ := cfg["close_key"].(string)
+	token, _ := agentCloseToken.Load().(string)
 	return &closeableMockAgent{AgentAdapter: inner, token: token}, nil
 }
 
@@ -111,6 +115,7 @@ func newCloseToken(t *testing.T) (token string, trackerFlag, agentFlag *int32) {
 	var tf, af int32
 	trackerCloseFlags.Store(token, &tf)
 	agentCloseFlags.Store(token, &af)
+	agentCloseToken.Store(token)
 	t.Cleanup(func() {
 		trackerCloseFlags.Delete(token)
 		agentCloseFlags.Delete(token)
@@ -118,10 +123,6 @@ func newCloseToken(t *testing.T) (token string, trackerFlag, agentFlag *int32) {
 	return token, &tf, &af
 }
 
-// writeCloseableWorkflow writes a WORKFLOW.md in dir that uses the
-// "closeable-file" tracker and "closeable-mock" agent, both receiving
-// token as the "close_key" extension so their Close() calls are
-// observable via the package-level spy.
 func writeCloseableWorkflow(t *testing.T, dir, issuesPath, token string) string {
 	t.Helper()
 	content := fmt.Sprintf(`---
@@ -138,11 +139,9 @@ agent:
 closeable-file:
   path: %s
   close_key: %s
-closeable-mock:
-  close_key: %s
 ---
 Do {{ .issue.title }}.
-`, issuesPath, token, token)
+`, issuesPath, token)
 	p := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)

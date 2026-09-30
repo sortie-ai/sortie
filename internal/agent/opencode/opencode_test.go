@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,15 +86,20 @@ cat '` + runPath + `'`
 	return writeOpenCodeScriptMajor2(t, dir, body)
 }
 
-// mustStartSession starts a session with the given command or fatals.
 func mustStartSession(t *testing.T, a domain.AgentAdapter, workDir, cmd string) domain.Session {
+	t.Helper()
+	return mustStartSessionWith(t, a, workDir, cmd, nil)
+}
+
+func mustStartSessionWith(t *testing.T, a domain.AgentAdapter, workDir, cmd string, settings map[string]any) domain.Session {
 	t.Helper()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: workDir,
 		AgentConfig:   domain.AgentConfig{Command: cmd},
+		Settings:      settings,
 	})
 	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
+		t.Fatalf("StartSession(Settings=%v) error = %v", settings, err)
 	}
 	return session
 }
@@ -195,7 +201,7 @@ func collectEvents(t *testing.T, a domain.AgentAdapter, session domain.Session, 
 func TestNewOpenCodeAdapter(t *testing.T) {
 	t.Parallel()
 
-	a, err := NewOpenCodeAdapter(map[string]any{})
+	a, err := NewOpenCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 	}
@@ -207,31 +213,61 @@ func TestNewOpenCodeAdapter(t *testing.T) {
 	}
 }
 
-// TestNewOpenCodeAdapter_OverlapErrorMatchesValidateConfig asserts that
-// NewOpenCodeAdapter's constructor refusal and validateConfig's offline
-// diagnostic report byte-identical text for the same overlapping
-// configuration, so the two surfaces can never disagree.
-func TestNewOpenCodeAdapter_OverlapErrorMatchesValidateConfig(t *testing.T) {
+func TestStartSession_RefusalMatchesValidateConfig(t *testing.T) {
 	t.Parallel()
 
-	config := map[string]any{
-		"allowed_tools": []any{"bash"},
-		"denied_tools":  []any{"bash"},
+	tests := []struct {
+		name     string
+		settings map[string]any
+		check    string
+	}{
+		{name: "tool overlap", settings: map[string]any{"allowed_tools": []any{"bash"}, "denied_tools": []any{"bash"}}, check: "opencode.allowed_tools.overlap"},
+		{name: "effort and variant both set", settings: map[string]any{registry.EffortKey: "high", "variant": "max"}, check: "opencode." + registry.EffortKey + ".conflict"},
 	}
 
-	_, err := NewOpenCodeAdapter(config)
-	if err == nil {
-		t.Fatal("NewOpenCodeAdapter() error = nil, want overlap error")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	diags := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: config})
-	diag := hasCheck(diags, "opencode.allowed_tools.overlap")
-	if diag == nil {
-		t.Fatalf("validateConfig() missing check %q; got %+v", "opencode.allowed_tools.overlap", diags)
-	}
+			err, launched := startRefusedSession(t, tt.settings)
 
-	if err.Error() != diag.Message {
-		t.Errorf("NewOpenCodeAdapter() error = %q, validateConfig() diagnostic message = %q, want identical", err.Error(), diag.Message)
+			agentErr, ok := errors.AsType[*domain.AgentError](err)
+			diag := hasCheck(validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: tt.settings}), tt.check)
+			if !ok || agentErr.Kind != domain.ErrAgentNotFound || diag == nil || agentErr.Message != diag.Message || launched {
+				t.Errorf("StartSession(%v) error, launched = %v, %v, want an agent_not_found *domain.AgentError carrying the message of validateConfig check %q (%+v), no launch", tt.settings, err, launched, tt.check, diag)
+			}
+		})
+	}
+}
+
+func TestStartSession_SettingsArePerSession(t *testing.T) {
+	t.Parallel()
+
+	a, _ := NewOpenCodeAdapter()
+	script := fakeMinimalRuntime(t)
+
+	first := mustStartSessionWith(t, a, t.TempDir(), script, map[string]any{"model": "provider/model-a", "allowed_tools": []any{"read"}}).Internal.(*sessionState)
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:   t.TempDir(),
+		AgentConfig:     domain.AgentConfig{Command: script},
+		ResumeSessionID: "ses_prior",
+		Settings:        map[string]any{"model": "provider/model-b"},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	resumed := session.Internal.(*sessionState)
+
+	if first.passthrough.Model != "provider/model-a" || !slices.Equal(first.passthrough.AllowedTools, []string{"read"}) {
+		t.Errorf("first session settings = %+v, want model-a with allowed_tools [read]", first.passthrough)
+	}
+	if resumed.passthrough.Model != "provider/model-b" || len(resumed.passthrough.AllowedTools) != 0 {
+		t.Errorf("resumed session settings = %+v, want model-b with no allowed_tools", resumed.passthrough)
+	}
+	for turn := 1; turn <= 2; turn++ {
+		if got := flagValue(buildRunArgs(resumed, "p", resumed.passthrough), "--model"); got != "provider/model-b" {
+			t.Errorf("resumed session turn %d --model = %q, want %q", turn, got, "provider/model-b")
+		}
 	}
 }
 
@@ -272,7 +308,7 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			a, _ := NewOpenCodeAdapter(map[string]any{})
+			a, _ := NewOpenCodeAdapter()
 			_, err := a.StartSession(context.Background(), tt.params)
 			if err == nil {
 				t.Fatal("StartSession() error = nil, want error")
@@ -291,7 +327,7 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 func TestStartSession_ResumeSession(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	resumeID := "ses_resume123"
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   t.TempDir(),
@@ -362,7 +398,7 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 				t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			}
 
-			a, _ := NewOpenCodeAdapter(map[string]any{})
+			a, _ := NewOpenCodeAdapter()
 			session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 				WorkspacePath: t.TempDir(),
 				AgentConfig:   domain.AgentConfig{Command: command},
@@ -394,7 +430,7 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 func TestRunTurn_WrongInternalType(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := domain.Session{
 		ID:       "test",
 		Internal: "not-a-session-state",
@@ -419,7 +455,7 @@ func TestRunTurn_WrongInternalType(t *testing.T) {
 func TestRunTurn_ClosedSession(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
 	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
@@ -447,7 +483,7 @@ func TestRunTurn_ClosedSession(t *testing.T) {
 func TestRunTurn_LinkedWorkspaceRefusedBeforeStart(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
 	marker := filepath.Join(tmpDir, "marker")
 	script := writeOpenCodeScript(t, t.TempDir(), "#!/bin/sh\ntouch "+marker+"\n")
@@ -484,7 +520,7 @@ func TestRunTurn_LinkedWorkspaceRefusedBeforeStart(t *testing.T) {
 func TestRunTurn_ConcurrentRunRejected(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
 	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
@@ -514,7 +550,7 @@ func TestRunTurn_ConcurrentRunRejected(t *testing.T) {
 func TestRunTurn_SessionIDMismatch(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
@@ -570,7 +606,7 @@ func TestRunTurn_SessionIDMismatch(t *testing.T) {
 func TestStopSession_NoActiveTurn(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
 	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
@@ -597,7 +633,7 @@ trap '' TERM
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 while :; do sleep 1; done`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(testCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script},
@@ -831,7 +867,7 @@ trap '' TERM
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 while :; do :; done`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(testCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script, StopGraceMS: 200},
@@ -885,7 +921,7 @@ while :; do :; done`)
 func TestStopSession_WrongInternalType(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := domain.Session{
 		ID:       "test",
 		Internal: "not-a-session-state",
@@ -946,7 +982,7 @@ func TestRunTurn_MultiTurnAccumulation(t *testing.T) {
 esac
 cat '`+runPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	var allEvents []domain.AgentEvent
@@ -1013,7 +1049,7 @@ cat '`+runPath+`'`)
 	outerCtx, outerCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer outerCancel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(outerCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script},
@@ -1086,7 +1122,7 @@ func TestRunTurn_SessionStartedOnce(t *testing.T) {
 
 	script := writeOpenCodeScript(t, tmpDir, "cat '"+fixturePath+"'")
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	countType := func(events []domain.AgentEvent, typ domain.AgentEventType) int {
@@ -1131,7 +1167,7 @@ func TestRunTurn_LogicalFailureExitZero(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "logical_failure_exit0.jsonl")
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1215,8 +1251,8 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 			tmpDir := t.TempDir()
 			script := writeUnreachableModelsScript(t, tmpDir, tt.fixture)
 
-			a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
-			session := mustStartSession(t, a, tmpDir, script)
+			a, _ := NewOpenCodeAdapter()
+			session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
 
 			events, result, err := collectEvents(t, a, session, "work")
 			if result.ExitReason != domain.EventTurnFailed {
@@ -1311,8 +1347,8 @@ func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nanthropic/claude-sonnet-4-6\n'; exit 0`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
-	session := mustStartSession(t, a, tmpDir, script)
+	a, _ := NewOpenCodeAdapter()
+	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
 
 	events, result, err := collectEvents(t, a, session, "work")
 	if result.ExitReason != domain.EventTurnFailed {
@@ -1353,8 +1389,8 @@ func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nexisting/model\n'; exit 0`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{"model": "existing/model"})
-	session := mustStartSession(t, a, tmpDir, script)
+	a, _ := NewOpenCodeAdapter()
+	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "existing/model"})
 
 	events, result, err := collectEvents(t, a, session, "work")
 	if result.ExitReason != domain.EventTurnFailed {
@@ -1390,8 +1426,8 @@ func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeMaskedRunScript(t, tmpDir, `exit 1`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
-	session := mustStartSession(t, a, tmpDir, script)
+	a, _ := NewOpenCodeAdapter()
+	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
 
 	events, result, err := collectEvents(t, a, session, "work")
 	if result.ExitReason != domain.EventTurnFailed {
@@ -1428,7 +1464,7 @@ func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
 	sentinel := filepath.Join(tmpDir, "models-invoked")
 	script := writeMaskedRunScript(t, tmpDir, `touch '`+sentinel+`'; exit 0`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1468,11 +1504,11 @@ func TestRunTurn_FreeTierRefusalNamesDeniedTools(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "free_tier_refusal.jsonl")
 
-	a, err := NewOpenCodeAdapter(map[string]any{"allowed_tools": []any{"read", "glob"}})
+	a, err := NewOpenCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 	}
-	session := mustStartSession(t, a, tmpDir, script)
+	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"allowed_tools": []any{"read", "glob"}})
 
 	events, result, _ := collectEvents(t, a, session, "work")
 
@@ -1500,11 +1536,11 @@ func TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScriptMajor2(t, tmpDir, "free_tier_refusal_v2.jsonl")
 
-	a, err := NewOpenCodeAdapter(map[string]any{"allowed_tools": []any{"read", "glob"}})
+	a, err := NewOpenCodeAdapter()
 	if err != nil {
 		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 	}
-	session := mustStartSession(t, a, tmpDir, script)
+	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"allowed_tools": []any{"read", "glob"}})
 
 	events, result, _ := collectEvents(t, a, session, "work")
 
@@ -1529,7 +1565,7 @@ func TestRunTurn_OversizedStdoutLine(t *testing.T) {
 	script := writeOpenCodeScript(t, tmpDir, `head -c $((10*1024*1024+1)) /dev/zero | tr '\000' 'a'
 printf '\n'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1587,7 +1623,7 @@ printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"
 head -c $((10*1024*1024+1)) /dev/zero | tr '\000' 'a'
 printf '\n'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1628,7 +1664,7 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 		tmpDir := t.TempDir()
 		script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
-		a, _ := NewOpenCodeAdapter(map[string]any{})
+		a, _ := NewOpenCodeAdapter()
 		session := mustStartSession(t, a, tmpDir, script)
 
 		events, result, err := collectEvents(t, a, session, "work")
@@ -1659,7 +1695,7 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 		tmpDir := t.TempDir()
 		script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
-		a, _ := NewOpenCodeAdapter(map[string]any{})
+		a, _ := NewOpenCodeAdapter()
 		session := mustBuildSSHSessionWithLocalScript(t, tmpDir, script, "example.test")
 
 		events, result, err := collectEvents(t, a, session, "work")
@@ -1689,7 +1725,7 @@ func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1731,7 +1767,7 @@ func TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage(t *testing.T) {
 esac
 cat '`+runPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	_, result, err := collectEvents(t, a, session, "work")
@@ -1773,7 +1809,7 @@ func TestRunTurn_UsageMeasured_TrueWhenTheExportIsAGenuineZero(t *testing.T) {
 esac
 cat '`+runPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1834,7 +1870,7 @@ func TestAssertUsageReporting(t *testing.T) {
 esac
 cat '`+runPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1865,7 +1901,7 @@ printf '{"type":"text","timestamp":1001,"sessionID":"ses_visibility123","part":{
 printf '{"type":"unknown_future_type","timestamp":1001,"sessionID":"ses_visibility123","data":"something"}\n'
 printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","part":{"id":"p2","messageID":"m1","sessionID":"ses_visibility123","type":"step-finish","reason":"stop"}}\n'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -1945,7 +1981,7 @@ func TestRunTurn_ReasoningPartCountsAsWork(t *testing.T) {
 esac
 printf '{"type":"reasoning","timestamp":1000,"sessionID":"ses_reasoning123","part":{"id":"p1","messageID":"m1","sessionID":"ses_reasoning123","type":"reasoning","text":"thinking it through"}}\n'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2005,7 +2041,7 @@ esac
 cat '`+stderrPath+`' >&2
 cat '`+stdoutPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2047,7 +2083,7 @@ func TestRunTurn_PermissionWarningOnStdoutIsNotRecognized(t *testing.T) {
 esac
 cat '`+stdoutPath+`'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, _, err := collectEvents(t, a, session, "work")
@@ -2087,7 +2123,7 @@ esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 sleep 1000`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(outerCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script},
@@ -2160,7 +2196,7 @@ esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 sleep 1000`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(testCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script},
@@ -2227,7 +2263,7 @@ esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_c1","part":{"id":"p1","messageID":"m1","sessionID":"ses_c1","snapshot":"","type":"step-start"}}\n'
 printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id":"p2","messageID":"m1","sessionID":"ses_c1","type":"step-finish","reason":"stop"}}\n'`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2271,7 +2307,7 @@ func TestRunTurn_ExitZeroNoJSONEventAtAll(t *testing.T) {
 esac
 exit 0`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2307,7 +2343,7 @@ esac
 echo 'Usage: opencode [options]'
 exit 0`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2346,7 +2382,7 @@ esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_nonzero","part":{"id":"p1","messageID":"m1","sessionID":"ses_nonzero","snapshot":"","type":"step-start"}}\n'
 exit 7`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2388,7 +2424,7 @@ func TestRunTurn_ReadTimeoutBeforeFirstJSONEvent(t *testing.T) {
 esac
 sleep 5`)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 100},
@@ -2431,7 +2467,7 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	_, result, err := collectEvents(t, a, session, "work")
@@ -2457,7 +2493,7 @@ func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "tool_success.jsonl")
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
@@ -2491,7 +2527,7 @@ else
   printf '{"type":"tool_use","timestamp":1001,"sessionID":"ses_both_then_none","part":{"id":"p2","messageID":"m1","sessionID":"ses_both_then_none","type":"tool","tool":"read","callID":"call_both","state":{"status":"completed","input":{},"output":"ok","time":{"start":1001,"end":1001}}}}\n'
 fi`, counterFile, counterFile))
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	_, result1, err := collectEvents(t, a, session, "first")
@@ -2532,7 +2568,7 @@ else
   printf '{"type":"text","timestamp":1000,"sessionID":"ses_work_pin","part":{"id":"p1","messageID":"m1","sessionID":"ses_work_pin","type":"text","text":"ok","time":{"start":1000,"end":1000}}}\n'
 fi`, counterFile, counterFile))
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 
 	_, result1, err := collectEvents(t, a, session, "first")
@@ -2726,7 +2762,7 @@ func TestRunTurn_DescendantHoldsStdout(t *testing.T) {
 		script := writeOpenCodeInGroupDescendantScript(t, tmpDir, pidFile, "ses_ingroup")
 
 		spy := &agenttest.LogSpy{}
-		a, _ := NewOpenCodeAdapter(map[string]any{})
+		a, _ := NewOpenCodeAdapter()
 		session := mustStartSession(t, a, tmpDir, script)
 		state := session.Internal.(*sessionState)
 		state.baseLogger = slog.New(spy)
@@ -2764,7 +2800,7 @@ func TestRunTurn_DescendantHoldsStdout(t *testing.T) {
 		script := writeOpenCodeEscapedDescendantScript(t, tmpDir, pidFile, "ses_ingroup")
 
 		spy := &agenttest.LogSpy{}
-		a, _ := NewOpenCodeAdapter(map[string]any{})
+		a, _ := NewOpenCodeAdapter()
 		session := mustStartSession(t, a, tmpDir, script)
 		state := session.Internal.(*sessionState)
 		state.baseLogger = slog.New(spy)
@@ -2816,7 +2852,7 @@ printf '{"type":"text","timestamp":1001,"sessionID":"ses_stderr_holder","part":{
 exit 0
 `, writeEscapedHolderSpawn(pidFile, ">/dev/null")))
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 	session.Internal.(*sessionState).drainGrace = 200 * time.Millisecond
 
@@ -2895,7 +2931,7 @@ sleep 3600
 `, spawn))
 
 			spy := &agenttest.LogSpy{}
-			a, _ := NewOpenCodeAdapter(map[string]any{})
+			a, _ := NewOpenCodeAdapter()
 			session := mustStartSession(t, a, tmpDir, script)
 			state := session.Internal.(*sessionState)
 			state.baseLogger = slog.New(spy)
@@ -2983,7 +3019,7 @@ sleep 3600
 `, writeEscapedHolderSpawn(pidFile, "2>/dev/null")))
 
 	spy := &agenttest.LogSpy{}
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   tmpDir,
 		AgentConfig:     domain.AgentConfig{Command: script},
@@ -3037,7 +3073,7 @@ esac
 %sexit 0
 `, writeEscapedHolderSpawn(pidFile, "2>/dev/null")))
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		// The leader's own exit waits on the escaped descendant's marker
@@ -3105,7 +3141,7 @@ func TestRunTurn_LatchSetDuringPostExitDrain(t *testing.T) {
 
 	spy := &agenttest.LogSpy{}
 	const readTimeoutMS = 150
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: readTimeoutMS},
@@ -3172,7 +3208,7 @@ printf 'direct child stderr\n' >&2
 %sexit 0
 `, writeEscapedHolderSpawn(pidFile, ">/dev/null")))
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 200},
@@ -3215,7 +3251,7 @@ printf '{"type":"text","timestamp":1001,"sessionID":"ses_long","part":{"id":"p2"
 exit 0
 `)
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session := mustStartSession(t, a, tmpDir, script)
 	// Far shorter than the turn: an anchor at launch would expire long
 	// before the agent says anything.
@@ -3261,7 +3297,7 @@ sleep 1000`)
 	outerCtx, outerCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer outerCancel()
 
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(outerCtx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		AgentConfig:   domain.AgentConfig{Command: script},
@@ -3358,7 +3394,7 @@ sleep 1000`)
 	// Resumed, so the session id is known before the turn starts. A turn
 	// that emits nothing never learns one, and an export needs one -- which
 	// is a separate reason to recover nothing, and not the one under test.
-	a, _ := NewOpenCodeAdapter(map[string]any{})
+	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: tmpDir,
 		// The export's own budget is 2x this, so a value tight enough to
@@ -3438,7 +3474,7 @@ func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 		stdinPath := filepath.Join(tmpDir, "stdin.txt")
 		script := writeRunFixtureScriptWithCapture(t, tmpDir, "simple_turn.jsonl", argvPath, stdinPath)
 
-		a, err := NewOpenCodeAdapter(map[string]any{})
+		a, err := NewOpenCodeAdapter()
 		if err != nil {
 			t.Fatalf("%s: NewOpenCodeAdapter() error = %v, want nil", tc.name, err)
 		}

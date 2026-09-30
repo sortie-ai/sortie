@@ -99,8 +99,7 @@ func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.Agen
 			)
 			continue
 		}
-		cfgMap := config.AgentAdapterConfig(cfg, kind)
-		adapter, err := ctor(cfgMap)
+		adapter, err := ctor()
 		if err != nil {
 			log.Warn("skipping agent adapter cache entry, construction failed",
 				slog.String("kind", kind),
@@ -381,8 +380,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		br.logger.Error("unknown agent kind", slog.String("kind", br.cfg.Agent.Kind), slog.Any("error", err))
 		return 1
 	}
-	agentCfgMap := config.AgentAdapterConfig(br.cfg, br.cfg.Agent.Kind)
-	agentAdapter, err := agentCtor(agentCfgMap)
+	agentAdapter, err := agentCtor()
 	if err != nil {
 		br.logger.Error("failed to construct agent adapter", slog.Any("error", err))
 		return 1

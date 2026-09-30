@@ -52,14 +52,15 @@ func recordedEffortEnv(t *testing.T, passthrough map[string]any, verification bo
 		Path:  recording,
 		Names: []string{effortEnvName},
 	})
-	adapter, err := NewClaudeCodeAdapter(passthrough)
+	adapter, err := NewClaudeCodeAdapter()
 	if err != nil {
-		t.Fatalf("NewClaudeCodeAdapter(%v) error = %v", passthrough, err)
+		t.Fatalf("NewClaudeCodeAdapter() error = %v", err)
 	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:          t.TempDir(),
 		AgentConfig:            domain.AgentConfig{Command: command},
 		CredentialVerification: verification,
+		Settings:               passthrough,
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)

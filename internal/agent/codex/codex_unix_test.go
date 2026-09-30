@@ -149,7 +149,7 @@ func TestStartSession_SSH_CarriesEnvironmentVariable(t *testing.T) {
 	capturePath := filepath.Join(tmpDir, "captured.txt")
 	agentScript := writeCodexHandshakeScriptWithEnvCapture(t, tmpDir, carriedName, capturePath)
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter() error = %v, want nil", err)
 	}
@@ -200,7 +200,7 @@ func TestStartSession_SSH_NoDDEndsAsPortExit(t *testing.T) {
 	capturePath := filepath.Join(tmpDir, "captured.txt")
 	agentScript := writeCodexHandshakeScriptWithEnvCapture(t, tmpDir, carriedName, capturePath)
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter() error = %v, want nil", err)
 	}
@@ -421,7 +421,7 @@ func TestStartSession_CancelSignalsProcessGroup(t *testing.T) {
 	descendant := writeDescendantScript(t, tmpDir, pidFile, markerFile)
 	script := writeFakeAppServerScript(t, tmpDir, descendant)
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter() error = %v, want nil", err)
 	}

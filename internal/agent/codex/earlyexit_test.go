@@ -9,7 +9,7 @@ import (
 
 func TestEarlyExitConformance(t *testing.T) {
 	// Not parallel: AssertEarlyExitReport sets PATH through t.Setenv.
-	adapter, err := NewCodexAdapter(map[string]any{})
+	adapter, err := NewCodexAdapter()
 	if err != nil {
 		t.Fatalf("NewCodexAdapter() error = %v", err)
 	}

@@ -140,7 +140,7 @@ func TestStartSession_MajorOneDeprecationWarning(t *testing.T) {
 			spy := agenttest.InstallLogSpy(t)
 			dir := t.TempDir()
 			command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: tt.reportedVersion})
-			a, err := NewOpenCodeAdapter(map[string]any{})
+			a, err := NewOpenCodeAdapter()
 			if err != nil {
 				t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 			}

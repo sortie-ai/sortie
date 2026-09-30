@@ -93,7 +93,7 @@ func TestStartSession_SSHBinaryNotFound(t *testing.T) {
 	// No t.Parallel(): uses t.Setenv which mutates process env.
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 
-	adapter, _ := NewCodexAdapter(map[string]any{})
+	adapter, _ := NewCodexAdapter()
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		SSHHost:       "remote.example.com",

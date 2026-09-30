@@ -1,10 +1,12 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
@@ -12,59 +14,96 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-func effortTurnFixture(turns int) []byte {
-	var b strings.Builder
-	for turn := 1; turn <= turns; turn++ {
-		id := fmt.Sprintf("turn-%03d", turn)
-		fmt.Fprintf(&b, `{"id":%d,"result":{"turn":{"id":%q,"status":"starting"}}}`+"\n", turn, id)
-		fmt.Fprintf(&b, `{"method":"turn/started","params":{"turnId":%q}}`+"\n", id)
-		fmt.Fprintf(&b, `{"method":"turn/completed","params":{"turn":{"id":%q,"status":"completed"}}}`+"\n", id)
-	}
-	return []byte(b.String())
+type recordedFrame struct {
+	Method string         `json:"method"`
+	Params map[string]any `json:"params"`
 }
 
-func turnStartEfforts(t *testing.T, recorder *capturingWriteCloser) []string {
-	t.Helper()
-
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-
-	var efforts []string
-	for _, write := range recorder.writes {
-		var message struct {
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
-		}
-		if err := json.Unmarshal([]byte(write), &message); err != nil {
-			t.Fatalf("decode write %q: %v", write, err)
-		}
-		if message.Method != "turn/start" {
-			continue
-		}
-		effort, _ := message.Params[registry.EffortKey].(string)
-		efforts = append(efforts, effort)
-	}
-	return efforts
+type recordingSession struct {
+	session    domain.Session
+	state      *sessionState
+	recordPath string
 }
 
-func codexEffortProbe(t *testing.T, passthrough map[string]any, verification bool, turns int) ([]string, error) {
+func (r *recordingSession) recorded(t *testing.T, method string) []recordedFrame {
 	t.Helper()
 
-	adapter, err := NewCodexAdapter(passthrough)
+	data, err := os.ReadFile(r.recordPath)
+	if err != nil {
+		t.Fatalf("read recorded frames: %v", err)
+	}
+	var frames []recordedFrame
+	for line := range bytes.SplitSeq(bytes.TrimSpace(data), []byte("\n")) {
+		var frame recordedFrame
+		if err := json.Unmarshal(line, &frame); err != nil {
+			t.Fatalf("decode recorded frame %q: %v", line, err)
+		}
+		if frame.Method == method {
+			frames = append(frames, frame)
+		}
+	}
+	return frames
+}
+
+func startRecordingSessionE(t *testing.T, adapter *CodexAdapter, settings map[string]any, resumeID string, verification bool) (*recordingSession, error) {
+	t.Helper()
+
+	recordPath := filepath.Join(t.TempDir(), "frames")
+	command := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioRecordFrames, recordFramesParams{RecordPath: recordPath})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:          t.TempDir(),
+		AgentConfig:            domain.AgentConfig{Command: command},
+		ResumeSessionID:        resumeID,
+		CredentialVerification: verification,
+		Settings:               settings,
+	})
 	if err != nil {
 		return nil, err
 	}
-	recorder := &capturingWriteCloser{}
-	state := makeTestStateWithStdin(t, effortTurnFixture(turns), recorder)
-	state.credentialVerification = verification
-	session := fakeSession(state)
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+	return &recordingSession{session: session, state: session.Internal.(*sessionState), recordPath: recordPath}, nil
+}
+
+func startRecordingSession(t *testing.T, adapter *CodexAdapter, settings map[string]any, resumeID string) *recordingSession {
+	t.Helper()
+
+	session, err := startRecordingSessionE(t, adapter, settings, resumeID, false)
+	if err != nil {
+		t.Fatalf("StartSession(Settings=%v) error = %v", settings, err)
+	}
+	return session
+}
+
+func runRecordedTurns(t *testing.T, adapter *CodexAdapter, r *recordingSession, turns int) {
+	t.Helper()
 
 	for turn := 1; turn <= turns; turn++ {
-		if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{Prompt: "probe", OnEvent: func(domain.AgentEvent) {}}); err != nil {
-			return nil, fmt.Errorf("RunTurn(%d): %w", turn, err)
+		if _, err := adapter.RunTurn(context.Background(), r.session, domain.RunTurnParams{Prompt: "probe", OnEvent: func(domain.AgentEvent) {}}); err != nil {
+			t.Fatalf("RunTurn(%d) error = %v", turn, err)
 		}
 	}
-	return turnStartEfforts(t, recorder), nil
+}
+
+func codexEffortProbe(t *testing.T, settings map[string]any, verification, resumed bool, turns int) ([]string, error) {
+	t.Helper()
+
+	resumeID := ""
+	if resumed {
+		resumeID = "thread-prior"
+	}
+	adapter := &CodexAdapter{}
+	session, err := startRecordingSessionE(t, adapter, settings, resumeID, verification)
+	if err != nil {
+		return nil, fmt.Errorf("StartSession: %w", err)
+	}
+	runRecordedTurns(t, adapter, session, turns)
+
+	var efforts []string
+	for _, frame := range session.recorded(t, "turn/start") {
+		effort, _ := frame.Params[registry.EffortKey].(string)
+		efforts = append(efforts, effort)
+	}
+	return efforts, nil
 }
 
 func TestEffortForwarding(t *testing.T) {

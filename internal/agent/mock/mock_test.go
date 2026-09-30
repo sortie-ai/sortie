@@ -15,6 +15,26 @@ import (
 
 var _ domain.AgentAdapter = (*MockAdapter)(nil)
 
+func startMockSession(t *testing.T, adapter domain.AgentAdapter, settings map[string]any) domain.Session {
+	t.Helper()
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{WorkspacePath: "/tmp/work", Settings: settings})
+	if err != nil {
+		t.Fatalf("StartSession(Settings=%v) error = %v", settings, err)
+	}
+	return session
+}
+
+func mustStartMock(t *testing.T, settings map[string]any) (*MockAdapter, domain.Session) {
+	t.Helper()
+
+	adapter, err := NewMockAdapter()
+	if err != nil {
+		t.Fatalf("NewMockAdapter() error = %v", err)
+	}
+	return adapter.(*MockAdapter), startMockSession(t, adapter, settings)
+}
+
 func defaultParams() domain.RunTurnParams {
 	return domain.RunTurnParams{
 		Prompt:  "test prompt",
@@ -33,12 +53,7 @@ func collectEvents(params *domain.RunTurnParams) *[]domain.AgentEvent {
 func TestNewMockAdapter_Defaults(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	m := adapter.(*MockAdapter)
+	m := parseSettings(nil)
 	if m.sessionID != "mock-session-001" {
 		t.Errorf("sessionID = %q, want %q", m.sessionID, "mock-session-001")
 	}
@@ -71,7 +86,7 @@ func TestNewMockAdapter_Defaults(t *testing.T) {
 func TestNewMockAdapter_AllConfigKeys(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{
+	m := parseSettings(map[string]any{
 		"session_id":             "custom-session",
 		"agent_pid":              "12345",
 		"start_error":            "boom",
@@ -82,11 +97,6 @@ func TestNewMockAdapter_AllConfigKeys(t *testing.T) {
 		"output_tokens_per_turn": 75,
 		"turn_delay_ms":          10,
 	})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	m := adapter.(*MockAdapter)
 	if m.sessionID != "custom-session" {
 		t.Errorf("sessionID = %q, want %q", m.sessionID, "custom-session")
 	}
@@ -119,17 +129,12 @@ func TestNewMockAdapter_AllConfigKeys(t *testing.T) {
 func TestNewMockAdapter_FloatTokenValues(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{
+	m := parseSettings(map[string]any{
 		"events_per_turn":        float64(7),
 		"input_tokens_per_turn":  float64(250),
 		"output_tokens_per_turn": float64(125),
 		"turn_delay_ms":          float64(42),
 	})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	m := adapter.(*MockAdapter)
 	if m.eventsPerTurn != 7 {
 		t.Errorf("eventsPerTurn = %d, want 7", m.eventsPerTurn)
 	}
@@ -152,7 +157,7 @@ func TestRegistration(t *testing.T) {
 		t.Fatalf("registry.Agents.Get(\"mock\") error = %v", err)
 	}
 
-	adapter, err := ctor(map[string]any{})
+	adapter, err := ctor()
 	if err != nil {
 		t.Fatalf("constructor() error = %v", err)
 	}
@@ -215,10 +220,11 @@ func TestStartSession(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			adapter, err := NewMockAdapter(tt.config)
+			adapter, err := NewMockAdapter()
 			if err != nil {
 				t.Fatalf("NewMockAdapter() error = %v", err)
 			}
+			tt.params.Settings = tt.config
 
 			sess, err := adapter.StartSession(context.Background(), tt.params)
 			if tt.wantErr {
@@ -247,8 +253,7 @@ func TestStartSession(t *testing.T) {
 func TestRunTurn_DefaultSuccess(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "mock-session-001"}
+	adapter, sess := mustStartMock(t, nil)
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -298,8 +303,7 @@ func TestRunTurn_DefaultSuccess(t *testing.T) {
 func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "mock-session-001"}
+	adapter, sess := mustStartMock(t, nil)
 
 	// First turn: consume.
 	adapter.RunTurn(context.Background(), sess, defaultParams()) //nolint:errcheck // test setup
@@ -329,8 +333,7 @@ func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "s"}
+	adapter, sess := mustStartMock(t, nil)
 
 	// Token usage is cumulative across turns.
 	wantUsage := []domain.TokenUsage{
@@ -350,6 +353,32 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 	}
 }
 
+func TestRunTurn_TokenAccumulationIsPerSession(t *testing.T) {
+	t.Parallel()
+
+	adapter, cheap := mustStartMock(t, map[string]any{"input_tokens_per_turn": 10, "output_tokens_per_turn": 1})
+	costly := startMockSession(t, adapter, map[string]any{"input_tokens_per_turn": 1000, "output_tokens_per_turn": 100})
+
+	turns := []struct {
+		sess domain.Session
+		want domain.TokenUsage
+	}{
+		{cheap, domain.TokenUsage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11}},
+		{costly, domain.TokenUsage{InputTokens: 1000, OutputTokens: 100, TotalTokens: 1100}},
+		{cheap, domain.TokenUsage{InputTokens: 20, OutputTokens: 2, TotalTokens: 22}},
+		{costly, domain.TokenUsage{InputTokens: 2000, OutputTokens: 200, TotalTokens: 2200}},
+	}
+	for i, turn := range turns {
+		result, err := adapter.RunTurn(context.Background(), turn.sess, defaultParams())
+		if err != nil {
+			t.Fatalf("turn %d: RunTurn() error = %v", i+1, err)
+		}
+		if result.Usage != turn.want {
+			t.Errorf("turn %d: Usage = %+v, want %+v", i+1, result.Usage, turn.want)
+		}
+	}
+}
+
 // TestRunTurn_AssertUsageContract drives three turns and checks the
 // full emitted event sequence against the shared usage contract: every
 // component non-negative, TotalTokens equal to InputTokens plus
@@ -358,8 +387,7 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 func TestRunTurn_AssertUsageContract(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "s"}
+	adapter, sess := mustStartMock(t, nil)
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -381,8 +409,7 @@ func TestRunTurn_ReportTokenUsage(t *testing.T) {
 	t.Run("false emits no token_usage event and leaves the run unmeasured", func(t *testing.T) {
 		t.Parallel()
 
-		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": false})
-		sess := domain.Session{ID: "s"}
+		adapter, sess := mustStartMock(t, map[string]any{"report_token_usage": false})
 		params := defaultParams()
 		events := collectEvents(&params)
 
@@ -397,12 +424,11 @@ func TestRunTurn_ReportTokenUsage(t *testing.T) {
 	t.Run("absent with zero per-turn config reports a measurement of zero", func(t *testing.T) {
 		t.Parallel()
 
-		adapter, _ := NewMockAdapter(map[string]any{
+		adapter, sess := mustStartMock(t, map[string]any{
 			"input_tokens_per_turn":      0,
 			"output_tokens_per_turn":     0,
 			"cache_read_tokens_per_turn": 0,
 		})
-		sess := domain.Session{ID: "s"}
 		params := defaultParams()
 		events := collectEvents(&params)
 
@@ -434,8 +460,7 @@ func TestRunTurn_ReportTokenUsage(t *testing.T) {
 	t.Run("true reports a measurement", func(t *testing.T) {
 		t.Parallel()
 
-		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": true})
-		sess := domain.Session{ID: "s"}
+		adapter, sess := mustStartMock(t, map[string]any{"report_token_usage": true})
 
 		result, err := adapter.RunTurn(context.Background(), sess, defaultParams())
 		if err != nil {
@@ -450,8 +475,7 @@ func TestRunTurn_ReportTokenUsage(t *testing.T) {
 	t.Run("unrecognized value type falls back to true", func(t *testing.T) {
 		t.Parallel()
 
-		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": "false"})
-		sess := domain.Session{ID: "s"}
+		adapter, sess := mustStartMock(t, map[string]any{"report_token_usage": "false"})
 
 		result, err := adapter.RunTurn(context.Background(), sess, defaultParams())
 		if err != nil {
@@ -479,11 +503,7 @@ func runMockTurnWithToolCall(t *testing.T, config map[string]any) ([]domain.Agen
 	}
 	maps.Copy(merged, config)
 
-	adapter, err := NewMockAdapter(merged)
-	if err != nil {
-		t.Fatalf("NewMockAdapter(%v) error = %v", merged, err)
-	}
-	sess := domain.Session{ID: "mock-session-001"}
+	adapter, sess := mustStartMock(t, merged)
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -535,10 +555,9 @@ func TestAssertUsageReporting(t *testing.T) {
 func TestRunTurn_ConfiguredOutcomes(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"completed", "failed", "cancelled"},
 	})
-	sess := domain.Session{ID: "s"}
 
 	tests := []struct {
 		turn     int
@@ -574,10 +593,9 @@ func TestRunTurn_ConfiguredOutcomes(t *testing.T) {
 func TestRunTurn_ExhaustedOutcomes(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"failed"},
 	})
-	sess := domain.Session{ID: "s"}
 
 	// Turn 1: fails per config.
 	_, err := adapter.RunTurn(context.Background(), sess, defaultParams())
@@ -595,13 +613,30 @@ func TestRunTurn_ExhaustedOutcomes(t *testing.T) {
 	}
 }
 
+func TestSessionsKeepTheirOwnSettingsWhileTheTurnCursorIsAdapterWide(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter()
+	failing := startMockSession(t, adapter, map[string]any{"turn_outcomes": []any{"failed"}, "session_id": "failing"})
+	plain := startMockSession(t, adapter, nil)
+
+	if failing.ID != "failing" || plain.ID != "mock-session-001" {
+		t.Errorf("session IDs = %q, %q, want %q, %q", failing.ID, plain.ID, "failing", "mock-session-001")
+	}
+	if _, err := adapter.RunTurn(context.Background(), plain, defaultParams()); err != nil {
+		t.Errorf("plain session turn at cursor 0 error = %v, want nil: the other session's turn_outcomes must not apply", err)
+	}
+	if _, err := adapter.RunTurn(context.Background(), failing, defaultParams()); err != nil {
+		t.Errorf("failing session first turn at cursor 1 error = %v, want nil: the cursor is shared, so index 1 is past its turn_outcomes", err)
+	}
+}
+
 func TestRunTurn_InputRequired(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"input_required"},
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -630,10 +665,9 @@ func TestRunTurn_InputRequired(t *testing.T) {
 func TestRunTurn_InputRequired_MatchesSharedLayer(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"input_required"},
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -676,10 +710,9 @@ func TestRunTurn_InputRequired_MatchesSharedLayer(t *testing.T) {
 func TestRunTurn_Incomplete_MatchesSharedLayer(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"incomplete"},
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -716,10 +749,9 @@ func TestRunTurn_Incomplete_MatchesSharedLayer(t *testing.T) {
 func TestRunTurn_ErrorOutcome(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_outcomes": []any{"error"},
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -742,10 +774,9 @@ func TestRunTurn_ErrorOutcome(t *testing.T) {
 func TestRunTurn_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"turn_delay_ms": 60000,
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -768,10 +799,9 @@ func TestRunTurn_ContextCancellation(t *testing.T) {
 func TestRunTurn_CustomEventsPerTurn(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"events_per_turn": 0,
 	})
-	sess := domain.Session{ID: "s"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -821,8 +851,8 @@ func TestStopSession(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			adapter, _ := NewMockAdapter(tt.config)
-			err := adapter.StopSession(context.Background(), domain.Session{})
+			adapter, sess := mustStartMock(t, tt.config)
+			err := adapter.StopSession(context.Background(), sess)
 
 			if tt.wantErr {
 				if err == nil {
@@ -845,15 +875,10 @@ func TestStopSession(t *testing.T) {
 func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{
+	m := parseSettings(map[string]any{
 		"cache_read_tokens_per_turn": 500,
 		"model_name":                 "claude-sonnet-4-20250514",
 	})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	m := adapter.(*MockAdapter)
 	if m.cacheReadTokensPerTurn != 500 {
 		t.Errorf("cacheReadTokensPerTurn = %d, want 500", m.cacheReadTokensPerTurn)
 	}
@@ -867,14 +892,13 @@ func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {
 func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"input_tokens_per_turn":      100,
 		"output_tokens_per_turn":     50,
 		"cache_read_tokens_per_turn": 200,
 		"model_name":                 "test-model",
 		"events_per_turn":            0,
 	})
-	sess := domain.Session{ID: "s"}
 
 	// Turn 1: cumulative cache_read = 200.
 	params1 := defaultParams()
@@ -927,18 +951,13 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 func TestNewMockAdapter_TimingConfig(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{
+	m := parseSettings(map[string]any{
 		"api_duration_ms": float64(750),
 		"tool_calls": []any{
 			map[string]any{"tool_name": "Read", "duration_ms": float64(120)},
 			map[string]any{"tool_name": "Write", "duration_ms": float64(350)},
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	m := adapter.(*MockAdapter)
 	if m.apiDurationMS != 750 {
 		t.Errorf("apiDurationMS = %d, want 750", m.apiDurationMS)
 	}
@@ -958,10 +977,9 @@ func TestNewMockAdapter_TimingConfig(t *testing.T) {
 func TestRunTurn_APIDurationMS_OnTokenUsage(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"api_duration_ms": float64(500),
 	})
-	sess := domain.Session{ID: "mock-session-001"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -985,8 +1003,7 @@ func TestRunTurn_APIDurationMS_OnTokenUsage(t *testing.T) {
 func TestRunTurn_APIDurationMS_ZeroByDefault(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "mock-session-001"}
+	adapter, sess := mustStartMock(t, nil)
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -1011,13 +1028,12 @@ func TestRunTurn_APIDurationMS_ZeroByDefault(t *testing.T) {
 func TestRunTurn_ToolCalls_EmitsToolResultEvents(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"tool_calls": []any{
 			map[string]any{"tool_name": "Read", "duration_ms": float64(100)},
 			map[string]any{"tool_name": "Bash", "duration_ms": float64(250)},
 		},
 	})
-	sess := domain.Session{ID: "mock-session-001"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -1048,8 +1064,7 @@ func TestRunTurn_ToolCalls_EmitsToolResultEvents(t *testing.T) {
 func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
 	t.Parallel()
 
-	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "mock-session-001"}
+	adapter, sess := mustStartMock(t, nil)
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -1069,17 +1084,12 @@ func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
 func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{
+	adapter, sess := mustStartMock(t, map[string]any{
 		"tool_calls": []any{
 			map[string]any{"tool_name": "Bash", "duration_ms": float64(100), "error": true},
 			map[string]any{"tool_name": "Read", "duration_ms": float64(50)},
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewMockAdapter() error = %v", err)
-	}
-
-	sess := domain.Session{ID: "mock-session-001"}
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -1112,18 +1122,20 @@ func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
 func TestRunTurn_CredentialVerification(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := NewMockAdapter(map[string]any{"turn_outcomes": []any{"failed"}})
+	settings := map[string]any{"turn_outcomes": []any{"failed"}}
+	adapter, err := NewMockAdapter()
 	if err != nil {
 		t.Fatalf("NewMockAdapter() error = %v", err)
 	}
 	verifySession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:          "/tmp/work",
 		CredentialVerification: true,
+		Settings:               settings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession(verification) error = %v", err)
 	}
-	workingSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{WorkspacePath: "/tmp/work"})
+	workingSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{WorkspacePath: "/tmp/work", Settings: settings})
 	if err != nil {
 		t.Fatalf("StartSession(working) error = %v", err)
 	}
@@ -1149,20 +1161,19 @@ func TestRunTurn_CredentialVerification(t *testing.T) {
 func TestMockAdapter_CredentialVerificationConformance(t *testing.T) {
 	t.Parallel()
 
-	verified, _ := NewMockAdapter(map[string]any{})
-	unverified, _ := NewMockAdapter(map[string]any{"credential_error": "refused"})
+	adapter, _ := NewMockAdapter()
 
 	credentialtest.AssertCredentialVerification(t, "mock", []credentialtest.CredentialVerificationCase{
 		{
 			Name:    "no credential_error passes",
-			Adapter: verified,
+			Adapter: adapter,
 			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work"},
 			Want:    credentialtest.WantVerified,
 		},
 		{
 			Name:    "credential_error set fails",
-			Adapter: unverified,
-			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work"},
+			Adapter: adapter,
+			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work", Settings: map[string]any{"credential_error": "refused"}},
 			Want:    credentialtest.WantUnverified,
 		},
 	})

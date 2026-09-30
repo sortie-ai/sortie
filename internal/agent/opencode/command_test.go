@@ -126,7 +126,7 @@ func newTestSessionState(workspacePath, sessionID string) *sessionState {
 	}
 }
 
-func TestNewOpenCodeAdapter_ParsePassthroughConfig(t *testing.T) {
+func TestParsePassthroughConfigAndCrossField(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -227,11 +227,15 @@ func TestNewOpenCodeAdapter_ParsePassthroughConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			a, err := NewOpenCodeAdapter(tt.config)
+			pt, fault := parsePassthroughConfig(tt.config)
+			if fault != nil {
+				t.Fatalf("parsePassthroughConfig(%v) fault = %v", tt.config, fault)
+			}
+			err := checkCrossField(pt)
 
 			if tt.wantErr {
 				if err == nil {
-					t.Fatal("NewOpenCodeAdapter() error = nil, want error")
+					t.Fatal("checkCrossField() error = nil, want error")
 				}
 				if !strings.Contains(err.Error(), "bash") {
 					t.Errorf("error = %q, want it to mention %q", err.Error(), "bash")
@@ -240,15 +244,10 @@ func TestNewOpenCodeAdapter_ParsePassthroughConfig(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Fatalf("NewOpenCodeAdapter() error = %v", err)
-			}
-
-			oc, ok := a.(*OpenCodeAdapter)
-			if !ok {
-				t.Fatalf("adapter type = %T, want *OpenCodeAdapter", a)
+				t.Fatalf("checkCrossField() error = %v", err)
 			}
 			if tt.checkFunc != nil {
-				tt.checkFunc(t, oc.passthrough)
+				tt.checkFunc(t, pt)
 			}
 		})
 	}

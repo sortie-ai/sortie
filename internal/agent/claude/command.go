@@ -33,7 +33,7 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}
-	model, fault := typeutil.StringField(config, "model")
+	model, fault := registry.ModelSetting(config)
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}

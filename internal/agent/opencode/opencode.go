@@ -58,9 +58,7 @@ func init() {
 
 var _ domain.AgentAdapter = (*OpenCodeAdapter)(nil)
 
-type OpenCodeAdapter struct {
-	passthrough passthroughConfig
-}
+type OpenCodeAdapter struct{}
 
 type sessionState struct {
 	target         agentcore.LaunchTarget
@@ -127,25 +125,25 @@ type waitResult struct {
 	err      error
 }
 
-// NewOpenCodeAdapter creates an [OpenCodeAdapter] from the raw "opencode"
-// adapter configuration in WORKFLOW.md.
-func NewOpenCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt, fault := parsePassthroughConfig(config)
-	if fault != nil {
-		return nil, fault
-	}
-	if err := checkCrossField(pt); err != nil {
-		return nil, err
-	}
-	return &OpenCodeAdapter{passthrough: pt}, nil
+// NewOpenCodeAdapter creates an [OpenCodeAdapter].
+func NewOpenCodeAdapter() (domain.AgentAdapter, error) {
+	return &OpenCodeAdapter{}, nil
 }
 
-// StartSession resolves the launch target, detects the installed
-// OpenCode major, and initializes adapter-owned session state without
-// starting a turn subprocess. It refuses a major other than 1 or 2, and
-// a passthrough setting that major cannot carry. A working session on
-// major 1 logs one deprecation warning naming the detected version.
+// StartSession parses the session's settings, detects the installed
+// OpenCode major, and initializes session state without starting a turn
+// subprocess. It refuses an unusable settings block before launching
+// anything, a major other than 1 or 2, and a setting that major cannot
+// carry. A working session on major 1 logs one deprecation warning.
 func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	pt, fault := parsePassthroughConfig(params.Settings)
+	if fault != nil {
+		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
+	}
+	if err := checkCrossField(pt); err != nil {
+		return domain.Session{}, agentcore.SettingsError(err.Error(), err)
+	}
+
 	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -163,7 +161,7 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 	state := &sessionState{
 		target:                 target,
 		agentConfig:            params.AgentConfig,
-		passthrough:            a.passthrough,
+		passthrough:            pt,
 		sessionID:              params.ResumeSessionID,
 		major:                  majorUnknown,
 		baseLogger:             slog.Default().With(slog.String("component", "opencode-adapter")),
@@ -232,7 +230,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		}
 	}
 
-	managedEnv, err := buildManagedEnv(a.passthrough, state.major)
+	managedEnv, err := buildManagedEnv(state.passthrough, state.major)
 	if err != nil {
 		return domain.TurnResult{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -257,7 +255,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		}
 	}
 	state.turnCount++
-	cmdArgs := buildRunArgs(state, params.Prompt, a.passthrough)
+	cmdArgs := buildRunArgs(state, params.Prompt, state.passthrough)
 	logger := state.loggerLocked()
 
 	var cmd *exec.Cmd

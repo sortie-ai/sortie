@@ -11,7 +11,7 @@ import (
 
 func TestEarlyExitConformance(t *testing.T) {
 	// Not parallel: AssertEarlyExitReport sets PATH through t.Setenv.
-	adapter, err := NewClientProtocolAdapter(map[string]any{})
+	adapter, err := NewClientProtocolAdapter()
 	if err != nil {
 		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 	}
