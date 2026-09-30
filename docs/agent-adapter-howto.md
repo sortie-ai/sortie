@@ -25,11 +25,14 @@ This section writes a new Go package under `internal/agent`, for a runtime that 
            UsageArrival:        registry.UsageArrivalIncremental, // or TurnEnd, or None
            UsageAttribution:    registry.UsageAttributionPerModel, // or SessionTotal, or None
            CredentialEnv:       registry.DeclareCredentialEnv("YOUR_API_KEY"),
+           EffortForwarding:    registry.EffortForwarded, // or NotForwarded
        })
    }
    ```
 
    `CredentialEnv` names the environment variables this kind's runtime reads as the credential for its default provider, in the order a remote launch carries them. A kind whose runtime reads none says so explicitly with `registry.DeclareCredentialEnv()` and no arguments, which is a different thing from leaving the field unset. Each name must be a valid environment variable name, must not repeat, and must not be one the SSH carrier reserves for itself.
+
+   `EffortForwarding` declares what the adapter does with the `effort` key of its own settings block. Declare `registry.EffortForwarded` only for an adapter that reads the key through `registry.EffortSetting` and delivers a non-empty value to its runtime on every turn of every session, credential verification included; such a kind's tests call `agenttest.AssertEffortForwarding`, and a completeness test in `cmd/sortie` fails, naming the kind, when they do not. Declare `registry.EffortNotForwarded` for an adapter that reads no such key, and leave `registry.EffortSetting` and `registry.EffortKey` out of its non-test files. An adapter whose runtime lets an environment variable outrank the delivered level sets `LaunchTarget.WithheldEnv` to that variable's name in `StartSession`, right after `agentcore.ResolveLaunchTarget` returns, when the level is set.
 
    Set `MCPInjection`, `UsageArrival`, and `UsageAttribution` to what the adapter actually does today, not what the underlying CLI could in principle support. Derive `UsageArrival` and `UsageAttribution` from the adapter's own emission code, not from the CLI's documentation: re-read the symbol that decides when a `token_usage` event fires and whether it carries a model before writing the literal. Add a `UsageSessionRules` entry only when some passthrough setting or launch mode narrows the pair for part of this kind's configuration space, and add `SessionResumeBlockedBy` only if some config key of this adapter's own can block session resume under a given passthrough.
 
