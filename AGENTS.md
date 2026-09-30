@@ -24,6 +24,7 @@ An agent orchestrator that ships as one statically-linked binary with no runtime
 
 - Read the architecture section your task touches before implementing. Drift from the spec is a bug.
 - Implement adapter integrations as new packages behind the existing Go interface — additive only.
+- Keep documentation true in the same change. Whenever a spec, plan or code change alters the API or behavior (a feature, a fix, a refactor that changes a contract), find every document it makes wrong (architecture sections, `docs/workflow-reference.md`, adapter notes, guides, env and config references, event and API schemas, `CHANGELOG.md`) and update it in that change. A task that never mentions docs, or names only some of them, does not exempt the rest. Accepted ADRs in `docs/decisions/*.md` keep their Ask-first protection: report them as stale instead of editing them.
 
 ### Ask first
 
