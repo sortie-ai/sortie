@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A set `claude-code.effort` now takes precedence over a `CLAUDE_CODE_EFFORT_LEVEL` variable in Sortie's environment or on an SSH worker host, that variable keeps its effect while `effort` is unset, and a level Claude Code does not recognize now logs a warning. ([#1182](https://github.com/sortie-ai/sortie/issues/1182))
 
+- An edit to an agent kind's settings block, such as `claude-code` or `opencode`, now applies from the next attempt without a restart, while a running session keeps the settings it started with. ([#1191](https://github.com/sortie-ai/sortie/issues/1191))
+
 ### Deprecated
 
 - Running the `opencode` agent kind on OpenCode 1.x is deprecated, and a later release removes it: runs on 1.x keep working and each logs a warning naming the installed version. OpenCode 2.x is published on npm as `@opencode/cli`, while `opencode-ai` ships only 1.x, so uninstall `opencode-ai` before installing `@opencode/cli`, and before switching remove `opencode.pure` and give any `opencode.effort` or `opencode.variant` an `opencode.model` without a `#` suffix, or 2.x refuses the session. The OpenCode Docker example now installs 2.x. ([#1178](https://github.com/sortie-ai/sortie/issues/1178))
