@@ -601,6 +601,140 @@ func TestBuildSSHLaunch_PanicsOnReservedEnvName(t *testing.T) {
 	})
 }
 
+func TestBuildSSHLaunch_Unset(t *testing.T) {
+	t.Parallel()
+
+	const carriedPreamble = "unset _sortie_env && export A='x' && _sortie_complete=1"
+	carriedImport := fmt.Sprintf(`cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=%d 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && `, len(carriedPreamble))
+
+	tests := []struct {
+		name         string
+		opts         SSHOptions
+		wantFinal    string
+		wantPreamble string
+	}{
+		{
+			name:      "unset without carried variables",
+			opts:      SSHOptions{Unset: []string{"FOO", "BAR"}},
+			wantFinal: "cd -- '/w' && unset FOO BAR && { run --acp 'a'\n}",
+		},
+		{
+			name:         "unset after the import step and before the agent group",
+			opts:         SSHOptions{Env: []EnvVar{{Name: "A", Value: "x"}}, Unset: []string{"FOO"}},
+			wantFinal:    carriedImport + "unset FOO && { run --acp 'a'\n}",
+			wantPreamble: carriedPreamble,
+		},
+		{
+			name:      "nil Unset leaves the command as it was",
+			opts:      SSHOptions{},
+			wantFinal: "cd -- '/w' && { run --acp 'a'\n}",
+		},
+		{
+			name:      "empty Unset leaves the command as it was",
+			opts:      SSHOptions{Unset: []string{}},
+			wantFinal: "cd -- '/w' && { run --acp 'a'\n}",
+		},
+		{
+			name:         "empty Unset leaves the carried command as it was",
+			opts:         SSHOptions{Env: []EnvVar{{Name: "A", Value: "x"}}, Unset: []string{}},
+			wantFinal:    carriedImport + "{ run --acp 'a'\n}",
+			wantPreamble: carriedPreamble,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			launch := BuildSSHLaunch("h", "/w", "run --acp", []string{"a"}, tt.opts)
+
+			gotFinal := launch.Args[len(launch.Args)-1]
+			if gotFinal != tt.wantFinal {
+				t.Errorf("BuildSSHLaunch(...).Args final element = %q, want %q", gotFinal, tt.wantFinal)
+			}
+			if gotPreamble := string(mustReadAllBytes(t, launch.StdinReader())); gotPreamble != tt.wantPreamble {
+				t.Errorf("BuildSSHLaunch(...) preamble = %q, want %q", gotPreamble, tt.wantPreamble)
+			}
+		})
+	}
+}
+
+func TestBuildSSHLaunch_UnsetRemovesTheVariableBeforeTheAgentRuns(t *testing.T) {
+	sh := requirePOSIXShell(t)
+
+	const name = "SORTIE_TEST_WITHHELD"
+
+	tests := []struct {
+		name  string
+		unset []string
+		want  string
+	}{
+		{name: "unset names the variable", unset: []string{name}, want: "unset"},
+		{name: "no unset leaves the variable in effect", want: "leaked"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launch := BuildSSHLaunch("h", t.TempDir(), `printf '%s' "${`+name+`-unset}"`, nil, SSHOptions{Unset: tt.unset})
+
+			cmd := exec.Command(sh, "-c", launch.Args[len(launch.Args)-1])
+			cmd.Env = append(os.Environ(), name+"=leaked")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("sh -c on the remote command: %v", err)
+			}
+
+			if got := string(out); got != tt.want {
+				t.Errorf("value the agent saw for %s = %q, want %q", name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSSHLaunch_PanicsOnInvalidOrReservedUnsetName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		unset []string
+		opts  SSHOptions
+		leak  string
+	}{
+		{name: "invalid name without Env", unset: []string{"OK", "1BAD"}, leak: "1BAD"},
+		{name: "reserved name without Env", unset: []string{"OK", "_sortie_complete"}, leak: "_sortie_complete"},
+		{name: "invalid name with Env", unset: []string{"OK", "1BAD"}, opts: SSHOptions{Env: []EnvVar{{Name: "A", Value: "x"}}}, leak: "1BAD"},
+		{name: "reserved name with Env", unset: []string{"OK", "_sortie_complete"}, opts: SSHOptions{Env: []EnvVar{{Name: "A", Value: "x"}}}, leak: "_sortie_complete"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := tt.opts
+			opts.Unset = tt.unset
+
+			r := recoverFrom(func() { BuildSSHLaunch("h", "/w", "cmd", nil, opts) })
+
+			if r == nil {
+				t.Fatalf("BuildSSHLaunch(Unset=%q) did not panic", tt.unset)
+			}
+			msg := fmt.Sprint(r)
+			if !strings.Contains(msg, "Unset[1]") {
+				t.Errorf("BuildSSHLaunch(Unset=%q) panic = %q, want it to name Unset[1]", tt.unset, msg)
+			}
+			if strings.Contains(msg, tt.leak) {
+				t.Errorf("BuildSSHLaunch(Unset=%q) panic = %q, want it to omit the name %q", tt.unset, msg, tt.leak)
+			}
+		})
+	}
+}
+
+func recoverFrom(f func()) (recovered any) {
+	defer func() { recovered = recover() }()
+	f()
+	return nil
+}
+
 // recordingWriteCloser is a test double for io.WriteCloser that
 // records every Write call's bytes, optionally fails every Write with
 // a fixed error, and records whether Close was called.

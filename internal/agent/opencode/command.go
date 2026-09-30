@@ -14,12 +14,14 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 type passthroughConfig struct {
 	Model                    string
 	Agent                    string
+	Effort                   string
 	Variant                  string
 	Thinking                 bool
 	Pure                     bool
@@ -77,6 +79,10 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 	if fault != nil {
 		return passthroughConfig{}, fault
 	}
+	effort, fault := registry.EffortSetting(config)
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
 	variant, fault := typeutil.StringField(config, "variant")
 	if fault != nil {
 		return passthroughConfig{}, fault
@@ -85,6 +91,7 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 	return passthroughConfig{
 		Model:                    model,
 		Agent:                    agent,
+		Effort:                   effort,
 		Variant:                  variant,
 		Thinking:                 typeutil.BoolFrom(config, "thinking", false),
 		Pure:                     typeutil.BoolFrom(config, "pure", false),
@@ -95,10 +102,33 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 	}, nil
 }
 
+// variantSlot returns the value that fills the runtime's one model-variant
+// slot and the settings key it was written under. effort takes the slot
+// when set; a passthrough setting both is refused before a session starts.
+func (pt passthroughConfig) variantSlot() (value, key string) {
+	if pt.Effort != "" {
+		return pt.Effort, registry.EffortKey
+	}
+	return pt.Variant, "variant"
+}
+
+// variantConflictMessage returns the byte-identical message both
+// [validateConfig] and [NewOpenCodeAdapter] report when effort and variant
+// are both set, or "" otherwise.
+func variantConflictMessage(pt passthroughConfig) string {
+	if pt.Effort == "" || pt.Variant == "" {
+		return ""
+	}
+	return fmt.Sprintf("opencode.%s and opencode.variant both set the model variant; set one of them", registry.EffortKey)
+}
+
 // checkCrossField rejects a passthrough whose allowed_tools and
-// denied_tools overlap.
+// denied_tools overlap, or whose effort and variant are both set.
 func checkCrossField(pt passthroughConfig) error {
 	if message := overlapMessage(pt.AllowedTools, pt.DeniedTools); message != "" {
+		return fmt.Errorf("%s", message)
+	}
+	if message := variantConflictMessage(pt); message != "" {
 		return fmt.Errorf("%s", message)
 	}
 	return nil
@@ -110,6 +140,7 @@ func checkCrossField(pt passthroughConfig) error {
 // its working directory comes from PWD (agentcore.LaunchTarget.BindWorkspace)
 // and its prompt from standard input.
 func buildRunArgs(state *sessionState, prompt string, pt passthroughConfig) []string {
+	slot, _ := pt.variantSlot()
 	if state.major == major2 {
 		args := []string{"run", "--format", "json", "--standalone"}
 		if state.sessionID != "" {
@@ -117,8 +148,8 @@ func buildRunArgs(state *sessionState, prompt string, pt passthroughConfig) []st
 		}
 		if pt.Model != "" {
 			model := pt.Model
-			if pt.Variant != "" {
-				model += "#" + pt.Variant
+			if slot != "" {
+				model += "#" + slot
 			}
 			args = append(args, "--model", model)
 		}
@@ -145,8 +176,8 @@ func buildRunArgs(state *sessionState, prompt string, pt passthroughConfig) []st
 	if pt.Agent != "" {
 		args = append(args, "--agent", pt.Agent)
 	}
-	if pt.Variant != "" {
-		args = append(args, "--variant", pt.Variant)
+	if slot != "" {
+		args = append(args, "--variant", slot)
 	}
 	if pt.Thinking {
 		args = append(args, "--thinking")

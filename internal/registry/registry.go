@@ -236,6 +236,10 @@ type AgentMeta struct {
 	// kind's runtime reads as the credential for its default
 	// provider. The zero value means undeclared.
 	CredentialEnv CredentialEnv
+
+	// EffortForwarding declares what this adapter does with the effort
+	// key of its own settings block. The empty value means undeclared.
+	EffortForwarding EffortForwarding
 }
 
 // CredentialEnv declares the environment variable names an agent

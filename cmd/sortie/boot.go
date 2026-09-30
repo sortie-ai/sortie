@@ -28,10 +28,12 @@ const (
 
 // workflowAdvisories is the shared advisory hook every [workflow.Manager]
 // the program constructs wires through [workflow.WithAdvisoryFunc], so a
-// workflow reaching a deprecated agent kind or an invalid token_rates
-// entry draws the same advisory on every load path.
+// workflow reaching a deprecated agent kind, an effort setting on a kind
+// that forwards none, or an invalid token_rates entry draws the same
+// advisory on every load path.
 var workflowAdvisories workflow.AdvisoryFunc = func(cfg config.ServiceConfig) []config.Advisory {
 	advisories := orchestrator.AgentKindDeprecations(cfg, registry.Agents.Meta)
+	advisories = append(advisories, orchestrator.AgentKindEffortAdvisories(cfg, registry.Agents.Meta)...)
 	return append(advisories, server.TokenRateAdvisories(cfg)...)
 }
 

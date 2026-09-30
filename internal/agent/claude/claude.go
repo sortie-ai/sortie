@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +27,15 @@ import (
 // defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "claude"
 
+// effortEnvName is the variable Claude Code lets outrank --effort without
+// reporting it, so a session that sets the level launches without it.
+const effortEnvName = "CLAUDE_CODE_EFFORT_LEVEL"
+
+// unknownEffortPrefix starts the standard-error line Claude Code writes
+// when it does not recognize the --effort value and runs at the model's
+// default level instead.
+const unknownEffortPrefix = "Warning: Unknown --effort value"
+
 func init() {
 	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
 		RequiresCommand:        true,
@@ -36,6 +46,7 @@ func init() {
 		UsageArrival:           registry.UsageArrivalIncremental,
 		UsageAttribution:       registry.UsageAttributionPerModel,
 		CredentialEnv:          registry.DeclareCredentialEnv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
+		EffortForwarding:       registry.EffortForwarded,
 	})
 }
 
@@ -101,6 +112,11 @@ type sessionState struct {
 	// [agentcore.FinalizeTurn].
 	humanInputEnds   bool
 	humanInputDetail string
+
+	// effortReported records that the session has already logged the
+	// runtime's report of an unrecognized effort value. Touched only from
+	// the OnFinalize hook.
+	effortReported bool
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -108,6 +124,27 @@ func (s *sessionState) logger() *slog.Logger {
 		return s.baseLogger
 	}
 	return logging.WithSession(s.baseLogger, s.claudeSessionID)
+}
+
+// relayEffortReport logs the first standard-error line that starts with
+// [unknownEffortPrefix] as a warning, once per session, so the operator
+// learns the configured level was not applied. It does nothing when no
+// effort is configured.
+func (s *sessionState) relayEffortReport(effort string, stderrLines []string) {
+	if s.effortReported || effort == "" {
+		return
+	}
+	idx := slices.IndexFunc(stderrLines, func(line string) bool {
+		return strings.HasPrefix(line, unknownEffortPrefix)
+	})
+	if idx < 0 {
+		return
+	}
+	s.logger().Warn("reasoning level not applied by the agent",
+		slog.String("agent_kind", "claude-code"),
+		slog.String(registry.EffortKey, effort),
+		slog.String("line", stderrLines[idx]))
+	s.effortReported = true
 }
 
 func (s *sessionState) refreshForkLogger() {
@@ -147,6 +184,9 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
+	}
+	if a.passthrough.Effort != "" {
+		target.WithheldEnv = []string{effortEnvName}
 	}
 
 	isContinuation := false
@@ -316,6 +356,14 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			usage := state.acc.Snapshot()
 
+			finalize := func(ev agentcore.TurnEvidence, meta agentcore.TurnMeta) (domain.TurnResult, *domain.AgentError) {
+				result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+				if agentErr == nil {
+					state.relayEffortReport(a.passthrough.Effort, stderrLines)
+				}
+				return result, agentErr
+			}
+
 			// A recognized request that only a person could answer, observed
 			// in ParseLine, overrides the turn's normal success/failure
 			// disposition regardless of how the subprocess exited.
@@ -326,7 +374,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					Usage:         usage,
 					UsageMeasured: state.usageMeasured,
 				}
-				return agentcore.FinalizeTurn(emit, state.logger(), evidence, meta)
+				return finalize(evidence, meta)
 			}
 
 			lastResult, _ := lastParsed.(*rawEvent)
@@ -365,7 +413,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				APIDurationMS: turnAPIDuration,
 			}
 
-			return agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+			return finalize(ev, meta)
 		},
 		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
 	}

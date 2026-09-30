@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1858,6 +1860,130 @@ func TestValidateAgentConfigOfflineVerdict_OpenCodeToolOverlap(t *testing.T) {
 	}
 	if !foundErr {
 		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "opencode.allowed_tools.overlap")
+	}
+}
+
+func effortWorkflow(kind, effortBlock string) []byte {
+	agentBlock := "agent:\n  kind: " + kind + "\n"
+	if kind != "mock" {
+		agentBlock += "  command: /usr/bin/true\n"
+	}
+	return []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states:\n    - To Do\n  terminal_states:\n    - Done\n" +
+		agentBlock +
+		effortBlock +
+		"file:\n  path: issues.json\n" +
+		"---\nDo {{ .issue.title }}.\n")
+}
+
+func validateEffortJSON(t *testing.T, content []byte) (int, validateOutput) {
+	t.Helper()
+
+	wfPath := writeCustomWorkflowFile(t, t.TempDir(), content)
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v; stderr: %s", stdout.String(), err, stderr.String())
+	}
+	return code, out
+}
+
+func TestValidateEffortNotForwarded(t *testing.T) {
+	t.Parallel()
+
+	const wantCheck = "agent.effort.not_forwarded"
+
+	tests := []struct {
+		name        string
+		kind        string
+		effortBlock string
+		wantWarning bool
+	}{
+		{name: "agent-client-protocol with effort", kind: "agent-client-protocol", effortBlock: "agent-client-protocol:\n  " + registry.EffortKey + ": high\n", wantWarning: true},
+		{name: "mock with effort", kind: "mock", effortBlock: "mock:\n  " + registry.EffortKey + ": high\n", wantWarning: true},
+		{name: "claude-code with effort forwards it", kind: "claude-code", effortBlock: "claude-code:\n  " + registry.EffortKey + ": high\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wantCode, _ := validateEffortJSON(t, effortWorkflow(tt.kind, ""))
+
+			code, out := validateEffortJSON(t, effortWorkflow(tt.kind, tt.effortBlock))
+
+			if code != wantCode {
+				t.Errorf("run(validate) with effort = %d, want %d, the code without the key", code, wantCode)
+			}
+			var got *validateDiag
+			for i := range out.Warnings {
+				if out.Warnings[i].Check == wantCheck {
+					got = &out.Warnings[i]
+				}
+			}
+			if !tt.wantWarning {
+				if got != nil {
+					t.Errorf("validateOutput.Warnings = %+v, want no %q", out.Warnings, wantCheck)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("validateOutput.Warnings = %+v, want a warning under %q", out.Warnings, wantCheck)
+			}
+			if got.Severity != "warning" {
+				t.Errorf("warning Severity = %q, want %q", got.Severity, "warning")
+			}
+		})
+	}
+}
+
+func TestValidateEffortNotForwardedText(t *testing.T) {
+	t.Parallel()
+
+	wfPath := writeCustomWorkflowFile(t, t.TempDir(), effortWorkflow("agent-client-protocol", "agent-client-protocol:\n  "+registry.EffortKey+": high\n"))
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning:") || !strings.Contains(stderr.String(), "agent.effort.not_forwarded") {
+		t.Errorf("stderr = %q, want a warning naming %q", stderr.String(), "agent.effort.not_forwarded")
+	}
+}
+
+var registerDeprecatedOrderFixture = sync.OnceFunc(func() {
+	registry.Agents.RegisterWithMeta("deprecated-order-fixture",
+		func(map[string]any) (domain.AgentAdapter, error) {
+			return nil, errors.New("fixture kind is never constructed")
+		},
+		registry.AgentMeta{Deprecation: &registry.AgentDeprecation{Replacement: "mock"}})
+})
+
+func TestWorkflowAdvisories_EffortAdvisoryBetweenDeprecationsAndTokenRates(t *testing.T) {
+	t.Parallel()
+
+	registerDeprecatedOrderFixture()
+	cfg := config.ServiceConfig{
+		Agent:    config.AgentConfig{Kind: "deprecated-order-fixture"},
+		Dispatch: config.DispatchConfig{Default: config.DispatchSelection{AgentKind: "mock"}},
+	}
+	cfg.SetExtensionSection("mock", map[string]any{registry.EffortKey: "high"})
+	cfg.SetExtensionSection("token_rates", map[string]any{"claude-code": map[string]any{"output_per_mtok": 15}})
+
+	var got []string
+	for _, advisory := range workflowAdvisories(cfg) {
+		got = append(got, advisory.Check)
+	}
+
+	want := []string{"agent.kind.deprecated", "agent.effort.not_forwarded", "token_rates"}
+	if !slices.Equal(got, want) {
+		t.Errorf("workflowAdvisories(...) checks = %v, want %v", got, want)
 	}
 }
 
