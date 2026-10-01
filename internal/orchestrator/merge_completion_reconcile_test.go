@@ -5,11 +5,14 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
@@ -814,6 +817,7 @@ func TestReconcileMergeCompletion_MissingSHAExpiryEscalatesOnceAndStops(t *testi
 	}}
 	params := mgcParams(store, scm, tracker)
 	params.MergeCompletionConfig.Escalation = "comment"
+	params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 	now := mgcBaseTime
 	params.NowFunc = func() time.Time { return now }
 
@@ -895,6 +899,7 @@ func TestReconcileMergeCompletion_MissingSHAEscalationFailureStopsAndFreshPendin
 			}}
 			params := mgcParams(store, scm, tracker)
 			params.MergeCompletionConfig.Escalation = tt.escalation
+			params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 			now := mgcBaseTime
 			params.NowFunc = func() time.Time { return now }
 
@@ -1343,6 +1348,7 @@ func TestReconcileMergeCompletion_EscalationDispatchesConfiguredAction(t *testin
 		scm := &mgcSCMFake{fn: func(int, string, string) (domain.PRMergeStatus, error) { return mergedStatus("sha-13"), nil }}
 		params := mgcParams(store, scm, tracker)
 		params.MergeCompletionConfig.Escalation = "comment"
+		params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 
 		reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
 		state.TrackerOpsWg.Wait()
@@ -1745,6 +1751,7 @@ func TestReconcileMergeCompletion_MissingSHAEscalationSharesDeadlineWithMarkerWr
 			}}
 			params := mgcParams(store, scm, tracker)
 			params.MergeCompletionConfig.Escalation = tt.escalation
+			params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 			now := mgcBaseTime
 			params.NowFunc = func() time.Time { return now }
 
@@ -1779,5 +1786,66 @@ func TestReconcileMergeCompletion_MissingSHAEscalationSharesDeadlineWithMarkerWr
 				t.Errorf("MarkReactionObservationDispatched context = %v, want the identical context passed to the %s tracker write (one shared deadline, not two)", store.markObservationCtx, tt.escalation)
 			}
 		})
+	}
+}
+
+// markSignalStore reports the observation marker write on marked.
+type markSignalStore struct {
+	*mgcStoreFake
+	marked chan struct{}
+}
+
+func (s *markSignalStore) MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error {
+	defer close(s.marked)
+	return s.mgcStoreFake.MarkReactionObservationDispatched(ctx, issueID, kind, fingerprint)
+}
+
+// A slow Slack or webhook send shares the escalation's deadline, so the
+// marker must follow the tracker comment alone or an expired deadline
+// leaves the observation undispatched and a later entry comments again.
+func TestReconcileMergeCompletion_MissingSHAMarkerDoesNotWaitForOtherDestinations(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MGC-MISSING-SLOW-SLACK"
+	state := mgcStateWithPending(issueID, 56)
+	store := &markSignalStore{mgcStoreFake: newMGCStore(), marked: make(chan struct{})}
+	tracker := &mgcTrackerFake{states: map[string]string{issueID: "In Review"}}
+	scm := &mgcSCMFake{fn: func(int, string, string) (domain.PRMergeStatus, error) {
+		return mergedMissingSHAStatus(), nil
+	}}
+	params := mgcParams(store, scm, tracker)
+	params.MergeCompletionConfig.Escalation = "comment"
+	slack := &notifierSpy{release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(slack.release) }) }
+	t.Cleanup(state.TrackerOpsWg.Wait)
+	t.Cleanup(release)
+	params.Router = mustRouter(t, tracker, spyLookup(slack), route.Inputs{
+		Entries:            []config.NotificationBackend{subscribe("slack", domain.EventEscalationMergeCompletion)},
+		CommentEscalations: []domain.EventType{domain.EventEscalationMergeCompletion},
+	})
+	now := mgcBaseTime
+	params.NowFunc = func() time.Time { return now }
+
+	reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+	now = now.Add(31 * time.Minute)
+	reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	select {
+	case <-store.marked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("observation marker not written while the Slack send is in flight, want it decided by the tracker comment alone")
+	}
+	release()
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.commentCalls) != 1 {
+		t.Errorf("CommentIssue calls = %d, want 1", len(tracker.commentCalls))
+	}
+	if observation, ok := store.missingSHAObservation(issueID); !ok || !observation.dispatched {
+		t.Errorf("missing-SHA observation = %+v, ok=%v, want dispatched=true", observation, ok)
+	}
+	if got := len(slack.received); got != 1 {
+		t.Errorf("Slack sends = %d, want 1", got)
 	}
 }

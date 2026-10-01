@@ -33,10 +33,11 @@
    - Snapshot timeout
    - Dashboard render errors
    - Log sink configuration failure
+   - Delivery of an orchestrator event to a Slack or webhook destination
 
 6. `CI Feedback Failures`
    - CI status fetch errors (transport, auth, API, not-found, payload)
-   - Escalation failures (label or comment write to tracker)
+   - Escalation failures (label write or `tracker_comment` delivery to the tracker, and delivery of the escalation event to a Slack or webhook destination)
    - Missing or malformed `.sortie/scm.json`
 
 7. `Handoff Evidence Failures`
@@ -53,6 +54,10 @@
 
 - Worker failures:
   - Convert to retries with exponential backoff.
+
+- Failed delivery of an orchestrator event to a Slack or webhook destination:
+  - Log a warning naming the event type, the destination, and the notifier kind.
+  - Never retry, and never let it block another destination or the action a producer uses to confirm its own delivery.
 
 - Recognized `.sortie/status` signal:
   - All three values keep their existing dispositions. A `blocked` soft stop suppresses the handoff transition and the continuation retry, and, where the dispatch drives issue state, parks the issue instead of merely releasing the claim: it records a durable park and applies the parking label, sharing both the mechanism and the release rule the consecutive-absence ceiling uses below. A completion signal (`needs-human-review`) suppresses the continuation retry and takes the ordered handoff disposition (§7.3) unchanged: the transition fires only where a handoff state is configured, the issue is still active, the dispatch drives issue state, no terminal observation suppresses it, and the evidence verdict permits the write. A verdict that withholds the write routes this exit to the withheld-handoff recovery below, exactly as it routes any other exit that reaches it. A declaration (`no-change-needed`) that stands suppresses the continuation retry and takes the same ordered handoff disposition, except that its evidence verdict is always work observed: it never reaches the withheld-handoff recovery below, and its transition target is `tracker.no_change_state` where that field is configured, `tracker.handoff_state` otherwise.
@@ -94,7 +99,7 @@
 
 Not every orchestrator-driven tracker write in this section gets a later re-attempt. A stalled dispatch is retried and a CI check re-enqueues, but a dispatch-time in-progress transition failure is only logged and never retried, and a handoff transition failure on a soft-stop worker exit releases the claim without scheduling a continuation; both fail quietly with no re-attempt to follow. Escalation failures do not reopen the dropped entry within the same process run (see the escalation bullet above). What distinguishes merge-completion is not the absence of any fallback, but where that fallback lives. A failed transition escalation deliberately leaves the normal merge fingerprint undispatched (§11G.4), so a freshly seeded pending entry reconciles the same merge commit and retries the transition the escalated attempt could not complete.
 
-Missing-identifier escalation follows the same cross-run posture without changing that normal fingerprint: its separate observation is marked dispatched only after the operator label or comment is delivered. A failed write leaves the expired observation undispatched and the current pending entry dropped. A later worker exit or startup recovery may seed a fresh entry, which retries only that undelivered operator signal and drops again; it neither restarts the thirty-minute grace period nor restores an in-process polling loop. This is why every disposition above ends in a bounded retry followed by escalation, an immediate escalation, or an explicit logged stop, and never a silent drop: the durable undispatched state gives the failed action another chance across a fresh entry.
+Missing-identifier escalation follows the same cross-run posture without changing that normal fingerprint: its separate observation is marked dispatched only after the action that confirms delivery succeeds: the label under `escalation: label`, and the `tracker_comment` write under `comment` or `none` when that destination receives the event (§11G.6). A Slack or webhook outcome never confirms delivery and never blocks it. A failed write leaves the expired observation undispatched and the current pending entry dropped. A later worker exit or startup recovery may seed a fresh entry, which retries only that undelivered operator signal and drops again; it neither restarts the thirty-minute grace period nor restores an in-process polling loop. This is why every disposition above ends in a bounded retry followed by escalation, an immediate escalation, or an explicit logged stop, and never a silent drop: the durable undispatched state gives the failed action another chance across a fresh entry.
 
 ### 14.3 Partial State Recovery (Restart)
 
@@ -102,7 +107,7 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 
 - Retry entries with future `due_at` timestamps are restored from SQLite and rescheduled on startup.
 - Parked issues are reloaded from SQLite before the event loop starts, so an issue parked before a restart stays out of dispatch across it without depending on any tracker read to rediscover the park.
-- Budget-hold notice records are reloaded from SQLite before the event loop starts, so a hold announced on the tracker before a restart is not announced again after it.
+- Budget-hold notice records are reloaded from SQLite before the event loop starts, so a hold announced to its destinations before a restart is not announced again after it. A record means the `budget.held` notice had at least one destination; a hold with none records nothing, so a destination subscribed after a restart still receives its notice.
 - Session metadata from the previous run is available for observability and debugging.
 - Run history is preserved in SQLite for operational review.
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the orchestrator knows which issues were in-flight at shutdown and re-dispatches them immediately rather than waiting for the next polling cycle to discover them.

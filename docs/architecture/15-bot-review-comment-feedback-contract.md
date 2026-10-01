@@ -45,7 +45,7 @@ The kind carries its own validated configuration, independent of `review`:
 
 | Field | Default | Constraint |
 |-------|---------|------------|
-| `escalation` | `label` | `label` or `comment` |
+| `escalation` | `label` | `label`, `comment` (deprecated), or `none` |
 | `escalation_label` | `needs-human` | none |
 | `poll_interval_ms` | `60000` | `>= 30000` |
 | `watch_window_ms` | `1800000` | non-negative and at most `9223372036854`; `0` removes the bound |
@@ -56,14 +56,17 @@ The poll-interval default is tighter than `review`'s `120000` and the retry budg
 
 ### 11D.5 Escalation and ownership
 
-Two conditions reach the escalation: `reaction_attempts[issue_id:bot-review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (§11D.3). The action, the metric label, and the slot-scoped cleanup are the same for both; only the log message and, on the `comment` action, the posted text differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted. Escalation follows the auto-merge cross-kind isolation contract in §11C.10, not the `review` escalation path:
+Two conditions reach the escalation: `reaction_attempts[issue_id:bot-review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (§11D.3). The action, the metric label, and the slot-scoped cleanup are the same for both; only the log message and the event body differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted. Escalation follows the auto-merge cross-kind isolation contract in §11C.10, not the `review` escalation path:
 
-- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`, in a detached goroutine with a 30-second timeout.
-- `escalation: comment`: post a plain-text comment naming the PR number and the number of continuation turns attempted, under the same goroutine pattern.
+Every escalation emits the `escalation.bot_review` event (Section 10.4.7) under every posture, in a detached goroutine with a 30-second timeout. The event body is a plain-text message naming the PR number and the number of continuation turns attempted. The posture decides whether a label is applied and which destination receives the event without further configuration:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`, in its own detached goroutine with a 30-second timeout. The event reaches only destinations that subscribe to `escalation.bot_review`, so the issue receives no comment unless a `tracker_comment` entry lists it.
+- `escalation: comment` (deprecated): apply no label; the `tracker_comment` destination receives the event through a subscription Sortie synthesizes from this value. The comment keeps posting and a deprecation advisory names the replacement: `escalation: none` plus `escalation.bot_review` in the events of a `tracker_comment` entry (Section 5.3.10).
+- `escalation: none`: apply no label; the event reaches only destinations subscribed to it.
 
 Cleanup is scoped to the `bot-review` slot only: delete `pending_reactions[issue_id:bot-review]` and the `bot-review` fingerprint row. The escalation path MUST NOT clear any sibling kind's slot, MUST NOT call `CancelRetry` or `DeleteRetryEntry`, MUST NOT delete `state.Claimed[issue_id]`, and MUST NOT delete the residual `reaction_attempts[issue_id:bot-review]` counter. The issue claim and that residual counter are owned by whichever kind currently holds the claim (the first-turn dispatch, `review`, or `merge`); releasing them from the bot-review path would corrupt sibling-kind ownership. Because the pending entry is deleted, the kind stops polling, but the residual counter is not released by any path scoped to bot-review. The residual counter and the claim are released together, whole-issue, once the tracker reports the issue terminal: the tracker-reconcile pass drops every pending entry and every attempt counter the issue holds, cancels its pending retry, and releases `state.Claimed[issue_id]`, leaving `reaction_fingerprints` untouched. This mirrors how `escalateAutoMergeFailure` leaves `reaction_attempts[issue_id:merge]` and `state.Claimed` uncleaned after a merge-kind escalation; that residue, too, is released once the issue reaches a terminal state.
 
-Escalation tracker-call failures are logged and counted (`sortie_bot_review_escalations_total{action="error"}`) but do not block the slot-scoped cleanup.
+Escalation tracker-call failures are logged and counted (`sortie_bot_review_escalations_total{action="error"}`) but do not block the slot-scoped cleanup. Under `comment` and `none`, the counter records `comment` when the `tracker_comment` destination accepted the event, `error` when it failed, and `none` when it was not a destination of the event.
 
 ### 11D.6 Seeding, recovery, and metadata validation
 

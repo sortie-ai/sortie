@@ -67,12 +67,13 @@ When the gate proceeds, or when no `triage` block is configured, the per-episode
 - If `attempts > MaxRetries` (default 1): invoke `escalateMergeConflictFailure`.
 - Otherwise: invoke `dispatchMergeConflictContinuation`.
 
-`escalateMergeConflictFailure` applies the configured escalation action (label or comment) in a detached `TrackerOpsWg` goroutine with a 30-second timeout, then performs the episode-exit cleanup. Its action, metric label, and cleanup are the same whether the budget or a triage command reached it; only the log message and, on the `comment` action, the posted text differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted.
+`escalateMergeConflictFailure` emits the `escalation.merge_conflicts` event (Section 10.4.7) under every posture and applies the configured escalation action, in a detached `TrackerOpsWg` goroutine with a 30-second timeout, then performs the episode-exit cleanup. Its action, metric label, and cleanup are the same whether the budget or a triage command reached it; only the log message and the event body differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted. The event body is a plain-text message naming the PR number and the number of attempts.
 
-- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`.
-- `escalation: comment`: post a plain-text comment naming the PR number and the number of attempts, via `TrackerAdapter.CommentIssue`.
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`, in its own detached goroutine. The event reaches only destinations that subscribe to `escalation.merge_conflicts`, so the issue receives no comment unless a `tracker_comment` entry lists it.
+- `escalation: comment` (deprecated): apply no label; the `tracker_comment` destination receives the event through a subscription Sortie synthesizes from this value. The comment keeps posting and a deprecation advisory names the replacement: `escalation: none` plus `escalation.merge_conflicts` in the events of a `tracker_comment` entry (Section 5.3.10).
+- `escalation: none`: apply no label; the event reaches only destinations subscribed to it.
 
-Episode-exit cleanup is identical for both escalation postures. After the action:
+Episode-exit cleanup is identical for every escalation posture. After the action:
 
 ```
 delete(state.PendingReactions,    ReactionKey(issueID, "merge-conflict"))
@@ -116,7 +117,7 @@ Configuration fields:
 | Field | Default | Constraint |
 |-------|---------|------------|
 | `max_retries` | `1` | non-negative; `0` means escalate on first detection |
-| `escalation` | `label` | `label` or `comment` |
+| `escalation` | `label` | `label`, `comment` (deprecated), or `none` |
 | `escalation_label` | `needs-human` | none |
 | `poll_interval_ms` | `60000` | `>= 30000` |
 | `watch_window_ms` | `1800000` | non-negative and at most `9223372036854`; `0` removes the bound |
@@ -126,7 +127,7 @@ The `max_retries` default of 1 is lower than other reaction kinds (which default
 Two metrics counters:
 
 - `sortie_merge_conflict_checks_total{result}`: incremented once per counted reconcile-loop outcome for a due entry. Label values: `dispatched`, `error`, `unknown`, `clear`. Dirty-branch deferrals (empty head SHA, empty base branch, or the same-head dedup early-return) and the escalation path do not increment this counter.
-- `sortie_merge_conflict_escalations_total{action}`: incremented inside the escalation goroutine. Label values: `label`, `comment`, `error`.
+- `sortie_merge_conflict_escalations_total{action}`: incremented inside the escalation goroutine. Label values: `label`, `comment`, `none`, `error`. Under `comment` and `none`, the value is `comment` when the `tracker_comment` destination accepted the event, `error` when it failed, and `none` when it was not a destination of the event.
 
 ### 11E.9 State machine
 

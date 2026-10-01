@@ -169,10 +169,6 @@ tracker:
   query_filter: "labels = 'agent-ready'"
   handoff_state: Human Review
   in_progress_state: In Progress
-  comments:
-    on_dispatch: false
-    on_completion: false
-    on_failure: false
 ```
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
@@ -189,7 +185,7 @@ tracker:
 | `handoff_evidence` | string         | No                        | `observed`      | Future worker attempts             | Policy governing the evidence condition on an otherwise-eligible handoff. `observed` withholds only when absence of work is positively observed and allows an undeterminable verdict; `strict` also withholds an undeterminable verdict; `off` restores the prior four-condition decision and performs no baseline capture, exit-time workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are rejected as a closed set while configuration is parsed, without contacting the tracker, so startup, reload, and `sortie validate` all reject the same value. See [architecture §6.4](architecture/06-configuration-specification.md#64-config-fields-summary-cheat-sheet) for the verdict's derivation. |
 | `no_change_state` | string          | No                        | `handoff_state` | Future worker exits                | Target tracker state for a worker run whose agent declared, through `.sortie/status`, that the requested outcome already held and nothing needed changing. When absent, a declared run targets `handoff_state` instead, so a deployment that does not set this field sees no change in where its issues land. Is the one target-state field permitted to name a terminal state. |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
-| `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
+| `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | **Deprecated.** Toggles for the comments Sortie posts at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`; non-boolean values are rejected with a configuration error. A key set to `true` subscribes the `tracker_comment` destination to events: `on_dispatch` to `session.started`, `on_completion` to `session.completed` and `session.stopped`, and `on_failure` to `session.failed`. The keys keep working and draw a deprecation warning that names the replacement: list those events in a `tracker_comment` entry of [`notifications`](#211-notifications-operator-notification-backends), then remove the key. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides, which are deprecated with them. |
 
 **`active_states` / `terminal_states` validation rules:**
 
@@ -624,12 +620,22 @@ The `reactions` section configures feedback loops that respond to external event
 | ------------------ | ------- | --------------------- | ------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `provider`         | string  | **Yes** (to activate) | _(absent)_    | Requires restart | Adapter identifier (e.g. `github`). When absent or empty, the reaction kind is disabled.         |
 | `max_retries`      | integer | No                    | `2`           | Requires restart | Maximum fix continuation dispatches per issue before escalation. Must be non-negative.           |
-| `escalation`       | string  | No                    | `label`       | Requires restart | Action taken when the kind hands the subject to a person, either because retries are exhausted or because a `triage` command answered `escalate`. Valid: `"label"`, `"comment"`. |
+| `escalation`       | string  | No                    | `label`       | Requires restart | Action taken when the kind hands the subject to a person, either because retries are exhausted or because a `triage` command answered `escalate`. Valid: `"label"`, `"comment"` (deprecated), `"none"`. See "Escalation postures" below. |
 | `escalation_label` | string  | No                    | `needs-human` | Requires restart | Label applied when `escalation` is `"label"`.                                                    |
 
-**Reload behavior:** every field of every reaction kind is read once when the orchestrator is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only on the next restart. `reactions.ci_failure` is the single exception: the orchestrator re-reads `max_retries`, `escalation`, `escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its `max_log_lines` and its `triage` block still require a restart: the CI provider is constructed once at process start, and the triage configuration is frozen at construction for every kind that offers it, so a script or timeout changed mid-run cannot apply one configuration's timeout to another configuration's script.
+**Reload behavior:** every field of every reaction kind is read once when the orchestrator is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only on the next restart. `reactions.ci_failure` is the single exception: the orchestrator re-reads `max_retries`, `escalation`, `escalation_label`, and `watch_window_ms` from the reloaded config on each tick. The `escalation` value of every other kind stays the value read at startup, and so does the comment that `escalation: comment` posts for it, whatever a reload changes in `notifications`. Its `max_log_lines` and its `triage` block still require a restart: the CI provider is constructed once at process start, and the triage configuration is frozen at construction for every kind that offers it, so a script or timeout changed mid-run cannot apply one configuration's timeout to another configuration's script.
 
-**Escalation recurrence:** `escalation: label` is idempotent (re-applying a present label is a no-op); `escalation: comment` posts a new comment each time it fires. Two conditions fire it: the kind's own budget is exhausted, or a `triage` command answers `escalate`. Recurrence depends on the kind rather than on which condition fired. For kinds whose escalation releases the issue claim (`ci_failure`, `review_comments`), escalation fires once and the reaction stops. For kinds whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the reaction re-arms if its condition recurs and escalates again, so on a long-lived PR `escalation: comment` can accumulate repeated comments while `escalation: label` stays a single mark. Prefer `label` for kinds that may escalate repeatedly. A triage escalation is not re-posted for a subject already escalated: the answer is retained for as long as the subject's fingerprint stands, and a retained `escalate` re-applies without invoking the escalation a second time.
+**Escalation postures:** whenever a kind hands its subject to a person, it emits one escalation event, whatever `escalation` says: `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, or `escalation.merge_completion`. A destination in [`notifications`](#211-notifications-operator-notification-backends) receives the event when its `events` list names it. The value of `escalation` decides whether the label is applied and whether the issue gets a comment without any `notifications` entry:
+
+| Value | Label | Comment on the issue |
+| ----- | ----- | -------------------- |
+| `label` (default) | Applied. | None, unless a `tracker_comment` entry lists the event. |
+| `comment` (deprecated) | None. | Posted, as before. A deprecation warning names the replacement. |
+| `none` | None. | None, unless a `tracker_comment` entry lists the event. |
+
+To get a comment on the issue and no label, write `escalation: none` and list the event in a `tracker_comment` entry. A reaction block that omits `escalation` resolves to `label`, `auto_merge` included, and draws no warning.
+
+**Escalation recurrence:** `escalation: label` is idempotent (re-applying a present label is a no-op); a comment on the issue, whether it comes from `escalation: comment` or from a `tracker_comment` subscription to the escalation event, posts a new comment each time the escalation fires. Two conditions fire it: the kind's own budget is exhausted, or a `triage` command answers `escalate`. Recurrence depends on the kind rather than on which condition fired. For kinds whose escalation releases the issue claim (`ci_failure`, `review_comments`), escalation fires once and the reaction stops. For kinds whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the reaction re-arms if its condition recurs and escalates again, so on a long-lived PR a comment can accumulate repeated entries while `escalation: label` stays a single mark. Prefer `label` for kinds that may escalate repeatedly, and list the event in a `tracker_comment` entry only when you want each recurrence on the issue. A triage escalation is not re-posted for a subject already escalated: the answer is retained for as long as the subject's fingerprint stands, and a retained `escalate` re-applies without invoking the escalation a second time.
 
 **Release on terminal state:** each reconcile pass reads tracker state for every running issue and for every issue holding a pending reaction entry, whether or not a worker is still running for it. When the tracker reports an issue in a state from `tracker.terminal_states`, the pass releases that issue's pending reaction entries, its reaction attempt counters, its pending retry, and its dispatch claim. Polling for that issue stops on the same pass. The release is scoped to in-memory state and leaves the `reaction_fingerprints` rows untouched.
 
@@ -762,7 +768,7 @@ Additional fields (via Extra):
 
 **Bot exclusion:** Human-loop selection drops a comment whose author the platform reports as an automated bot account, and separately drops a comment whose author matches `reactions.bot_review.bot_usernames`. The allowlist half takes effect only while `reactions.bot_review` is configured with a provider, because that is the only condition under which the allowlist is built; a deployment running `review_comments` alone sees no allowlist exclusion.
 
-**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the configured escalation action (label or comment) and releases the claim.
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the configured escalation (`label`, `comment`, or `none`) and releases the claim.
 
 Example:
 
@@ -806,7 +812,11 @@ For a GitLab provider one scope covers the whole API. `api` grants complete read
 
 **Cross-kind isolation:** Auto-merge success and failure cleanup scope mutation to the `merge` kind only. CI failure and review comment continuations on the same issue are unaffected by a successful merge or by escalation.
 
-**Escalation:** When `max_retries` is exhausted, the orchestrator applies the configured escalation action (label or comment) and removes the pending merge entry. Other reaction kinds on the same issue are preserved.
+**Escalation:** When `max_retries` is exhausted, the orchestrator applies the configured escalation (`label`, `comment`, or `none`) and removes the pending merge entry. Other reaction kinds on the same issue are preserved.
+
+**Success comment:** after a merge the orchestrator emits the `auto_merge.merged` event. The issue receives its comment when a `tracker_comment` entry in [`notifications`](#211-notifications-operator-notification-backends) lists `auto_merge.merged`. While the workflow has a tracker and no `tracker_comment` entry, the comment keeps posting without any entry and draws a deprecation warning; adding an entry that omits `auto_merge.merged` stops it.
+
+The example below escalates with no label. The issue gets an escalation comment only when a `tracker_comment` entry lists `escalation.auto_merge`.
 
 Example:
 
@@ -815,7 +825,7 @@ reactions:
   auto_merge:
     provider: github
     max_retries: 2
-    escalation: comment
+    escalation: none
     strategy: squash
     require_ci: true
     delete_branch: true
@@ -845,7 +855,7 @@ Additional fields (via Extra):
 
 **Cross-kind isolation:** `bot_review` and `review_comments` never interfere on the same PR; each owns its own pending entry, fingerprint row, and attempt counter. Escalation cleanup is scoped to the `bot_review` kind only and does not release the issue claim or clear sibling reaction kinds.
 
-**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the configured escalation action (`label` or `comment`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending bot-review entry. Other reaction kinds on the same issue are preserved.
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the configured escalation (`label`, `comment`, or `none`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending bot-review entry. Other reaction kinds on the same issue are preserved.
 
 Example:
 
@@ -873,7 +883,7 @@ Fields:
 | ------------------ | ------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
 | `provider`         | string  | _(required)_  | Requires restart | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the kind.         |
 | `max_retries`      | integer | `1`           | Requires restart | Per-episode rebase attempts before escalation. `0` escalates on first detection without a rebase attempt. |
-| `escalation`       | string  | `label`       | Requires restart | Escalation action when retries are exhausted. One of `label` or `comment`.                                |
+| `escalation`       | string  | `label`       | Requires restart | Escalation action when retries are exhausted. One of `label`, `comment` (deprecated), or `none`.          |
 | `escalation_label` | string  | `needs-human` | Requires restart | Label applied when `escalation` is `label`.                                                               |
 | `poll_interval_ms` | integer | `60000`       | Requires restart | Polling interval for the conflict-detection state machine. Minimum: `30000` (30 sec).                     |
 | `watch_window_ms`  | integer | `1800000`     | Requires restart | Bounds a pending entry's age, measured from the entry's creation rather than from the last recorded head. `0` removes the bound. Must be non-negative and must not exceed `9223372036854`. |
@@ -884,7 +894,7 @@ Fields:
 
 **Cross-kind isolation:** Merge-conflict detection runs independently of every other reaction kind; each owns its own pending entry, fingerprint row, and attempt counter. Escalation cleanup is scoped to the `merge-conflict` kind only and does not release the issue claim or clear sibling reaction kinds. Auto-merge and merge-conflict coexist on the same PR: auto-merge defers while a PR is conflicted, and merge-conflict drives the resolution, after which auto-merge proceeds once the PR is clean and approved.
 
-**Escalation:** When `max_retries` is exhausted within an episode (a new conflicting head pushes the attempt count strictly over the budget), the orchestrator applies the configured escalation action (`label` or `comment`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending merge-conflict entry and its attempt counter. Other reaction kinds on the same issue are preserved.
+**Escalation:** When `max_retries` is exhausted within an episode (a new conflicting head pushes the attempt count strictly over the budget), the orchestrator applies the configured escalation (`label`, `comment`, or `none`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending merge-conflict entry and its attempt counter. Other reaction kinds on the same issue are preserved.
 
 Example:
 
@@ -952,7 +962,7 @@ Fields:
 | `target_state`     | string  | _(required)_  | Requires restart  | The single terminal state the linked issue moves to once its pull request merges. Never inferred. |
 | `poll_interval_ms` | integer | `60000`       | Requires restart  | Polling interval for the merge-observation state machine. Minimum `30000` (30 sec).               |
 | `max_retries`      | integer | `2`           | Requires restart  | Retryable transition attempts before escalation. `0` escalates on the first failed attempt.       |
-| `escalation`       | string  | `label`       | Requires restart  | Escalation action when retries are exhausted. One of `label` or `comment`.                        |
+| `escalation`       | string  | `label`       | Requires restart  | Escalation action when retries are exhausted. One of `label`, `comment` (deprecated), or `none`.  |
 | `escalation_label` | string  | `needs-human` | Requires restart  | Label applied when `escalation` is `label`.                                                       |
 
 **Tracker prerequisites:** two `tracker` fields must be set before this block activates, and each is enforced offline. `tracker.handoff_state` must be non-empty: it is the state a merge waits in, and pending-reaction recovery across a restart is disabled entirely without it. `tracker.terminal_states` must be written out in front matter rather than left to the tracker adapter's default list: the reconcile pass and the terminal workspace sweep both read the list exactly as configured, with no fallback to an adapter default, so a defaulted list would let the validator accept a `target_state` the runtime never treats as terminal.
@@ -961,7 +971,7 @@ Fields:
 
 **Target-state rule and irreversibility:** the target is never inferred from the terminal list; the operator names it explicitly, and it is applied verbatim once the merge is observed. The transition is not reversible by the orchestrator: naming an abandonment state where a completion state was meant closes finished work under the wrong label, and no validator can detect that mistake, because it is a judgement about the issue rather than a configuration shape.
 
-**Idempotency key:** the fingerprint is the merge commit identifier reported by the provider, not the pull request number, persisted in the `reaction_fingerprints` SQLite table under a kind distinct from every other reaction. A row is created on the first observed merge, retained (never deleted) once the transition succeeds, and re-armed only when a later merge reports a different commit identifier. A pull request may remain unmerged for any length of time without starting a failure clock. When the provider first reports `Merged: true` with no commit identifier, Sortie records that PR identity separately and waits thirty minutes, retrying with exponential pending backoff floored at `poll_interval_ms`. If the identifier is still absent on the first poll at or after the deadline, Sortie stops polling that pending entry without transitioning the issue and attempts the configured label or comment. Delivery is recorded only after that tracker write succeeds. A failure does not restart the stopped polling loop; a later fresh pending entry, including one recovered after restart, can retry the undelivered notification. If the tracker write succeeds but the follow-up marker write itself fails, the notification has already reached the operator even though the observation stays recorded as undelivered; a later fresh pending entry then delivers it a second time. `escalation: label` repeats harmlessly, because re-applying a present label is a no-op; `escalation: comment` posts the operator a duplicate comment. If such a later entry instead observes a real identifier, it follows the normal merge-commit fingerprint path and clears the temporary observation after that latch completes. `max_retries` applies only to failed tracker transitions, not to this grace period.
+**Idempotency key:** the fingerprint is the merge commit identifier reported by the provider, not the pull request number, persisted in the `reaction_fingerprints` SQLite table under a kind distinct from every other reaction. A row is created on the first observed merge, retained (never deleted) once the transition succeeds, and re-armed only when a later merge reports a different commit identifier. A pull request may remain unmerged for any length of time without starting a failure clock. When the provider first reports `Merged: true` with no commit identifier, Sortie records that PR identity separately and waits thirty minutes, retrying with exponential pending backoff floored at `poll_interval_ms`. If the identifier is still absent on the first poll at or after the deadline, Sortie stops polling that pending entry without transitioning the issue and emits `escalation.merge_completion` under the configured `escalation`. Delivery is recorded only after the action that confirms it succeeds: the label under `escalation: label`, and the comment on the issue under `escalation: comment` or `none` when a `tracker_comment` subscription receives the event. A Slack or webhook send never confirms delivery and never blocks it, so it never suppresses the retry of a failed tracker write. Under `none` with no subscriber the event has no destination and delivery is recorded at once. A failure does not restart the stopped polling loop; a later fresh pending entry, including one recovered after restart, can retry the undelivered notification. If the tracker write succeeds but the follow-up marker write itself fails, the notification has already reached the operator even though the observation stays recorded as undelivered; a later fresh pending entry then delivers it a second time. `escalation: label` repeats harmlessly, because re-applying a present label is a no-op; a comment on the issue is posted a second time. If such a later entry instead observes a real identifier, it follows the normal merge-commit fingerprint path and clears the temporary observation after that latch completes. `max_retries` applies only to failed tracker transitions, not to this grace period.
 
 **Failure matrix:**
 
@@ -997,7 +1007,7 @@ reactions:
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a configuration error.
 - `max_retries` must be non-negative for all kinds.
-- `escalation` must be `"label"` or `"comment"` for all kinds.
+- `escalation` must be `"label"`, `"comment"`, or `"none"` for all kinds.
 - `watch_window_ms` must be non-negative and must not exceed `9223372036854` for `ci_failure`, `review_comments`, `bot_review`, `merge_conflicts`, and `auto_merge`.
 - `poll_interval_ms` must be >= `30000` for `review_comments`.
 - `debounce_ms` must be non-negative for `review_comments`.
@@ -1293,22 +1303,29 @@ The design rationale is in [architecture §5.3.9](architecture/05-workflow-speci
 ### 2.11 `notifications` (operator notification backends)
 
 ```yaml
-notifications: # ordered list of notifier backends; optional
+notifications: # ordered list of destinations; optional
+  - kind: tracker_comment # built-in: comments on the issue
+    events: [session.completed, session.stopped, session.failed, escalation.ci_failure, auto_merge.merged, budget.held]
   - kind: slack
     webhook_url: $SORTIE_SLACK_WEBHOOK_URL # SORTIE_-prefixed reference (mandatory)
+    events: [agent.message, session.failed]
     max_per_session: 20                     # optional; 0 selects the default (also 20)
   - kind: webhook
     url: $SORTIE_OPS_WEBHOOK_URL            # SORTIE_-prefixed reference (mandatory)
+    events: [session.started, session.completed, session.stopped, session.failed]
 ```
 
-The `notifications` list configures the backends behind the `notify_operator` agent tool. While a session runs, the agent calls `notify_operator` to escalate a decision, report progress, or flag a blocker to a real-time channel. The tool is registered only when at least one valid backend is configured; an empty or absent list leaves it unregistered, so the agent is never offered a tool it cannot use.
+The `notifications` list decides where Sortie sends its messages. Each entry is one destination, and its `events` list names the event types it receives. Two things produce events: the agent, which calls the `notify_operator` tool to escalate a decision, report progress, or flag a blocker (event `agent.message`), and Sortie itself, which produces every other event in the catalog below. Routing is a pure function of the configuration and the event type: the agent never chooses a destination, and an event reaches only the destinations that list it.
 
-The value is a sequence, not a single object. A second channel is a second list entry. Each entry is a map carrying a required `kind` discriminator and that backend's own fields.
+The `notify_operator` tool is registered only when at least one entry receives `agent.message`, so the agent is never offered a tool whose messages reach no destination.
+
+The value is a sequence, not a single object. A second channel is a second list entry. Each entry is a map carrying a required `kind` discriminator, an `events` list, and that backend's own fields.
 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
-| `kind` | string | Yes | _(none)_ | Backend discriminator. v1 backends are `webhook` and `slack`. |
-| `max_per_session` | int | No | `20` | Notification cap for the whole agent run. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
+| `kind` | string | Yes | _(none)_ | Destination discriminator. v1 backends are `webhook` and `slack`. The reserved value `tracker_comment` selects the built-in destination that comments on the issue. |
+| `events` | list of strings | On `tracker_comment`; otherwise optional | `[agent.message]` for `webhook` and `slack` | The event types the entry receives, written explicitly. Each name must come from the catalog below, none may repeat, and there is no wildcard. An entry of a `webhook` or `slack` kind that omits the key receives `agent.message` only, as before the key existed, and draws a deprecation warning that suggests `events: [agent.message]`. A `tracker_comment` entry must write the key; `[]` means only the comments that deprecated settings enable. |
+| `max_per_session` | int | No | `20` | Notification cap for the whole agent run. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. It counts only `agent.message` calls and has no effect on an entry that does not receive that event. |
 
 Per-backend fields depend on `kind` and are passed through to the backend untyped:
 
@@ -1316,10 +1333,98 @@ Per-backend fields depend on `kind` and are passed through to the backend untype
 | ------ | ----- | ----------- |
 | `webhook` | `url` | Endpoint that receives an HTTP POST of the notification as a JSON object using generic field names. |
 | `slack` | `webhook_url` | Slack incoming webhook URL that receives a Slack-shaped JSON body with a `text` field. |
+| `tracker_comment` | _(none)_ | Takes only `kind` and `events`. Any other key is rejected. |
+
+#### Event catalog
+
+The catalog is closed. Validation accepts exactly these names and rejects any other.
+
+| Event type | Sent when | Severity |
+| ---------- | --------- | -------- |
+| `session.started` | A session is dispatched on an issue whose dispatch drives issue state, after the in-progress transition and before the workspace is prepared. | `info` |
+| `session.completed` | A worker exits normally. | `info` |
+| `session.stopped` | A worker exits on a soft stop: `blocked`, `needs-human-review`, or `no-change-needed`. | `warning`; `info` for `no-change-needed` |
+| `session.failed` | A worker exits with an error, or its handoff is withheld by the handoff-evidence policy. | `warning` |
+| `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, `escalation.merge_completion` | The matching reaction ([Section 2.9](#29-reactions--reaction-based-feedback-loops)) hands its subject to a person, under any `escalation` value. | `warning` |
+| `auto_merge.merged` | The auto-merge reaction merges a pull request. | `info` |
+| `budget.held` | An issue is held out of dispatch by `agent.max_sessions` or `agent.max_tokens`. | `warning` |
+| `agent.message` | The agent calls `notify_operator`. | Set by the agent. |
+
+A run cancelled by Sortie produces no session event. Sortie never counts its own events against `max_per_session`, and an agent that has used its cap never suppresses one.
+
+#### The `tracker_comment` destination
+
+A `tracker_comment` entry posts each event it receives as a comment on the event's issue, using the same text Sortie has always posted for that moment. The comment never carries error text, the agent's session identifier, or the agent kind, because a tracker issue can be read by people outside your deployment. Slack and webhook destinations receive the full notification.
+
+- At most one entry has this kind, and it requires a configured `tracker.kind`.
+- It requires `events`, and `agent.message` is rejected there: messages from the agent never reach the issue.
+- It receives the union of three sets: the events its entry lists, the events that the deprecated `tracker.comments` settings and `escalation: comment` enable, and, while no `tracker_comment` entry exists, `auto_merge.merged` and `budget.held`. Writing the new form never withdraws a comment an old setting enabled, and one event is delivered at most once to a destination however many of these select it. Keeping `tracker.comments.on_completion: true` and also listing `session.completed` on the entry gives one comment per completion, not two.
+
+**An explicit entry is authoritative for two comments.** The auto-merge success comment and the budget-hold comment have never had a setting of their own: they post whenever a tracker is configured. They keep posting only while no `tracker_comment` entry exists. Once you write an entry, it posts `auto_merge.merged` and `budget.held` only when it lists them, so an entry that omits them stops those comments. With no `tracker.kind` there is no issue to comment on and nothing posts.
+
+#### Moving from the deprecated settings
+
+A configuration written before this key existed, with completion and failure comments, a commenting CI reaction, and one Slack channel for the agent:
+
+```yaml
+tracker:
+  kind: github
+  api_key: $SORTIE_GITHUB_TOKEN
+  project: acme/billing-api
+  comments:
+    on_completion: true
+    on_failure: true
+
+reactions:
+  ci_failure:
+    provider: github
+    escalation: comment
+
+notifications:
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+```
+
+The same comments and messages in the new form. The two comments that had no setting are listed because an explicit entry ends their implicit delivery; neither feature is configured here, so they post nothing until it is:
+
+```yaml
+tracker:
+  kind: github
+  api_key: $SORTIE_GITHUB_TOKEN
+  project: acme/billing-api
+
+reactions:
+  ci_failure:
+    provider: github
+    escalation: none                 # no label; the comment comes from the entry below
+
+notifications:
+  - kind: tracker_comment
+    events: [session.completed, session.stopped, session.failed, escalation.ci_failure, auto_merge.merged, budget.held]
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+    events: [agent.message]
+```
+
+The old form keeps working. Each deprecated form the configuration relies on draws one warning that names its replacement, once per configuration change and not per event. `sortie validate` shows the same warnings without changing its verdict or exit status, and the dry run shows them too. Sortie sets no removal date.
+
+| Deprecated form | Replacement |
+| --------------- | ----------- |
+| `tracker.comments.on_dispatch: true`, or `SORTIE_TRACKER_COMMENTS_ON_DISPATCH` | List `session.started` in a `tracker_comment` entry, then remove the key. |
+| `tracker.comments.on_completion: true`, or `SORTIE_TRACKER_COMMENTS_ON_COMPLETION` | List `session.completed` and `session.stopped`, then remove the key. |
+| `tracker.comments.on_failure: true`, or `SORTIE_TRACKER_COMMENTS_ON_FAILURE` | List `session.failed`, then remove the key. |
+| `reactions.<kind>.escalation: comment` on an active reaction | Set `escalation: none` and list `escalation.<kind>` in a `tracker_comment` entry. |
+| The auto-merge success comment, with the auto-merge reaction active, a tracker configured, and no `tracker_comment` entry | Add an entry that lists `auto_merge.merged`. |
+| The budget-hold comment, with `agent.max_sessions` or `agent.max_tokens` above `0`, a tracker configured, and no `tracker_comment` entry | Add an entry that lists `budget.held`. |
+| A `webhook` or `slack` entry without `events` | Add `events: [agent.message]`. |
+
+#### Delivery
+
+Sortie sends an orchestrator event to every destination that lists it, all at once. A failure to deliver to one destination is logged and never stops the others, and nothing is retried. A slow Slack or webhook endpoint never delays an agent's start and never delays the comment on the issue. A reload whose destinations for orchestrator events cannot be built, such as an unknown `kind` or a required secret that resolved to an empty string, is rejected, and the previous configuration stays in force ([Section 7.2](#72-per-field-reload-behavior)).
 
 The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint. It is unrelated to inbound tracker webhooks ([architecture §20](architecture/25-webhook-support.md)), which trigger reconciliation. The two share a name but not a direction.
 
-When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap covers one agent run on every agent kind: every turn and every tool server process of that run share one count, which Sortie keeps as files in the workspace's `.sortie/notification_slots/` directory. A retry or a continuation starts a new run and a new count. A call counts once at least one backend accepts the notification, not once per backend that accepts it; if no backend accepts it, the reserved slot is released and the call does not count.
+When more than one entry receives `agent.message`, the effective cap is the maximum non-zero `max_per_session` across those entries, falling back to the default when every one is `0` or unset. The cap covers one agent run on every agent kind: every turn and every tool server process of that run share one count, which Sortie keeps as files in the workspace's `.sortie/notification_slots/` directory. A retry or a continuation starts a new run and a new count. A call counts once at least one backend accepts the notification, not once per backend that accepts it; if no backend accepts it, the reserved slot is released and the call does not count.
 
 The `webhook` backend posts a JSON object whose keys use the generic notifier vocabulary, so any consumer can correlate and route without backend-specific knowledge:
 
@@ -1335,13 +1440,14 @@ The `webhook` backend posts a JSON object whose keys use the generic notifier vo
 | `attempt` | integer or null | Retry or continuation attempt; `null` on the first run. |
 | `agent` | string | Dispatch-frozen agent kind. |
 | `severity` | string | `info`, `warning`, or `critical`. |
-| `title` | string | Short summary the agent supplied. |
-| `body` | string | Notification detail the agent supplied. |
+| `title` | string | Short summary: the agent's own for `agent.message`, and `<issue>: <event type>` for an event Sortie produces. |
+| `body` | string | Notification detail: the agent's own for `agent.message`, and the text Sortie posts as the comment for an event it produces. |
 | `category` | string | Optional: `decision_needed`, `progress`, `blocked`, `completed`, or `other`. Absent when the agent did not set it. |
+| `event_type` | string | The event type from the catalog above. Present only on an event Sortie produces. An `agent.message` payload carries exactly the keys above and no `event_type`, so an endpoint configured before this key existed receives the same JSON as before. |
 
 **`SORTIE_`-prefixed secret rule:**
 
-A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environment variable, written as `$SORTIE_NAME` or `${SORTIE_NAME}`. The prefix is mandatory, not stylistic. The `notify_operator` tool runs in a separate `sortie mcp-server` process that receives only the workflow file path and the orchestrator's `SORTIE_`-prefixed variables. A reference without the `SORTIE_` prefix, or to an unset variable, resolves to an empty string in that process. The backend rejects an empty required secret, which surfaces as a fatal startup error rather than a notification posted nowhere. Name every notification secret with the `SORTIE_` prefix.
+A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environment variable, written as `$SORTIE_NAME` or `${SORTIE_NAME}`. The prefix is mandatory for an entry that receives `agent.message`, and not stylistic: the `notify_operator` tool runs in a separate `sortie mcp-server` process that receives only the workflow file path and the orchestrator's `SORTIE_`-prefixed variables. A reference without the `SORTIE_` prefix, or to an unset variable, resolves to an empty string in that process. The backend rejects an empty required secret, which surfaces as a fatal startup error rather than a notification posted nowhere. An entry that receives only events Sortie produces is built only in the main process, where the prefix is not required, but name every notification secret with the `SORTIE_` prefix so that adding `agent.message` to the entry later does not break it.
 
 ---
 
@@ -1382,9 +1488,9 @@ Each variable maps to exactly one config field. The naming convention is `SORTIE
 | `SORTIE_TRACKER_HANDOFF_STATE`             | `tracker.handoff_state`          | string |                                |
 | `SORTIE_TRACKER_NO_CHANGE_STATE`           | `tracker.no_change_state`        | string |                                |
 | `SORTIE_TRACKER_IN_PROGRESS_STATE`         | `tracker.in_progress_state`      | string |                                |
-| `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`      | `tracker.comments.on_dispatch`   | bool   | `true`/`false`/`1`/`0`        |
-| `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`    | `tracker.comments.on_completion` | bool   | `true`/`false`/`1`/`0`        |
-| `SORTIE_TRACKER_COMMENTS_ON_FAILURE`       | `tracker.comments.on_failure`    | bool   | `true`/`false`/`1`/`0`        |
+| `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`      | `tracker.comments.on_dispatch`   | bool   | `true`/`false`/`1`/`0`; deprecated, see [Section 2.11](#211-notifications-operator-notification-backends) |
+| `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`    | `tracker.comments.on_completion` | bool   | `true`/`false`/`1`/`0`; deprecated, see [Section 2.11](#211-notifications-operator-notification-backends) |
+| `SORTIE_TRACKER_COMMENTS_ON_FAILURE`       | `tracker.comments.on_failure`    | bool   | `true`/`false`/`1`/`0`; deprecated, see [Section 2.11](#211-notifications-operator-notification-backends) |
 
 #### Polling
 
@@ -1507,7 +1613,7 @@ For path fields (`workspace.root`, `db_path`), tilde (`~`) expansion still appli
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
 | `tracker.api_version`                  | No override variable exists; set it in the front matter or through `$VAR` indirection |
 | `tracker.handoff_evidence`             | No override variable exists; set it in the front matter. The value is matched against the closed set as written, so `$VAR` indirection does not apply. |
-| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.11), not as field-level overrides. |
+| `notifications`                        | List of pass-through destination maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.11), not as field-level overrides. |
 | `reactions.*` (including `reactions.label_commands`) | No override variables exist; reaction configuration comes from WORKFLOW.md |
 | `dispatch.*`                           | No override variables exist; rule definitions and template paths come from WORKFLOW.md |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
@@ -2774,6 +2880,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `tracker.no_change_state`              | Future worker exits, not in-flight sessions.                                                   |
 | `tracker.in_progress_state`            | Future dispatches, not in-flight sessions.                                                     |
 | `tracker.handoff_evidence`             | Future worker attempts, not in-flight sessions.                                                |
+| `tracker.comments.*`                   | Deprecated. The next event routes by the reloaded value: future dispatches (`on_dispatch`) and future worker exits (`on_completion`, `on_failure`). |
 | `polling.interval_ms`                  | **Immediate** — affects future tick scheduling.                                                |
 | `workspace.root`                       | Future workspace operations.                                                                   |
 | `workspace.retention_days`             | Dynamic reload. Applies on the next sweep pass.                                                |
@@ -2808,7 +2915,8 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `reactions.merge_completion.*`                  | **No effect.** Requires restart. The reaction config, `target_state` included, is built once at construction. |
 | `claude-code.*`, `codex.*`, `copilot-cli.*`, `opencode.*`, `agent-client-protocol.*` | Future worker attempts, not in-flight sessions. Each attempt resolves its kind's block when it starts. |
 | `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, agent, template) reaches future claims only. |
-| `notifications`                        | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
+| `notifications` (agent messages)       | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
+| `notifications` (events Sortie produces) | The next event. Sortie routes each event against the configuration in force when it decides to send it, so a change to `events` or to a destination applies to the next event and never to one already routed. A reload whose destinations for these events cannot be built, such as an unknown `kind` or a required secret that resolved to an empty string, is rejected and the previous configuration stays in force. The `escalation: comment` of a reaction other than `ci_failure` keeps the value read at startup. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
@@ -2891,6 +2999,13 @@ These offline checks never contact Linear and never log the API key value. State
 | `agent.kind.retired`                                        | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) was removed and converted onto its replacement kind. The warning names the converted fields, the launch the replacement kind performs, and the settings not carried, and states that the conversion is temporary. |
 | `agent.effort.not_forwarded`                                | A kind the configuration reaches whose adapter passes no reasoning level (`agent-client-protocol`, `mock`) has a non-empty `effort` in its settings block, or a value of another type there. A rule's settings block for such a kind whose resolved `effort` is non-empty draws it again, with the text opening `dispatch rule "<name>" (dispatch.rules[<i>].<kind>)`. |
 | `agent.effort.inherited`                                    | A rule's settings block writes `model` (`null` included), does not write `effort`, and inherits a non-empty `effort` from its kind's top-level block. Level names depend on the model; write `effort` in the rule to choose the level for its model, or `effort: null` to clear it. |
+| `tracker.comments.on_dispatch.deprecated`                   | `tracker.comments.on_dispatch` resolves to `true`, from the file or from `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`. |
+| `tracker.comments.on_completion.deprecated`                 | `tracker.comments.on_completion` resolves to `true`, from the file or from `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`. |
+| `tracker.comments.on_failure.deprecated`                    | `tracker.comments.on_failure` resolves to `true`, from the file or from `SORTIE_TRACKER_COMMENTS_ON_FAILURE`. |
+| `reactions.<key>.escalation.deprecated`                     | A reaction among `ci_failure`, `review_comments`, `bot_review`, `merge_conflicts`, `auto_merge`, and `merge_completion` names a provider and sets `escalation: comment`. |
+| `notifications.tracker_comment.implicit_auto_merge`         | `tracker.kind` is set, no `notifications` entry has kind `tracker_comment`, and `reactions.auto_merge` names a provider. |
+| `notifications.tracker_comment.implicit_budget_hold`        | `tracker.kind` is set, no `notifications` entry has kind `tracker_comment`, and `agent.max_sessions` or `agent.max_tokens` is above `0`. |
+| `notifications[<i>].events.missing`                         | A `notifications` entry other than `tracker_comment` omits `events`. |
 | `token_rates`                                               | `token_rates` or one of its entries is not a map, an entry has an empty agent kind, a rate is not a finite, non-negative number, an entry names a key Sortie does not recognize, or an entry lacks `input_per_mtok` or `output_per_mtok`. |
 
 ---
@@ -2979,6 +3094,18 @@ These errors are raised during typed config construction from the parsed front m
 | `config: reactions.ci_failure.watch_window_ms: must not exceed 9223372036854 (about 292 years); use 0 for no time limit, got <val>` | `watch_window_ms` exceeds the ceiling. | Lower the value, or use `0` for no time limit. |
 | `config: reactions.ci_failure.watch_window_ms: must be non-negative, got <val>` | Negative value for `watch_window_ms`.                                    | Use `0` (no time limit) or a positive integer.                                                                                       |
 | `config: notifications[N].kind: expected string, got <type>`                   | The `kind` of the `N`th `notifications` entry is not a string (e.g., integer, boolean, list). | Ensure the value is a string, quoted if necessary.                                                                 |
+| `config: notifications[N].events: expected sequence, got <type>`               | `events` of the `N`th entry is not a list. | Write a list, such as `events: [session.failed]`. |
+| `config: notifications[N].events[M]: expected string, got <type>`              | Element `M` of `events` is not a string. | Write every event name as a string. |
+| `config: notifications[N].events[M]: unknown event type "<v>"; valid: <catalog>` | Element `M` of `events` is not in the event catalog. | Use one of the names the message lists; see [Section 2.11](#211-notifications-operator-notification-backends). |
+| `config: notifications[N].events[M]: event type "<v>" is listed more than once` | Element `M` repeats an earlier event in the same list. | Remove the repeat. |
+| `config: notifications[N].events[M]: agent.message cannot be posted as a tracker comment` | A `tracker_comment` entry lists `agent.message`. | Remove it; messages from the agent never reach the issue. |
+| `config: notifications[N].events: a tracker_comment entry must list its events; write [] to post only what the deprecated settings enable` | A `tracker_comment` entry has no `events` key. | Add `events`, using `[]` to post only what the deprecated settings enable. |
+| `config: notifications[N].kind: only one notifications entry may have kind tracker_comment` | A second `tracker_comment` entry. | Merge the two entries into one. |
+| `config: notifications[N].kind: kind tracker_comment requires a configured tracker` | A `tracker_comment` entry while `tracker.kind` is empty. | Set `tracker.kind`, or remove the entry. |
+| `config: notifications[N].<key>: kind tracker_comment takes only kind and events` | A `tracker_comment` entry carries a key other than `kind` and `events`. | Remove the key. |
+| `config: notifications[N].kind: <reason>` | The entry receives an event Sortie produces and its `kind` is not a registered backend. | Use `webhook`, `slack`, or `tracker_comment`. |
+| `config: notifications[N]: <reason>` | The entry receives an event Sortie produces and its backend cannot be built, such as a required secret that resolved to an empty string. | Fix the field the reason names. |
+| `config: reactions.<kind>.escalation: must be "label", "comment", or "none", got "<v>"` | `escalation` of a reaction is any other value. | Use `label`, `none`, or the deprecated `comment`. |
 
 ### 9.3 Environment Variable Errors
 
@@ -3027,9 +3154,9 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `tracker.handoff_evidence`              | string           | `observed`                   | —                                        | `observed`, `strict`, or `off`; closed set                                             |
 | `tracker.in_progress_state`             | string           | _(absent)_                   | `SORTIE_TRACKER_IN_PROGRESS_STATE`       | Must be in active; must not collide with terminal/handoff                              |
 | `tracker.api_version`                   | string           | `"3"`                        | —                                        | Jira only; `"3"` (Cloud) or `"2"` (Server/DC); `$VAR` supported; quote the value       |
-| `tracker.comments.on_dispatch`          | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`    |                                                                                        |
-| `tracker.comments.on_completion`        | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`  |                                                                                        |
-| `tracker.comments.on_failure`           | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_FAILURE`     |                                                                                        |
+| `tracker.comments.on_dispatch`          | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`    | Deprecated; subscribes `tracker_comment` to `session.started`                          |
+| `tracker.comments.on_completion`        | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`  | Deprecated; subscribes `tracker_comment` to `session.completed` and `session.stopped`  |
+| `tracker.comments.on_failure`           | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_FAILURE`     | Deprecated; subscribes `tracker_comment` to `session.failed`                           |
 | `polling.interval_ms`                   | integer          | `30000`                      | `SORTIE_POLLING_INTERVAL_MS`             | Dynamic reload                                                                         |
 | `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `SORTIE_WORKSPACE_ROOT`                  | `~` expanded; `$VAR` skipped for env-sourced values                                    |
 | `workspace.retention_days`              | integer          | `0` (disabled)               | `SORTIE_WORKSPACE_RETENTION_DAYS`        | Floor `30`; `1`-`29` rejected; dynamic reload, applies on the next sweep pass          |
@@ -3055,7 +3182,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
 | `reactions.<kind>.provider`             | string           | _(absent)_                   | —                                        | Adapter identifier; absent = disabled; restart required                                |
 | `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative; `merge_conflicts` defaults to `1`; restart required except for `ci_failure` |
-| `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`; restart required except for `ci_failure`                     |
+| `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"`, `"comment"` (deprecated), or `"none"`; every escalation emits its event; restart required except for `ci_failure` |
 | `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`; restart required except for `ci_failure`       |
 | `reactions.ci_failure.max_log_lines`    | integer          | `50`                         | —                                        | CI log excerpt lines; `0` disables; non-negative; restart required                      |
 | `reactions.<kind>.watch_window_ms`      | integer          | `86400000` for `ci_failure`, `1800000` for the other four | — | Bounds a pending entry's age; non-negative; not above `9223372036854`; `0` removes the bound; restart required except for `ci_failure` |
@@ -3082,9 +3209,10 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `self_review.verification_timeout_ms`   | integer          | `120000`                     | —                                        | Per-command timeout                                                                    |
 | `self_review.max_diff_bytes`            | integer          | `102400`                     | —                                        | Diff truncation limit                                                                  |
 | `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
-| `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Notifier backend list; `notify_operator` tool; absent = tool unregistered             |
-| `notifications[].kind`                  | string           | _(required)_                 | —                                        | Backend discriminator; v1: `webhook`, `slack`                                          |
-| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for the whole agent run; `0` selects the default; never unlimited; non-negative |
+| `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Destination list; `notify_operator` is registered only when an entry receives `agent.message` |
+| `notifications[].kind`                  | string           | _(required)_                 | —                                        | Destination discriminator; v1: `webhook`, `slack`, and the built-in `tracker_comment`  |
+| `notifications[].events`                | `[string]`       | `[agent.message]` for `webhook` and `slack`; _(required)_ for `tracker_comment` | — | Event types the entry receives; names from the closed catalog, none repeated; omitting it on `webhook` or `slack` is deprecated; `agent.message` is rejected on `tracker_comment` |
+| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for the whole agent run, drawn from entries that receive `agent.message`; `0` selects the default; never unlimited; non-negative |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |
@@ -3215,7 +3343,7 @@ reactions:
     provider: github # Activate CI feedback via GitHub Checks API
     max_retries: 2 # CI-fix attempts before escalation
     max_log_lines: 50 # Log lines in the failing check excerpt
-    escalation: label # "label" or "comment" on exhaustion
+    escalation: label # "label" or "none" on exhaustion
     escalation_label: needs-human # Label added when escalation is "label"
   # review_comments:
   #   provider: github

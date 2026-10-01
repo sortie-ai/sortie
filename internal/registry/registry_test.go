@@ -159,6 +159,64 @@ func TestRegister_Panics(t *testing.T) {
 	}
 }
 
+func TestRegister_ReservedKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		register func()
+	}{
+		{
+			name: "Register on a registry that reserves the kind",
+			register: func() {
+				NewRegistry[testConstructor, testMeta]("test", "builtin").Register("builtin", dummyConstructor())
+			},
+		},
+		{
+			name: "RegisterWithMeta on a registry that reserves the kind",
+			register: func() {
+				NewRegistry[testConstructor, testMeta]("test", "builtin").RegisterWithMeta("builtin", dummyConstructor(), testMeta{})
+			},
+		},
+		{
+			name: "the notifier registry reserves the tracker comment kind",
+			register: func() {
+				Notifiers.Register(domain.TrackerCommentKind, func(map[string]any) (domain.Notifier, error) { return nil, nil })
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				v := recover()
+				if v == nil {
+					t.Fatalf("%s did not panic", tt.name)
+				}
+				if msg := fmt.Sprint(v); !strings.Contains(msg, "reserved") {
+					t.Errorf("%s panic = %q, want it to contain %q", tt.name, msg, "reserved")
+				}
+			}()
+
+			tt.register()
+		})
+	}
+}
+
+func TestRegister_UnreservedKindOnReservingRegistry(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry[testConstructor, testMeta]("test", "builtin")
+
+	r.Register("other", dummyConstructor())
+
+	if _, err := r.Get("other"); err != nil {
+		t.Errorf("Get(%q) error = %v, want nil after registering an unreserved kind", "other", err)
+	}
+}
+
 func TestKinds(t *testing.T) {
 	t.Parallel()
 

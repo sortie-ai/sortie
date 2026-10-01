@@ -304,8 +304,13 @@ func escalateReviewFailure(
 		)
 	}
 
-	switch params.ReviewConfig.Escalation {
-	case "label":
+	commentText := buildReviewEscalationComment(reviewData, turnCount)
+	if trigger == EscalationTriggerTriage {
+		commentText = buildTriageEscalationComment("review", fmt.Sprintf("PR #%d", reviewData.PRNumber))
+	}
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationReviewComments, pending, commentText))
+
+	if params.ReviewConfig.Escalation == "label" {
 		label := params.ReviewConfig.EscalationLabel
 		if label == "" {
 			label = "needs-human"
@@ -334,45 +339,16 @@ func escalateReviewFailure(
 		} else {
 			metrics.IncReviewEscalations(params.ReviewConfig.Escalation)
 		}
-
-	case "comment", "":
-		commentText := buildReviewEscalationComment(reviewData, turnCount)
-		if trigger == EscalationTriggerTriage {
-			commentText = buildTriageEscalationComment("review", fmt.Sprintf("PR #%d", reviewData.PRNumber))
-		}
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			m := metrics
-			escalLog := log
-			ct := commentText
-			escalAction := params.ReviewConfig.Escalation
-			if escalAction == "" {
-				escalAction = "comment"
-			}
-
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
-
-				if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-					escalLog.Warn("review escalation comment failed",
-						slog.Any("error", err),
-					)
-					m.IncReviewEscalations("error")
-				} else {
-					m.IncReviewEscalations(escalAction)
-				}
-			})
-		} else {
-			action := params.ReviewConfig.Escalation
-			if action == "" {
-				action = "comment"
-			}
-			metrics.IncReviewEscalations(action)
-		}
 	}
+
+	// A label owns the escalation counter, so only the other modes record it.
+	var record func(action string)
+	if params.ReviewConfig.Escalation != "label" {
+		record = metrics.IncReviewEscalations
+	}
+	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
+		log.Warn("review escalation comment failed", slog.Any("error", err))
+	})
 
 	CancelRetry(state, pending.IssueID)
 

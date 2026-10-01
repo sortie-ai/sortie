@@ -1,0 +1,44 @@
+[
+  {
+    "step": "dispatch",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session started."
+      }
+    ]
+  },
+  {
+    "step": "dispatch_review_posture",
+    "ops": []
+  },
+  {
+    "step": "exit_completed",
+    "ops": []
+  },
+  {
+    "step": "exit_completed_requeued",
+    "ops": []
+  },
+  {
+    "step": "exit_soft_stop_no_change",
+    "ops": []
+  },
+  {
+    "step": "exit_soft_stop_blocked",
+    "ops": []
+  },
+  {
+    "step": "exit_handoff_withheld",
+    "ops": []
+  },
+  {
+    "step": "exit_failed",
+    "ops": []
+  },
+  {
+    "step": "exit_cancelled",
+    "ops": []
+  }
+]

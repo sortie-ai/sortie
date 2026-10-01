@@ -5300,6 +5300,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5357,6 +5358,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 				deps := WorkerDeps{
 					TrackerAdapter:         tracker,
+					Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 					AgentAdapter:           &mockAgentAdapter{},
 					AgentKind:              kind,
 					ConfigFunc:             func() config.ServiceConfig { return cfg },
@@ -5393,6 +5395,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5437,6 +5440,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5486,6 +5490,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5518,6 +5523,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5550,6 +5556,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
+			Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -5587,6 +5594,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 				deps := WorkerDeps{
 					TrackerAdapter:         tracker,
+					Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 					AgentAdapter:           &mockAgentAdapter{},
 					ConfigFunc:             func() config.ServiceConfig { return cfg },
 					PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
@@ -6540,6 +6548,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment(t *testing.T) {
 	ec := newExitCapture()
 	deps := WorkerDeps{
 		TrackerAdapter:         tracker,
+		Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 		AgentAdapter:           &mockAgentAdapter{},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
 		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
@@ -6717,6 +6726,7 @@ func TestRunWorkerAttempt_NormalDispatchUnaffected(t *testing.T) {
 	ec := newExitCapture()
 	deps := WorkerDeps{
 		TrackerAdapter:         tracker,
+		Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 		AgentAdapter:           &mockAgentAdapter{},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
 		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
@@ -6884,6 +6894,7 @@ func TestRunWorkerAttempt_Fix_SuppressesDispatchComment(t *testing.T) {
 	ec := newExitCapture()
 	deps := WorkerDeps{
 		TrackerAdapter:         tracker,
+		Router:                 routerWithComments(tracker, cfg.Tracker.Comments),
 		AgentAdapter:           &mockAgentAdapter{},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
 		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
@@ -8524,7 +8535,7 @@ func TestRunWorkerAttempt_SelfReviewTurnTimeoutFailsAttempt(t *testing.T) {
 	tracker := &mockTrackerAdapter{}
 	state := exitStateWithIssue(t, result.IssueID, "To Do")
 	params := handoffEvidenceExitParams(t, store, tracker, &domain.NoopMetrics{})
-	params.CommentsConfig.OnFailure = true
+	params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 
 	HandleWorkerExit(state, result, params)
 	state.TrackerOpsWg.Wait()

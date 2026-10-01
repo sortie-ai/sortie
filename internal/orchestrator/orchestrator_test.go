@@ -21,6 +21,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -5280,6 +5281,7 @@ func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore,
 		State:           state,
 		Logger:          discardLogger(),
 		TrackerAdapter:  tracker,
+		Router:          route.NewRouter(tracker, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -5295,6 +5297,7 @@ func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
+		Router:          route.NewRouter(tracker, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -5310,6 +5313,7 @@ func budgetOrchestratorWithMetrics(state *State, wm *stubWorkflowManager, store 
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
+		Router:          route.NewRouter(tracker, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -7185,6 +7189,7 @@ func drainTestOrchestrator(state *State, wm *stubWorkflowManager, store *stubSto
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
+		Router:          route.NewRouter(tracker, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -8959,6 +8964,7 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 		State:           state1,
 		Logger:          discardLogger(),
 		TrackerAdapter:  tracker1,
+		Router:          route.NewRouter(tracker1, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store1,
@@ -9011,6 +9017,7 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 		State:           state2,
 		Logger:          logger,
 		TrackerAdapter:  tracker2,
+		Router:          route.NewRouter(tracker2, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store2,
@@ -9415,34 +9422,6 @@ func TestHandleTick_BudgetHoldNoticeParkedIssue(t *testing.T) {
 	}
 }
 
-func TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow(t *testing.T) {
-	t.Parallel()
-
-	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	store := &stubStore{}
-	entry := &BudgetExhaustedEntry{
-		Reason: budgetReasonSession, UsedSessions: 4, BudgetSessions: 3, ExhaustedAt: time.Now().UTC(),
-	}
-
-	postBudgetHoldNotice(state, budgetHoldNoticeParams{
-		IssueID:        "ISS-NIL",
-		Entry:          entry,
-		Store:          store,
-		TrackerAdapter: nil,
-		Metrics:        &spyMetrics{},
-		Logger:         discardLogger(),
-		Ctx:            context.Background(),
-	})
-	state.TrackerOpsWg.Wait()
-
-	if len(store.budgetHoldNotices) != 0 {
-		t.Errorf("store.budgetHoldNotices = %+v, want none (a nil tracker adapter writes no row)", store.budgetHoldNotices)
-	}
-	if _, ok := state.BudgetHoldNoticed["ISS-NIL"]; ok {
-		t.Error("BudgetHoldNoticed[ISS-NIL] present, want absent (a nil tracker adapter writes no row)")
-	}
-}
-
 func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
 	t.Parallel()
 
@@ -9456,13 +9435,12 @@ func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
 	}
 
 	postBudgetHoldNotice(state, budgetHoldNoticeParams{
-		IssueID:        "ISS-UPSERT-FAIL",
-		Entry:          entry,
-		Store:          store,
-		TrackerAdapter: tracker,
-		Metrics:        &spyMetrics{},
-		Logger:         logger,
-		Ctx:            context.Background(),
+		IssueID: "ISS-UPSERT-FAIL",
+		Entry:   entry,
+		Store:   store,
+		Metrics: &spyMetrics{},
+		Logger:  logger,
+		Ctx:     context.Background(),
 	})
 	state.TrackerOpsWg.Wait()
 

@@ -1,0 +1,22 @@
+[
+  {
+    "step": "ci_budget_exhausted",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "CI fix retries exhausted\n\nSortie attempted 3 CI-fix continuation(s) on ref abc1234 but CI is still failing.\n\nFailing checks: 2\n- test: failure (details: https://ci.example.test/runs/1)\n- lint: failure\n\nManual intervention required."
+      }
+    ]
+  },
+  {
+    "step": "ci_triage",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "The ci triage command requested human attention for ref abc1234.\n\nSortie ran the configured triage command before dispatching a continuation and the command answered \"escalate\", so no continuation was dispatched and no retry or continuation budget was spent. Manual intervention required."
+      }
+    ]
+  }
+]

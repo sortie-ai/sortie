@@ -1,0 +1,22 @@
+[
+  {
+    "step": "review_budget_exhausted",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  },
+  {
+    "step": "review_triage",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  }
+]

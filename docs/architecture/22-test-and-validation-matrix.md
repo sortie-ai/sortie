@@ -134,7 +134,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - The budget-exhausted gauge reports a per-reason level derived from the current set, seeded to zero for every declared reason on each recompute, so a reason that clears reports zero rather than freezing at its last published value
 - Both `GET /api/v1/state` and `GET /api/v1/{identifier}` carry the budget-exhausted record's identifier, reason, and numbers, and the per-issue endpoint answers for a budget-blocked issue instead of reporting it unknown
 - The dashboard renders a budget-blocked card and table only when the exhausted set is non-empty
-- A hold entering the budget-exhausted set, on either lane, posts exactly one tracker comment naming the fired ceiling and its governing setting; a tick or retry fire that re-observes the same hold under the same reason posts nothing further
+- A hold entering the budget-exhausted set, on either lane, delivers exactly one `budget.held` event to its destinations, which posts one tracker comment naming the fired ceiling and its governing setting when the `tracker_comment` destination receives it; a tick or retry fire that re-observes the same hold under the same reason delivers nothing further
+- A hold whose `budget.held` delivery has no destination spends no pacing slot and writes neither a durable notice row nor a memory entry, on either lane; after a configuration change subscribes a destination to `budget.held`, the next pass delivers the notice exactly once
 - A restart does not repeat the comment: a second process loading the same durable notice table posts nothing for a hold already announced before the restart, even though its own in-memory log latch re-announces the hold
 - A hold whose governing ceiling changes posts a second comment naming the new ceiling and replaces the durable notice row rather than adding one
 - Notices are paced by a wall-clock window shared by both lanes rather than by a per-tick count, so the same bound holds at any configured poll interval; a burst of holds larger than the window drains over the following windows with nothing lost or duplicated
@@ -158,7 +159,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - CI status passing clears CI fix attempts for the issue
 - CI status pending re-enqueues the pending check for the next tick
 - CI status failing within `max_retries` schedules a CI-fix dispatch with failure context
-- CI status failing beyond `max_retries` escalates (label or comment) and releases the claim
+- CI status failing beyond `max_retries` escalates (applies the label under `label`, and emits the `escalation.ci_failure` event under every posture) and releases the claim
 - CI failure context is injected into turn 1 prompt via `prompt.WithContinuationContext`
 - Escalation label failure is logged but does not block claim release
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue

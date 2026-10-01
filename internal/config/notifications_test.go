@@ -2,7 +2,12 @@ package config
 
 import (
 	"errors"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 func TestNotificationsConfig_AbsentSection(t *testing.T) {
@@ -371,5 +376,225 @@ func TestNotificationsConfig_ErrorIsPtrConfigError(t *testing.T) {
 
 	if _, ok := errors.AsType[*ConfigError](err); !ok {
 		t.Fatalf("error type = %T, want *ConfigError", err)
+	}
+}
+
+func trackerCommentRaw(entries ...any) map[string]any {
+	return map[string]any{
+		"tracker":       map[string]any{"kind": "file"},
+		"notifications": entries,
+	}
+}
+
+func catalogNames(types []domain.EventType) []any {
+	names := make([]any, len(types))
+	for i, eventType := range types {
+		names[i] = string(eventType)
+	}
+	return names
+}
+
+func TestNotificationsConfig_EventsErrors(t *testing.T) {
+	t.Parallel()
+
+	catalog := make([]string, 0, len(domain.EventTypes()))
+	for _, eventType := range domain.EventTypes() {
+		catalog = append(catalog, string(eventType))
+	}
+
+	webhook := func(events any) map[string]any {
+		return map[string]any{"kind": "webhook", "url": "https://example.com/hook", "events": events}
+	}
+	trackerComment := func(fields map[string]any) map[string]any {
+		entry := map[string]any{"kind": domain.TrackerCommentKind}
+		maps.Copy(entry, fields)
+		return entry
+	}
+
+	tests := []struct {
+		name        string
+		raw         map[string]any
+		wantField   string
+		wantMessage string
+	}{
+		{
+			name:        "events not a sequence",
+			raw:         trackerCommentRaw(webhook("budget.held")),
+			wantField:   "notifications[0].events",
+			wantMessage: "expected sequence, got string",
+		},
+		{
+			name:        "event not a string",
+			raw:         trackerCommentRaw(webhook([]any{"budget.held", 7})),
+			wantField:   "notifications[0].events[1]",
+			wantMessage: "expected string, got integer",
+		},
+		{
+			name:        "unknown event type lists the catalog",
+			raw:         trackerCommentRaw(webhook([]any{"session.begun"})),
+			wantField:   "notifications[0].events[0]",
+			wantMessage: `unknown event type "session.begun"; valid: ` + strings.Join(catalog, ", "),
+		},
+		{
+			name:        "repeated event type",
+			raw:         trackerCommentRaw(webhook([]any{"budget.held", "session.failed", "budget.held"})),
+			wantField:   "notifications[0].events[2]",
+			wantMessage: `event type "budget.held" is listed more than once`,
+		},
+		{
+			name:        "agent message on tracker comment",
+			raw:         trackerCommentRaw(trackerComment(map[string]any{"events": []any{"session.failed", "agent.message"}})),
+			wantField:   "notifications[0].events[1]",
+			wantMessage: "agent.message cannot be posted as a tracker comment",
+		},
+		{
+			name:        "tracker comment without events",
+			raw:         trackerCommentRaw(trackerComment(nil)),
+			wantField:   "notifications[0].events",
+			wantMessage: "a tracker_comment entry must list its events; write [] to post only what the deprecated settings enable",
+		},
+		{
+			name: "second tracker comment",
+			raw: trackerCommentRaw(
+				trackerComment(map[string]any{"events": []any{}}),
+				webhook([]any{"budget.held"}),
+				trackerComment(map[string]any{"events": []any{"budget.held"}}),
+			),
+			wantField:   "notifications[2].kind",
+			wantMessage: "only one notifications entry may have kind tracker_comment",
+		},
+		{
+			name: "tracker comment without a tracker",
+			raw: map[string]any{
+				"notifications": []any{trackerComment(map[string]any{"events": []any{}})},
+			},
+			wantField:   "notifications[0].kind",
+			wantMessage: "kind tracker_comment requires a configured tracker",
+		},
+		{
+			name:        "tracker comment with a pass-through key",
+			raw:         trackerCommentRaw(trackerComment(map[string]any{"events": []any{}, "url": "https://example.com"})),
+			wantField:   "notifications[0].url",
+			wantMessage: "kind tracker_comment takes only kind and events",
+		},
+		{
+			name:        "tracker comment with a cap",
+			raw:         trackerCommentRaw(trackerComment(map[string]any{"events": []any{}, "max_per_session": 3})),
+			wantField:   "notifications[0].max_per_session",
+			wantMessage: "kind tracker_comment takes only kind and events",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewServiceConfig(tt.raw)
+
+			var ce *ConfigError
+			if !errors.As(err, &ce) {
+				t.Fatalf("NewServiceConfig(%s) error = %v, want *ConfigError", tt.name, err)
+			}
+			if ce.Field != tt.wantField {
+				t.Errorf("ConfigError.Field = %q, want %q", ce.Field, tt.wantField)
+			}
+			if ce.Message != tt.wantMessage {
+				t.Errorf("ConfigError.Message = %q, want %q", ce.Message, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestNotificationsConfig_EventsParsed(t *testing.T) {
+	t.Parallel()
+
+	catalog := domain.EventTypes()
+	withoutAgentMessage := slices.DeleteFunc(slices.Clone(catalog), func(eventType domain.EventType) bool {
+		return eventType == domain.EventAgentMessage
+	})
+
+	tests := []struct {
+		name         string
+		entry        map[string]any
+		wantEvents   []domain.EventType
+		wantDeclared bool
+	}{
+		{
+			name:         "every catalog type on a registered kind, in written order",
+			entry:        map[string]any{"kind": "webhook", "url": "https://example.com/hook", "events": catalogNames(catalog)},
+			wantEvents:   catalog,
+			wantDeclared: true,
+		},
+		{
+			name:         "reversed order is kept",
+			entry:        map[string]any{"kind": "webhook", "url": "https://example.com/hook", "events": []any{"budget.held", "session.started"}},
+			wantEvents:   []domain.EventType{domain.EventBudgetHeld, domain.EventTypeSessionStarted},
+			wantDeclared: true,
+		},
+		{
+			name:         "every orchestrator type on tracker comment",
+			entry:        map[string]any{"kind": domain.TrackerCommentKind, "events": catalogNames(withoutAgentMessage)},
+			wantEvents:   withoutAgentMessage,
+			wantDeclared: true,
+		},
+		{
+			name:         "empty list on tracker comment",
+			entry:        map[string]any{"kind": domain.TrackerCommentKind, "events": []any{}},
+			wantEvents:   []domain.EventType{},
+			wantDeclared: true,
+		},
+		{
+			name:         "absent events on a registered kind",
+			entry:        map[string]any{"kind": "slack", "webhook_url": "https://hooks.slack.com/T/B/SECRET"},
+			wantEvents:   []domain.EventType{domain.EventAgentMessage},
+			wantDeclared: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := NewServiceConfig(trackerCommentRaw(tt.entry))
+			if err != nil {
+				t.Fatalf("NewServiceConfig(%s): %v", tt.name, err)
+			}
+			if len(cfg.Notifications.Backends) != 1 {
+				t.Fatalf("Notifications.Backends len = %d, want 1", len(cfg.Notifications.Backends))
+			}
+
+			got := cfg.Notifications.Backends[0]
+			if !slices.Equal(got.Events, tt.wantEvents) {
+				t.Errorf("Backends[0].Events = %v, want %v", got.Events, tt.wantEvents)
+			}
+			if got.EventsDeclared != tt.wantDeclared {
+				t.Errorf("Backends[0].EventsDeclared = %v, want %v", got.EventsDeclared, tt.wantDeclared)
+			}
+			if _, ok := got.Config["events"]; ok {
+				t.Errorf("Backends[0].Config[\"events\"] present, want it excluded from pass-through config")
+			}
+		})
+	}
+}
+
+func TestNotificationsConfig_EventsKeepMaxPerSession(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewServiceConfig(trackerCommentRaw(map[string]any{
+		"kind":            "webhook",
+		"url":             "https://example.com/hook",
+		"max_per_session": 4,
+		"events":          []any{"budget.held"},
+	}))
+	if err != nil {
+		t.Fatalf("NewServiceConfig: %v", err)
+	}
+
+	got := cfg.Notifications.Backends[0]
+	if got.MaxPerSession != 4 {
+		t.Errorf("Backends[0].MaxPerSession = %d, want 4", got.MaxPerSession)
+	}
+	if !slices.Equal(got.Events, []domain.EventType{domain.EventBudgetHeld}) {
+		t.Errorf("Backends[0].Events = %v, want [budget.held]", got.Events)
 	}
 }

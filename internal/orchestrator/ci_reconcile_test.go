@@ -869,6 +869,7 @@ func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
 	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -948,6 +949,7 @@ func TestReconcileCIStatus_CommentEscalation_RecursOncePerHead_ThenAgainAfterNot
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
 	params := ciParams(t, store, ci, tracker, scm)
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	for i := range 3 {
 		entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
@@ -1125,6 +1127,7 @@ func TestReconcileCIStatus_NoPersonAttributingLanguage(t *testing.T) {
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
 	params := ciParams(t, store, ci, tracker, scm)
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	handler := &sweepLogHandler{}
 	params.Logger = slog.New(handler)
@@ -1266,6 +1269,7 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
 	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -2082,6 +2086,7 @@ func TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric(t *testing.T) {
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
 	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
@@ -2116,9 +2121,7 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements(t *testing.T) {
 	}
 }
 
-// TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment verifies the same
-// zero-increment guarantee for the comment escalation path with nil tracker.
-func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
+func TestEscalateCIFailure_NilTracker_RecordsNone_Comment(t *testing.T) {
 	t.Parallel()
 
 	state := stateWithPendingReaction(t, "ESC-NIL-2", "feature/broken", 2)
@@ -2126,14 +2129,18 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
 	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, nil, defaultCISCM()) // nil TrackerAdapter
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, nil, domain.EventEscalationCIFailure)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	if len(metrics.ciEscalations) != 0 {
-		t.Errorf("IncCIEscalations called with nil TrackerAdapter; want zero increments, got %v", metrics.ciEscalations)
+	if got := metrics.ciEscalations["none"]; got != 1 {
+		t.Errorf(`IncCIEscalations("none") with no tracker = %d, want 1`, got)
+	}
+	if got := len(metrics.ciEscalations); got != 1 {
+		t.Errorf("IncCIEscalations actions with no tracker = %v, want only none", metrics.ciEscalations)
 	}
 }
 
@@ -2759,6 +2766,7 @@ func TestReconcileCIStatus_Triage_Escalate_CommentTextNamesTriage(t *testing.T) 
 	scm := defaultCISCM()
 	params := ciTriageParams(t, store, ci, tracker, scm, root, escalateTriageScript)
 	params.CIFeedback.Escalation = "comment"
+	params.Router = commentRouter(t, params.TrackerAdapter, domain.EventEscalationCIFailure)
 
 	runCITriageToCompletion(t, state, params, rkey, metrics)
 

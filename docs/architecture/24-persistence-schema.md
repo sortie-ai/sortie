@@ -154,7 +154,7 @@ The reset point is read from `run_history` inside the write, so a work-observed 
 
 One row per parked issue, holding current state rather than history: the row is deleted the moment the park is lifted, not retained as a record of a past park. `parked_state` is nullable in meaning though not in type: an empty string means no tracker state was observed at park time, which only a park taken from the retry lane produces, since that lane parks ahead of its own tracker fetch by design (§14.2). `label_applied` has exactly one writer: the orchestrator's release-rule observation of the label on a later fetch of the issue, never the outcome of the label write itself.
 
-**`budget_hold_notices`**: cross-restart dedup for the tracker comment posted on an issue held by a per-issue budget ceiling (migration 015)
+**`budget_hold_notices`**: cross-restart dedup for the `budget.held` notice delivered for an issue held by a per-issue budget ceiling (migration 015)
 
 | Column       | Type    | Notes                                                       |
 | ------------ | ------- | ------------------------------------------------------------ |
@@ -162,7 +162,7 @@ One row per parked issue, holding current state rather than history: the row is 
 | `reason`     | TEXT    | `session_budget` or `token_budget`                            |
 | `noticed_at` | TEXT    | ISO-8601 timestamp the posted notice reported                 |
 
-One row per issue whose current budget hold has been announced on the tracker, holding current state rather than history: the row is deleted when the hold clears, on the same evidence rule that prunes the in-memory announcement latch, or when both budgets are disabled. An issue held by a ceiling and then closed, or otherwise never observed as a candidate again, never has its row deleted, so the row persists for the rest of the deployment's lifetime. `noticed_at` exists so an operator reading the database can align a row with the comment on the issue; no runtime decision reads it.
+One row per issue whose current budget hold has been announced to at least one destination. A row records that the notice had a destination: a hold whose `budget.held` event reached none writes no row, and the issue is routed again on a later pass, so a destination subscribed afterward still receives the notice. The row is written before the delivery and survives a failed delivery. The table holds current state rather than history: the row is deleted when the hold clears, on the same evidence rule that prunes the in-memory announcement latch, or when both budgets are disabled. An issue held by a ceiling and then closed, or otherwise never observed as a candidate again, never has its row deleted, so the row persists for the rest of the deployment's lifetime. `noticed_at` exists so an operator reading the database can align a row with the notice, which is the comment on the issue when the `tracker_comment` destination received it; no runtime decision reads it.
 
 ### 19.3 Migration Strategy
 

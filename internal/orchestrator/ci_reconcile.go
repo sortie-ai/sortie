@@ -452,7 +452,7 @@ func handleCIFailure(
 
 // escalateCIFailure handles the case where the CI retry budget has been
 // spent for the commit currently recorded. It applies the configured
-// escalation action (label or comment) at most once per recorded head,
+// escalation action (label, comment, or none) at most once per recorded head,
 // cancels the retry, and releases the claim so the issue does not stay
 // reserved by a reaction that has stopped dispatching. The pending
 // entry, its attempt counter, and its fingerprint row all survive: the
@@ -490,8 +490,13 @@ func escalateCIFailure(
 			)
 		}
 
-		switch params.CIFeedback.Escalation {
-		case "label":
+		commentText := buildCIEscalationComment(result, ref, attempts)
+		if trigger == EscalationTriggerTriage {
+			commentText = buildTriageEscalationComment("ci", "ref "+ref)
+		}
+		delivery := params.Router.Route(reactionNotification(domain.EventEscalationCIFailure, pending, commentText))
+
+		if params.CIFeedback.Escalation == "label" {
 			label := params.CIFeedback.EscalationLabel
 			if label == "" {
 				label = "needs-human"
@@ -518,39 +523,16 @@ func escalateCIFailure(
 					}
 				})
 			}
-
-		case "comment", "":
-			commentText := buildCIEscalationComment(result, ref, attempts)
-			if trigger == EscalationTriggerTriage {
-				commentText = buildTriageEscalationComment("ci", "ref "+ref)
-			}
-			if params.TrackerAdapter != nil {
-				issueID := pending.IssueID
-				tracker := params.TrackerAdapter
-				m := metrics
-				escalLog := log
-				ct := commentText
-				escalAction := params.CIFeedback.Escalation
-				if escalAction == "" {
-					escalAction = "comment"
-				}
-
-				state.TrackerOpsWg.Go(func() {
-					dctx, cancel := context.WithTimeout(
-						context.WithoutCancel(ctx), 30*time.Second)
-					defer cancel()
-
-					if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-						escalLog.Warn("CI escalation comment failed",
-							slog.Any("error", err),
-						)
-						m.IncCIEscalations("error")
-					} else {
-						m.IncCIEscalations(escalAction)
-					}
-				})
-			}
 		}
+
+		// A label owns the escalation counter, so only the other modes record it.
+		var record func(action string)
+		if params.CIFeedback.Escalation != "label" {
+			record = metrics.IncCIEscalations
+		}
+		publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
+			log.Warn("CI escalation comment failed", slog.Any("error", err))
+		})
 	}
 
 	// Set regardless of the tracker write's outcome: the write runs in

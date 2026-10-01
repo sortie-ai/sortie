@@ -180,6 +180,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest":  {reason: "shared credential-verification conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel":       {reason: "shared scripted model endpoint and scripted-model conformance driver; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/notify/route":                    {reason: "shared notification routing for orchestrator events; registers no kind and holds no adapter", coreImportable: true},
 }
 
 // contractPackageBannedImports maps one package's import path to the

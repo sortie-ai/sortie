@@ -26,6 +26,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
+var agentMessageEvents = []domain.EventType{domain.EventAgentMessage}
+
 func TestRunMCPServer_Help_ReturnsZero(t *testing.T) {
 	t.Parallel()
 
@@ -663,6 +665,7 @@ func TestBuildNotifyTool_ValidWebhookBackend_ReturnsNonNilTool(t *testing.T) {
 	backends := []config.NotificationBackend{
 		{
 			Kind:   "webhook",
+			Events: agentMessageEvents,
 			Config: map[string]any{"url": srv.URL},
 		},
 	}
@@ -694,7 +697,7 @@ func TestBuildNotifyTool_PropagatesSessionID(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	backends := []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}},
 	}
 	env := notify.NotificationEnvelopeContext{DispatchID: "dispatch-reaches-tool"}
 	sessionID := func() string { return "session-reaches-tool" }
@@ -744,6 +747,7 @@ func TestBuildNotifyTool_ValidSlackBackend_ReturnsNonNilTool(t *testing.T) {
 	backends := []config.NotificationBackend{
 		{
 			Kind:   "slack",
+			Events: agentMessageEvents,
 			Config: map[string]any{"webhook_url": srv.URL},
 		},
 	}
@@ -763,6 +767,7 @@ func TestBuildNotifyTool_UnknownKind_ReturnsError(t *testing.T) {
 	backends := []config.NotificationBackend{
 		{
 			Kind:   "no-such-backend-kind-xyz",
+			Events: agentMessageEvents,
 			Config: map[string]any{"url": "https://example.com"},
 		},
 	}
@@ -801,7 +806,7 @@ func TestBuildNotifyTool_EmptyRequiredSecret_ReturnsError(t *testing.T) {
 			t.Parallel()
 
 			backends := []config.NotificationBackend{
-				{Kind: tt.kind, Config: tt.config},
+				{Kind: tt.kind, Events: agentMessageEvents, Config: tt.config},
 			}
 
 			tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
@@ -826,8 +831,8 @@ func TestBuildNotifyTool_PartialFailureIsTotal(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	backends := []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}},
-		{Kind: "unknown-kind-for-partial-test", Config: map[string]any{"url": srv.URL}},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}},
+		{Kind: "unknown-kind-for-partial-test", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}},
 	}
 
 	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
@@ -1049,5 +1054,79 @@ func TestBuildSessionToolRegistry_EnvFree(t *testing.T) {
 	if !slices.Equal(names1, names2) {
 		t.Errorf("BuildSessionToolRegistry tool names differ when SORTIE_* env set:\n  no env: %v\n with env: %v",
 			names1, names2)
+	}
+}
+
+func TestBuildNotifyTool_SelectsOnlyAgentMessageSubscribers(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(srv.Close)
+	webhook := func(maxPerSession int, events ...domain.EventType) config.NotificationBackend {
+		return config.NotificationBackend{
+			Kind: "webhook", MaxPerSession: maxPerSession, Events: events, EventsDeclared: true,
+			Config: map[string]any{"url": srv.URL},
+		}
+	}
+	unconstructible := config.NotificationBackend{
+		Kind: "no-such-backend-kind-xyz", Events: []domain.EventType{domain.EventBudgetHeld}, EventsDeclared: true,
+	}
+
+	tests := []struct {
+		name     string
+		backends []config.NotificationBackend
+		wantTool bool
+		wantCap  int
+	}{
+		{
+			name:     "only orchestrator events registers nothing and builds nothing",
+			backends: []config.NotificationBackend{unconstructible, webhook(3, domain.EventSessionFailed)},
+		},
+		{
+			name:     "a tracker comment entry registers nothing",
+			backends: []config.NotificationBackend{{Kind: domain.TrackerCommentKind, Events: []domain.EventType{domain.EventBudgetHeld}, EventsDeclared: true}},
+		},
+		{
+			name:     "the cap comes from the agent message subset",
+			backends: []config.NotificationBackend{webhook(2, domain.EventAgentMessage), webhook(9, domain.EventSessionFailed), unconstructible},
+			wantTool: true,
+			wantCap:  2,
+		},
+		{
+			name:     "an entry written without events keeps its default cap",
+			backends: []config.NotificationBackend{{Kind: "webhook", Events: agentMessageEvents, MaxPerSession: 0, Config: map[string]any{"url": srv.URL}}},
+			wantTool: true,
+			wantCap:  defaultMaxPerSession,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotLimit int
+			reserve := func(limit int) (notify.SlotClaim, bool, error) {
+				gotLimit = limit
+				return noopSlotClaim{}, true, nil
+			}
+
+			tool, err := buildNotifyTool(tt.backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, reserve)
+			if err != nil {
+				t.Fatalf("buildNotifyTool(%s) error = %v, want nil", tt.name, err)
+			}
+			if (tool != nil) != tt.wantTool {
+				t.Fatalf("buildNotifyTool(%s) tool = %v, want tool: %v", tt.name, tool, tt.wantTool)
+			}
+			if tool == nil {
+				return
+			}
+
+			if _, err := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B"}`)); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if gotLimit != tt.wantCap {
+				t.Errorf("slot limit = %d, want %d", gotLimit, tt.wantCap)
+			}
+		})
 	}
 }

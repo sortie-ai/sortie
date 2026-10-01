@@ -18,6 +18,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -2232,7 +2233,7 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 		params := defaultExitParams(t, store)
 		params.TrackerAdapter = tracker
 		params.ActiveStates = []string{"In Progress"}
-		params.CommentsConfig.OnCompletion = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnCompletion: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:      "SID-3",
@@ -2498,7 +2499,7 @@ func TestHandleWorkerExit_HandoffEvidenceObservedAbsenceWithholds(t *testing.T) 
 	state := exitStateWithIssue(t, issueID, "In Progress")
 	state.Running[issueID].ContinuationContext = map[string]any{"review_comments": "preserved"}
 	params := handoffEvidenceExitParams(t, store, tracker, spy)
-	params.CommentsConfig.OnCompletion = true
+	params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnCompletion: true})
 	var logs bytes.Buffer
 	params.Logger = debugLogger(t, &logs)
 
@@ -2602,7 +2603,7 @@ func newSuppressedShapeFixture(t *testing.T, issueID string) suppressedShapeFixt
 	spy := &spyMetrics{}
 	state := exitStateWithIssue(t, issueID, "In Progress")
 	params := handoffEvidenceExitParams(t, store, tracker, spy)
-	params.CommentsConfig.OnFailure = true
+	params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 	var logs bytes.Buffer
 	params.Logger = debugLogger(t, &logs)
 	return suppressedShapeFixture{
@@ -2801,7 +2802,7 @@ func TestHandleWorkerExit_WithheldReadGating(t *testing.T) {
 		spy := &spyMetrics{}
 		state := exitStateWithIssue(t, issueID, "In Progress")
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:                 issueID,
@@ -3022,7 +3023,7 @@ func TestHandleWorkerExit_WithheldReadFailOpen(t *testing.T) {
 		spy := newCommentAwareMetrics()
 		state := exitStateWithIssue(t, issueID, "In Progress")
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 		var logs bytes.Buffer
 		params.Logger = debugLogger(t, &logs)
 
@@ -3214,8 +3215,7 @@ func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T
 		spy := newCommentAwareMetrics()
 		state := exitStateWithIssue(t, issueID, "In Progress")
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
-		params.CommentsConfig.OnCompletion = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true, OnCompletion: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:                 issueID,
@@ -3255,7 +3255,7 @@ func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T
 		spy := newCommentAwareMetrics()
 		state := exitStateWithIssue(t, issueID, "In Progress")
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:                 issueID,
@@ -3297,7 +3297,7 @@ func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T
 		spy := newCommentAwareMetrics()
 		state := exitStateWithIssue(t, issueID, "In Progress")
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:                 issueID,
@@ -3347,7 +3347,7 @@ func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T
 			ReactionKind: ReactionKindCI,
 		}
 		params := handoffEvidenceExitParams(t, store, tracker, spy)
-		params.CommentsConfig.OnFailure = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:                 issueID,
@@ -3417,8 +3417,7 @@ func TestHandleWorkerExit_SuppressedExitPostsCompletionCommentNotFailure(t *test
 			spy := newCommentAwareMetrics()
 			state := exitStateWithIssue(t, tt.issueID, "In Progress")
 			params := handoffEvidenceExitParams(t, store, tracker, spy)
-			params.CommentsConfig.OnFailure = true
-			params.CommentsConfig.OnCompletion = true
+			params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnFailure: true, OnCompletion: true})
 
 			HandleWorkerExit(state, WorkerResult{
 				IssueID:                 tt.issueID,
@@ -5131,12 +5130,20 @@ func TestBuildFailureComment_NeverCarriesErrorTextOrSessionIdentifier(t *testing
 	}
 }
 
+func routerWithComments(tracker domain.TrackerAdapter, comments config.TrackerCommentsConfig) *route.Router {
+	router := route.NewRouter(tracker, nil)
+	if err := router.Update(route.Inputs{Comments: comments}); err != nil {
+		panic(err)
+	}
+	return router
+}
+
 func exitParamsWithComments(t *testing.T, store *mockExitStore, tracker *mockTrackerAdapter, comments config.TrackerCommentsConfig) HandleWorkerExitParams {
 	t.Helper()
 	p := defaultExitParams(t, store)
 	p.TrackerAdapter = tracker
 	p.ActiveStates = []string{"In Progress"}
-	p.CommentsConfig = comments
+	p.Router = routerWithComments(p.TrackerAdapter, comments)
 	return p
 }
 
@@ -5364,7 +5371,7 @@ func TestHandleWorkerExit_CommentNilTrackerAdapterSafe(t *testing.T) {
 	state := exitState(t, "CMT-7", nil)
 	params := defaultExitParams(t, store)
 	params.TrackerAdapter = nil
-	params.CommentsConfig = config.TrackerCommentsConfig{OnCompletion: true, OnFailure: true}
+	params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnCompletion: true, OnFailure: true})
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:      "CMT-7",
@@ -9122,7 +9129,7 @@ func TestHandleWorkerExit_DeclaredRunCompletionComment(t *testing.T) {
 		params.HandoffState = "Human Review"
 		params.NoChangeState = "Done"
 		params.ActiveStates = []string{"In Progress"}
-		params.CommentsConfig.OnCompletion = true
+		params.Router = routerWithComments(params.TrackerAdapter, config.TrackerCommentsConfig{OnCompletion: true})
 
 		HandleWorkerExit(state, WorkerResult{
 			IssueID:        "NC-CMT-ON",

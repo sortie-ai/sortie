@@ -1,6 +1,6 @@
 ## 11C. Auto-merge Reaction Contract
 
-The auto-merge reaction is default-off; enablement requires `reactions.auto_merge.provider` to be non-empty in `WORKFLOW.md`. The merge operation is irreversible: the orchestrator does NOT roll back on partial-failure tail operations (branch delete, tracker comment). The reaction runs after the CI, review-comment, bot-review-comment, and merge-conflict reconcile passes in the tick, so the precondition reads observe the most current per-kind state; it runs before the label-review and label-fix passes, whose relative ordering does not affect correctness because each of those two is fully cross-kind isolated.
+The auto-merge reaction is default-off; enablement requires `reactions.auto_merge.provider` to be non-empty in `WORKFLOW.md`. The merge operation is irreversible: the orchestrator does NOT roll back on partial-failure tail operations (branch delete, success-event delivery). The reaction runs after the CI, review-comment, bot-review-comment, and merge-conflict reconcile passes in the tick, so the precondition reads observe the most current per-kind state; it runs before the label-review and label-fix passes, whose relative ordering does not affect correctness because each of those two is fully cross-kind isolated.
 
 ### 11C.1 SCMAdapter write surface
 
@@ -60,7 +60,7 @@ The auto-merge reconcile loop evaluates the merge preconditions reported by `Get
 | Pending | `ReviewDecision != APPROVED` and `!= NOT_REQUIRED` | Pending | Re-enqueue with poll interval. |
 | Pending | `require_ci == true` and `CI` is neither `success` nor the empty no-checks value | Pending | Re-enqueue with poll interval. |
 | Pending | All preconditions satisfied (`Mergeability` in (`clean`, `unstable`); `!Draft`; review and CI satisfied) | Merging | Call `SCMAdapter.MergePR`. |
-| Merging | Merge succeeded | Done | Post tracker comment; delete branch when `delete_branch == true`; clear fingerprint; increment `sortie_reactions_auto_merge_total{result="merged"}`. |
+| Merging | Merge succeeded | Done | Emit the `auto_merge.merged` event, whose body is the merge-success comment, to its subscribers (§11C.6); delete branch when `delete_branch == true`; clear fingerprint; increment `sortie_reactions_auto_merge_total{result="merged"}`. |
 | Merging | `ErrSCMConflict` ("already merged") | Done | Treat as idempotent success; same actions as merge succeeded. |
 | Merging | `ErrSCMConflict` (head SHA mismatch) | Pending | Re-enqueue with poll interval; next tick refreshes fingerprint. |
 | Merging | `ErrSCMAuth` | Escalated | Escalate immediately; do not re-enqueue. |
@@ -77,10 +77,13 @@ The count-based escalation check guards the comparison with `MaxRetries > 0`: th
 
 A configured `MaxRetries` of `0` disables count-based escalation rather than triggering it on the first attempt: the `> 0` guard keeps the comparison false no matter how large `reaction_attempts[issue_id:merge]` grows, so a `merge`-kind entry with no retry budget keeps retrying transient failures instead of escalating on them. This is the opposite of the sibling merge-conflict reaction, whose comparison (`attempts > MaxRetries`, §11E.5) carries no such guard, so a merge-conflict `MaxRetries` of `0` escalates on the first conflict detection (§11E.8). The same `0` literal therefore carries two incompatible meanings across these two adjacent `WORKFLOW.md` configuration blocks. An `ErrSCMAuth` or `ErrSCMPayload` failure still escalates immediately regardless of the configured `MaxRetries`, including when it is `0`.
 
-Two escalation postures are available, set by the operator in `WORKFLOW.md`:
+Every escalation emits the `escalation.auto_merge` event (Section 10.4.7) under every posture, in a detached goroutine with a 30-second timeout. The event body is a plain-text message identifying the PR number, the retry count, and that manual merge is required. Three escalation postures are available, set by the operator in `WORKFLOW.md`:
 
-- `label`: applies the `needs-human` label to the tracker issue via `TrackerAdapter.AddLabel`. This is the default posture.
-- `comment`: posts a plain-text message to the tracker issue identifying the PR number, the retry count, and that manual merge is required.
+- `label`: applies the `needs-human` label to the tracker issue via `TrackerAdapter.AddLabel`. This is the default posture, and it is the posture an omitted `escalation` resolves to. The event reaches only destinations that subscribe to `escalation.auto_merge`, so the issue receives no comment unless a `tracker_comment` entry lists it.
+- `comment` (deprecated): applies no label; the `tracker_comment` destination receives the event through a subscription Sortie synthesizes from this value. The comment keeps posting and a deprecation advisory names the replacement: `escalation: none` plus `escalation.auto_merge` in the events of a `tracker_comment` entry (Section 5.3.10).
+- `none`: applies no label; the event reaches only destinations subscribed to it.
+
+The merge-success comment is the `auto_merge.merged` event (§11C.5): a `tracker_comment` entry that lists it posts the comment, and a configuration with no `tracker_comment` entry keeps posting it through an implicit subscription that draws a deprecation advisory. A `tracker_comment` entry that omits `auto_merge.merged` posts no merge-success comment.
 
 Neither posture writes to the reaction attempt state. What makes escalation terminal is the cleanup that follows the action: the `merge`-kind pending entry is deleted from `pending_reactions` and its `reaction_fingerprints` row is removed, and because the reconcile loop iterates only over pending entries, that issue's merge kind is polled no further. The `reaction_attempts[issue_id:merge]` counter is left in place, unlike the merge-conflict episode-exit cleanup (§11E.5) and unlike this kind's own watch-window drop (§11C.4), so a `merge` entry re-created for the same issue later in the same process escalates on its first tick whenever `MaxRetries > 0`.
 

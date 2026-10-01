@@ -1,0 +1,37 @@
+[
+  {
+    "step": "merge_completion_escalated",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  },
+  {
+    "step": "missing_sha_delivered",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      },
+      {
+        "op": "observation_dispatched",
+        "issue_id": "GOLD-1",
+        "text": "merge-completion-missing-sha"
+      }
+    ]
+  },
+  {
+    "step": "missing_sha_tracker_write_fails",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  }
+]

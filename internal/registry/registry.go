@@ -70,8 +70,10 @@ type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
 
 // Notifiers is the default notifier adapter registry. Backend packages
 // register themselves via [Registry.Register] in their init functions;
-// the sidecar resolves backends via [Registry.Get] at runtime.
-var Notifiers = NewRegistry[NotifierConstructor, struct{}]("notifier")
+// the sidecar and the program's notification router resolve backends via
+// [Registry.Get] at runtime. It reserves [domain.TrackerCommentKind],
+// which names a built-in destination rather than a backend.
+var Notifiers = NewRegistry[NotifierConstructor, struct{}]("notifier", domain.TrackerCommentKind)
 
 // TrackerConfigFields holds the config values passed to adapter
 // validation functions. This is a plain data struct that avoids
@@ -453,6 +455,7 @@ type AgentConfigFields struct {
 // implementation.
 type Registry[T any, M any] struct {
 	name     string
+	reserved []string
 	mu       sync.RWMutex
 	adapters map[string]T
 	meta     map[string]M
@@ -460,17 +463,19 @@ type Registry[T any, M any] struct {
 
 // NewRegistry creates an empty [Registry] with the given dimension
 // name. The name appears in error messages produced by [Registry.Get]
-// (e.g. "tracker", "agent").
-func NewRegistry[T any, M any](name string) *Registry[T, M] {
+// (e.g. "tracker", "agent"). Each reserved kind is refused by
+// [Registry.Register] and [Registry.RegisterWithMeta].
+func NewRegistry[T any, M any](name string, reserved ...string) *Registry[T, M] {
 	return &Registry[T, M]{
 		name:     name,
+		reserved: slices.Clone(reserved),
 		adapters: make(map[string]T),
 		meta:     make(map[string]M),
 	}
 }
 
 // Register associates a kind string with a constructor function.
-// Panics if kind is empty or already registered. Registration is
+// Panics if kind is empty, reserved, or already registered. Registration is
 // expected during init(); duplicate registration is a programming
 // error. The zero value of M is stored as metadata so that [Meta]
 // returns (zero, true) for kinds registered without explicit metadata.
@@ -480,6 +485,9 @@ func (r *Registry[T, M]) Register(kind string, constructor T) {
 
 	if kind == "" {
 		panic("registry: kind must not be empty")
+	}
+	if slices.Contains(r.reserved, kind) {
+		panic(fmt.Sprintf("registry: kind %q is reserved", kind))
 	}
 	if _, exists := r.adapters[kind]; exists {
 		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))
@@ -497,6 +505,9 @@ func (r *Registry[T, M]) RegisterWithMeta(kind string, constructor T, meta M) {
 
 	if kind == "" {
 		panic("registry: kind must not be empty")
+	}
+	if slices.Contains(r.reserved, kind) {
+		panic(fmt.Sprintf("registry: kind %q is reserved", kind))
 	}
 	if _, exists := r.adapters[kind]; exists {
 		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))

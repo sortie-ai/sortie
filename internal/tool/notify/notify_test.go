@@ -318,6 +318,9 @@ func TestExecute_EnvelopeCarriesSessionContext(t *testing.T) {
 	if n.Envelope.Timestamp == "" {
 		t.Error("Envelope.Timestamp is empty, want ISO-8601 UTC timestamp")
 	}
+	if n.Envelope.EventType != domain.EventAgentMessage {
+		t.Errorf("Envelope.EventType = %q, want %q", n.Envelope.EventType, domain.EventAgentMessage)
+	}
 }
 
 func TestExecute_ResolvesSessionIDPerNotification(t *testing.T) {

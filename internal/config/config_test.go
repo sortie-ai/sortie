@@ -5267,3 +5267,41 @@ dispatch:
 	}
 	requireConfigMasked(t, secret)
 }
+
+func TestNewServiceConfig_ReactionEscalationNone(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"ci_failure", "review_comments", "bot_review", "merge_conflicts", "auto_merge", "merge_completion"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := NewServiceConfig(map[string]any{
+				"reactions": map[string]any{key: map[string]any{"provider": "github", "escalation": "none", "target_state": "Done"}},
+			})
+			if err != nil {
+				t.Fatalf("NewServiceConfig(%s escalation none): %v", key, err)
+			}
+
+			got := cfg.Reactions[key].Escalation
+			if key == "ci_failure" {
+				got = cfg.CIFeedback.Escalation
+			}
+			assertStringEqual(t, key+" escalation", "none", got)
+		})
+	}
+}
+
+func TestNewServiceConfig_ReactionEscalationRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewServiceConfig(map[string]any{
+		"reactions": map[string]any{"auto_merge": map[string]any{"provider": "github", "escalation": "email"}},
+	})
+
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("NewServiceConfig(escalation email) error = %v, want *ConfigError", err)
+	}
+	assertStringEqual(t, "ConfigError.Field", "reactions.auto_merge.escalation", ce.Field)
+	assertStringEqual(t, "ConfigError.Message", `must be "label", "comment", or "none", got "email"`, ce.Message)
+}

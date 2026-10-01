@@ -91,16 +91,20 @@ Review-fix dispatches count toward the regular retry machinery but use a fixed d
 
 ### 11B.6 Escalation behavior
 
-Two conditions reach the escalation: `reaction_attempts[issue_id:review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (Section 11B.5). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and, on the `comment` action, the posted text differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
+Two conditions reach the escalation: `reaction_attempts[issue_id:review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (Section 11B.5). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and the event body differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
 
-In either case:
+Every escalation emits the `escalation.review_comments` event (Section 10.4.7) under every posture, in a detached goroutine with a 30-second timeout. The event body is a plain-text message:
 
-- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second timeout.
-- `escalation: comment`: post a plain-text comment:
-  ```
-  Review fix continuation turns exhausted for PR #{pr_number} on branch {branch}.
-  {turn_count} continuation turns attempted. Remaining review comments require human attention.
-  ```
+```
+Review fix continuation turns exhausted for PR #{pr_number} on branch {branch}.
+{turn_count} continuation turns attempted. Remaining review comments require human attention.
+```
+
+The posture decides whether a label is applied and which destination receives the event without further configuration:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`. The label call runs in its own detached goroutine with a 30-second timeout. The event reaches only destinations that subscribe to `escalation.review_comments`, so the issue receives no comment unless a `tracker_comment` entry lists it.
+- `escalation: comment` (deprecated): apply no label; the `tracker_comment` destination receives the event through a subscription Sortie synthesizes from this value. The comment keeps posting and a deprecation advisory names the replacement: `escalation: none` plus `escalation.review_comments` in the events of a `tracker_comment` entry (Section 5.3.10).
+- `escalation: none`: apply no label; the event reaches only destinations subscribed to it.
 
 After escalation:
 
@@ -109,7 +113,7 @@ After escalation:
 - Release the claim (`delete claimed[issue_id]`).
 - Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
 
-Escalation failures are logged and counted (`sortie_review_escalations_total{action="error"}`) but do not block claim release.
+Escalation failures are logged and counted (`sortie_review_escalations_total{action="error"}`) but do not block claim release. Under `comment` and `none`, the counter records `comment` when the `tracker_comment` destination accepted the event, `error` when it failed, and `none` when it was not a destination of the event.
 
 ### 11B.7 Fingerprint and debounce
 

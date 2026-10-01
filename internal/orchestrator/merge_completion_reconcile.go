@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -460,7 +461,7 @@ func routeTransitionFailure(
 }
 
 // escalateMergeCompletion dispatches the configured escalation action
-// (label or comment) asynchronously through [State.TrackerOpsWg] and
+// (label, comment, or none) asynchronously through [State.TrackerOpsWg] and
 // clears the transition call counter. The pending entry is already
 // removed by the caller; the fingerprint row is left undispatched, the
 // accepted residue of an escalated merge-completion attempt.
@@ -473,12 +474,13 @@ func escalateMergeCompletion(
 	log *slog.Logger,
 	ctx context.Context,
 ) {
-	issueID := pending.IssueID
-	tracker := params.TrackerAdapter
-	escalLog := log
+	commentText := buildMergeCompletionEscalationComment(data, params.MergeCompletionConfig.TargetState, attempts)
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationMergeCompletion, pending, commentText))
 
-	switch params.MergeCompletionConfig.Escalation {
-	case "label":
+	if params.MergeCompletionConfig.Escalation == "label" {
+		issueID := pending.IssueID
+		tracker := params.TrackerAdapter
+		escalLog := log
 		label := params.MergeCompletionConfig.EscalationLabel
 
 		state.TrackerOpsWg.Go(func() {
@@ -491,21 +493,10 @@ func escalateMergeCompletion(
 				)
 			}
 		})
-
-	case "comment":
-		commentText := buildMergeCompletionEscalationComment(data, params.MergeCompletionConfig.TargetState, attempts)
-
-		state.TrackerOpsWg.Go(func() {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-
-			if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
-				escalLog.Warn("merge_completion escalation comment failed",
-					slog.Any("error", err),
-				)
-			}
-		})
 	}
+	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, nil, func(err error) {
+		log.Warn("merge_completion escalation comment failed", slog.Any("error", err))
+	})
 
 	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
 }
@@ -547,13 +538,20 @@ func escalateMergeCompletionMissingSHA(
 		}
 	}
 
-	switch params.MergeCompletionConfig.Escalation {
-	case "label":
-		label := params.MergeCompletionConfig.EscalationLabel
-		state.TrackerOpsWg.Go(func() {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
+	commentText := buildMergeCompletionMissingSHAEscalationComment(
+		data,
+		params.MergeCompletionConfig.TargetState,
+		waited,
+	)
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationMergeCompletion, pending, commentText))
+	label := params.MergeCompletionConfig.EscalationLabel
+	labels := params.MergeCompletionConfig.Escalation == "label"
 
+	state.TrackerOpsWg.Go(func() {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+
+		if labels {
 			if err := tracker.AddLabel(dctx, issueID, label); err != nil {
 				escalLog.Error("merge_completion missing-SHA escalation label failed; polling remains stopped and a fresh pending entry can retry delivery",
 					slog.Any("error", err),
@@ -563,29 +561,30 @@ func escalateMergeCompletionMissingSHA(
 				return
 			}
 			markDelivered(dctx)
-		})
+			deliverEvent(dctx, delivery, escalLog)
+			return
+		}
 
-	case "comment":
-		commentText := buildMergeCompletionMissingSHAEscalationComment(
-			data,
-			params.MergeCompletionConfig.TargetState,
-			waited,
-		)
-		state.TrackerOpsWg.Go(func() {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
+		// Only the tracker comment decides the marker, so a slow Slack or
+		// webhook send must not spend the shared deadline first.
+		trackerDelivery, others := delivery.SplitTrackerComment()
+		var sends sync.WaitGroup
+		defer sends.Wait()
+		if !others.Empty() {
+			sends.Go(func() { deliverEvent(dctx, others, escalLog) })
+		}
 
-			if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
-				escalLog.Error("merge_completion missing-SHA escalation comment failed; polling remains stopped and a fresh pending entry can retry delivery",
-					slog.Any("error", err),
-					slog.String("repository", data.Owner+"/"+data.Repo),
-					slog.Int("pr_number", data.PRNumber),
-				)
-				return
-			}
-			markDelivered(dctx)
-		})
-	}
+		received, err := deliverEvent(dctx, trackerDelivery, escalLog).TrackerComment()
+		if received && err != nil {
+			escalLog.Error("merge_completion missing-SHA escalation comment failed; polling remains stopped and a fresh pending entry can retry delivery",
+				slog.Any("error", err),
+				slog.String("repository", data.Owner+"/"+data.Repo),
+				slog.Int("pr_number", data.PRNumber),
+			)
+			return
+		}
+		markDelivered(dctx)
+	})
 }
 
 // buildMergeCompletionEscalationComment returns the plain-text escalation

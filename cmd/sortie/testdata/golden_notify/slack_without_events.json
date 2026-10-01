@@ -1,0 +1,51 @@
+{
+  "cap": 20,
+  "calls": [
+    {
+      "input": "{\"severity\":\"info\",\"title\":\"Build finished\",\"body\":\"All checks passed.\"}",
+      "result": "{\"data\":{\"delivered\":1,\"notification_id\":\"masked\"},\"success\":true}",
+      "requests": [
+        {
+          "server": "slack",
+          "method": "POST",
+          "path": "/hooks/slack",
+          "headers": {
+            "Accept-Encoding": [
+              "gzip"
+            ],
+            "Content-Type": [
+              "application/json"
+            ],
+            "User-Agent": [
+              "Go-http-client/1.1"
+            ]
+          },
+          "body": "{\"text\":\"[INFO] Build finished\\nAll checks passed.\"}"
+        }
+      ]
+    },
+    {
+      "input": "{\"severity\":\"critical\",\"title\":\"Decision needed\",\"body\":\"Pick a migration path.\",\"category\":\"decision_needed\"}",
+      "result": "{\"data\":{\"delivered\":1,\"notification_id\":\"masked\"},\"success\":true}",
+      "requests": [
+        {
+          "server": "slack",
+          "method": "POST",
+          "path": "/hooks/slack",
+          "headers": {
+            "Accept-Encoding": [
+              "gzip"
+            ],
+            "Content-Type": [
+              "application/json"
+            ],
+            "User-Agent": [
+              "Go-http-client/1.1"
+            ]
+          },
+          "body": "{\"text\":\"[CRITICAL] Decision needed\\nPick a migration path.\"}"
+        }
+      ]
+    }
+  ]
+}

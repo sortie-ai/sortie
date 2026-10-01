@@ -743,8 +743,8 @@ type ParkedEntry struct {
 
 // State is the single authoritative runtime state owned by the
 // orchestrator. Not safe for concurrent access: all mutations are
-// serialized through the event loop goroutine, except WorkerWg, which is
-// goroutine-safe. The agent_totals and completed set are backed by SQLite
+// serialized through the event loop goroutine, except WorkerWg and
+// TrackerOpsWg, which are goroutine-safe. The agent_totals and completed set are backed by SQLite
 // and survive restarts.
 type State struct {
 	// WorkerWg tracks in-flight worker goroutines spawned by
@@ -753,7 +753,11 @@ type State struct {
 	WorkerWg sync.WaitGroup
 
 	// TrackerOpsWg tracks fire-and-forget tracker API goroutines, drained
-	// after worker shutdown so they are not orphaned on exit.
+	// after worker shutdown so they are not orphaned on exit. A worker adds
+	// to it for the detached part of the session.started delivery before
+	// it reports its exit and only while its context is live, and the
+	// drain cancels every worker before it waits, so an add cannot race
+	// the wait.
 	TrackerOpsWg sync.WaitGroup
 
 	// TriageWg tracks in-flight reaction triage goroutines so shutdown can
@@ -1281,8 +1285,8 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 	if cfg.Escalation == "" {
 		cfg.Escalation = "label"
 	}
-	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
-		return ReviewReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	if err := checkEscalation(cfg.Escalation); err != nil {
+		return ReviewReactionConfig{}, err
 	}
 
 	if cfg.EscalationLabel == "" {
@@ -1350,8 +1354,8 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 	if cfg.Escalation == "" {
 		cfg.Escalation = "label"
 	}
-	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
-		return BotReviewReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	if err := checkEscalation(cfg.Escalation); err != nil {
+		return BotReviewReactionConfig{}, err
 	}
 
 	if cfg.EscalationLabel == "" {
@@ -1405,6 +1409,17 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 	return cfg, nil
 }
 
+// checkEscalation reports an error unless escalation is a value a
+// reaction's escalation setting accepts.
+func checkEscalation(escalation string) error {
+	switch escalation {
+	case "label", "comment", "none":
+		return nil
+	default:
+		return fmt.Errorf("invalid escalation: must be \"label\", \"comment\", or \"none\", got %q", escalation)
+	}
+}
+
 // BuildAutoMergeReactionConfig extracts and validates auto-merge-specific
 // configuration from a [config.ReactionConfig].
 func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionConfig, error) {
@@ -1422,8 +1437,8 @@ func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionCo
 	if cfg.Escalation == "" {
 		cfg.Escalation = "comment"
 	}
-	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
-		return AutoMergeReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	if err := checkEscalation(cfg.Escalation); err != nil {
+		return AutoMergeReactionConfig{}, err
 	}
 
 	if cfg.EscalationLabel == "" {
@@ -1498,8 +1513,8 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 	if cfg.Escalation == "" {
 		cfg.Escalation = "label"
 	}
-	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
-		return MergeConflictReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	if err := checkEscalation(cfg.Escalation); err != nil {
+		return MergeConflictReactionConfig{}, err
 	}
 
 	if cfg.EscalationLabel == "" {
@@ -1566,8 +1581,8 @@ func BuildMergeCompletionReactionConfig(rc config.ReactionConfig, tracker config
 	if cfg.Escalation == "" {
 		cfg.Escalation = "label"
 	}
-	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
-		return MergeCompletionReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	if err := checkEscalation(cfg.Escalation); err != nil {
+		return MergeCompletionReactionConfig{}, err
 	}
 
 	if cfg.EscalationLabel == "" {

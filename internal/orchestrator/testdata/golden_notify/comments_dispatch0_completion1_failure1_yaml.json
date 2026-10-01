@@ -1,0 +1,74 @@
+[
+  {
+    "step": "dispatch",
+    "ops": []
+  },
+  {
+    "step": "dispatch_review_posture",
+    "ops": []
+  },
+  {
+    "step": "exit_completed",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session completed.\nDuration: 1m30s\nTurns: 3"
+      }
+    ]
+  },
+  {
+    "step": "exit_completed_requeued",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session completed (re-queuing).\nDuration: 1m30s\nTurns: 3"
+      }
+    ]
+  },
+  {
+    "step": "exit_soft_stop_no_change",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session completed (agent signaled: no-change-needed).\nDuration: 1m30s\nTurns: 2"
+      }
+    ]
+  },
+  {
+    "step": "exit_soft_stop_blocked",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session completed (agent signaled: blocked).\nDuration: 1m30s\nTurns: 2"
+      }
+    ]
+  },
+  {
+    "step": "exit_handoff_withheld",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session failed.\nDuration: 1m30s\nRetry: yes (attempt 1)"
+      }
+    ]
+  },
+  {
+    "step": "exit_failed",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session failed.\nDuration: 1m30s\nRetry: yes (attempt 1)"
+      }
+    ]
+  },
+  {
+    "step": "exit_cancelled",
+    "ops": []
+  }
+]

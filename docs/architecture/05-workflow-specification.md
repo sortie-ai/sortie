@@ -108,6 +108,11 @@ Fields:
   - Transition failure is non-fatal: the worker logs a warning and continues to workspace preparation.
   - If the issue is already in the target state (case-insensitive comparison), the `TransitionIssue` call is skipped and a debug-level message is logged.
   - Changes take effect for future dispatches, not in-flight sessions.
+- `comments` (object, optional; deprecated)
+  - Toggles for the comments the orchestrator posts at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`; a non-boolean value is rejected with a configuration error. The `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`, `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`, and `SORTIE_TRACKER_COMMENTS_ON_FAILURE` environment overrides set the three keys before the mapping below applies.
+  - Each key that resolves to `true` subscribes the built-in `tracker_comment` destination (Section 5.3.10) to a set of events: `on_dispatch` to `session.started`; `on_completion` to `session.completed` and `session.stopped`; `on_failure` to `session.failed`. The mapping unions with the `events` of an explicit `tracker_comment` entry, so holding both forms never posts a comment twice.
+  - The settings keep working. A resolved `true` value draws a deprecation advisory (Section 5.3.10) that names the events to list in a `tracker_comment` entry before the key is removed. Sortie never rewrites `WORKFLOW.md`, and no removal date is set.
+  - Changes take effect for future dispatches and worker exits, not in-flight sessions.
 
 #### 5.3.2 `polling` (object)
 
@@ -294,7 +299,7 @@ Each reaction kind sub-object shares a common field schema:
   - MUST be non-negative; negative values are rejected with a configuration error.
   - `review_comments` and `bot_review` do not consume this field. Each bounds its dispatches with its own `max_continuation_turns` instead, and a value set here has no effect on those two kinds.
 - `escalation` (string)
-  - Action taken when the kind stops dispatching continuations and hands the subject to a person. Two conditions reach it: the kind's dispatch budget is exhausted, whether that budget is `max_retries` or `max_continuation_turns`, or a `triage` command answers `escalate`. Valid values: `label` (default), `comment`.
+  - Action taken when the kind stops dispatching continuations and hands the subject to a person. Two conditions reach it: the kind's dispatch budget is exhausted, whether that budget is `max_retries` or `max_continuation_turns`, or a `triage` command answers `escalate`. Valid values: `label` (default), `comment` (deprecated), and `none`. Every escalation emits its `escalation.<kind>` event (Section 5.3.10) whatever the value. `label` applies the label, and the event reaches only the destinations subscribed to it. `none` applies no label, and the event reaches only the destinations subscribed to it. `comment` applies no label and subscribes the `tracker_comment` destination to the event, keeps working, and draws a deprecation advisory whose replacement is `escalation: none` plus the event in the `events` of a `tracker_comment` entry. An omitted `escalation` resolves to `label` for every kind, `auto_merge` included, and draws no advisory.
 - `escalation_label` (string)
   - Label applied when `escalation` is `label`. Default: `needs-human`.
 - `triage` (object)
@@ -405,7 +410,7 @@ The kind carries no `watch_window_ms`: a pull request may remain unmerged for an
 
 - Reaction kind keys MUST match `[a-z][a-z0-9_-]*`.
 - Invalid kind keys are rejected with a configuration error.
-- Per-kind common fields are validated as follows: `max_retries` MUST be a non-negative integer, `escalation` MUST be `label` or `comment`, and `provider`, `escalation`, and `escalation_label` MUST be strings. Each violation is rejected with a configuration error.
+- Per-kind common fields are validated as follows: `max_retries` MUST be a non-negative integer, `escalation` MUST be `label`, `comment`, or `none`, and `provider`, `escalation`, and `escalation_label` MUST be strings. Each violation is rejected with a configuration error.
 - Extra fields are kind-specific; the orchestrator validates them when constructing the kind-specific config (e.g. `BuildReviewReactionConfig`).
 - A `triage` block under any reaction key other than `ci_failure`, `review_comments`, `bot_review`, or `merge_conflicts` is rejected with a configuration error, as is a block whose `script` is absent, not a string, or blank, and one whose `timeout_ms` falls outside the closed range `1` to `600000`.
 
@@ -507,33 +512,115 @@ dispatch:
 
 #### 5.3.10 `notifications` (list, optional)
 
-The `notifications` list configures the backends behind the `notify_operator` tool (Section 10.4.5). While a session runs, the agent calls the tool to escalate a decision, report progress, or flag a blocker to a real-time channel. The tool is registered only when at least one valid backend is configured; an empty or absent list leaves it unregistered, so the agent is never offered a tool it cannot use.
+The `notifications` list configures every outbound message Sortie sends to a destination other than the issue's own tracker fields: Slack and webhook backends, and the built-in `tracker_comment` destination that posts comments on the tracker issue. Each entry names the event types it receives. Two producers feed the list: the agent, through the `notify_operator` tool (Section 10.4.5), which produces `agent.message`, and the orchestrator, which produces every other event in the catalog below (Section 10.4.7). The tool is registered only when at least one entry receives `agent.message`, so the agent is never offered a tool it cannot use.
 
-The value is a sequence, not a single object. Each entry is a map carrying a required `kind` discriminator and that backend's own fields. A second channel is a second list entry.
+The value is a sequence, not a single object. Each entry is a map carrying a required `kind` discriminator, an `events` list, and that backend's own fields. A second channel is a second list entry.
 
 ```yaml
 notifications:
+  - kind: tracker_comment
+    events: [session.completed, session.stopped, session.failed, escalation.ci_failure, auto_merge.merged, budget.held]
   - kind: slack
     webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+    events: [agent.message, session.stopped, session.failed]
     max_per_session: 20
   - kind: webhook
     url: $SORTIE_OPS_WEBHOOK_URL
+    events: [session.started, session.completed, session.stopped, session.failed]
 ```
 
 Per-entry fields:
 
 - `kind` (string)
-  - Required. The registry discriminator, resolved against the notifier registry (Section 10.4.7) at sidecar startup. v1 backends are `webhook` and `slack`.
+  - Required. The registry discriminator, resolved against the notifier registry (Section 10.4.7). v1 backends are `webhook` and `slack`. The reserved value `tracker_comment` selects the built-in destination and is not a registry entry.
+- `events` (list of strings)
+  - The event types the entry receives, listed explicitly. There is no wildcard and no filter beyond the event type.
+  - Optional on a registered kind: an entry that omits it receives `agent.message` only, as every entry did before the key existed, and draws a deprecation advisory that suggests `events: [agent.message]`.
+  - Required on `tracker_comment`. An empty list (`[]`) means only the subscriptions synthesized from deprecated settings.
+  - Each element MUST be a string naming a type in the catalog, and no type repeats. `agent.message` MUST NOT appear on `tracker_comment`.
 - `max_per_session` (integer, optional)
-  - The `notify_operator` call cap for the whole agent run, shared by every tool server process of the dispatch (Section 10.4.5). It is not a per-entry default: an omitted, `null`, or `0` value contributes nothing to cap selection, which then falls back to the default of `20` only when every entry is `0` or unset (see "Validation and resolution" below). `0` never means unlimited. A negative value is rejected at config parse time.
+  - The `notify_operator` call cap for the whole agent run, shared by every tool server process of the dispatch (Section 10.4.5). It is not a per-entry default: an omitted, `null`, or `0` value contributes nothing to cap selection, which then falls back to the default of `20` only when every entry that receives `agent.message` is `0` or unset. `0` never means unlimited. A negative value is rejected at config parse time. The value has no effect on an entry that does not receive `agent.message`, and an orchestrator event never counts against it.
 - backend-specific fields
-  - Passed through to the backend constructor untyped, with `$VAR` references resolved. The `webhook` backend requires `url`; the `slack` backend requires `webhook_url`.
+  - Passed through to the backend constructor untyped, with `$VAR` references resolved. The `webhook` backend requires `url`; the `slack` backend requires `webhook_url`. A `tracker_comment` entry carries no key other than `kind` and `events`.
+
+**Event catalog.** The catalog is closed and lives in the domain model. Validation accepts exactly these names.
+
+| Event type | Meaning |
+|---|---|
+| `session.started` | A session was dispatched on an issue whose dispatch drives issue state |
+| `session.completed` | A worker exited normally |
+| `session.stopped` | A worker exited on a soft stop: `blocked`, `needs-human-review`, or `no-change-needed` |
+| `session.failed` | A worker exited with an error, or its handoff was withheld by the evidence verdict |
+| `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, `escalation.merge_completion` | The matching reaction (Section 5.3.8) handed its subject to a person, under any `escalation` value |
+| `auto_merge.merged` | The auto-merge reaction merged a pull request |
+| `budget.held` | An issue was held out of dispatch by `agent.max_sessions` or `agent.max_tokens` |
+| `agent.message` | The agent called `notify_operator` |
+
+**The `tracker_comment` destination.** The destination posts an event's body as a comment on the event's issue through the tracker adapter, and renders nothing else of the event. It is available only when `tracker.kind` is configured. At most one entry has this kind. The destination receives the union of three sets: the `events` of its explicit entry, the subscriptions synthesized from `tracker.comments` and from `escalation: comment` (Section 5.3.1, Section 5.3.8), and, while no explicit entry exists, implicit subscriptions to `auto_merge.merged` and `budget.held`. The union is monotone: writing the new form never withdraws a comment an old key enabled, and one event is delivered at most once to a destination however many subscriptions select it. An operator who keeps `tracker.comments.on_completion: true` and also lists `session.completed` on a `tracker_comment` entry gets one comment per completion.
+
+**An explicit entry is authoritative for the two formerly ungated comments.** The auto-merge success comment and the budget-hold comment were posted without any configuration gate. They keep posting through implicit subscriptions only while no `tracker_comment` entry exists. An entry is the operator's own statement of what the issue receives, so it receives `auto_merge.merged` and `budget.held` only when it lists them. With no tracker configured no implicit destination exists.
+
+A front matter fragment written in the old form, with completion and failure comments, a commenting CI reaction, and one Slack channel for the agent:
+
+```yaml
+tracker:
+  kind: github
+  api_key: $SORTIE_GITHUB_TOKEN
+  project: acme/billing-api
+  comments:
+    on_completion: true
+    on_failure: true
+
+reactions:
+  ci_failure:
+    provider: github
+    escalation: comment
+
+notifications:
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+```
+
+The same comments and messages in the new form. The two formerly ungated events are listed because an explicit entry ends their implicit subscriptions; neither feature is configured here, so they post nothing until it is:
+
+```yaml
+tracker:
+  kind: github
+  api_key: $SORTIE_GITHUB_TOKEN
+  project: acme/billing-api
+
+reactions:
+  ci_failure:
+    provider: github
+    escalation: none                 # no label; the comment comes from the subscription below
+
+notifications:
+  - kind: tracker_comment
+    events: [session.completed, session.stopped, session.failed, escalation.ci_failure, auto_merge.merged, budget.held]
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+    events: [agent.message]
+```
+
+**Delivery.** The orchestrator delivers its events to Slack and webhook destinations from the main process. A destination for orchestrator events is an entry of a registered kind whose `events` hold at least one orchestrator event; the main process builds it with the backend constructor the sidecar uses. A failed delivery to one destination is logged and does not prevent delivery to the others, and nothing is retried (Section 10.4.7). The orchestrator never claims a notification slot, so its events cannot interact with the `notify_operator` cap.
 
 Validation and resolution:
 
 - The list is structurally validated when the config is parsed: a non-sequence value, an entry that is not a map, an entry with an empty `kind`, or a negative `max_per_session` aborts config construction (Section 6.3).
-- When more than one backend is configured, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap belongs to the dispatch (Section 10.4.5): a runtime that starts a new tool server process for each turn shares the same count across every turn of the run rather than restarting it.
-- A backend secret SHOULD be given as a reference to a `SORTIE_`-prefixed environment variable (`$SORTIE_NAME` or `${SORTIE_NAME}`). The `notify_operator` tool runs in a separate `sortie mcp-server` process whose environment is constructed by the agent's MCP host. The orchestrator guarantees that only its `SORTIE_`-prefixed variables are propagated into that process for `$VAR` resolution; the host MAY additionally inherit other variables from its own environment, so a reference without the prefix is not guaranteed to resolve and MAY resolve to the empty string. References are expanded against the sidecar process environment with no prefix enforcement, so the `SORTIE_` prefix is the way to guarantee a secret resolves regardless of host. When a required secret resolves to the empty string, the backend rejects it, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
+- `events` is validated at the same point. A non-sequence value, a non-string element, a name outside the catalog, a repeated name, `agent.message` on `tracker_comment`, a `tracker_comment` entry without `events`, a second `tracker_comment` entry, a `tracker_comment` entry while `tracker.kind` is empty, and a `tracker_comment` entry carrying any key other than `kind` and `events` each abort config construction.
+- Workflow validation constructs every destination for orchestrator events, so an unknown `kind` or a required secret that resolves to the empty string on such an entry fails startup and rejects a reload (Section 6.2).
+- When more than one entry receives `agent.message`, the effective cap is the maximum non-zero `max_per_session` across those entries, falling back to the default when each is `0` or unset. The cap belongs to the dispatch (Section 10.4.5): a runtime that starts a new tool server process for each turn shares the same count across every turn of the run rather than restarting it.
+- A backend secret SHOULD be given as a reference to a `SORTIE_`-prefixed environment variable (`$SORTIE_NAME` or `${SORTIE_NAME}`). The `notify_operator` tool runs in a separate `sortie mcp-server` process whose environment is constructed by the agent's MCP host. The orchestrator guarantees that only its `SORTIE_`-prefixed variables are propagated into that process for `$VAR` resolution; the host MAY additionally inherit other variables from its own environment, so a reference without the prefix is not guaranteed to resolve and MAY resolve to the empty string. References are expanded against the sidecar process environment with no prefix enforcement, so the `SORTIE_` prefix is the way to guarantee a secret resolves regardless of host. When a required secret resolves to the empty string, the backend rejects it, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere. The prefix is mandatory for an entry that receives `agent.message`, because the sidecar builds it; an entry that receives only orchestrator events is built only in the main process.
+
+**Deprecation advisories.** Each deprecated form the loaded configuration relies on produces one configuration advisory that names its replacement. An advisory is logged once per configuration change, appears as a warning in `sortie validate` without changing `valid` or the exit status, and appears in the dry run. Nothing is logged per event. The conditions are:
+
+- `tracker.comments.on_dispatch`, `on_completion`, or `on_failure` resolves to `true`, from the file or from its environment override.
+- A reaction with a non-empty `provider` among `ci_failure`, `review_comments`, `bot_review`, `merge_conflicts`, `auto_merge`, and `merge_completion` sets `escalation: comment`.
+- `tracker.kind` is configured, no `tracker_comment` entry exists, and `reactions.auto_merge.provider` is non-empty: the auto-merge success comment posts only through the implicit subscription.
+- `tracker.kind` is configured, no `tracker_comment` entry exists, and `agent.max_sessions` or `agent.max_tokens` is above `0`: the budget-hold comment posts only through the implicit subscription.
+- An entry that is not `tracker_comment` omits `events`.
+
+No removal date or removal version is set for any deprecated form.
 
 ### 5.4 Prompt Template Contract
 

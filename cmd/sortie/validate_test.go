@@ -5333,3 +5333,98 @@ func TestValidateRuleSettingsBlocks(t *testing.T) {
 		})
 	}
 }
+
+func deprecatedNotificationsWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+  comments:
+    on_dispatch: true
+agent:
+  kind: mock
+notifications:
+  - kind: webhook
+    url: $SORTIE_TEST_WEBHOOK_URL
+---
+Do {{ .issue.title }}.
+`)
+}
+
+func TestValidateDeprecatedNotificationSettingsAreWarnings(t *testing.T) {
+	t.Setenv("SORTIE_TEST_WEBHOOK_URL", "https://example.com/hook")
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, deprecatedNotificationsWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true: deprecated settings are warnings only")
+	}
+
+	want := map[string]string{
+		"tracker.comments.on_dispatch.deprecated": "tracker.comments.on_dispatch is deprecated and keeps posting until it is removed; list session.started in the events of a notifications entry of kind tracker_comment, then remove the key",
+		"notifications[0].events.missing":         "notifications[0] has no events and receives agent.message only, which is deprecated; add events: [agent.message] to keep its current behavior",
+	}
+	for _, w := range out.Warnings {
+		if wantMessage, ok := want[w.Check]; ok {
+			if w.Message != wantMessage || w.Severity != "warning" {
+				t.Errorf("warning %q = {%q %q}, want severity warning and message %q", w.Check, w.Severity, w.Message, wantMessage)
+			}
+			delete(want, w.Check)
+		}
+	}
+	for check := range want {
+		t.Errorf("validateOutput.Warnings = %v, want a warning under check %q", out.Warnings, check)
+	}
+}
+
+func TestValidateRejectsUnconstructibleDestination(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+notifications:
+  - kind: webhook
+    url: ""
+    events: [budget.held]
+---
+Do {{ .issue.title }}.
+`))
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Error("validateOutput.Valid = true, want false for a destination that cannot be constructed")
+	}
+	if !slices.ContainsFunc(out.Errors, func(d validateDiag) bool { return d.Check == "config.notifications[0]" }) {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "config.notifications[0]")
+	}
+}

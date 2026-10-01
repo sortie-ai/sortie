@@ -273,9 +273,9 @@ On failure the tool returns the failure envelope `{"success": false, "error": {"
 
 This result shape supersedes the five-field description of ADR-0013 (`docs/decisions/0013-agent-cost-budget.md`); `unmeasured_sessions` and `used_tokens_complete` are additions this section now records as current, and the running session is matched by dispatch ID rather than by the session identifier that decision assumed the tool receives.
 
-**`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured channel while a session runs. The agent uses it to escalate a decision it should not make alone, report progress on a long task, or flag a blocker, without terminating the session. The tool resolves the configured notifier backends and posts to them; it knows nothing about any specific channel.
+**`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured channel while a session runs. The agent uses it to escalate a decision it should not make alone, report progress on a long task, or flag a blocker, without terminating the session. The tool resolves the notifier backends that receive `agent.message` and posts to them; it knows nothing about any specific channel.
 
-Availability: registered only when at least one valid notifier backend is configured in the `notifications` list (Section 5.3.10). The registration derives from the same workflow file the main process reads, so the sidecar and the main process agree on the tool set. When the list is empty or absent, the tool is not registered.
+Availability: registered only when at least one entry of the `notifications` list (Section 5.3.10) receives `agent.message`: a registered notifier kind that lists `agent.message` in `events`, or that writes no `events` and so receives `agent.message` by default. Entries that receive only orchestrator events, and the `tracker_comment` entry, never receive a tool call and do not count toward registration. Both the sidecar and the main process select the receiving entries from the live workflow configuration, so they agree on the tool set. When no entry receives `agent.message`, the tool is not registered and the agent is never offered a tool whose messages reach no destination.
 
 The agent supplies only the message; the system owns the envelope and the tool input cannot set any envelope field. The input schema rejects unknown fields:
 
@@ -286,11 +286,11 @@ The agent supplies only the message; the system owns the envelope and the tool i
 | `body` | string | Yes | Non-empty notification detail |
 | `category` | string | No | One of `decision_needed`, `progress`, `blocked`, `completed`, `other` |
 
-The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a source (the hostname by default), the issue id and identifier, the dispatch id, the session id, the attempt, and the dispatch-frozen agent kind. The envelope correlates the notification to a dispatch and a session for an operator and a machine consumer.
+The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a source (the hostname by default), the issue id and identifier, the dispatch id, the session id, the attempt, the dispatch-frozen agent kind, and the event type, which the tool sets to `agent.message`. The envelope correlates the notification to a dispatch and a session for an operator and a machine consumer.
 
 The dispatch id and the session id are distinct identities. The dispatch id is minted once for the current worker attempt and stays the same for every notification and every tool server process of that attempt; it is new for every dispatch, retry, and continuation. The session id is read from the workspace's dispatch identity record (Section 9.5.2) each time an envelope is built, and reflects the latest session id the worker has accepted for the tool server's own dispatch; it stays empty until the worker accepts one, and an agent kind that never reports a session id leaves it empty for the whole dispatch. A record naming a different dispatch id, or no record at all, also yields an empty session id, so a tool server outliving its dispatch cannot post another dispatch's session id.
 
-Rate limiting: the tool enforces a cap, `max_per_session`, where `0` selects the default rather than unlimited. The count belongs to the dispatch and is shared by every tool server process that serves it, kept as files in the workspace's notification slot directory (Section 9.5.3): a runtime that starts a new process for each turn shares the same count across every turn instead of restarting it. A retry or a continuation mints a new dispatch id and starts a new count; a session id change never resets it. A call claims its slot before delivery, not once per backend, and counts against the cap from the moment the first backend accepts the notification; when no backend accepted it, the slot is released and the call does not count. A call whose tool server process ends before any backend accepted the notification, for example because the process was killed, does not count either, except on a workspace filesystem that refuses file locks (Section 9.5.3). A call past the cap returns `rate_limited` and sends nothing. A call whose slot cannot be evaluated returns `state_unavailable` and sends nothing; this also covers a tool server started with no dispatch identity.
+Rate limiting: the tool enforces a cap, `max_per_session`, where `0` selects the default rather than unlimited. The cap is drawn from the entries that receive `agent.message`, and it counts only the agent's own calls: an orchestrator event never claims a slot, and a slot never suppresses an orchestrator event. The count belongs to the dispatch and is shared by every tool server process that serves it, kept as files in the workspace's notification slot directory (Section 9.5.3): a runtime that starts a new process for each turn shares the same count across every turn instead of restarting it. A retry or a continuation mints a new dispatch id and starts a new count; a session id change never resets it. A call claims its slot before delivery, not once per backend, and counts against the cap from the moment the first backend accepts the notification; when no backend accepted it, the slot is released and the call does not count. A call whose tool server process ends before any backend accepted the notification, for example because the process was killed, does not count either, except on a workspace filesystem that refuses file locks (Section 9.5.3). A call past the cap returns `rate_limited` and sends nothing. A call whose slot cannot be evaluated returns `state_unavailable` and sends nothing; this also covers a tool server started with no dispatch identity.
 
 Result semantics: on success the tool returns `{"success": true, "data": {"delivered": <int>, "notification_id": "<id>"}}`, the uniform success envelope of Section 10.4.2. On a domain failure it returns `{"success": false, "error": {"kind": "...", "message": "..."}}` with `error.kind` in the closed set below. The Go error return is reserved for an internal marshal failure.
 
@@ -300,7 +300,7 @@ Result semantics: on success the tool returns `{"success": true, "data": {"deliv
 | `state_unavailable` | The dispatch's notification count could not be established; no backend is called |
 | `rate_limited` | Every one of the dispatch's `max_per_session` slots is occupied: counted, or held by a call still in flight (Section 9.5.3) |
 | `send_failed` | A backend returned a transport failure, a non-2xx response, or an unparseable response. The message is a redacted category and never echoes the URL, request body, or response body |
-| `backend_unavailable` | No backend could be resolved at execution time (defensive; normal operation gates registration on a configured backend) |
+| `backend_unavailable` | No backend could be resolved at execution time (defensive; normal operation gates registration on an entry that receives `agent.message`) |
 
 #### 10.4.6 Tools vs. agent-authored files
 
@@ -322,7 +322,7 @@ The tool subsystem (this section) and the `.sortie/status` file protocol (Sectio
 - Tools are the **data plane**: the agent requests information or performs a mutation and receives a structured result within the same turn. The agent needs the response to continue its work.
 - The `.sortie/status` file is the **control plane**: the agent advises the orchestrator about task feasibility after the turn completes. The orchestrator uses this signal to suppress continuation retries. No response flows back to the agent.
 
-The `notify_operator` tool (Section 10.4.5) is a third direction that the data-plane and control-plane framing above does not cover: agent to operator. Most tools target the orchestrator and return data the agent consumes to continue its turn. `notify_operator` is a tool by transport (it travels the MCP execution channel and returns a delivery result), but its recipient is a human on a configured channel, not the orchestrator, and it changes no orchestrator state. The three patterns are distinct: read or mutate orchestrator-held data (`tracker_api`, `cost_budget`, `sortie_status`, `workspace_history`), advise the orchestrator about feasibility after the turn (`.sortie/status`), and reach the operator in real time during the turn (`notify_operator`). `notify_operator` does not suppress retries, perform a handoff, or release a claim; an agent that needs to alter orchestrator control flow still writes `.sortie/status`.
+The `notify_operator` tool (Section 10.4.5) is a third direction that the data-plane and control-plane framing above does not cover: agent to operator. Most tools target the orchestrator and return data the agent consumes to continue its turn. `notify_operator` is a tool by transport (it travels the MCP execution channel and returns a delivery result), but its recipient is a human on a configured channel that subscribes to `agent.message`, not the orchestrator, and it changes no orchestrator state. The three patterns are distinct: read or mutate orchestrator-held data (`tracker_api`, `cost_budget`, `sortie_status`, `workspace_history`), advise the orchestrator about feasibility after the turn (`.sortie/status`), and reach the operator in real time during the turn (`notify_operator`). `notify_operator` does not suppress retries, perform a handoff, or release a claim; an agent that needs to alter orchestrator control flow still writes `.sortie/status`.
 
 Collapsing both into a single MCP-based channel was evaluated and rejected during the A2O protocol design (see `docs/agent-to-orchestrator-protocol.md`, Section 5.1, Alternative 2). The MCP approach fails the agent-agnostic requirement: an agent without MCP client support cannot send the control signal. The file-based channel satisfies all six A2O requirements (agent-agnostic, fail-safe, advisory, zero-dependency, forward-compatible, inspectable) simultaneously; no tool-call-based mechanism achieves this.
 
@@ -339,16 +339,50 @@ The two channels do not interact. A tool call cannot write to `.sortie/status` o
 
 #### 10.4.7 Notifier adapter family
 
-Operator notifications are an adapter family, the same shape as the tracker, agent, CI, and SCM families. The `notify_operator` tool (Section 10.4.5) is a thin Tier 2 wrapper over this family; a new channel is a new package behind the existing interface, not a tool rewrite.
+Outbound notifications are an adapter family, the same shape as the tracker, agent, CI, and SCM families. Two producers feed it: the `notify_operator` tool (Section 10.4.5), a thin Tier 2 wrapper that runs in the sidecar, and the orchestrator, which publishes its own events from the main process. A new channel is a new package behind the existing interface, not a tool rewrite and not a new call site in the orchestrator.
 
 The family has the following parts:
 
 - **The `domain.Notifier` interface** exposes one method, `Send(ctx, Notification) error`. A single method keeps every backend interchangeable and lets any producer reuse the family. An implementation applies a per-call timeout and never logs the endpoint URL, the request body, or the response body.
-- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and carries the notification id, timestamp, source, issue id and identifier, dispatch id, session id, attempt, and dispatch-frozen agent kind. The message is agent-supplied and carries `severity`, `title`, `body`, and an optional `category`. The value is self-contained: every field a backend needs rides in it, with no dependency on producer-only state, so a future orchestrator producer can fill the envelope without an interface change.
-- **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend packages register in `init()`; the sidecar resolves backends by `kind` at runtime. This mirrors `registry.SCMAdapters` exactly.
-- **The backend packages** are one per `kind`. v1 ships `webhook` (posts the notification as a JSON object using generic field names) and `slack` (posts a Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies its own transport and non-2xx errors into a category that omits the URL and payload. The `webhook` body carries every envelope and message field under snake_case keys, `dispatch_id` and `session_id` included.
+- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and carries the notification id, timestamp, source, issue id and identifier, dispatch id, session id, attempt, dispatch-frozen agent kind, and the event type. The message carries `severity`, `title`, `body`, and an optional `category`; the agent supplies it for `agent.message` and the orchestrator for every other event. The value is self-contained: every field a backend needs rides in it, with no dependency on producer-only state.
+- **The event type** is a closed catalog declared in the domain layer. Configuration validation accepts exactly the names the catalog declares, so a valid name and an emitted type cannot drift apart. Each type declares its severity, and every type except `agent.message` is an orchestrator event.
+- **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend packages register in `init()`; the sidecar and the main process resolve backends by `kind` at runtime. This mirrors `registry.SCMAdapters` exactly. The registry reserves the kind `tracker_comment`, and a registration under that name is refused.
+- **The backend packages** are one per `kind`. v1 ships `webhook` (posts the notification as a JSON object using generic field names) and `slack` (posts a Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies its own transport and non-2xx errors into a category that omits the URL and payload. The `webhook` body carries every envelope and message field under snake_case keys, `dispatch_id` and `session_id` included, and adds `event_type` on an orchestrator event.
+- **The routing component** is a kind-free package that registers no kind, so the orchestrator may import it while it still resolves every notifier kind through the registry. It turns the loaded `notifications` configuration into a routing table, selects destinations for an event, and delivers. The same table definition serves both processes, and entry selection for the tool uses the same predicate in the sidecar and the main process.
+- **The `tracker_comment` destination** is built into the routing component rather than registered as a kind, because a notifier constructor receives only its entry's configuration map and cannot be handed the tracker adapter. It wraps the tracker adapter the process already constructed, posts the event's body on the issue the envelope names through `CommentIssue`, and never renders the envelope.
 
 The backend packages obey the adapter-family boundary rules: no cross-adapter imports, no importing the orchestrator, normalization to the domain type at the boundary, and generic `notifier_*` vocabulary in the core, never `slack_*`.
+
+**Event catalog.** The orchestrator produces each event at the point where it formerly wrote the matching tracker comment, and the event body is exactly the text that comment carried.
+
+| Event type | Produced when | Severity |
+|---|---|---|
+| `session.started` | the dispatch drives issue state, after the in-progress transition and before workspace preparation | `info` |
+| `session.completed` | a worker exits normally | `info` |
+| `session.stopped` | a worker exits on a soft stop (`blocked`, `needs-human-review`, or `no-change-needed`) | `warning`; `info` for `no-change-needed` |
+| `session.failed` | a worker exits with an error, or a run whose handoff the evidence verdict withheld | `warning` |
+| `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, `escalation.merge_completion` | the reaction hands its subject to a person, under any `escalation` value | `warning` |
+| `auto_merge.merged` | an auto-merge succeeds | `info` |
+| `budget.held` | an issue enters the held set under a per-issue ceiling | `warning` |
+| `agent.message` | the agent calls `notify_operator` | set by the agent |
+
+A cancelled run publishes no session event.
+
+**Routing and delivery.**
+
+- Each `notifications` entry carries an `events` list: the event types that destination receives. An entry of a registered kind that writes no `events` receives `agent.message` only. Routing is a pure function of the loaded configuration and the event type; the agent never influences it, and event names are listed explicitly with no wildcard or filter.
+- A destination for orchestrator events is an entry of a registered kind whose `events` hold at least one orchestrator event. The main process constructs it with the same constructor the sidecar uses. An entry that receives only `agent.message` is never constructed in the main process for delivery.
+- The `tracker_comment` destination receives the union of the `events` of its single entry and the subscriptions synthesized from the deprecated comment settings and `escalation: comment` (Section 5.3.10). One event is delivered at most once to each destination, however many subscriptions select it.
+- A producer routes the event at its decision point, so a detached write is routed by the configuration its decision saw, and then delivers through one call that returns the outcome of every destination. Delivery sends to all destinations concurrently, so a slow Slack or webhook endpoint never consumes the tracker comment's deadline.
+- The producer keeps its own goroutine, wait group, timeout, deduplication, pacing, and metrics. Only `session.started` splits its delivery: the `tracker_comment` target stays on the worker, as the dispatch comment did, and every other destination is delivered detached in the tracker-operations wait group, so an operator endpoint never delays the agent's start.
+- A failed delivery to one destination is logged at WARN and does not prevent delivery to the others. Nothing is retried, and no notifier outcome stands in for the outcome of the action a producer uses to confirm its own delivery.
+- An orchestrator event never claims a slot in the notification slot directory (Section 9.5.3), and the sidecar delivers `agent.message` only to the entries that receive it.
+
+The `NotifierConstructor` signature is:
+
+```go
+type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
+```
 
 Backends register via the notifier registry using `init()` functions:
 
@@ -358,13 +392,7 @@ func init() {
 }
 ```
 
-The `NotifierConstructor` signature is:
-
-```go
-type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
-```
-
-The `config` parameter receives the per-backend fields from the matching `notifications` list entry (Section 5.3.10), with `$VAR` references already resolved. A constructor rejects a missing required field or a secret that resolved to the empty string, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
+The `config` parameter receives the per-backend fields from the matching `notifications` list entry (Section 5.3.10), with `$VAR` references already resolved and the `kind`, `max_per_session`, and `events` keys removed. A constructor rejects a missing required field or a secret that resolved to the empty string. In the sidecar that surfaces as a fatal startup error rather than a notification posted nowhere; in the main process it fails workflow validation, so startup fails and a reload is rejected with the previous configuration kept (Section 6.2).
 
 ### 10.5 Timeouts and Error Mapping
 

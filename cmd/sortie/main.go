@@ -30,6 +30,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -791,6 +792,10 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// constructible is closed before the registry is returned: the worker
 	// reads only tool metadata, never executing the tools, so the
 	// connection is not needed beyond construction.
+	//
+	// The notification entries come from the live configuration, so a reload
+	// that adds or removes an agent.message subscriber changes what the next
+	// session advertises.
 	sessionToolFunc := func(ctx context.Context, issueID, workspacePath string) (*domain.ToolRegistry, error) {
 		sessionTools, err := BuildSessionToolRegistry(ctx, br.logger, SessionToolParams{
 			TrackerAdapter:        br.trackerAdapter,
@@ -799,7 +804,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			MaxTokens:             br.cfg.Agent.MaxTokens,
 			MaxSessions:           br.cfg.Agent.MaxSessions,
 			TokenWarningThreshold: br.mgr.Config().Agent.TokenWarningThreshold(),
-			Notifications:         br.cfg.Notifications.Backends,
+			Notifications:         br.mgr.Config().Notifications.Backends,
 			IssueID:               issueID,
 			WorkspacePath:         workspacePath,
 		})
@@ -816,6 +821,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		State:                             state,
 		Logger:                            br.logger,
 		TrackerAdapter:                    br.trackerAdapter,
+		Router:                            route.NewRouter(br.trackerAdapter, registry.Notifiers.Get),
 		AgentAdapter:                      agentAdapter,
 		AgentAdapterByKind:                agentAdapterByKind,
 		WorkflowManager:                   br.mgr,

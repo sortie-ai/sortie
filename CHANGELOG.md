@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A dispatch rule can now route an issue by a phrase in its title, such as `[docs]` or `WIP:`, with `match.title`. ([#1195](https://github.com/sortie-ai/sortie/issues/1195))
 
+- Slack and webhook entries in `notifications` can now receive Sortie's own events, such as a failed session or a reaction escalation, each entry naming the events it wants in `events`, and a new `tracker_comment` entry chooses which events Sortie comments on in the issue, with `escalation: none` turning off a reaction's label. ([#1201](https://github.com/sortie-ai/sortie/issues/1201))
+
 ### Changed
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
@@ -31,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Deprecated
 
 - Running the `opencode` agent kind on OpenCode 1.x is deprecated, and a later release removes it: runs on 1.x keep working and each logs a warning naming the installed version. OpenCode 2.x is published on npm as `@opencode/cli`, while `opencode-ai` ships only 1.x, so uninstall `opencode-ai` before installing `@opencode/cli`, and before switching remove `opencode.pure` and give any `opencode.effort` or `opencode.variant` an `opencode.model` without a `#` suffix, or 2.x refuses the session. The OpenCode Docker example now installs 2.x. ([#1178](https://github.com/sortie-ai/sortie/issues/1178))
+- `tracker.comments` and the environment variables that set it, a reaction's `escalation: comment`, and a `notifications` entry without `events` are deprecated, as is relying on the auto-merge success and budget-hold comments while no `tracker_comment` entry exists: each keeps working and logs a deprecation warning, also shown by `sortie validate`, that names its replacement. ([#1201](https://github.com/sortie-ai/sortie/issues/1201))
 
 ### Removed
 

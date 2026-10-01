@@ -235,6 +235,7 @@ func (t *NotifyTool) buildEnvelope() domain.NotificationEnvelope {
 		SessionID:      t.sessionID(),
 		Attempt:        t.env.Attempt,
 		Agent:          t.env.Agent,
+		EventType:      domain.EventAgentMessage,
 	}
 }
 

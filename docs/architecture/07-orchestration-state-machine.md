@@ -107,14 +107,14 @@ A verdict that withholds the write is, immediately before any of its effects, ch
   - Consult the retry slot (Section 7.5) first. If an incumbent occupies it, defer: re-enqueue the pending entry with a refreshed `CreatedAt` and take none of the actions below on this tick — no run-history row, no counter increment, no dispatch, and no escalation.
   - On a free slot: persist CI failure run history and increment the CI fix attempt counter.
   - If within `reactions.ci_failure.max_retries`: schedule a CI-fix dispatch with failure context injected into the prompt.
-  - If retries exhausted: escalate (add label or post comment per escalation config), cancel retry, release claim.
+  - If retries exhausted: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim.
 
 - `Review Comments Detected`
   - Compute fingerprint from non-outdated review comment IDs.
   - If fingerprint is unchanged and already dispatched: skip.
   - If within debounce window: defer to next tick.
   - If within `reactions.review_comments.max_continuation_turns` and the retry slot is free: schedule a review-fix dispatch with review comment context injected into the prompt. If the slot is occupied by an incumbent, defer instead (Section 7.5).
-  - If continuation turns exhausted: escalate (add label or post comment per escalation config), cancel retry, release claim.
+  - If continuation turns exhausted: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim.
 
 - `Merge Completion Observed`
   - Observed on the reconcile tick for an issue still parked in `tracker.handoff_state` and not currently claimed by the orchestrator.
@@ -129,7 +129,7 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are required before launching any worker.
 - Reconciliation runs before dispatch on every tick.
-- Restart recovery uses persisted state from SQLite for retry queues, session metadata, parked issues, and budget-hold notice records, supplemented by tracker polling for current issue states and filesystem inspection for workspace existence.
+- Restart recovery uses persisted state from SQLite for retry queues, session metadata, parked issues, and budget-hold notice records (the durable record that a `budget.held` notice reached at least one destination; a hold with no destination records nothing and is routed again on a later pass), supplemented by tracker polling for current issue states and filesystem inspection for workspace existence.
 - Startup pending reaction recovery uses `run_history`, tracker state, and `.sortie/scm.json` to reconstruct runtime `pending_reactions` for recent handoff-stage runs before the first poll tick. The scan is bounded by `PendingReactionRecoveryLookback` and a fixed candidate cap.
 - Startup terminal cleanup maps existing workspace directories to issue identifiers, queries the tracker for the states of those specific issues, and removes the ones in terminal states. An issue that reaches a terminal state through the merge-completion transition (§11G) becomes eligible for this same cleanup without a human relabeling it first.
 
@@ -139,7 +139,7 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 2. Load persisted retry entries from SQLite.
 3. Reconstruct retry timers from persisted `due_at` timestamps.
 4. Load persisted park records from SQLite and reconstruct the runtime park set before the event loop starts, so a parked issue stays out of dispatch across the restart.
-5. Load persisted budget-hold notice records from SQLite and reconstruct the runtime notice memory before the event loop starts, so a hold already announced on the tracker before the restart is not announced again after it.
+5. Load persisted budget-hold notice records from SQLite and reconstruct the runtime notice memory before the event loop starts, so a hold already announced to its destinations before the restart is not announced again after it. A record exists only for a notice that had at least one destination.
 6. Map existing workspace directories to issue identifiers, query the tracker for the states of those specific issues, and clean the ones in terminal states.
 7. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and review pending entries for handoff-stage issues.
 8. Query tracker for active issues and reconcile with persisted state.

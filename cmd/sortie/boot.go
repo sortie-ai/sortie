@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -26,17 +27,32 @@ const (
 	defaultServerHost = "127.0.0.1"
 )
 
+// workflowValidate is the shared promotion-validation hook every
+// [workflow.Manager] the program constructs wires through
+// [workflow.WithValidateFunc]. It adds the notification destination check
+// to the orchestrator's own rules, so a reload whose destinations cannot
+// be constructed is rejected and the previous configuration stays in
+// force.
+var workflowValidate workflow.ValidateFunc = func(cfg config.ServiceConfig) error {
+	if err := orchestrator.ValidateConfigForPromotion(cfg); err != nil {
+		return err
+	}
+	return route.CheckDestinations(cfg.Notifications.Backends, registry.Notifiers.Get)
+}
+
 // workflowAdvisories is the shared advisory hook every [workflow.Manager]
 // the program constructs wires through [workflow.WithAdvisoryFunc], so a
 // workflow reaching a deprecated agent kind, an effort setting on a kind
 // that forwards none, a rule that changes the model but keeps an inherited
 // effort level, or an invalid token_rates entry draws the same
-// advisory on every load path.
+// advisory on every load path. It also reports each deprecated
+// notification setting the workflow relies on.
 var workflowAdvisories workflow.AdvisoryFunc = func(cfg config.ServiceConfig) []config.Advisory {
 	advisories := orchestrator.AgentKindDeprecations(cfg, registry.Agents.Meta)
 	advisories = append(advisories, orchestrator.AgentKindEffortAdvisories(cfg, registry.Agents.Meta)...)
 	advisories = append(advisories, orchestrator.DispatchRuleEffortAdvisories(cfg)...)
-	return append(advisories, server.TokenRateAdvisories(cfg)...)
+	advisories = append(advisories, server.TokenRateAdvisories(cfg)...)
+	return append(advisories, route.Advisories(cfg)...)
 }
 
 type bootParams struct {
@@ -164,7 +180,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 	redact.AddEnviron(os.Environ())
 
 	mgr, err := workflow.NewManager(path, logger,
-		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
+		workflow.WithValidateFunc(workflowValidate),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
 		workflow.WithRetiredAgents(registry.RetiredAgentOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))
