@@ -331,33 +331,46 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 // with Kind [domain.ErrTrackerNotFound] if the issue does not exist.
 func (a *FileAdapter) CommentIssue(_ context.Context, issueID string, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		raws, err := loadIssues(a.path)
-		if err != nil {
-			return err
-		}
-
-		found := false
-		for _, raw := range raws {
-			if raw.ID == issueID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerNotFound,
-				Message: fmt.Sprintf("issue not found: %s", issueID),
-			}
-		}
-
-		a.mu.Lock()
-		a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
-			Body:      text,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		})
-		a.mu.Unlock()
-		return nil
+		return a.postComment(issueID, text)
 	})
+}
+
+// CommentIssueWithLiteral records a comment whose body is text followed by
+// literal in a fenced Markdown code block, otherwise as
+// [FileAdapter.CommentIssue] does.
+func (a *FileAdapter) CommentIssueWithLiteral(_ context.Context, issueID, text, literal string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return a.postComment(issueID, issuekit.MarkdownLiteralComment(text, literal))
+	})
+}
+
+func (a *FileAdapter) postComment(issueID, body string) error {
+	raws, err := loadIssues(a.path)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for _, raw := range raws {
+		if raw.ID == issueID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+
+	a.mu.Lock()
+	a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
+		Body:      body,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	a.mu.Unlock()
+	return nil
 }
 
 // SetMetrics configures the metrics recorder for tracker API call

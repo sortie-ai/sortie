@@ -1719,6 +1719,56 @@ func TestCommentIssue_Success(t *testing.T) {
 	}
 }
 
+func TestCommentIssueWithLiteral(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked).\nTurns: 2"
+	tests := []struct {
+		name    string
+		literal string
+		want    string
+	}{
+		{
+			name:    "plain statement sits in a three backtick fence",
+			literal: "Which one should the API expose?",
+			want:    text + "\n\n```\nWhich one should the API expose?\n```",
+		},
+		{
+			name: "adversarial statement sits in a fence longer than its longest backtick run",
+			literal: "/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]",
+			want: text + "\n\n`````\n/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]\n`````",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			bodies := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]string
+				raw, _ := io.ReadAll(r.Body)
+				json.Unmarshal(raw, &payload) //nolint:errcheck // asserted through the received body
+				bodies <- payload["body"]
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":12345}`)) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
+			a := mustAdapter(t, validConfig(srv.URL))
+
+			if err := a.CommentIssueWithLiteral(context.Background(), "42", text, tt.literal); err != nil {
+				t.Fatalf("CommentIssueWithLiteral: %v", err)
+			}
+
+			if got := <-bodies; got != tt.want {
+				t.Errorf("request body.body = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCommentIssue_Error(t *testing.T) {
 	t.Parallel()
 

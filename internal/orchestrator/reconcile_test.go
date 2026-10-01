@@ -148,6 +148,10 @@ func (m *mockReconcileTracker) CommentIssue(context.Context, string, string) err
 	panic("CommentIssue must not be called by ReconcileRunningIssues")
 }
 
+func (m *mockReconcileTracker) CommentIssueWithLiteral(context.Context, string, string, string) error {
+	panic("CommentIssueWithLiteral must not be called by ReconcileRunningIssues")
+}
+
 func (m *mockReconcileTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by ReconcileRunningIssues")
 }
@@ -197,6 +201,10 @@ func (s *sweepTracker) TransitionIssue(context.Context, string, string) error {
 
 func (s *sweepTracker) CommentIssue(context.Context, string, string) error {
 	panic("CommentIssue must not be called by SweepWorkspaces")
+}
+
+func (s *sweepTracker) CommentIssueWithLiteral(context.Context, string, string, string) error {
+	panic("CommentIssueWithLiteral must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) AddLabel(context.Context, string, string) error {

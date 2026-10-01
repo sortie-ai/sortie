@@ -156,7 +156,10 @@ func (s *stubTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 }
 func (s *stubTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
 func (s *stubTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
-func (s *stubTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
+func (s *stubTrackerAdapter) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (s *stubTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
 // TestBuildSessionToolRegistry_AllToolsPresent verifies served-side parity:
 // all five expected tools appear in the built registry and in the names served

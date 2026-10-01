@@ -120,6 +120,8 @@ Two more properties of that route: it defaults to **newest-first**, so ascending
 
 Internal notes are passed through. They are genuine human comments, and an operator who does not want them in prompts controls that by not writing them.
 
+**A note that carries agent text must not expose it to slash commands.** A recognized slash command at the start of a line in a note body runs as a quick action, so a literal `/close` in agent text would close the issue. A comment that carries agent text is therefore the text, a blank line, a Markdown fence, the literal, and the same fence, with the fence one backtick longer than the longest backtick run in the literal and at least three. GitLab extracts quick actions from rendered Markdown paragraphs only, so no line inside the fence runs, whatever it starts with. The guard for Sortie's own text is unchanged: a body consumed entirely as quick actions creates no note and is reported as a payload error.
+
 **There is a true batch state lookup**, which neither sibling adapter has: one request resolves many issues by their internal ids. Reconciliation for N running issues costs one request instead of N. Two caveats: the batch must request all states so a just-closed issue is still reported, and it must be **chunked**, because the request is a query string and a long enough one meets a URI-length limit imposed by the front-end web server rather than by GitLab.
 
 ## Pagination

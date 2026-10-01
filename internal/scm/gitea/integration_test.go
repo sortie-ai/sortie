@@ -1,9 +1,12 @@
 package gitea
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,5 +401,57 @@ func TestIntegration_FetchIssueComments(t *testing.T) {
 			t.Errorf("comments not in ascending createdAt order at index %d: %q before %q",
 				i, comments[i-1].CreatedAt, comments[i].CreatedAt)
 		}
+	}
+}
+
+const integrationStatement = "/close\n@sortie-literal-probe please look\n[~jdoe] see https://example.com/probe?x=1\n" +
+	"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat}\ntoken=[redacted]"
+
+func TestIntegration_CommentIssueWithLiteral_RendersInert(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter, ok := newIntegrationAdapter(t).(*GiteaAdapter)
+	if !ok {
+		t.Fatal("NewGiteaAdapter did not return a *GiteaAdapter")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	issue := firstCandidate(t, adapter, ctx)
+	marker := "sortie literal round trip " + time.Now().UTC().Format(time.RFC3339Nano)
+	if err := adapter.CommentIssueWithLiteral(ctx, issue.ID, marker, integrationStatement); err != nil {
+		t.Fatalf("CommentIssueWithLiteral(%s): %v", issue.Identifier, err)
+	}
+
+	comments, err := adapter.FetchIssueComments(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("FetchIssueComments(%s): %v", issue.Identifier, err)
+	}
+	var stored string
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, marker) {
+			stored = comment.Body
+		}
+	}
+	if stored == "" {
+		t.Fatalf("no stored comment contains %q among %d comments", marker, len(comments))
+	}
+
+	payload, err := json.Marshal(map[string]any{"Text": stored, "Mode": "gfm", "Context": adapter.owner + "/" + adapter.repo})
+	if err != nil {
+		t.Fatalf("marshal render request: %v", err)
+	}
+	rendered, err := adapter.client.Send(ctx, "POST", "/markdown", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST /markdown: %v", err)
+	}
+
+	html := string(rendered)
+	if got := strings.Count(html, "<pre"); got != 1 {
+		t.Errorf("rendered comment holds %d <pre> blocks, want 1:\n%s", got, html)
+	}
+	if strings.Contains(html, "<a ") {
+		t.Errorf("rendered comment holds a link or mention, want the statement inert:\n%s", html)
 	}
 }

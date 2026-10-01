@@ -32,6 +32,7 @@ type mgcLabelCall struct {
 type mgcCommentCall struct {
 	issueID string
 	text    string
+	literal string
 }
 
 // mgcTrackerFake is a fully controllable domain.TrackerAdapter for
@@ -96,6 +97,12 @@ func (f *mgcTrackerFake) TransitionIssue(_ context.Context, issueID, target stri
 
 func (f *mgcTrackerFake) CommentIssue(ctx context.Context, issueID, text string) error {
 	f.commentCalls = append(f.commentCalls, mgcCommentCall{issueID: issueID, text: text})
+	f.commentCtx = ctx
+	return f.commentErr
+}
+
+func (f *mgcTrackerFake) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	f.commentCalls = append(f.commentCalls, mgcCommentCall{issueID: issueID, text: text, literal: literal})
 	f.commentCtx = ctx
 	return f.commentErr
 }

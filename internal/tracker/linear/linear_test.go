@@ -1304,6 +1304,53 @@ func TestCommentIssue(t *testing.T) {
 	})
 }
 
+func TestCommentIssueWithLiteral(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked).\nTurns: 2"
+	tests := []struct {
+		name    string
+		literal string
+		want    string
+	}{
+		{
+			name:    "plain statement sits in a three backtick fence",
+			literal: "Which one should the API expose?",
+			want:    text + "\n\n```\nWhich one should the API expose?\n```",
+		},
+		{
+			name: "adversarial statement sits in a fence longer than its longest backtick run",
+			literal: "/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]",
+			want: text + "\n\n`````\n/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]\n`````",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFakeClient()
+			seedPreflight(f, t)
+			f.queueBody("CommentCreate", loadFixture(t, "comment_create_success.json"))
+			adapter := newTestAdapter(t, f)
+
+			if err := adapter.CommentIssueWithLiteral(context.Background(), "SOR-5", text, tt.literal); err != nil {
+				t.Fatalf("CommentIssueWithLiteral: %v", err)
+			}
+
+			calls := f.callsFor("CommentCreate")
+			if len(calls) != 1 {
+				t.Fatalf("CommentCreate call count = %d, want 1", len(calls))
+			}
+			if got := calls[0].variables["body"]; got != tt.want {
+				t.Errorf("CommentCreate body = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAddLabel(t *testing.T) {
 	t.Parallel()
 

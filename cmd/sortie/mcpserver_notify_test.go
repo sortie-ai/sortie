@@ -93,7 +93,10 @@ func (tr *notifyE2ETracker) FetchIssueComments(_ context.Context, _ string) ([]d
 
 func (tr *notifyE2ETracker) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
 func (tr *notifyE2ETracker) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
-func (tr *notifyE2ETracker) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
+func (tr *notifyE2ETracker) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (tr *notifyE2ETracker) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
 type turnController struct {
 	sessionID   string

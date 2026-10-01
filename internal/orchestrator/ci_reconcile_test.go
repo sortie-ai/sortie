@@ -209,6 +209,7 @@ type ciTrackerStub struct {
 	addLabelErr       error
 	commentIssueErr   error
 	lastComment       string
+	lastLiteral       string
 }
 
 var _ domain.TrackerAdapter = (*ciTrackerStub)(nil)
@@ -235,6 +236,12 @@ func (s *ciTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) e
 func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, text string) error {
 	s.commentIssueCalls++
 	s.lastComment = text
+	return s.commentIssueErr
+}
+func (s *ciTrackerStub) CommentIssueWithLiteral(_ context.Context, _, text, literal string) error {
+	s.commentIssueCalls++
+	s.lastComment = text
+	s.lastLiteral = literal
 	return s.commentIssueErr
 }
 func (s *ciTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
@@ -1206,6 +1213,9 @@ func (b *blockingCITracker) CommentIssue(ctx context.Context, _ string, _ string
 		}
 	}
 	return nil
+}
+func (b *blockingCITracker) CommentIssueWithLiteral(ctx context.Context, issueID, text, _ string) error {
+	return b.CommentIssue(ctx, issueID, text)
 }
 
 // TestEscalateCIFailure_LabelTracksTrackerOps verifies that the AddLabel

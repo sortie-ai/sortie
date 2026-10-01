@@ -1078,57 +1078,69 @@ func (a *GitLabAdapter) TransitionIssue(ctx context.Context, issueID, targetStat
 // WARN; the note text itself is never logged.
 func (a *GitLabAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		n, ok := parseIID(issueID)
-		if !ok {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerNotFound,
-				Message: fmt.Sprintf("issue not found: %s", issueID),
-			}
-		}
-		path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n) + "/notes"
-
-		payload, err := json.Marshal(map[string]string{"body": text})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal comment payload",
-				Err:     err,
-			}
-		}
-
-		respBody, err := a.client.Send(ctx, http.MethodPost, path, bytes.NewReader(payload))
-		if err != nil {
-			return err
-		}
-
-		var created gitlabNoteCreated
-		if err := json.Unmarshal(respBody, &created); err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to parse note-creation response",
-				Err:     err,
-			}
-		}
-
-		if len(created.CommandsChanges) > 0 {
-			keys := make([]string, 0, len(created.CommandsChanges))
-			for key := range created.CommandsChanges {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			a.log.Warn("gitlab executed quick actions in a comment body",
-				slog.String("iid", strconv.Itoa(n)),
-				slog.Any("commands", keys))
-		}
-
-		if created.ID == nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: fmt.Sprintf("gitlab created no note for issue %s: the comment body was consumed as quick actions", issueID),
-			}
-		}
-		return nil
+		return a.postComment(ctx, issueID, text)
 	})
+}
+
+// CommentIssueWithLiteral posts text followed by literal in a fenced Markdown
+// code block, so the tracker shows literal verbatim.
+func (a *GitLabAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return a.postComment(ctx, issueID, issuekit.MarkdownLiteralComment(text, literal))
+	})
+}
+
+func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) error {
+	n, ok := parseIID(issueID)
+	if !ok {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+	path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n) + "/notes"
+
+	payload, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal comment payload",
+			Err:     err,
+		}
+	}
+
+	respBody, err := a.client.Send(ctx, http.MethodPost, path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+
+	var created gitlabNoteCreated
+	if err := json.Unmarshal(respBody, &created); err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse note-creation response",
+			Err:     err,
+		}
+	}
+
+	if len(created.CommandsChanges) > 0 {
+		keys := make([]string, 0, len(created.CommandsChanges))
+		for key := range created.CommandsChanges {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		a.log.Warn("gitlab executed quick actions in a comment body",
+			slog.String("iid", strconv.Itoa(n)),
+			slog.Any("commands", keys))
+	}
+
+	if created.ID == nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("gitlab created no note for issue %s: the comment body was consumed as quick actions", issueID),
+		}
+	}
+	return nil
 }
 
 // AddLabel attaches label to the issue, resolving its canonical stored

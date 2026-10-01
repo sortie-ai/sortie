@@ -1065,6 +1065,9 @@ func (s *botReviewErrTrackerStub) CommentIssue(_ context.Context, _, text string
 	s.lastCommentText = text
 	return s.commentErr
 }
+func (s *botReviewErrTrackerStub) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (s *botReviewErrTrackerStub) AddLabel(_ context.Context, _, label string) error {
 	s.addLabelCalls++
 	s.lastLabel = label

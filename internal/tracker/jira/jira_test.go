@@ -54,6 +54,32 @@ func loadFixture(t *testing.T, name string) []byte {
 	return data
 }
 
+const adversarialStatement = "/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+	"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]"
+
+func postedCommentBody(t *testing.T, config func(endpoint string) map[string]any, post func(*JiraAdapter) error) []byte {
+	t.Helper()
+
+	bodies := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- body
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+
+	if err := post(mustAdapter(t, config(srv.URL))); err != nil {
+		t.Fatalf("post comment: %v", err)
+	}
+	select {
+	case body := <-bodies:
+		return body
+	default:
+		t.Fatal("server received no comment request")
+		return nil
+	}
+}
+
 func TestNewJiraAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -1808,6 +1834,20 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		requireSingleCall(t, spy, "comment", "error")
 	})
 
+	t.Run("CommentIssueWithLiteral/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		if err := a.CommentIssueWithLiteral(ctx, "PROJ-5", "test", "reason"); err != nil {
+			t.Fatalf("CommentIssueWithLiteral: %v", err)
+		}
+		requireSingleCall(t, spy, "comment", "success")
+	})
+
 	t.Run("AddLabel/success", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1919,6 +1959,52 @@ func TestCommentIssue_Success(t *testing.T) {
 	}
 	if len(body.Body.Content) != 2 {
 		t.Errorf("body.content paragraphs = %d, want 2 (one per line)", len(body.Body.Content))
+	}
+}
+
+func TestCommentIssueWithLiteral_V3SendsOneCodeBlockHoldingTheStatement(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked).\nTurns: 2"
+	raw := postedCommentBody(t, validConfig, func(a *JiraAdapter) error {
+		return a.CommentIssueWithLiteral(context.Background(), "PROJ-9", text, adversarialStatement)
+	})
+
+	var body struct {
+		Body struct {
+			Version int    `json:"version"`
+			Type    string `json:"type"`
+			Content []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"content"`
+		} `json:"body"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal request body %s: %v", raw, err)
+	}
+
+	nodes := body.Body.Content
+	if len(nodes) != 3 {
+		t.Fatalf("body.content has %d nodes, want 2 paragraphs and 1 codeBlock", len(nodes))
+	}
+	for i, node := range nodes[:2] {
+		if node.Type != "paragraph" {
+			t.Errorf("body.content[%d].type = %q, want paragraph", i, node.Type)
+		}
+	}
+	block := nodes[2]
+	if block.Type != "codeBlock" {
+		t.Fatalf("body.content[2].type = %q, want codeBlock", block.Type)
+	}
+	if len(block.Content) != 1 || block.Content[0].Type != "text" || block.Content[0].Text != adversarialStatement {
+		t.Errorf("codeBlock content = %+v, want one text node holding the statement verbatim", block.Content)
+	}
+	if strings.Count(string(raw), "@octocat") != 1 {
+		t.Errorf("request body %s holds the statement more than once, want it only inside the codeBlock", raw)
 	}
 }
 

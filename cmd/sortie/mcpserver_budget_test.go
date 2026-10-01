@@ -89,7 +89,10 @@ func (tr *budgetE2ETracker) FetchIssueComments(_ context.Context, _ string) ([]d
 
 func (tr *budgetE2ETracker) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
 func (tr *budgetE2ETracker) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
-func (tr *budgetE2ETracker) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
+func (tr *budgetE2ETracker) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (tr *budgetE2ETracker) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
 // budgetE2EAgent is a domain.AgentAdapter fixture whose single turn
 // holds open until the test tells it to emit a usage-bearing event and,

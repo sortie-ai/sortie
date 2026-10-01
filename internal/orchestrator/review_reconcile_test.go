@@ -166,6 +166,9 @@ func (s *reviewTrackerStub) CommentIssue(_ context.Context, _ string, _ string) 
 	s.commentIssueCalls++
 	return nil
 }
+func (s *reviewTrackerStub) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (s *reviewTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	s.addLabelCalled++
 	return nil

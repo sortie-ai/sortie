@@ -43,6 +43,9 @@ func (m *mockTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ stri
 func (m *mockTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string) error {
 	return nil
 }
+func (m *mockTrackerAdapter) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
 
 func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error {
 	return nil
