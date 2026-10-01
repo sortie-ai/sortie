@@ -153,7 +153,8 @@ func renderSummary(ctx renderContext, action string, incidentNumber int) string 
 		for _, failed := range report.failedTests {
 			fmt.Fprintf(&summary, "- `%s`\n", failed)
 		}
-		summary.WriteString("\n" + fencedOutput(report.excerpt))
+		summary.WriteByte('\n')
+		summary.WriteString(fencedOutput(report.excerpt))
 	}
 	if len(report.skippedTests) > 0 {
 		summary.WriteString("\n### Skipped tests\n\n")
