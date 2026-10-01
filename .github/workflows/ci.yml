@@ -83,6 +83,15 @@ jobs:
           working-directory: tools/qualify
           skip-cache: true
 
+      # gopls analyses every GOOS variant in one run, so one matrix leg suffices.
+      - name: Install gopls
+        if: matrix.goos == 'linux'
+        run: go install golang.org/x/tools/gopls@latest
+
+      - name: Lint (gopls)
+        if: matrix.goos == 'linux'
+        run: make lint-gopls GOPLS="$(go env GOPATH)/bin/gopls"
+
   lint-shell:
     name: Lint (shell)
     runs-on: ubuntu-latest

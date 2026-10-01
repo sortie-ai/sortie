@@ -340,6 +340,10 @@ func runHandshakeLoop(params protocolAgentParams, startIndex int) (code int, exi
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "protocol agent: read input: %v\n", err)
+		return 2, true
+	}
 	return 0, false
 }
 

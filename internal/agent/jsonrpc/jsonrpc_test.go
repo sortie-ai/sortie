@@ -420,6 +420,7 @@ func TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines(t *testing.T) {
 		seenIDs   = make(map[int64]bool)
 		duplicate bool
 		malformed bool
+		peerErr   error
 	)
 	peerDone := make(chan struct{})
 	go func() {
@@ -451,6 +452,7 @@ func TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines(t *testing.T) {
 				return
 			}
 		}
+		peerErr = scanner.Err()
 	}()
 
 	const numCalls = 20
@@ -480,13 +482,16 @@ func TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines(t *testing.T) {
 			t.Errorf("concurrent Call/Notify: %v", err)
 		}
 	}
-	if err := reqR.Close(); err != nil {
-		t.Fatalf("reqR.Close() error = %v", err)
+	if err := reqW.Close(); err != nil {
+		t.Fatalf("reqW.Close() error = %v", err)
 	}
 	select {
 	case <-peerDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the fake peer to observe the closed pipe")
+	}
+	if peerErr != nil {
+		t.Errorf("fake peer read requests: %v", peerErr)
 	}
 
 	peerMu.Lock()

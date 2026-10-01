@@ -237,6 +237,10 @@ func runQuotaReportingACPAgent(_ []string, _ quotaReportingACPParams) int {
 			return code
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "quota-reporting agent: read input: %v\n", err)
+		return 2
+	}
 	return 0
 }
 

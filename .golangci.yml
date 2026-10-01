@@ -21,6 +21,9 @@ linters:
     - unparam
     - unused
   settings:
+    govet:
+      enable:
+        - unusedwrite
     sloglint:
       attr-only: true
       static-msg: true

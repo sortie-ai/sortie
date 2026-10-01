@@ -27,6 +27,7 @@ DATE    ?= $(shell date -u +%Y-%m-%d)
 GO      ?= go
 LINTER  ?= golangci-lint
 SHELLCHECK ?= shellcheck
+GOPLS   ?= gopls
 
 ACP_VERSION ?= 1.23.0
 
