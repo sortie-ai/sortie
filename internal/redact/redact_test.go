@@ -345,6 +345,48 @@ func TestMaskTruncated_CutInsideValueLeavesNoPrefixAtAnyOffset(t *testing.T) {
 	}
 }
 
+func TestMaskTruncated_CutFragmentHidingAMaskedValueIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	inner := randomSecret(t)
+	outer := "outer-" + inner + "-" + randomSecret(t)
+	Add("test.MaskTruncated inner", inner)
+	Add("test.MaskTruncated outer", outer)
+	withMarker := randomSecret(t) + Marker + randomSecret(t)
+	Add("test.MaskTruncated marker", withMarker)
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "shorter value inside the cut prefix of a longer one", input: "token=" + outer[:len(outer)-4]},
+		{name: "cut prefix of a value that holds the marker", input: "token=" + withMarker[:len(withMarker)-4]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := MaskTruncated(tt.input); got != "token=" {
+				t.Errorf("MaskTruncated(%q) = %q, want %q", tt.input, got, "token=")
+			}
+		})
+	}
+}
+
+func TestMaskTruncated_CompleteValueOverlappingTheCutStaysMasked(t *testing.T) {
+	t.Parallel()
+
+	first := randomSecret(t)
+	second := first[len(first)-4:] + randomSecret(t)
+	Add("test.MaskTruncated first", first)
+	Add("test.MaskTruncated second", second)
+
+	input := "token=" + first
+	if got, want := MaskTruncated(input), "token="+Marker; got != want {
+		t.Errorf("MaskTruncated(%q) = %q, want %q", input, got, want)
+	}
+}
+
 func TestMaskTruncated_NothingRegisteredMatchesMask(t *testing.T) {
 	t.Parallel()
 
