@@ -881,7 +881,7 @@ func TestIntegration_CommentIssueWithLiteral_RendersInertAndLeavesTheIssueOpen(t
 		t.Fatalf("no stored comment contains %q among %d comments", marker, len(comments))
 	}
 
-	payload, err := json.Marshal(map[string]any{"text": stored, "gfm": true, "project": adapter.projectPath})
+	payload, err := json.Marshal(map[string]any{"text": stored, "gfm": true, "project": requireEnv(t, "SORTIE_GITLAB_PROJECT")})
 	if err != nil {
 		t.Fatalf("marshal render request: %v", err)
 	}
