@@ -48,6 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A local `opencode` turn no longer spends tokens on a session title, so the token usage reported for it covers every model request the turn makes. ([#1205](https://github.com/sortie-ai/sortie/issues/1205))
 - On GitHub and GitLab, the CI log the agent receives after a failed check now shows the step that failed, from the command it ran to its error, instead of the last lines of the whole job, which artifact uploads and cleanup steps could fill. When that step cannot be found the excerpt is still the end of the job log and its first line says so, and logs up to 16 MiB are now read in full instead of only their first 1 MiB. On Gitea, the CI failure excerpt built from the commit status description now drops blank lines and control characters and cuts very long lines. ([#1221](https://github.com/sortie-ai/sortie/issues/1221))
 
+- A scheduled retry no longer waits for a later recovery pass when the process pauses while arming its timer. ([#1231](https://github.com/sortie-ai/sortie/pull/1231))
+
 ## [1.25.0] - 2026-09-27
 
 ### Added

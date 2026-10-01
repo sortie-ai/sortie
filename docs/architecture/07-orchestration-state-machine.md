@@ -147,6 +147,8 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 
 ### 7.5 Retry-Slot Arbitration
 
+Retry staleness is measured from a monotonic timestamp captured before arming the timer. A pause while scheduling must not make the timer's own due event look premature and leave the retry waiting for overdue recovery.
+
 `retry_attempts` holds at most one entry per issue: the retry slot. The entry's reaction kind records the owner, with the empty string meaning the orchestrator's own continuation lane. Every code path that wants to schedule a retry for an issue (a challenger) checks whether the slot is occupied before writing. A non-nil occupant (the incumbent) means another unit of work already owns the issue's next dispatch; the challenger defers instead of overwriting it, leaving the incumbent untouched and making no other state mutation. The rule keys on occupancy alone: it does not compare owners, rank reaction kinds, or preempt.
 
 Only two writers are exempt from checking first, because each frees the slot itself immediately before writing back into it: the retry-timer handler's inner reschedule, which pops and deletes the entry it is replacing before rescheduling it, and the overdue-retry re-arm pass (below), which cancels the same entry before re-arming it with a zero delay. Every other writer is admitted only into a free slot.
