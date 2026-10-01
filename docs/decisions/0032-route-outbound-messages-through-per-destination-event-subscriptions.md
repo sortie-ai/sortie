@@ -37,7 +37,7 @@ The gap now carries a correctness cost. The agent's reason for a `blocked` or `n
 
 ## Decision Outcome
 
-Chosen option: **Per-destination subscriptions on the existing `notifications` list**, because it is the only option that satisfies drivers 1 through 4 without reshaping a section operators already populate (driver 7), and it moves every call site onto one path while leaving the text builders, the reaction fingerprints, the budget-hold pacing, and the backends untouched (drivers 8 and 10).
+Chosen option: **Per-destination subscriptions on the existing `notifications` list**, because it is the only option that satisfies drivers 1 through 4 without reshaping a section operators already populate (driver 7), and it moves every call site onto one path while leaving the text builders, the reaction fingerprints, and the budget-hold pacing untouched and reusing the existing backends, which change only to render the agent-text field and, for the webhook, to carry the event type on orchestrator events (drivers 8 and 10).
 
 ### One event catalog, produced by the orchestrator and the agent
 
