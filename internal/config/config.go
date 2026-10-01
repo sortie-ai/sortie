@@ -515,10 +515,12 @@ func mergeExtensionSection(dst map[string]any, extensions map[string]any, kind s
 	return ExtensionBlockPresent, ""
 }
 
-// describeExtensionValue maps a parsed front-matter value that failed
-// [mergeExtensionSection]'s mapping assertion to fixed, operator-facing
+// describeExtensionValue names the shape of a parsed front-matter value
+// that failed an expected-shape check, in fixed, operator-facing
 // vocabulary. It never names a Go type: that detail is internal and an
-// operator writing YAML cannot act on it.
+// operator writing YAML cannot act on it. Callers are the extension
+// block merge ([mergeExtensionSection]), the dispatch rule settings
+// block, and the dispatch match title phrases.
 func describeExtensionValue(v any) string {
 	switch v.(type) {
 	case string:
@@ -529,6 +531,8 @@ func describeExtensionValue(v any) string {
 		return "a number"
 	case []any:
 		return "a list"
+	case map[string]any:
+		return "a map"
 	default:
 		return "a value of an unexpected type"
 	}

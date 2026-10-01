@@ -1034,6 +1034,7 @@ dispatch:
         priority: { lte: 2 }    # predicate object; exactly one of eq, in, lt, lte, gt, gte
         identifier: ["FE-*"]    # string or list; glob; matched against issue.identifier
         assignee: ["alice"]     # string or list; case-insensitive equality
+        title: ["[docs]", "wip:"] # string or list; whole words; case-insensitive
       agent: <kind>    # optional; overrides the agent kind for matching issues
       template: ./prompts/bug.md # optional; path relative to the WORKFLOW.md directory
       <kind>: # optional; settings block for the agent kind this rule runs
@@ -1070,6 +1071,7 @@ The `match` block accepts only these keys:
 | `priority` | predicate object | Numeric comparison | Single-operator predicate. See Priority predicates below. An issue with no priority never matches. |
 | `identifier` | string or list | Glob (any element) | Matches when `issue.identifier` glob-matches any pattern, in the case the adapter produced. |
 | `assignee` | string or list | Case-insensitive equality (any element) | Matches when the issue assignee equals any list entry. |
+| `title` | string or list | Whole-word phrase (any element) | Matches when any phrase appears in the issue title as whole words, ignoring letter case. A phrase has no wildcards. See [Title phrases](#title-phrases). |
 
 The `dispatch.default` block accepts only `agent` and `template`, with the same types and fallback behavior as the per-rule fields. It carries no settings block: a key that names an agent kind fails the load, and the top-level block of each kind holds the default settings.
 
@@ -1078,10 +1080,10 @@ The `dispatch.default` block accepts only `agent` and `template`, with the same 
 Evaluation applies AND logic across keys and OR logic within a single key:
 
 - A `match` block succeeds only when every present key is satisfied.
-- A key whose value is a list succeeds when any element matches.
+- A key whose value is a list succeeds when any element matches. A `labels`, `issue_type`, `identifier`, or `assignee` key whose value is null or an empty list is left out of the match instead, while for `title` it fails the load.
 - An absent or empty `match` block always succeeds (catch-all).
 
-String-valued keys (`labels`, `issue_type`, `identifier`, `assignee`) accept either a single string or a list of strings. A scalar is treated as a one-element list.
+String-valued keys (`labels`, `issue_type`, `identifier`, `assignee`, `title`) accept either a single string or a list of strings. A scalar is treated as a one-element list.
 
 #### Priority predicates
 
@@ -1097,6 +1099,54 @@ The `priority` key takes a predicate object with exactly one operator key:
 | `gte` | Priority is greater than or equal to value |
 
 For `in`, the value is a list of integers (e.g., `{ in: [1, 2] }`). For all other operators, the value is a single integer. An issue with no priority never matches a `priority` predicate.
+
+#### Title phrases
+
+The `title` key takes one phrase or a list of phrases. The key matches when any phrase appears in the issue title as whole words. Matching follows these rules:
+
+- Letter case is ignored, and so are the invisible emoji variation selectors U+FE0E and U+FE0F, on both the phrase and the title. White space at either end of a phrase or a title is ignored, and each run of white space, tabs, no-break spaces, and ideographic spaces included, compares as one space.
+- A word is a run of letters, digits, and combining marks. Every other character, hyphen and underscore included, separates words. A phrase matches only where it neither starts nor ends inside a word, so `fix` matches `Fix login redirect` but neither `Add prefix to logs` nor `Fixes typo in docs`, and `low-cost` does not match `Speed up slow-costly import`.
+- A phrase that starts or ends with a character that is not part of a word, such as `[docs]` or `wip:`, is held to no word boundary on that side. Punctuation written in a phrase must appear in the title: `[infra]` matches `[INFRA] rotate keys` but not `Improve infra docs`, while `infra` matches both.
+- Chinese, Japanese, Thai, Lao, Khmer, and Myanmar text is written without spaces between words, so each character of these scripts counts as a word of its own: `设计` matches inside `缓存设计文档`. A combining mark, such as a Thai vowel or tone mark, stays with the character before it in every script, so `เก` does not match `เก่ง`.
+- Korean is written with spaces, and its particles attach to the noun. A bare noun such as `버그` does not match its in-title form `버그를`; write the phrase as the title spells it.
+- Title phrases have no wildcards. `*` matches a literal asterisk, and `?` and brackets match themselves, unlike in `labels` and `identifier`, where they are glob characters. A phrase `*infra*` matches `*INFRA* rotate keys`, not `Improve infra docs`.
+- Accents and every other combining mark are compared as written: `cafe` does not match `Café opening hours`. An emoji matches whether or not the title or the phrase carries a variation selector after it, so the warning sign U+26A0 matches `⚠️ deprecate v1 API` and a phrase written with the selector matches a title written without it.
+- An issue with an empty title never matches. A `title` key that is null, bare, or an empty list fails the load, and so does a phrase that is empty or only white space; remove the key to leave the title out of the match. Each fault is listed in [Section 9.2](#92-configuration-errors).
+
+YAML reads an unquoted phrase that starts with `[` as a list, one that contains `: ` as a map, and a bare number or date as a number or a timestamp. Quote a phrase in these cases:
+
+```yaml
+match:
+  title: "[infra]"
+```
+
+```yaml
+match:
+  title: ["[infra]", "WIP:"]
+```
+
+Two unquoted forms escape the checks. `title: [infra]` is the list holding the word `infra`, so it loads and matches the bare word `infra`, not `[infra]`. `title: fix: typo` does not parse, and the load fails with a front matter error. A list element that YAML read as a list, a map, a number, or a date fails the load with a message that names the quoting that fixes it.
+
+A title is written for people, and one issue can match one rule by its title and another by its label. The first rule in YAML order that matches wins. In this workflow an issue titled `[docs] Fix broken link` and labeled `bug` runs the `docs` rule, because it comes first; with the two rules swapped it would run `bug-fix`:
+
+```yaml
+dispatch:
+  rules:
+    - name: docs
+      match:
+        title: "[docs]"
+      template: ./prompts/docs.md
+    - name: bug-fix
+      match:
+        labels: ["bug"]
+      template: ./prompts/bug.md
+```
+
+A rule that should run only for issues that satisfy both keys carries both in one `match` block: `match: { title: "[docs]", labels: ["bug"] }`. A rule whose only key is `title` is not a catch-all and may precede other rules.
+
+The title counts when a claim is first dispatched, as a label does. Renaming an issue whose claim is held does not re-route it, and renaming it before the claim routes it by the new title on the next tick. See [Freeze-on-dispatch](#freeze-on-dispatch).
+
+Whoever can edit an issue's title can change which rule it matches, and on many trackers that includes the issue's author, who may not be allowed to change its labels. A rule whose settings or template not every author should reach pairs `title` with `labels` or `assignee`.
 
 #### Fallback resolution chain
 
@@ -1188,7 +1238,7 @@ Changing `agent.kind` or `dispatch.default.agent` is rejected when a rule withou
 
 #### Freeze-on-dispatch
 
-An issue keeps its agent kind, template, and rule until its claim is released. The resolved `(agent_kind, template_id, rule_name)` is recorded at dispatch and reused by retries and reaction-driven continuations for the same claim. Rules are re-evaluated only after the claim is released, with one exception: a waiting retry checks its recorded selection against the configuration in force when its timer fires. Moving a label on an issue whose claim is still held does not re-route it; the next claim does.
+An issue keeps its agent kind, template, and rule until its claim is released. The resolved `(agent_kind, template_id, rule_name)` is recorded at dispatch and reused by retries and reaction-driven continuations for the same claim. Rules are re-evaluated only after the claim is released, with one exception: a waiting retry checks its recorded selection against the configuration in force when its timer fires. Moving a label on, or renaming, an issue whose claim is still held does not re-route it; the next claim does.
 
 What the selection contains is read from `WORKFLOW.md` at the start of every attempt: the agent settings (`model`, `effort`, and the rest of the kind's block, from the rule and from the top-level block), the template text, and the `agent.*` timeouts. A reload therefore reaches the next attempt of a claim that is already held, while a running session keeps the settings it started with. A retry or continuation that resumes a session resumes it with the settings it resolved, and a change of `model` or `effort` between attempts does not end the session.
 
@@ -2793,7 +2843,8 @@ Before dispatching work, the orchestrator validates the workflow configuration. 
 | Rule `name`, when present, matches `^[a-z][a-z0-9_-]*$` | Malformed rule name. |
 | No duplicate rule name | Two rules share the same non-empty `name`. |
 | No non-final catch-all (`unreachable_rules`) | A rule with no `match` block precedes another rule. |
-| Every `match` key recognized | A `match` key is not one of `labels`, `issue_type`, `priority`, `identifier`, `assignee`. |
+| Every `match` key recognized | A `match` key is not one of `labels`, `issue_type`, `priority`, `identifier`, `assignee`, `title`. |
+| Every `title` key lists phrases | A `title` key is null, bare, or an empty list; its value is not a string or a list; a list element is not a string; or a phrase is empty or only white space. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
 | `priority` predicate has exactly one operator | Zero or more than one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`. |
 | Glob patterns syntactically valid | A `labels` or `identifier` pattern fails `path.Match`. |
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
@@ -2888,6 +2939,10 @@ These errors are raised during typed config construction from the parsed front m
 | `config: dispatch.rules[<i>].<kind>.<key>: agent.<key> is workflow-wide; a dispatch rule cannot override it` | A rule's block writes `turn_timeout_ms`, `read_timeout_ms`, `stall_timeout_ms`, or `stop_grace_ms`. | Remove the key and set the limit in the `agent` section. |
 | `config: dispatch.rules[<i>]: a rule that carries a settings block must have a name` | A rule carries a settings block and no `name`. | Give the rule a `name`. |
 | `config: dispatch.rules[<i>].name: "default" is the name run history and statistics give the dispatch.default selection; a rule that carries a settings block must use another name` | A rule named `default` carries a settings block. | Rename the rule. |
+| `config: dispatch.rules[<i>].match.title: needs at least one phrase; remove the key to leave the title out of the match` | The `title` key is null, bare, or an empty list. | Write one phrase or a list of phrases, or remove the key to leave the title out of the match. |
+| `config: dispatch.rules[<i>].match.title: expected a phrase or a list of phrases, got <shape>` followed by `; quote the phrase` (`; quote a phrase that contains ": ", as in "fix: typo"` for a map) | The `title` value is not text or a list. `<shape>` is `a number`, `a true/false value`, `a map`, or `a value of an unexpected type`, such as an unquoted date. | Quote the phrase, as in `title: "404"`. |
+| `config: dispatch.rules[<i>].match.title[<j>]: expected a phrase, got <shape>` followed by a quoting hint | Element `<j>` of a `title` list is not text. `<shape>` is `a list` for an unquoted `- [infra]` (hint `; quote a phrase that starts with "[", as in "[infra]"`), `a map` for an unquoted `- fix: typo` (hint `; quote a phrase that contains ": ", as in "fix: typo"`), `a number`, `a true/false value`, or `a value of an unexpected type` (hint `; quote the phrase`), or `no value` for a bare `-` (no hint). | Quote the phrase, or remove the element. |
+| `config: dispatch.rules[<i>].match.title[<j>]: a phrase needs a character other than white space` | Phrase `<j>` of a `title` value is empty or only white space; a single phrase reports `title[0]`. | Write a phrase with a visible character, or remove it. |
 | `config: dispatch.default.<key>: dispatch.default carries no settings block; the top-level <key> block holds the default settings` | A key of `dispatch.default` names an agent kind. | Move the settings to the top-level block of that kind. |
 | `config: tracker.kind: expected string, got <type>`                             | `tracker.kind` is not a string (e.g., integer, boolean, list).           | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.endpoint: expected string, got <type>`                         | `tracker.endpoint` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |

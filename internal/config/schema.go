@@ -139,16 +139,6 @@ var dispatchRuleAllowedKeys = map[string]bool{
 	"template": true,
 }
 
-// dispatchMatchAllowedKeys lists the recognized match keys for
-// front-matter static analysis.
-var dispatchMatchAllowedKeys = map[string]bool{
-	"labels":     true,
-	"issue_type": true,
-	"priority":   true,
-	"identifier": true,
-	"assignee":   true,
-}
-
 // staticKnownExtensionKeys lists extension top-level keys defined by
 // the architecture spec. These are not core schema keys but are
 // recognized by Sortie's optional modules.
@@ -781,7 +771,7 @@ func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any, defaultKi
 		}
 		matchKeys := maputil.SortedKeys(matchMap)
 		for _, key := range matchKeys {
-			if !dispatchMatchAllowedKeys[key] {
+			if !matchKeyAllowed[key] {
 				warnings = append(warnings, FrontMatterWarning{
 					Check:   "unknown_sub_key",
 					Field:   rulePath + ".match." + key,

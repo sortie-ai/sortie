@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -1167,6 +1168,65 @@ func TestTypeMatches_FieldInt(t *testing.T) {
 
 			if got != tt.want {
 				t.Errorf("typeMatches(%v, FieldInt) = %v, want %v", tt.v, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateFrontMatterDispatchMatchTitle(t *testing.T) {
+	t.Parallel()
+
+	matchRaw := func(match map[string]any) map[string]any {
+		return dispatchRaw("", map[string]any{"name": "r", "agent": "mock", "match": match})
+	}
+	tests := []struct {
+		name         string
+		raw          map[string]any
+		wantField    string
+		wantMessage  string
+		wantWarnings int
+	}{
+		{name: "a scalar title draws no warning", raw: matchRaw(map[string]any{"title": "[docs]"})},
+		{name: "a title list beside labels draws no warning", raw: matchRaw(map[string]any{"title": []any{"[docs]", "wip:"}, "labels": []any{"bug"}})},
+		{name: "a misspelled title key still warns", raw: matchRaw(map[string]any{"titel": "fix"}), wantWarnings: 1, wantField: "dispatch.rules[0].match.titel", wantMessage: `unknown match key "titel"`},
+		{name: "an unrecognized key beside title still warns", raw: matchRaw(map[string]any{"title": "fix", "not_a_key": "x"}), wantWarnings: 1, wantField: "dispatch.rules[0].match.not_a_key", wantMessage: `unknown match key "not_a_key"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ValidateFrontMatter(tt.raw, ServiceConfig{Agent: AgentConfig{Kind: "mock"}})
+
+			if len(got) != tt.wantWarnings {
+				t.Fatalf("ValidateFrontMatter() returned %d warnings, want %d\nwarnings: %+v", len(got), tt.wantWarnings, got)
+			}
+			if tt.wantWarnings == 0 {
+				return
+			}
+			if got[0].Check != "unknown_sub_key" || got[0].Field != tt.wantField || got[0].Message != tt.wantMessage {
+				t.Errorf("ValidateFrontMatter()[0] = {Check:%q Field:%q Message:%q}, want {Check:%q Field:%q Message:%q}",
+					got[0].Check, got[0].Field, got[0].Message, "unknown_sub_key", tt.wantField, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestValidateFrontMatterEveryBuilderMatchKeyIsKnown(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range slices.Sorted(maps.Keys(matchKeyAllowed)) {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			raw := dispatchRaw("", map[string]any{"name": "r", "agent": "mock", "match": map[string]any{key: "x"}})
+
+			got := ValidateFrontMatter(raw, ServiceConfig{Agent: AgentConfig{Kind: "mock"}})
+
+			for _, w := range got {
+				if w.Check == "unknown_sub_key" {
+					t.Errorf("ValidateFrontMatter(match key %q) warning = %+v, want no unknown_sub_key", key, w)
+				}
 			}
 		})
 	}

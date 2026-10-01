@@ -444,13 +444,19 @@ No key is defaulted or coerced before the overlay. `$VAR` references in a rule's
 
 **Match-block keys and semantics**
 
-Match keys are evaluated with AND semantics across keys and OR semantics within a single key. String-valued keys accept either a single string or a list of strings; a scalar is treated as a one-element list. Comparisons against `issue_type` and `assignee` are case-insensitive:
+Match keys are evaluated with AND semantics across keys and OR semantics within a single key. String-valued keys accept either a single string or a list of strings; a scalar is treated as a one-element list. Comparisons against `issue_type`, `assignee`, and `title` are case-insensitive:
 
 - `labels` (string or list of glob patterns): matches when the issue carries at least one label matching any pattern; glob syntax (e.g. `bug/*`, `*-urgent`).
 - `issue_type` (string or list of strings): case-insensitive equality match against the issue type field; matches when the issue type equals any list entry.
 - `priority` (predicate object): numeric comparison via one operator key: `eq`, `in`, `lt`, `lte`, `gt`, or `gte`. The predicate object MUST have exactly one operator key.
 - `identifier` (string or list of glob patterns): matches against the issue identifier string.
 - `assignee` (string or list of strings): case-insensitive equality match against the issue assignee; matches when the assignee equals any list entry.
+- `title` (string or list of phrases): matches when any phrase appears in the issue title as whole words. A `title` key that is null, bare, or an empty list is a configuration error, unlike the other list-valued keys, where it leaves the key out of the match, so a rule whose only key is `title` is never a catch-all. A phrase that is empty or only white space is a configuration error. Phrases are kept as written; normalization happens at match time:
+  - Every case form of a letter compares equal on both sides, so σ, ς, and Σ match one another, as do s, S, and ſ. This is simple case folding, not full case folding: ß stays distinct from ss. The emoji variation selectors U+FE0E and U+FE0F are dropped on both sides, each run of white space becomes one space, and white space at either end is dropped. Nothing else is folded: no Unicode normalization form, no accent folding, no stemming, and no other variation selector or combining mark is dropped.
+  - A word is a run of letters, digits, and combining marks; every other character, underscore and hyphen included, separates words. An occurrence of a phrase in the title matches only where it neither starts nor ends inside a word. A phrase whose first character is not part of a word carries no constraint at its start, and one whose last character is not part of a word is constrained at its end only by a combining mark that follows it in the title. Every occurrence is tried, overlapping ones included.
+  - Han, Hiragana, Katakana, Thai, Lao, Khmer, and Myanmar are written without spaces between words, so each character of these scripts is a word of its own. Hangul is not in this set. A combining mark always joins the character before it, in every script, and is never a word boundary.
+  - The phrase search is literal: `*`, `?`, and brackets match only themselves, unlike in `labels` and `identifier`. There is no regular expression and no wildcard.
+  - An issue with an empty title never matches.
 
 **Resolution semantics and freeze-on-dispatch invariant**
 

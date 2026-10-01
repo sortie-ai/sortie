@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `sortie validate` now checks a dispatch rule's settings as it checks the agent kind's own block, and warns when a rule changes the model but keeps an `effort` level inherited from the top-level settings. ([#1191](https://github.com/sortie-ai/sortie/issues/1191))
 
+- A dispatch rule can now route an issue by a phrase in its title, such as `[docs]` or `WIP:`, with `match.title`. ([#1195](https://github.com/sortie-ai/sortie/issues/1195))
+
 ### Changed
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))

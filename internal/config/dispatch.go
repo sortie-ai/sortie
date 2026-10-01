@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -66,6 +67,10 @@ type DispatchMatch struct {
 	Priority   *PriorityPredicate
 	Identifier []string
 	Assignee   []string
+
+	// Title holds the title phrases as written, in YAML order. Nil when
+	// the key is absent.
+	Title []string
 }
 
 // PriorityPredicate carries a single numeric operator and its
@@ -100,6 +105,7 @@ var matchKeyAllowed = map[string]bool{
 	"priority":   true,
 	"identifier": true,
 	"assignee":   true,
+	"title":      true,
 }
 
 // ruleBlockForbiddenKeys maps each key a rule's settings block may not
@@ -477,13 +483,99 @@ func parseDispatchMatch(raw any, matchField string) (DispatchMatch, error) {
 		priority = p
 	}
 
+	rawTitle, titlePresent := matchMap["title"]
+	title, err := parseTitlePhrases(rawTitle, titlePresent, matchField+".title")
+	if err != nil {
+		return DispatchMatch{}, err
+	}
+
 	return DispatchMatch{
 		Labels:     labels,
 		IssueType:  issueTypes,
 		Priority:   priority,
 		Identifier: identifiers,
 		Assignee:   assignees,
+		Title:      title,
 	}, nil
+}
+
+// parseTitlePhrases validates the raw value of one match block's title
+// key and returns its phrases as written. present reports whether the
+// key exists; field is the path of the key. Unlike the other match
+// keys, a null or empty value is a fault, because dropping the key
+// would turn a title-only rule into a catch-all. Every element is
+// type-checked before any phrase is checked for emptiness, and the
+// first fault is returned.
+func parseTitlePhrases(raw any, present bool, field string) ([]string, error) {
+	if !present {
+		return nil, nil
+	}
+
+	var phrases []string
+	switch v := raw.(type) {
+	case nil:
+		return nil, errTitleNeedsPhrase(field)
+	case string:
+		phrases = []string{v}
+	case []any:
+		if len(v) == 0 {
+			return nil, errTitleNeedsPhrase(field)
+		}
+		phrases = make([]string, len(v))
+		for j, elem := range v {
+			phrase, ok := elem.(string)
+			if !ok {
+				shape := "no value"
+				if elem != nil {
+					shape = describeExtensionValue(elem)
+				}
+				return nil, &ConfigError{
+					Field:   fmt.Sprintf("%s[%d]", field, j),
+					Message: "expected a phrase, got " + shape + titleQuotingHint(shape),
+				}
+			}
+			phrases[j] = phrase
+		}
+	default:
+		shape := describeExtensionValue(raw)
+		return nil, &ConfigError{
+			Field:   field,
+			Message: "expected a phrase or a list of phrases, got " + shape + titleQuotingHint(shape),
+		}
+	}
+
+	for j, phrase := range phrases {
+		if strings.TrimFunc(phrase, unicode.IsSpace) == "" {
+			return nil, &ConfigError{
+				Field:   fmt.Sprintf("%s[%d]", field, j),
+				Message: "a phrase needs a character other than white space",
+			}
+		}
+	}
+	return phrases, nil
+}
+
+func errTitleNeedsPhrase(field string) error {
+	return &ConfigError{
+		Field:   field,
+		Message: "needs at least one phrase; remove the key to leave the title out of the match",
+	}
+}
+
+// titleQuotingHint returns the YAML quoting advice for a title value
+// whose shape shows an unquoted phrase that YAML read as something
+// else. A null element carries no advice.
+func titleQuotingHint(shape string) string {
+	switch shape {
+	case "a list":
+		return `; quote a phrase that starts with "[", as in "[infra]"`
+	case "a map":
+		return `; quote a phrase that contains ": ", as in "fix: typo"`
+	case "no value":
+		return ""
+	default:
+		return "; quote the phrase"
+	}
 }
 
 // parseStringList decodes a YAML scalar or sequence into []string.
@@ -836,5 +928,6 @@ func isEmptyMatch(m DispatchMatch) bool {
 		len(m.IssueType) == 0 &&
 		len(m.Identifier) == 0 &&
 		len(m.Assignee) == 0 &&
+		len(m.Title) == 0 &&
 		m.Priority == nil
 }
