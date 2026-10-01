@@ -17,7 +17,7 @@ const DefaultContinuationPrompt = "Continue working on this task. Review the cur
 // prompt on the first turn of each worker run. It informs the agent of
 // the A2O status-signaling protocol for reporting blocked,
 // needs-human-review, or no-change-needed status via the .sortie/status
-// file.
+// file, and asks it to give its reason on the lines after the value.
 //
 // Continuation turns omit this suffix because the instruction persists
 // in the agent's conversation history from turn 1.
@@ -33,7 +33,18 @@ Use "blocked" when you cannot proceed. Use "needs-human-review" when your work i
 complete and awaiting review. Use "no-change-needed" when the requested outcome
 already held before you started and you made no change to reach it. Do not write
 "no-change-needed" if you performed any work. Do not write this file during normal
-productive work.`
+productive work.
+
+Give your reason on the lines after the value: for "blocked", what you need from a
+person; for "no-change-needed", why nothing had to change; for
+"needs-human-review", what the reviewer should check. For example:
+
+    mkdir -p .sortie && printf '%s\n' "blocked" "The ticket asks for both soft and hard delete of invoices." "Which one should the API expose?" > .sortie/status
+
+Sortie may publish the reason in its comment on the issue and in operator
+notifications, so write it for the people who read the issue, name files by their
+path in the repository, never include credentials or other secrets, and keep the
+whole file under 1024 bytes.`
 
 // BuildTurnPrompt returns the rendered prompt for a single turn within a
 // worker session. turnNumber 1 is the initial turn; turnNumber 2 and above

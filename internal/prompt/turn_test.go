@@ -11,10 +11,20 @@ import (
 // short continuation line on subsequent turns.
 const branchingTemplate = `{{ if .run.is_continuation }}Continue turn {{ .run.turn_number }} cont=true{{ else }}Task: {{ .issue.title }} cont=false{{ end }}`
 
-// TestRuntimeStatusSuffixContent asserts the content requirements the
-// three-value suffix must satisfy: each recognized token appears as an
-// exact substring, and the suffix carries a single .sortie/status write
-// example rather than one command block per value.
+const originalStatusSuffix = `If you determine that you cannot make further progress on this task without human
+intervention, or if your work is complete and requires human review, or if you
+determine that the requested outcome already held and you changed nothing, signal
+the orchestrator by running the following, replacing STATUS with exactly one of
+the three values below:
+
+    mkdir -p .sortie && echo "STATUS" > .sortie/status
+
+Use "blocked" when you cannot proceed. Use "needs-human-review" when your work is
+complete and awaiting review. Use "no-change-needed" when the requested outcome
+already held before you started and you made no change to reach it. Do not write
+"no-change-needed" if you performed any work. Do not write this file during normal
+productive work.`
+
 func TestRuntimeStatusSuffixContent(t *testing.T) {
 	t.Parallel()
 
@@ -24,22 +34,43 @@ func TestRuntimeStatusSuffixContent(t *testing.T) {
 		}
 	}
 
-	if got := strings.Count(RuntimeStatusSuffix, ".sortie/status"); got != 1 {
-		t.Errorf("RuntimeStatusSuffix contains %d .sortie/status references, want 1 (a single write example)", got)
+	if !strings.HasPrefix(RuntimeStatusSuffix, originalStatusSuffix+"\n\n") {
+		t.Errorf("RuntimeStatusSuffix does not start with the original two paragraphs followed by a blank line:\n%s", RuntimeStatusSuffix)
 	}
 
-	// The write example must not hardcode a recognized value. An agent that
-	// copies the command verbatim would signal that value rather than the one
-	// its run actually reached, and a hardcoded "blocked" parks the issue.
+	appended := strings.TrimPrefix(RuntimeStatusSuffix, originalStatusSuffix)
+	for _, want := range []string{
+		"Give your reason on the lines after the value",
+		"path in the repository",
+		"never include credentials or other secrets",
+		"under 1024 bytes",
+	} {
+		if !strings.Contains(appended, want) {
+			t.Errorf("appended paragraphs missing %q:\n%s", want, appended)
+		}
+	}
+
+	var writeExamples []string
 	for line := range strings.SplitSeq(RuntimeStatusSuffix, "\n") {
-		if !strings.Contains(line, ".sortie/status") {
-			continue
+		if strings.Contains(line, ".sortie/status") {
+			writeExamples = append(writeExamples, strings.TrimSpace(line))
 		}
-		for _, v := range []string{"blocked", "needs-human-review", "no-change-needed"} {
-			if strings.Contains(line, v) {
-				t.Errorf("write example %q hardcodes recognized status %q, want a placeholder", strings.TrimSpace(line), v)
-			}
+	}
+	if len(writeExamples) != 2 {
+		t.Fatalf("RuntimeStatusSuffix has %d write examples %q, want 2", len(writeExamples), writeExamples)
+	}
+
+	// An agent that copies the placeholder command verbatim would signal a
+	// value its run did not reach, and a hardcoded "blocked" parks the issue.
+	for _, v := range []string{"blocked", "needs-human-review", "no-change-needed"} {
+		if strings.Contains(writeExamples[0], v) {
+			t.Errorf("placeholder write example %q hardcodes recognized status %q", writeExamples[0], v)
 		}
+	}
+
+	reasonExample := writeExamples[1]
+	if !strings.Contains(reasonExample, `printf '%s\n' "blocked" "`) {
+		t.Errorf("reason write example %q, want printf with the value and the reason as separate lines", reasonExample)
 	}
 }
 

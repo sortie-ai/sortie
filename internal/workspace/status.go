@@ -41,21 +41,42 @@ func (s StatusSignal) IsRecognized() bool {
 	return s == StatusBlocked || s == StatusNeedsHumanReview || s == StatusNoChangeNeeded
 }
 
-// statusFileMaxBytes is the maximum number of bytes read from the
-// status file. Legitimate tokens are under 30 bytes; 1 KiB provides
-// headroom while bounding memory usage.
+// StatusStatement is the text an agent wrote after the first line of the
+// status file.
+type StatusStatement struct {
+	// Text is the bytes after the first line feed, verbatim.
+	Text string
+
+	// Truncated reports that the file was longer than the read bound, so
+	// Text was cut.
+	Truncated bool
+}
+
+// StatusFile is one read of the status file.
+type StatusFile struct {
+	Signal StatusSignal
+
+	// Statement is zero unless Signal is recognized.
+	Statement StatusStatement
+}
+
+// statusFileMaxBytes is the maximum number of bytes of the status file
+// that token and statement are taken from. Legitimate tokens are under
+// 30 bytes; 1 KiB provides headroom for a short reason while bounding
+// memory usage.
 const statusFileMaxBytes = 1024
 
 // ReadStatusFile reads the A2O status file from the workspace
-// directory and returns the parsed status signal. The file path is
+// directory and returns the parsed status signal and, for a recognized
+// signal, the statement after its first line. The file path is
 // <workspacePath>/.sortie/status.
 //
-// Returns [StatusNone] when the file is absent, unreadable, empty
-// after trimming, or when the workspace directory, .sortie, or status
-// is a symbolic link or otherwise refused. Read errors, other than
-// absence, are logged at warn level; the function never returns an
+// Returns a zero [StatusFile] when the file is absent, unreadable,
+// empty after trimming, or when the workspace directory, .sortie, or
+// status is a symbolic link or otherwise refused. Read errors, other
+// than absence, are logged at warn level; the function never returns an
 // error to the caller.
-func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
+func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusFile {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -68,39 +89,50 @@ func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 				slog.Any("error", err),
 			)
 		}
-		return StatusNone
+		return StatusFile{}
 	}
 	defer f.Close() //nolint:errcheck // read-only file; close error is not actionable after data is read
 
-	data, err := io.ReadAll(io.LimitReader(f, statusFileMaxBytes))
+	// One byte past the bound tells a file of exactly the bound from a
+	// longer one.
+	data, err := io.ReadAll(io.LimitReader(f, statusFileMaxBytes+1))
 	if err != nil {
 		logger.Warn("failed to read .sortie/status",
 			slog.String("workspace", workspacePath),
 			slog.Any("error", err),
 		)
-		return StatusNone
+		return StatusFile{}
 	}
+	truncated := len(data) > statusFileMaxBytes
+	data = data[:min(len(data), statusFileMaxBytes)]
 
 	parts := bytes.SplitN(data, []byte("\n"), 2)
 	token := string(bytes.TrimSpace(parts[0]))
 	if token == "" {
-		return StatusNone
+		return StatusFile{}
 	}
 
+	var signal StatusSignal
 	switch token {
 	case "blocked":
-		return StatusBlocked
+		signal = StatusBlocked
 	case "needs-human-review":
-		return StatusNeedsHumanReview
+		signal = StatusNeedsHumanReview
 	case "no-change-needed":
-		return StatusNoChangeNeeded
+		signal = StatusNoChangeNeeded
 	default:
 		logger.Warn("unrecognized .sortie/status value",
 			slog.String("workspace", workspacePath),
 			slog.String("value", token),
 		)
-		return StatusNone
+		return StatusFile{}
 	}
+
+	statement := StatusStatement{Truncated: truncated}
+	if len(parts) == 2 {
+		statement.Text = string(parts[1])
+	}
+	return StatusFile{Signal: signal, Statement: statement}
 }
 
 // CleanupStatusFile removes the .sortie/status file from the

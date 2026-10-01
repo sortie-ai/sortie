@@ -26,12 +26,16 @@ type sessionEvent struct {
 	SessionID  string
 	Attempt    *int
 	Agent      string
+
+	// AgentText is the agent's stop statement after publicStatement, empty
+	// when there is none.
+	AgentText string
 }
 
 // notification builds the event for t with body as its text. severity
 // overrides the catalog severity when non-empty.
 func (s sessionEvent) notification(t domain.EventType, severity, body string) domain.Notification {
-	return orchestratorNotification(t, severity, domain.NotificationEnvelope{
+	n := orchestratorNotification(t, severity, domain.NotificationEnvelope{
 		IssueID:    s.IssueID,
 		Identifier: s.Identifier,
 		DispatchID: s.DispatchID,
@@ -39,6 +43,8 @@ func (s sessionEvent) notification(t domain.EventType, severity, body string) do
 		Attempt:    s.Attempt,
 		Agent:      s.Agent,
 	}, cmp.Or(s.DisplayID, s.Identifier, s.IssueID), body)
+	n.Message.AgentText = s.AgentText
+	return n
 }
 
 func reactionNotification(t domain.EventType, pending *PendingReaction, body string) domain.Notification {

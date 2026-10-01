@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Slack and webhook entries in `notifications` can now receive Sortie's own events, such as a failed session or a reaction escalation, each entry naming the events it wants in `events`, and a new `tracker_comment` entry chooses which events Sortie comments on in the issue, with `escalation: none` turning off a reaction's label. ([#1201](https://github.com/sortie-ai/sortie/issues/1201))
 
+- When an agent stops on `blocked`, `needs-human-review`, or `no-change-needed`, the reason it writes on the lines after the status in `.sortie/status` now appears in Sortie's comment on the issue as literal text, with secrets Sortie knows masked, and in Slack and webhook notifications of the stop; agents are now asked to give one. ([#1201](https://github.com/sortie-ai/sortie/issues/1201))
+
 ### Changed
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))

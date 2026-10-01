@@ -156,4 +156,9 @@ type NotificationMessage struct {
 	// Category is optional and, when set, is one of decision_needed,
 	// progress, blocked, completed, or other.
 	Category string
+
+	// AgentText is agent-authored text carried by an orchestrator event.
+	// Every destination renders it apart from Body; it is empty on
+	// agent.message.
+	AgentText string
 }

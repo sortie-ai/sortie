@@ -237,7 +237,7 @@ func TestReadStatusFile(t *testing.T) {
 			var logBuf bytes.Buffer
 			logger := captureLogger(&logBuf)
 
-			got := ReadStatusFile(wsPath, logger)
+			got := ReadStatusFile(wsPath, logger).Signal
 
 			if got != tt.want {
 				t.Errorf("ReadStatusFile() = %q, want %q", got, tt.want)
@@ -249,12 +249,94 @@ func TestReadStatusFile(t *testing.T) {
 	}
 }
 
+func TestReadStatusFile_Statement(t *testing.T) {
+	t.Parallel()
+
+	const head = "blocked\n"
+	tests := []struct {
+		name    string
+		content string
+		want    StatusFile
+	}{
+		{
+			name:    "token only",
+			content: "blocked",
+			want:    StatusFile{Signal: StatusBlocked},
+		},
+		{
+			name:    "token with line feed and nothing after",
+			content: head,
+			want:    StatusFile{Signal: StatusBlocked},
+		},
+		{
+			name:    "statement kept verbatim after the first line feed",
+			content: "no-change-needed\nAlready fixed in  main.\n\n  indented\tline\n",
+			want: StatusFile{
+				Signal:    StatusNoChangeNeeded,
+				Statement: StatusStatement{Text: "Already fixed in  main.\n\n  indented\tline\n"},
+			},
+		},
+		{
+			name:    "crlf after the token still ends the first line",
+			content: "needs-human-review\r\ncheck the retry path",
+			want: StatusFile{
+				Signal:    StatusNeedsHumanReview,
+				Statement: StatusStatement{Text: "check the retry path"},
+			},
+		},
+		{
+			name:    "whitespace-only rest is returned as written",
+			content: head + " \t\n\n",
+			want: StatusFile{
+				Signal:    StatusBlocked,
+				Statement: StatusStatement{Text: " \t\n\n"},
+			},
+		},
+		{
+			name:    "file of exactly the bound is not truncated",
+			content: head + strings.Repeat("a", 1024-len(head)),
+			want: StatusFile{
+				Signal:    StatusBlocked,
+				Statement: StatusStatement{Text: strings.Repeat("a", 1024-len(head))},
+			},
+		},
+		{
+			name:    "file one byte over the bound is cut at the bound and flagged",
+			content: head + strings.Repeat("a", 1025-len(head)),
+			want: StatusFile{
+				Signal:    StatusBlocked,
+				Statement: StatusStatement{Text: strings.Repeat("a", 1024-len(head)), Truncated: true},
+			},
+		},
+		{
+			name:    "unrecognized token yields no statement",
+			content: "stuck\nthe reason",
+			want:    StatusFile{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			writeStatusFile(t, wsPath, []byte(tt.content))
+
+			got := ReadStatusFile(wsPath, captureLogger(&bytes.Buffer{}))
+
+			if got != tt.want {
+				t.Errorf("ReadStatusFile(%q) = %+v, want %+v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReadStatusFile_NilLogger(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
 	// Should not panic with nil logger.
-	got := ReadStatusFile(wsPath, nil)
+	got := ReadStatusFile(wsPath, nil).Signal
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile(nil logger) = %q, want %q", got, StatusNone)
 	}
@@ -278,7 +360,7 @@ func TestReadStatusFile_SymlinkAtDotSortie(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf)).Signal
 
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (symlink escape)", got, StatusNone)
@@ -305,7 +387,7 @@ func TestReadStatusFile_SymlinkAtStatusFile(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf)).Signal
 
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (status symlink escape)", got, StatusNone)
@@ -334,7 +416,7 @@ func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf)).Signal
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (intra-workspace symlink must be rejected)", got, StatusNone)
 	}
@@ -361,7 +443,7 @@ func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
 	})
 
 	var logBuf bytes.Buffer
-	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf)).Signal
 
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q", got, StatusNone)

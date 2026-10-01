@@ -480,22 +480,22 @@ func writeReviewSummary(workspacePath string, meta domain.ReviewMetadata, logger
 // the returned signal is recognized, so a recognized value is never
 // observed by a later read at the same site.
 //
-// The removal is best-effort and never changes the returned signal: the
+// The removal is best-effort and never changes the returned file: the
 // caller sees the value that was read, whether or not the file was
 // actually removed.
-func readAndConsumeStatusSignal(workspacePath string, logger *slog.Logger) workspace.StatusSignal {
-	signal := workspace.ReadStatusFile(workspacePath, logger)
-	if signal.IsRecognized() {
+func readAndConsumeStatusSignal(workspacePath string, logger *slog.Logger) workspace.StatusFile {
+	status := workspace.ReadStatusFile(workspacePath, logger)
+	if status.Signal.IsRecognized() {
 		workspace.CleanupStatusFile(workspacePath, logger)
 	}
-	return signal
+	return status
 }
 
-func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal, bool, error) {
+func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusFile, bool, error) {
 	maxIter := params.Config.MaxIterations
 	iterations := make([]domain.ReviewIterationRecord, 0, maxIter)
 	logger := params.Logger
-	terminalSignal := workspace.StatusNone
+	var terminalStatus workspace.StatusFile
 	var expiryErr error
 
 	// cancelledAtEnding is read at each cut point rather than once the loop
@@ -585,20 +585,20 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 		*params.TurnsCompleted++
 
 		// Check A2O status for early abort signals.
-		statusSignal := readAndConsumeStatusSignal(params.WorkspacePath, logger)
-		if statusSignal == workspace.StatusBlocked {
+		statusFile := readAndConsumeStatusSignal(params.WorkspacePath, logger)
+		if statusFile.Signal == workspace.StatusBlocked {
 			logger.Info("self-review aborted by agent status",
 				slog.Int("iteration", i),
-				slog.String("status", string(statusSignal)),
+				slog.String("status", string(statusFile.Signal)),
 			)
 			iterations = append(iterations, domain.ReviewIterationRecord{
 				Iteration:           i,
 				DiffSizeBytes:       diffSize,
 				DiffTruncated:       truncated,
 				VerificationResults: verificationResults,
-				VerdictParseError:   fmt.Sprintf("aborted: agent status %q", statusSignal),
+				VerdictParseError:   fmt.Sprintf("aborted: agent status %q", statusFile.Signal),
 			})
-			terminalSignal = workspace.StatusBlocked
+			terminalStatus = statusFile
 			break
 		}
 
@@ -705,14 +705,14 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 		*params.TurnsCompleted++
 
 		// Check A2O status after fix turn.
-		statusSignal = readAndConsumeStatusSignal(params.WorkspacePath, logger)
-		if statusSignal == workspace.StatusBlocked {
+		statusFile = readAndConsumeStatusSignal(params.WorkspacePath, logger)
+		if statusFile.Signal == workspace.StatusBlocked {
 			logger.Info("self-review aborted by agent status after fix",
 				slog.Int("iteration", i),
-				slog.String("status", string(statusSignal)),
+				slog.String("status", string(statusFile.Signal)),
 			)
-			iterations[len(iterations)-1].VerdictParseError = fmt.Sprintf("aborted: agent status %q", statusSignal)
-			terminalSignal = workspace.StatusBlocked
+			iterations[len(iterations)-1].VerdictParseError = fmt.Sprintf("aborted: agent status %q", statusFile.Signal)
+			terminalStatus = statusFile
 			break
 		}
 	}
@@ -748,5 +748,5 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 	params.Metrics.IncSelfReviewSessions(finalVerdict)
 
-	return meta, terminalSignal, cancelledAtEnding, expiryErr
+	return meta, terminalStatus, cancelledAtEnding, expiryErr
 }

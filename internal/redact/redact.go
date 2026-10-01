@@ -228,6 +228,36 @@ func Mask(s string) string {
 	return string(maskBytes([]byte(s), spans))
 }
 
+// MaskTruncated is [Mask] for an s cut at its end from a longer text.
+// It also removes the longest trailing fragment, of 1 to len-1 bytes,
+// that is a proper prefix of a registered value, because the cut may
+// have split such a value. Only the text after the last [Marker] is
+// examined.
+func MaskTruncated(s string) string {
+	masked := Mask(s)
+	values := loadRegistered()
+	if len(values) == 0 {
+		return masked
+	}
+
+	tailStart := 0
+	if i := strings.LastIndex(masked, Marker); i >= 0 {
+		tailStart = i + len(Marker)
+	}
+	tail := masked[tailStart:]
+
+	cut := 0
+	for _, value := range values {
+		for n := min(len(value)-1, len(tail)); n > cut; n-- {
+			if strings.HasSuffix(tail, value[:n]) {
+				cut = n
+				break
+			}
+		}
+	}
+	return masked[:len(masked)-cut]
+}
+
 // Truncate returns [Mask](s) when it holds at most maxRunes runes;
 // otherwise its first maxRunes runes followed by "…" (U+2026), applied
 // after masking so a cut never splits a registered value.

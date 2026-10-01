@@ -156,6 +156,10 @@ type WorkerResult struct {
 	// when SoftStop is false.
 	SoftStopReason string
 
+	// SoftStopStatement is the text the agent wrote after the status token
+	// that produced SoftStopReason, zero whenever SoftStop is false.
+	SoftStopStatement workspace.StatusStatement
+
 	// ReviewMetadata summarizes the self-review outcome. Nil when self-review
 	// is disabled or the worker exited before the phase.
 	ReviewMetadata *domain.ReviewMetadata
@@ -1170,6 +1174,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// it after self-review has had a chance to run.
 	var pendingSoftStopReason string
 
+	// pendingSoftStopStatement is the statement of the read that produced
+	// pendingSoftStopReason, and is zero whenever that reason is empty.
+	var pendingSoftStopStatement workspace.StatusStatement
+
 	if err := publishWorkerState(0); err != nil {
 		logger.Warn("failed to write status state file at session start", slog.Any("error", err))
 	}
@@ -1342,9 +1350,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// Read the A2O status file to detect agent-reported blockage before
 		// a wasted tracker call. A recognized signal leaves the loop so the
 		// single post-loop teardown is the only exit path.
-		statusSignal := workspace.ReadStatusFile(wsResult.Path, logger)
-		if statusSignal.IsRecognized() {
-			pendingSoftStopReason = string(statusSignal)
+		statusFile := workspace.ReadStatusFile(wsResult.Path, logger)
+		if statusFile.Signal.IsRecognized() {
+			pendingSoftStopReason = string(statusFile.Signal)
+			pendingSoftStopStatement = statusFile.Statement
 			break
 		}
 
@@ -1419,8 +1428,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			)
 			workspace.CleanupStatusFile(wsResult.Path, logger)
 		}
-		var phaseSignal workspace.StatusSignal
-		reviewMeta, phaseSignal, cancelledAtEnding, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
+		var phaseStatus workspace.StatusFile
+		reviewMeta, phaseStatus, cancelledAtEnding, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:       session,
 			Issue:         issue,
 			WorkspacePath: wsResult.Path,
@@ -1444,11 +1453,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			TurnTimeoutMS:  cfg.Agent.TurnTimeoutMS,
 		})
 		// A blocked signal read inside the phase becomes the run's soft-stop
-		// reason unconditionally.
-		if phaseSignal == workspace.StatusBlocked {
+		// reason unconditionally, together with its statement.
+		if phaseStatus.Signal == workspace.StatusBlocked {
 			pendingSoftStopReason = string(workspace.StatusBlocked)
+			pendingSoftStopStatement = phaseStatus.Statement
 		}
 		pendingSoftStopReason = retractUnconfirmedNoChangeDeclaration(pendingSoftStopReason, reviewMeta, logger)
+		if pendingSoftStopReason == "" {
+			pendingSoftStopStatement = workspace.StatusStatement{}
+		}
 		phaseCut = phaseErr == nil && cancelledAtEnding
 	} else if selfReviewAdmitted {
 		phaseCut = true
@@ -1592,6 +1605,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		SSHHost:                      deps.SSHHost,
 		SoftStop:                     pendingSoftStopReason != "",
 		SoftStopReason:               pendingSoftStopReason,
+		SoftStopStatement:            pendingSoftStopStatement,
 		ReviewMetadata:               reviewMeta,
 		ObservedIssueState:           observedIssueState,
 		Usage:                        localUsage,

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -1266,7 +1268,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// The body is built synchronously to capture exit-time data; the
 	// delivery is detached so the event loop never blocks.
 	var eventType domain.EventType
-	var severity, body, lifecycle string
+	var severity, body, agentText, lifecycle string
 	switch {
 	case workerResult.ExitKind == WorkerExitCancelled:
 		return
@@ -1275,6 +1277,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		if workerResult.SoftStop {
 			eventType = domain.EventSessionStopped
 			body = buildSoftStopComment(runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
+			agentText = publicStatement(workerResult.SoftStopStatement)
 			if workerResult.SoftStopReason == string(workspace.StatusNoChangeNeeded) {
 				severity = "info"
 			}
@@ -1296,6 +1299,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		SessionID:  cmp.Or(workerResult.SessionID, entry.SessionID),
 		Attempt:    workerResult.Attempt,
 		Agent:      workerResult.AgentAdapter,
+		AgentText:  agentText,
 	}.notification(eventType, severity, body))
 
 	deliverDetached(ctx, &state.TrackerOpsWg, delivery, log, func(received bool, err error) {
@@ -1460,4 +1464,69 @@ func buildFailureComment(elapsed time.Duration, retryScheduled bool, nextAttempt
 func buildSoftStopComment(elapsed time.Duration, turnsCompleted int, reason string) string {
 	return fmt.Sprintf("Sortie session completed (agent signaled: %s).\nDuration: %s\nTurns: %d",
 		reason, elapsed.Truncate(time.Second).String(), turnsCompleted)
+}
+
+// maxPublicStatementRunes bounds the agent text a destination receives.
+const maxPublicStatementRunes = 1024
+
+// publicStatement returns the agent's stop statement in the form every
+// destination may show, or "" when nothing is left to show.
+//
+// Control characters are removed and invalid UTF-8 replaced before
+// masking, so removing one cannot assemble a registered value after the
+// mask ran. A statement cut at the read bound is masked as truncated text,
+// which also removes a trailing fragment of a registered value, and ends in
+// an ellipsis.
+func publicStatement(statement workspace.StatusStatement) string {
+	text := statement.Text
+	if statement.Truncated {
+		text = dropIncompleteTrailingRune(text)
+	}
+	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+	text = removeControlBytes(text)
+	text = strings.ToValidUTF8(text, "\uFFFD")
+	if statement.Truncated {
+		text = redact.MaskTruncated(text)
+	} else {
+		text = redact.Mask(text)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if statement.Truncated {
+		text += "\u2026"
+	}
+	return redact.Truncate(text, maxPublicStatementRunes)
+}
+
+// dropIncompleteTrailingRune removes a final multi-byte sequence that the
+// cut left without its continuation bytes.
+func dropIncompleteTrailingRune(text string) string {
+	for i := len(text) - 1; i >= 0 && i >= len(text)-utf8.UTFMax; i-- {
+		if !utf8.RuneStart(text[i]) {
+			continue
+		}
+		if utf8.FullRuneInString(text[i:]) {
+			return text
+		}
+		return text[:i]
+	}
+	return text
+}
+
+// removeControlBytes deletes every C0 control character except tab and
+// line feed, and DEL. Each is a single ASCII byte, so no multi-byte
+// sequence is affected.
+func removeControlBytes(text string) string {
+	var kept strings.Builder
+	kept.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if (b < 0x20 && b != '\t' && b != '\n') || b == 0x7f {
+			continue
+		}
+		kept.WriteByte(b)
+	}
+	return kept.String()
 }
