@@ -40,7 +40,8 @@ func fixtureProvenanceTxt(tag, commit string, assetLines ...string) string {
 	fmt.Fprintf(&b, "Tag:    %s\n", tag)
 	fmt.Fprintf(&b, "Commit: %s\n", commit)
 	for _, line := range assetLines {
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

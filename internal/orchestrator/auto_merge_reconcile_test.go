@@ -924,7 +924,7 @@ func TestReconcileAutoMerge_PreflightRetryExhausts(t *testing.T) {
 			return domain.MergeResult{}, nil
 		},
 	}
-	_ = realSCM
+	verifier.scm = realSCM
 	params := autoMergeParams(store, verifier, nil)
 
 	reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)

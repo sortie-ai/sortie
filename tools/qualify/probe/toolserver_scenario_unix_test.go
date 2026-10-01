@@ -42,6 +42,10 @@ func runMCPToolServer(_ []string, params mcpToolServerParams) int {
 			return 1
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "MCP tool server: read input: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

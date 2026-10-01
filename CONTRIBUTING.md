@@ -19,7 +19,7 @@ For larger work - new features, new adapters, architectural changes - open an is
 
 ## Setup
 
-**Requirements:** Go 1.26.1 (see [go.mod](go.mod)), golangci-lint.
+**Requirements:** Go 1.26.1 (see [go.mod](go.mod)), golangci-lint, gopls.
 
 ```bash
 git clone https://github.com/sortie-ai/sortie.git
