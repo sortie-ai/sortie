@@ -13,8 +13,8 @@ trap 'rm -f "$out"' EXIT
 
 # golangci-lint skips generated files, so they are not handed to gopls either.
 git ls-files -z '*.go' |
-	xargs -0 grep -LE '^// Code generated .* DO NOT EDIT\.$' |
-	xargs "$GOPLS" check -severity=hint >"$out"
+	xargs -0 grep -L --null -E '^// Code generated .* DO NOT EDIT\.$' |
+	xargs -0 "$GOPLS" check -severity=hint >"$out"
 
 # nolint_for FINDING LINTER: true when the finding's line, or the line above
 # it, carries a //nolint directive naming LINTER, as golangci-lint reads it.
