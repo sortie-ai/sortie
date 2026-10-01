@@ -103,7 +103,7 @@ check: lint lint-no-tests lint-shell test test-shell generate-check lint-tools l
 tidy: ## Tidy go.sum and prune stale entries from go.mod
 	$(GO) mod tidy
 
-##@ Tool module (tools/qualify)
+##@ Qualify module
 
 TOOLS_LINT_GOOS := $(filter-out windows,$(LINT_GOOS))
 
