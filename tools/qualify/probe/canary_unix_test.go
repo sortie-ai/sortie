@@ -65,6 +65,10 @@ func runUnauthenticated(args []string, _ struct{}) int {
 			return code
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "unauthenticated agent: read input: %v\n", err)
+		return 2
+	}
 	return 0
 }
 

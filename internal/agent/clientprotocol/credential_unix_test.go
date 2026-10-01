@@ -65,6 +65,10 @@ func runCredentialAgent(_ []string, params credentialAgentParams) int {
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "credential agent: read input: %v\n", err)
+		return 2
+	}
 	return 0
 }
 

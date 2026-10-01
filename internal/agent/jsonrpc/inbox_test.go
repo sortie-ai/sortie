@@ -249,7 +249,7 @@ func TestDeliver_PanicsOnNilInboxOrWrap(t *testing.T) {
 				t.Fatal("Deliver(inbox=nil, ...) did not panic, want panic")
 			}
 		}()
-		Deliver[Message](nil, func(m Message) Message { return m })
+		Deliver(nil, func(m Message) Message { return m })
 	})
 
 	t.Run("nil wrap", func(t *testing.T) {

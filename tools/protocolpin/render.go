@@ -122,7 +122,9 @@ func renderBody(action string, d drift, fp string) string {
 	if len(d.Integrity) > 0 {
 		b.WriteString("\nIntegrity findings:\n\n")
 		for _, f := range d.Integrity {
-			b.WriteString("- " + renderIntegrityLine(f) + "\n")
+			b.WriteString("- ")
+			b.WriteString(renderIntegrityLine(f))
+			b.WriteByte('\n')
 		}
 	}
 

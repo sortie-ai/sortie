@@ -136,7 +136,8 @@ type wireResponse struct {
 }
 
 type outboundReader struct {
-	ch chan []byte
+	ch  chan []byte
+	err error
 }
 
 // newOutboundReader starts scanning r in the background.
@@ -149,6 +150,7 @@ func newOutboundReader(r io.Reader) *outboundReader {
 			line := append([]byte(nil), scanner.Bytes()...)
 			rec.ch <- line
 		}
+		rec.err = scanner.Err()
 		close(rec.ch)
 	}()
 	return rec
@@ -159,6 +161,9 @@ func (r *outboundReader) next(t *testing.T) []byte {
 	select {
 	case line, ok := <-r.ch:
 		if !ok {
+			if r.err != nil {
+				t.Fatalf("read outbound stream: %v", r.err)
+			}
 			t.Fatal("outbound stream ended with no more lines")
 		}
 		return line
@@ -175,6 +180,9 @@ func (r *outboundReader) awaitMethod(t *testing.T, method string) (id json.RawMe
 		select {
 		case line, ok := <-r.ch:
 			if !ok {
+				if r.err != nil {
+					t.Fatalf("read outbound stream before method %q: %v", method, r.err)
+				}
 				t.Fatalf("outbound stream ended before method %q was written", method)
 			}
 			var h wireHeader
