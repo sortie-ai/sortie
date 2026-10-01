@@ -40,7 +40,7 @@ type historySample struct {
 // monitorDecision is the whole output the monitor writes to standard output.
 type monitorDecision struct {
 	Action         string `json:"action"`         // "none", "open", "reopen", "comment", or "close"
-	Classification string `json:"classification"` // "pass", "contract", "environment", or "not_a_sample"
+	Classification string `json:"classification"` // "pass", "test_failure", "environment", or "not_a_sample"
 	Title          string `json:"title"`
 	Body           string `json:"body"`       // the issue body for "open", the comment body otherwise; "" for "none"
 	Summary        string `json:"summary"`    // Markdown appended to the job summary on every run
@@ -88,6 +88,7 @@ func run(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		streaks:          streaks,
 		failureThreshold: *failureThreshold,
 		passThreshold:    *passThreshold,
+		reason:           chosen.Reason,
 	}
 
 	result := monitorDecision{

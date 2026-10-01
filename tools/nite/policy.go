@@ -103,7 +103,7 @@ type decision struct {
 // false downgrades open and reopen to none and close to comment. An
 // IncidentRead of false suppresses every incident-state mutation. Annotation
 // carries a non-empty GitHub workflow command whenever a read failure forces
-// a downgrade, or a warning when a failing streak is below its threshold.
+// a downgrade, or a notice when a failing streak is below its threshold.
 func decideAction(incidentState string, incidentNumber int, current sampleVerdict, streaks streakResult, failureThreshold, passThreshold int, historyRead, incidentRead bool) decision {
 	if current == verdictNotASample {
 		return decision{Action: "none", IncidentNumber: incidentNumber, Reason: "the sample executed no test and does not affect the streak"}
@@ -145,7 +145,7 @@ func decideAction(incidentState string, incidentNumber int, current sampleVerdic
 	if degradedBy != "" {
 		annotation = "::error::" + reason
 	} else if current == verdictFailing && action == "none" {
-		annotation = "::warning::" + reason
+		annotation = "::notice::" + reason
 	}
 
 	return decision{Action: action, IncidentNumber: incidentNumber, Reason: reason, Annotation: annotation}

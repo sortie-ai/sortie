@@ -154,6 +154,9 @@ decide_exit_trap() {
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		printf '%s: no NITE decision was executed; see the job log for the failure\n' "${ADAPTER_NAME:-unknown}" >>"$GITHUB_STEP_SUMMARY"
 	fi
+	if [ -n "${NITE_REPORT_DIR:-}" ] && [ -f "${NITE_REPORT_DIR}/summary.md" ]; then
+		printf '\nIncident action did not complete; see the job log.\n' >>"${NITE_REPORT_DIR}/summary.md"
+	fi
 	exit 0
 }
 
@@ -239,6 +242,13 @@ decide() {
 	_body=$(printf '%s' "$_decision_json" | jq -r '.body')
 	_summary=$(printf '%s' "$_decision_json" | jq -r '.summary')
 	_annotation=$(printf '%s' "$_decision_json" | jq -r '.annotation')
+	printf '%s\n' "$_summary"
+	printf '%s\n' "$_summary" >>"$GITHUB_STEP_SUMMARY"
+	if [ -n "${NITE_REPORT_DIR:-}" ]; then
+		mkdir -p "$NITE_REPORT_DIR"
+		printf '%s\n' "$_decision_json" >"${NITE_REPORT_DIR}/decision.json"
+		printf '%s\n' "$_summary" >"${NITE_REPORT_DIR}/summary.md"
+	fi
 
 	if [ -n "$_annotation" ]; then
 		printf '%s\n' "$_annotation"
@@ -280,8 +290,6 @@ decide() {
 		return 1
 		;;
 	esac
-
-	printf '%s\n' "$_summary" >>"$GITHUB_STEP_SUMMARY"
 
 	DECIDE_DONE=1
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -123,4 +125,75 @@ func TestRun(t *testing.T) {
 			t.Errorf("run(output failure) stderr = %q, want encode error", stderr.String())
 		}
 	})
+}
+
+func TestRunReportsLeafResults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		outcome string
+		report  string
+		want    []string
+	}{
+		{
+			name:    "failure includes evidence before later successful output",
+			outcome: "failure",
+			report: `{"Package":"a","Test":"TestSuite/broken","Action":"output","Output":"model unavailable\n"}
+{"Package":"a","Test":"TestSuite/broken","Action":"fail"}
+{"Package":"a","Test":"TestSuite/missing","Action":"output","Output":"fixture is not configured\n"}
+{"Package":"a","Test":"TestSuite/missing","Action":"skip"}
+{"Package":"a","Test":"TestSuite","Action":"fail"}
+{"Package":"b","Test":"TestSuite","Action":"pass"}
+` + fmt.Sprintf("{\"Package\":\"b\",\"Test\":\"TestSuite\",\"Action\":\"output\",\"Output\":%q}\n", strings.Repeat("later output\n", 1000)),
+			want: []string{"| Classification | test_failure |", "1 passed, 1 failed, 1 skipped", "| Coverage | partial |", "a: TestSuite/broken", "model unavailable", "a: TestSuite/missing", "fixture is not configured"},
+		},
+		{
+			name:    "successful parent with only skipped children is not a sample",
+			outcome: "success",
+			report: `{"Package":"a","Test":"TestSuite/optional","Action":"skip"}
+{"Package":"a","Test":"TestSuite","Action":"pass"}
+{"Package":"a","Action":"pass"}`,
+			want: []string{"| Classification | not_a_sample |", "0 passed, 0 failed, 1 skipped", "| Coverage | none |"},
+		},
+		{
+			name:    "parent assertion failure survives successful children",
+			outcome: "failure",
+			report: `{"Package":"a","Test":"TestSuite/ok","Action":"pass"}
+{"Package":"a","Test":"TestSuite","Action":"output","Output":"cleanup assertion failed\n"}
+{"Package":"a","Test":"TestSuite","Action":"fail"}`,
+			want: []string{"1 passed, 1 failed, 0 skipped", "cleanup assertion failed"},
+		},
+		{
+			name:    "mixed success shows partial coverage",
+			outcome: "success",
+			report: `{"Package":"a","Test":"TestLive","Action":"pass"}
+{"Package":"a","Test":"TestOptional","Action":"skip"}`,
+			want: []string{"| Classification | pass |", "1 passed, 0 failed, 1 skipped", "| Coverage | partial |", "a: TestOptional"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "report.json")
+			if err := os.WriteFile(path, []byte(tt.report), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			input := validMonitorInput()
+			input.Outcome, input.TestReportPath = tt.outcome, path
+			code, stdout, stderr := runNITE(t, input)
+			if code != 0 {
+				t.Fatalf("run() = %d: %s", code, stderr)
+			}
+			var decision monitorDecision
+			if err := json.Unmarshal([]byte(stdout), &decision); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(decision.Summary, want) {
+					t.Errorf("summary missing %q: %s", want, decision.Summary)
+				}
+			}
+		})
+	}
 }

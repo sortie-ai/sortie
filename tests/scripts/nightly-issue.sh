@@ -49,7 +49,7 @@ case "$*" in
 	;;
 *'createIssue'*) printf '%s\n' 555 ;;
 *'updateIssue'*) exit 0 ;;
-'issue comment'* | 'issue close'* | 'issue reopen'* | 'issue edit'*) exit 0 ;;
+'issue comment'* | 'issue close'* | 'issue reopen'* | 'issue edit'*) exit "${GH_FAIL_MUTATION:-0}" ;;
 *)
 	printf 'unexpected gh call: %s\n' "$*" >&2
 	exit 1
@@ -72,19 +72,25 @@ run_revision() {
 	: >"$_gh_log"
 	: >"$_bodies_log"
 	: >"$tmp/summary"
+	rm -f "$tmp/report/summary.md" "$tmp/report/decision.json"
 	PATH="$tmp/bin:$PATH" \
 		GH_TOKEN=test RUN_HISTORY_TOKEN=test GH_REPO=sortie-ai/sortie \
 		NITE_BIN="$tmp/bin/nite" \
+		NITE_REPORT_DIR="$tmp/report" \
 		ADAPTER=example ADAPTER_NAME=Example KIND=agent SOURCE=test ADAPTER_VERSION=1.0 \
 		TEST_ISSUE_TYPE_ID=IT_test JOB_NAME='Integration: Example' OUTCOME=success DEFAULT_BRANCH=main \
 		GITHUB_REPOSITORY=sortie-ai/sortie GITHUB_RUN_ID=42 GITHUB_SERVER_URL=https://github.com \
 		GITHUB_SHA=deadbeef GITHUB_STEP_SUMMARY="$tmp/summary" \
 		GH_ARGV_LOG="$_gh_log" GH_BODIES_LOG="$_bodies_log" \
 		GH_ISSUES_JSON="$ISSUES_JSON" \
+		GH_FAIL_MUTATION="${GH_FAIL_MUTATION:-0}" \
 		NITE_FORCE_ACTION="$NITE_FORCE_ACTION" NITE_FORCE_BODY="canned incident body" \
-		"$_script" decide
+		"$_script" decide >"$tmp/stdout"
 
-	[ "$(cat "$tmp/summary")" = summary ] || fail "${_script} decide (action ${NITE_FORCE_ACTION}) did not carry out the NITE decision: $(cat "$tmp/summary")"
+	grep -qx summary "$tmp/summary" || fail "job summary was not saved"
+	grep -qx summary "$tmp/stdout" || fail "summary was not printed to the job log"
+	grep -qx summary "$tmp/report/summary.md" || fail "report summary was not saved"
+	[ "$(jq -r .action "$tmp/report/decision.json")" = "$NITE_FORCE_ACTION" ] || fail "report decision was not saved"
 }
 
 check_action() {
@@ -111,3 +117,10 @@ check_action reopen "$closed_row" reopen
 check_action none '[]' none
 
 grep -q '=== call ===' "$tmp/gh.log" || fail "no gh calls were recorded for the none action"
+
+GH_FAIL_MUTATION=1
+ISSUES_JSON=$open_row
+NITE_FORCE_ACTION=comment
+run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
+grep -q 'Incident action did not complete' "$tmp/report/summary.md" || fail "incident failure was not recorded in the artifact"
+grep -q '^::error::' "$tmp/stdout" || fail "incident failure was not annotated"

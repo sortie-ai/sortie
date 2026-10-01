@@ -23,9 +23,8 @@ func baseRenderContext() renderContext {
 			AdapterName: "Example",
 		},
 		classification: sampleClassification{
-			Classification: "contract",
-			failedTests:    []string{"TestFoo"},
-			excerpt:        "FAIL\n",
+			Classification: "test_failure",
+			testReport:     testReport{failedTests: []string{"TestFoo"}, excerpt: "FAIL\n"},
 		},
 		streaks:          streakResult{failStreak: 2},
 		failureThreshold: 2,

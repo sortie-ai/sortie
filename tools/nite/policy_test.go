@@ -134,7 +134,7 @@ func TestStreaksAndDecideAction(t *testing.T) {
 		}{
 			{"not_a_sample", verdictNotASample},
 			{"pass", verdictPassing},
-			{"contract", verdictFailing},
+			{"test_failure", verdictFailing},
 			{"environment", verdictFailing},
 		}
 

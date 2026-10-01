@@ -1073,3 +1073,24 @@ func TestConformanceFatalArms(t *testing.T) {
 		})
 	}
 }
+
+func TestToolFailureDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	run := conformanceTurnRun()
+	run.Environment.Sentinel = conformanceSentinel
+	run.Exchanges[conformanceSecondTurnAt].ToolResults[0].Output = "permission denied " + conformanceSentinel + strings.Repeat("x", 3000)
+
+	got := strings.Join(toolPathViolations(run, conformanceNonce), "\n")
+	for _, want := range []string{"permission denied", "[redacted]", "[truncated]", `tool "read_file"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("toolPathViolations() = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, conformanceSentinel) {
+		t.Error("toolPathViolations() exposed the credential sentinel")
+	}
+	if len(got) > 2300 {
+		t.Errorf("toolPathViolations() returned %d bytes, want bounded output", len(got))
+	}
+}

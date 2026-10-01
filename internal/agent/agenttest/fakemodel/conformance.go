@@ -456,7 +456,7 @@ func toolPathViolations(run Run, nonce string) []string {
 		v.add("%s was answered with text, want the scripted call", requestLabel(turns[0]))
 	}
 	if len(turns) > 1 {
-		checkToolResult(v, turns[0], turns[1], nonce)
+		checkToolResult(v, turns[0], turns[1], nonce, run.Environment.Sentinel)
 	}
 
 	called := 0
@@ -490,7 +490,7 @@ func toolPathViolations(run Run, nonce string) []string {
 // checkToolResult records a violation unless next carries exactly one tool
 // result, that result answers call's exchange, and its output holds the
 // nonce.
-func checkToolResult(v *findings, call, next Exchange, nonce string) {
+func checkToolResult(v *findings, call, next Exchange, nonce, sentinel string) {
 	if call.Answer.Call == nil {
 		return
 	}
@@ -506,7 +506,14 @@ func checkToolResult(v *findings, call, next Exchange, nonce string) {
 		v.add("%s carries a tool result for tool %q, want tool %q", requestLabel(next), result.Name, call.Answer.Call.Name)
 	}
 	if !strings.Contains(result.Output, nonce) {
-		v.add("%s carries a tool result whose output does not contain the nonce", requestLabel(next))
+		output := result.Output
+		if sentinel != "" {
+			output = strings.ReplaceAll(output, sentinel, "[redacted]")
+		}
+		if len(output) > 2000 {
+			output = output[:2000] + "... [truncated]"
+		}
+		v.add("%s carries a tool result whose output does not contain the nonce; tool %q returned %q", requestLabel(next), call.Answer.Call.Name, output)
 	}
 }
 
@@ -668,7 +675,7 @@ func checkExhaustedExchange(v *findings, run Run, call, exhausted Exchange, nonc
 		v.add("the last %q event message %q does not contain the endpoint message %q", domain.EventTurnFailed, failed.Message, message)
 	}
 
-	checkToolResult(v, call, exhausted, nonce)
+	checkToolResult(v, call, exhausted, nonce, run.Environment.Sentinel)
 
 	if !reportsOnly(failures, exhausted) {
 		v.add("the endpoint reported %d failures %q, want exactly one containing %q", len(failures), failures, requestLabel(exhausted))

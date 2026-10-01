@@ -14,6 +14,7 @@ type renderContext struct {
 	streaks          streakResult
 	failureThreshold int
 	passThreshold    int
+	reason           string
 }
 
 // renderBody produces the issue or comment body for action, given the
@@ -122,17 +123,51 @@ func renderSummary(ctx renderContext, action string, incidentNumber int) string 
 	if incidentNumber != 0 {
 		incident = fmt.Sprintf("#%d", incidentNumber)
 	}
-	return fmt.Sprintf(
+	var summary strings.Builder
+	fmt.Fprintf(&summary,
 		"### NITE decision for `%s`\n\n"+
 			"| Field | Value |\n|---|---|\n"+
+			"| Run | %s |\n| Commit | `%s` |\n"+
 			"| Classification | %s |\n"+
 			"| Action | %s |\n"+
 			"| Failing streak | %d of %d required |\n"+
 			"| Passing streak | %d of %d required |\n"+
 			"| Incident | %s |\n",
-		ctx.input.AdapterName, ctx.classification.Classification, action,
+		ctx.input.AdapterName, ctx.input.RunURL, ctx.input.Commit, ctx.classification.Classification, action,
 		ctx.streaks.failStreak, ctx.failureThreshold,
 		ctx.streaks.passStreak, ctx.passThreshold,
 		incident,
 	)
+	report := ctx.classification
+	coverage := "complete"
+	if len(report.skippedTests) > 0 {
+		coverage = "partial"
+	}
+	if report.executed == 0 {
+		coverage = "none"
+	}
+	fmt.Fprintf(&summary, "| Tested version | %s |\n| Tests | %d passed, %d failed, %d skipped |\n| Coverage | %s |\n| Reason | %s |\n",
+		ctx.input.Version, report.passed, len(report.failedTests), len(report.skippedTests), coverage, ctx.reason)
+	if ctx.input.Outcome == "failure" {
+		summary.WriteString("\n### Failure evidence\n\n")
+		for _, failed := range report.failedTests {
+			fmt.Fprintf(&summary, "- `%s`\n", failed)
+		}
+		summary.WriteString("\n" + fencedOutput(report.excerpt))
+	}
+	if len(report.skippedTests) > 0 {
+		summary.WriteString("\n### Skipped tests\n\n")
+		for _, skipped := range report.skippedTests {
+			fmt.Fprintf(&summary, "- `%s: %s`\n\n%s", skipped.Package, skipped.Test, fencedOutput(skipped.Output))
+		}
+	}
+	return summary.String()
+}
+
+func fencedOutput(output string) string {
+	fence := "```"
+	for strings.Contains(output, fence) {
+		fence += "`"
+	}
+	return fence + "text\n" + output + "\n" + fence + "\n"
 }

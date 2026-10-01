@@ -371,11 +371,13 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 	}
 
 	// Resume via a fresh StartSession with the captured ID.
+	resumedSettings := integrationConfig()
+	resumedSettings["max_autopilot_continues"] = float64(6)
 	session2, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:   workspace,
 		AgentConfig:     domain.AgentConfig{Command: integrationCommand()},
 		ResumeSessionID: result1.SessionID,
-		Settings:        map[string]any{"model": "gpt-5", "effort": "low", "max_autopilot_continues": float64(5)},
+		Settings:        resumedSettings,
 	})
 	if err != nil {
 		t.Fatalf("StartSession (resume): %v", err)
