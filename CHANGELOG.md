@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-10-01
+
 ### Added
 
 - The command that starts your agent (`agent.command`) can now also be written as a list with one part per line, so a program path or an agent name that contains a space reaches the agent intact. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
@@ -1096,7 +1098,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.25.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.26.0...HEAD
+[1.26.0]: https://github.com/sortie-ai/sortie/compare/v1.25.0...v1.26.0
 [1.25.0]: https://github.com/sortie-ai/sortie/compare/v1.24.1...v1.25.0
 [1.24.1]: https://github.com/sortie-ai/sortie/compare/v1.24.0...v1.24.1
 [1.24.0]: https://github.com/sortie-ai/sortie/compare/v1.23.0...v1.24.0
