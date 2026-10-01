@@ -722,7 +722,7 @@ Additional fields (via Extra):
 
 | Field             | Type    | Default      | Dynamic Reload | Description                                                                                                             |
 | ----------------- | ------- | ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `max_log_lines`   | integer | `50`         | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative.                                   |
+| `max_log_lines`   | integer | `50`         | Requires restart | Maximum log lines of the CI excerpt injected into the prompt: the failing step's opening lines and last lines, or the end of the job log when that step cannot be found. Up to three extra lines starting with `[sortie]` come on top, so the excerpt holds at most this value plus three lines. `0` disables. Must be non-negative. |
 | `watch_window_ms` | integer | `86400000`   | Every tick        | Bounds a pending entry's age, measured from the last recorded head. `0` removes the clock bound. Must be non-negative and must not exceed `9223372036854`. |
 
 Example:
@@ -2338,7 +2338,7 @@ Non-nil only on turn 1 of a CI-fix continuation dispatch. Contains CI failure de
 | ------------------------- | --------------- | -------------------------------------------------------- |
 | `.ci_failure.status`      | string          | Aggregate CI pipeline status (`"failing"`).              |
 | `.ci_failure.check_runs`  | list of maps    | Individual check runs with `name`, `status`, `conclusion`, `details_url`. |
-| `.ci_failure.log_excerpt` | string          | Truncated log from the first failing check.              |
+| `.ci_failure.log_excerpt` | string          | Output of the failing step of the first failing check, or the end of its job log when that step cannot be found. The first line starts with `[sortie]` and takes one of four forms: it names the failing step; it names the failing step and says other steps ran at the same time, so their output is mixed in; it says the failing step could not be found and the lines are the end of the job log; or it says the step could not be found and the log was not read to its end. Up to two `[sortie] N lines omitted.` lines mark spans cut from a long step, so the excerpt holds at most `max_log_lines` plus three lines. A Gitea excerpt is the status description and URL and has no `[sortie]` line. Empty when no log is available. |
 | `.ci_failure.failing_count` | integer       | Number of failing check runs.                            |
 | `.ci_failure.ref`         | string          | The git ref that was queried.                            |
 
@@ -3057,7 +3057,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative; `merge_conflicts` defaults to `1`; restart required except for `ci_failure` |
 | `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`; restart required except for `ci_failure`                     |
 | `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`; restart required except for `ci_failure`       |
-| `reactions.ci_failure.max_log_lines`    | integer          | `50`                         | —                                        | CI log tail lines; `0` disables; non-negative; restart required                        |
+| `reactions.ci_failure.max_log_lines`    | integer          | `50`                         | —                                        | CI log excerpt lines; `0` disables; non-negative; restart required                      |
 | `reactions.<kind>.watch_window_ms`      | integer          | `86400000` for `ci_failure`, `1800000` for the other four | — | Bounds a pending entry's age; non-negative; not above `9223372036854`; `0` removes the bound; restart required except for `ci_failure` |
 | `reactions.review_comments.poll_interval_ms` | integer     | `120000`                     | —                                        | Review poll interval; min `30000`; restart required                                    |
 | `reactions.review_comments.debounce_ms` | integer          | `60000`                      | —                                        | Debounce after last comment; non-negative; restart required                            |
@@ -3214,7 +3214,7 @@ reactions:
   ci_failure:
     provider: github # Activate CI feedback via GitHub Checks API
     max_retries: 2 # CI-fix attempts before escalation
-    max_log_lines: 50 # Lines from first failing check log
+    max_log_lines: 50 # Log lines in the failing check excerpt
     escalation: label # "label" or "comment" on exhaustion
     escalation_label: needs-human # Label added when escalation is "label"
   # review_comments:

@@ -11,7 +11,7 @@ Inputs to prompt rendering:
 - `ci_failure` (map or nil): CI failure context injected into CI-fix continuation prompts via `CIResult.ToTemplateMap()`. Nil on initial dispatch and non-CI retries. When non-nil, contains:
   - `status`: aggregate CI pipeline status string (`failing`)
   - `check_runs`: list of individual check run maps (each with `name`, `status`, `conclusion`, `details_url`)
-  - `log_excerpt`: truncated log from the first failing check (empty string when unavailable)
+  - `log_excerpt`: the failing step's output, or the end of the job log when that step cannot be located, opened by a Sortie note line (empty string when unavailable)
   - `failing_count`: number of check runs with a failure conclusion
   - `ref`: the git ref that was queried
 
