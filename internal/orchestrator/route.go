@@ -256,13 +256,15 @@ func anyTitlePhraseMatch(phrases []string, title string) bool {
 	return false
 }
 
-// normalizeTitleText lowercases s, drops the emoji variation selectors,
-// replaces each run of white space with one space, and trims the ends.
-// Nothing else is folded: accents, Unicode forms, and ß stay as written.
+// normalizeTitleText folds every case form of a letter to one rune, drops
+// the emoji variation selectors, replaces each run of white space with one
+// space, and trims the ends. The fold is simple, not full: ß stays distinct
+// from ss, and accents and Unicode forms stay as written.
 func normalizeTitleText(s string) string {
 	var b strings.Builder
 	pendingSpace := false
-	for _, r := range strings.ToLower(s) {
+	for _, original := range s {
+		r := foldCase(original)
 		if isEmojiPresentationSelector(r) {
 			continue
 		}
@@ -277,6 +279,24 @@ func normalizeTitleText(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// foldCase maps r to the smallest letter in its simple case-folding orbit,
+// so σ, ς, and Σ, or s, S, and ſ, compare equal. Lowercasing runs first
+// because İ reaches i only through it. Only letters join an orbit, which
+// keeps U+0345 a combining mark rather than a spelling of ι.
+func foldCase(r rune) rune {
+	r = unicode.ToLower(r)
+	if !unicode.IsLetter(r) {
+		return r
+	}
+	canon := r
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < canon && unicode.IsLetter(f) {
+			canon = f
+		}
+	}
+	return canon
 }
 
 // isEmojiPresentationSelector reports whether r is U+FE0E or U+FE0F.

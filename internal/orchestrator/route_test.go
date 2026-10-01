@@ -905,6 +905,21 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		{name: "a combining mark after a letter and a variation selector still blocks the match", phrases: []string{"cafe"}, title: "cafe\ufe0f" + acuteMark + " opening hours", want: false},
 		{name: "a base letter with a combining accent does not match the bare base as a prefix", phrases: []string{"e"}, title: "e" + acuteMark + "cole", want: false},
 		{name: "sharp s is not folded to ss", phrases: []string{"stra\u00dfe"}, title: "STRASSE closed", want: false},
+
+		{name: "a final sigma in the phrase matches a capital sigma in the title", phrases: []string{"\u03bf\u03c2"}, title: "\u039f\u03a3 \u03bb\u03ac\u03b8\u03bf\u03c2", want: true},
+		{name: "a capital sigma in the phrase matches a final sigma in the title", phrases: []string{"\u039f\u03a3"}, title: "\u03bf\u03c2", want: true},
+		{name: "a long s in the title matches a plain s in the phrase", phrases: []string{"s"}, title: "add \u017f flag", want: true},
+		{name: "a long s in the phrase matches a capital S in the title", phrases: []string{"\u017f"}, title: "S", want: true},
+		{name: "the micro sign matches Greek mu", phrases: []string{"\u00b5"}, title: "\u03bc", want: true},
+		{name: "a Greek beta symbol matches beta", phrases: []string{"\u03d0"}, title: "\u03b2", want: true},
+
+		{name: "a dotted capital I in the title matches a plain i", phrases: []string{"i"}, title: "Fix \u0130 login", want: true},
+		{name: "a Greek word with a final sigma matches itself", phrases: []string{"\u03b9\u03c3\u03c4\u03cc\u03c2"}, title: "Fix \u03b9\u03c3\u03c4\u03cc\u03c2", want: true},
+		{name: "sharp s does not match ss", phrases: []string{"ss"}, title: "\u00df", want: false},
+		{name: "ss in the title does not match a phrase with sharp s", phrases: []string{"stra\u00dfe"}, title: "strasse", want: false},
+		{name: "ss in the phrase does not match sharp s in the title", phrases: []string{"strasse"}, title: "STRA\u00dfE", want: false},
+		{name: "a lone combining iota mark does not match the letter iota", phrases: []string{"\u03b9"}, title: "\u0345", want: false},
+		{name: "a bare phrase does not match the accented title", phrases: []string{"cafe"}, title: "Caf" + eAcute, want: false},
 	}
 
 	for _, tt := range tests {
