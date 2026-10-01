@@ -37,3 +37,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0029](0029-adopt-agent-client-protocol-as-a-generic-agent-transport.md) | Adopt the Agent Client Protocol as a Single Generic Agent Transport | Accepted |
 | [0030](0030-keep-both-kinds-registered-and-retire-only-at-parity.md) | Keep Both Kinds Registered and Retire a Hand-Written One Only at Parity | Accepted |
 | [0031](0031-let-a-dispatch-rule-carry-its-agent-kinds-settings.md) | Let a Dispatch Rule Carry the Settings of the Agent Kind It Selects | Accepted |
+| [0032](0032-route-outbound-messages-through-per-destination-event-subscriptions.md) | Route Outbound Messages Through Per-Destination Event Subscriptions | Accepted |
