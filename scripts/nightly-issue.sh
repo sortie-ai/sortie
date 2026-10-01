@@ -138,30 +138,30 @@ history_json_from_file() {
 	' <"$1"
 }
 
-# decide_exit_trap is installed before decide takes any other action.
-# It fires on EXIT, HUP, INT, and TERM; when DECIDE_DONE was never set,
-# no decision was carried out, so it announces the fault on the run
-# page and in the job summary itself, calling neither the monitor nor
-# gh, and forces a clean exit so a monitor or GitHub-API fault never
-# reddens a shard whose own tests passed.
+# Reporting faults must remain visible without failing a shard whose tests passed.
 decide_exit_trap() {
 	if [ "${DECIDE_TRAP_RUNNING:-0}" -eq 1 ] || [ "$DECIDE_DONE" -eq 1 ]; then
 		return
 	fi
 	DECIDE_TRAP_RUNNING=1
 
-	printf '::error::nightly-issue.sh decide for %s terminated before a NITE decision was carried out\n' "${ADAPTER_NAME:-unknown}"
+	_failure='No NITE decision was persisted; see the job log.'
+	if [ "$DECISION_PERSISTED" -eq 1 ]; then
+		_failure='Incident action did not complete; the NITE decision was persisted; see the job log.'
+	fi
+	printf '::error::nightly-issue.sh decide for %s: %s\n' "${ADAPTER_NAME:-unknown}" "$_failure"
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-		printf '%s: no NITE decision was executed; see the job log for the failure\n' "${ADAPTER_NAME:-unknown}" >>"$GITHUB_STEP_SUMMARY"
+		printf '%s: %s\n' "${ADAPTER_NAME:-unknown}" "$_failure" >>"$GITHUB_STEP_SUMMARY"
 	fi
 	if [ -n "${NITE_REPORT_DIR:-}" ] && [ -f "${NITE_REPORT_DIR}/summary.md" ]; then
-		printf '\nIncident action did not complete; see the job log.\n' >>"${NITE_REPORT_DIR}/summary.md"
+		printf '\n%s\n' "$_failure" >>"${NITE_REPORT_DIR}/summary.md"
 	fi
 	exit 0
 }
 
 decide() {
 	DECIDE_DONE=0
+	DECISION_PERSISTED=0
 	trap decide_exit_trap EXIT HUP INT TERM
 
 	require_tools gh jq awk date mktemp sort head cut
@@ -249,6 +249,7 @@ decide() {
 		printf '%s\n' "$_decision_json" >"${NITE_REPORT_DIR}/decision.json"
 		printf '%s\n' "$_summary" >"${NITE_REPORT_DIR}/summary.md"
 	fi
+	DECISION_PERSISTED=1
 
 	if [ -n "$_annotation" ]; then
 		printf '%s\n' "$_annotation"

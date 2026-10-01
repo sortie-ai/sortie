@@ -13,8 +13,9 @@ binary.
 Each integration job writes its decision to the job summary and the job log.
 The `nightly-<adapter>-<attempt>` artifact retains `summary.md` and
 `decision.json` for 14 days, including when tests fail or the incident action
-fails. `action` describes the selected action; an action failure is appended to
-the summary and annotated in the log.
+fails. `action` describes the selected action. If that action fails after the
+decision is persisted, the job summary, artifact summary, and error annotation
+all report the incomplete action separately from a missing decision.
 
 The summary includes the tested version, passed/failed/skipped counts, coverage,
 incident streaks, the action's reason, failure output, and skipped-test output.

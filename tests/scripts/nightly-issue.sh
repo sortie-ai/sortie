@@ -61,6 +61,7 @@ chmod +x "$tmp/bin/gh"
 cat >"$tmp/bin/nite" <<'EOF'
 #!/bin/sh
 cat >/dev/null
+[ "${NITE_FAIL:-0}" -eq 0 ] || exit 1
 printf '{"action":"%s","body":"%s","summary":"summary","annotation":""}\n' "$NITE_FORCE_ACTION" "$NITE_FORCE_BODY"
 EOF
 chmod +x "$tmp/bin/nite"
@@ -84,13 +85,16 @@ run_revision() {
 		GH_ARGV_LOG="$_gh_log" GH_BODIES_LOG="$_bodies_log" \
 		GH_ISSUES_JSON="$ISSUES_JSON" \
 		GH_FAIL_MUTATION="${GH_FAIL_MUTATION:-0}" \
+		NITE_FAIL="${NITE_FAIL:-0}" \
 		NITE_FORCE_ACTION="$NITE_FORCE_ACTION" NITE_FORCE_BODY="canned incident body" \
 		"$_script" decide >"$tmp/stdout"
 
-	grep -qx summary "$tmp/summary" || fail "job summary was not saved"
-	grep -qx summary "$tmp/stdout" || fail "summary was not printed to the job log"
-	grep -qx summary "$tmp/report/summary.md" || fail "report summary was not saved"
-	[ "$(jq -r .action "$tmp/report/decision.json")" = "$NITE_FORCE_ACTION" ] || fail "report decision was not saved"
+	if [ "${NITE_FAIL:-0}" -eq 0 ]; then
+		grep -qx summary "$tmp/summary" || fail "job summary was not saved"
+		grep -qx summary "$tmp/stdout" || fail "summary was not printed to the job log"
+		grep -qx summary "$tmp/report/summary.md" || fail "report summary was not saved"
+		[ "$(jq -r .action "$tmp/report/decision.json")" = "$NITE_FORCE_ACTION" ] || fail "report decision was not saved"
+	fi
 }
 
 check_action() {
@@ -124,3 +128,20 @@ NITE_FORCE_ACTION=comment
 run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
 grep -q 'Incident action did not complete' "$tmp/report/summary.md" || fail "incident failure was not recorded in the artifact"
 grep -q '^::error::' "$tmp/stdout" || fail "incident failure was not annotated"
+for output in "$tmp/stdout" "$tmp/summary" "$tmp/report/summary.md"; do
+	grep -q 'Incident action did not complete; the NITE decision was persisted' "$output" || fail "mutation failure was misreported in $output"
+	if grep -q 'no NITE decision' "$output"; then
+		fail "persisted decision was reported as missing in $output"
+	fi
+done
+
+NITE_FAIL=1
+run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
+for output in "$tmp/stdout" "$tmp/summary"; do
+	grep -q 'No NITE decision was persisted' "$output" || fail "missing decision was misreported in $output"
+done
+[ ! -f "$tmp/report/decision.json" ] || fail "failed monitor left a decision artifact"
+[ ! -f "$tmp/report/summary.md" ] || fail "failed monitor left a summary artifact"
+if grep -qx issue "$tmp/gh.log"; then
+	fail "failed monitor attempted an incident mutation"
+fi
