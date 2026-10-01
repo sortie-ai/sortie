@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -564,7 +565,16 @@ func escalateMergeCompletionMissingSHA(
 			return
 		}
 
-		received, err := deliverEvent(dctx, delivery, escalLog).TrackerComment()
+		// Only the tracker comment decides the marker, so a slow Slack or
+		// webhook send must not spend the shared deadline first.
+		trackerDelivery, others := delivery.SplitTrackerComment()
+		var sends sync.WaitGroup
+		defer sends.Wait()
+		if !others.Empty() {
+			sends.Go(func() { deliverEvent(dctx, others, escalLog) })
+		}
+
+		received, err := deliverEvent(dctx, trackerDelivery, escalLog).TrackerComment()
 		if received && err != nil {
 			escalLog.Error("merge_completion missing-SHA escalation comment failed; polling remains stopped and a fresh pending entry can retry delivery",
 				slog.Any("error", err),
