@@ -117,6 +117,26 @@ func TestStopStatement_PublicStatement(t *testing.T) {
 	}
 }
 
+func TestStopStatement_PublicStatementMasksSecretHoldingARewrittenByte(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range []string{"\r", "\x01"} {
+		buf := make([]byte, 16)
+		if _, err := rand.Read(buf); err != nil {
+			t.Fatalf("rand.Read: %v", err)
+		}
+		withByte := "stopsecret-" + hex.EncodeToString(buf[:8]) + b + hex.EncodeToString(buf[8:])
+		redact.Add("stop statement test", withByte)
+		statement := workspace.StatusStatement{Text: "token=" + withByte + " done"}
+
+		got := publicStatement(statement)
+
+		if want := "token=" + redact.Marker + " done"; got != want {
+			t.Errorf("publicStatement(secret holding %q) = %q, want %q", b, got, want)
+		}
+	}
+}
+
 func TestStopStatement_PublicStatementLeavesNoSecretPrefixAtAnyCut(t *testing.T) {
 	t.Parallel()
 

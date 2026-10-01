@@ -1482,6 +1482,9 @@ func publicStatement(statement workspace.StatusStatement) string {
 	if statement.Truncated {
 		text = dropIncompleteTrailingRune(text)
 	}
+	// A registered value may itself hold a byte the cleanup rewrites, so
+	// it is masked as written before the cleanup and once more after it.
+	text = redact.Mask(text)
 	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
 	text = removeControlBytes(text)
 	text = strings.ToValidUTF8(text, "\uFFFD")

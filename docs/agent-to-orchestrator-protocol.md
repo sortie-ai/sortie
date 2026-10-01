@@ -226,15 +226,16 @@ The kept statement is therefore empty whenever the run's soft-stop token is empt
 Before publication the orchestrator normalizes the kept statement in this order:
 
 1. When the file was longer than 1024 bytes, drop a trailing incomplete UTF-8 sequence left by the cut.
-2. Convert CRLF and lone CR to LF.
-3. Delete every C0 control character except tab and line feed, and delete DEL.
-4. Replace each invalid UTF-8 sequence with U+FFFD.
-5. Mask every registered secret (Section 7.4). When the file was longer than 1024 bytes, the masking also removes a trailing fragment that is a prefix of a registered secret, so the cut cannot leave the start of a secret behind.
-6. Trim leading and trailing whitespace.
-7. When the file was longer than 1024 bytes, append an ellipsis (U+2026).
-8. Cap the result at 1024 characters, ending in an ellipsis when it is cut.
+2. Mask every registered secret (Section 7.4) in the text as written.
+3. Convert CRLF and lone CR to LF.
+4. Delete every C0 control character except tab and line feed, and delete DEL.
+5. Replace each invalid UTF-8 sequence with U+FFFD.
+6. Mask every registered secret again. When the file was longer than 1024 bytes, this masking also removes a trailing fragment that is a prefix of a registered secret, so the cut cannot leave the start of a secret behind; the fragment is found before any secret inside it is masked.
+7. Trim leading and trailing whitespace.
+8. When the file was longer than 1024 bytes, append an ellipsis (U+2026).
+9. Cap the result at 1024 characters, ending in an ellipsis when it is cut.
 
-Control characters are removed before masking so that removing one cannot assemble a registered secret after masking has run. A statement that is empty after step 6 is absent.
+Masking runs on both sides of steps 3 to 5: before them so that a secret which itself holds a byte they rewrite is still recognized, and after them so that removing a byte cannot assemble a registered secret once masking has run. A statement that is empty after step 7 is absent.
 
 #### 2.7.3 Absence
 
