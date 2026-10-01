@@ -1373,7 +1373,7 @@ Before a reason leaves Sortie, Sortie removes control characters, replaces bytes
 | Destination | What it receives |
 | ----------- | ---------------- |
 | `tracker_comment` | Sortie's usual comment, then the reason in one literal block, shown by the tracker as plain text. A mention, link, markup, or slash command inside it takes no effect. |
-| `slack` | Sortie's usual text, a blank line, and the reason, with `&`, `<`, and `>` written as `&amp;`, `&lt;`, and `&gt;` so Slack shows it as written and never as a mention or link. |
+| `slack` | Sortie's usual text, a blank line, and the reason, with `&`, `<`, and `>` written as `&amp;`, `&lt;`, and `&gt;` so it never becomes a mention or a labeled link. Slack still makes a bare web address in it clickable and applies its own text formatting. |
 | `webhook` | The reason in the `agent_text` key, apart from `body`. |
 
 A status with no reason, or a reason that is empty after this cleanup, changes nothing: the comment and the notifications are exactly what Sortie sent before the reason existed.
