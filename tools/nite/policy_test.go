@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestStreaksAndDecideAction covers deriveStreaks and decideAction: the
 // streak pseudocode, every row of the decision table, the five named
@@ -343,15 +346,15 @@ func TestStreaksAndDecideAction(t *testing.T) {
 		}
 	})
 
-	t.Run("history_read_false_does_not_affect_comment", func(t *testing.T) {
+	t.Run("history_read_false_preserves_comment_and_reports_error", func(t *testing.T) {
 		t.Parallel()
 
 		got := decideAction("open", 5, verdictFailing, streakResult{failStreak: 1}, 1, 1, false, true)
 		if got.Action != "comment" {
 			t.Errorf("decideAction(%q, ..., historyRead=false) = %q, want %q", "open", got.Action, "comment")
 		}
-		if got.Annotation != "" {
-			t.Errorf("decideAction(%q, ..., historyRead=false).Annotation = %q, want empty", "open", got.Annotation)
+		if !strings.HasPrefix(got.Annotation, "::error::") {
+			t.Errorf("decideAction(%q, ..., historyRead=false).Annotation = %q, want a read error", "open", got.Annotation)
 		}
 	})
 }

@@ -102,8 +102,8 @@ type decision struct {
 // incident-state/sample/threshold decision table. A HistoryRead of
 // false downgrades open and reopen to none and close to comment. An
 // IncidentRead of false suppresses every incident-state mutation. Annotation
-// carries a non-empty GitHub workflow command whenever a read failure forces
-// a downgrade, or a notice when a failing streak is below its threshold.
+// reports read failures even below the threshold, or a notice when a healthy
+// read confirms that a failing streak is below its threshold.
 func decideAction(incidentState string, incidentNumber int, current sampleVerdict, streaks streakResult, failureThreshold, passThreshold int, historyRead, incidentRead bool) decision {
 	if current == verdictNotASample {
 		return decision{Action: "none", IncidentNumber: incidentNumber, Reason: "the sample executed no test and does not affect the streak"}
@@ -111,38 +111,27 @@ func decideAction(incidentState string, incidentNumber int, current sampleVerdic
 
 	action, reason := tableAction(incidentState, current, streaks, failureThreshold, passThreshold)
 
-	degradedBy := ""
 	if !historyRead {
+		reason = "the prior-run history could not be read; " + reason
 		switch action {
 		case "open", "reopen":
 			action = "none"
 			reason = "the prior-run history could not be read, so a failing streak cannot be confirmed"
-			degradedBy = "history"
 		case "close":
 			action = "comment"
 			reason = "the prior-run history could not be read, so the recovery is reported without closing the incident"
-			degradedBy = "history"
 		}
 	}
 	if !incidentRead {
-		switch action {
-		case "open":
-			action = "none"
-			reason = "the incident listing could not be read, so an existing incident cannot be ruled out"
-			degradedBy = "incident"
-		case "reopen", "close":
-			action = "none"
-			reason = "the incident listing could not be read, so the incident state cannot be confirmed"
-			degradedBy = "incident"
-		case "comment":
-			action = "none"
-			reason = "the incident listing could not be read, so the incident cannot be confirmed"
-			degradedBy = "incident"
+		action = "none"
+		reason = "the incident listing could not be read, so the incident state cannot be confirmed"
+		if !historyRead {
+			reason += "; the prior-run history also could not be read"
 		}
 	}
 
 	annotation := ""
-	if degradedBy != "" {
+	if !historyRead || !incidentRead {
 		annotation = "::error::" + reason
 	} else if current == verdictFailing && action == "none" {
 		annotation = "::notice::" + reason

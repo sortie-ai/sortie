@@ -76,6 +76,7 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 
 	var output strings.Builder
 	results := make(map[string]goTestEvent)
+	packages := make(map[string]goTestEvent)
 	parents := make(map[string]bool)
 	failedParents := make(map[string]bool)
 	var decoded int
@@ -91,9 +92,13 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 		output.WriteString(event.Output)
 
 		if event.Test == "" {
+			result := packages[event.Package]
+			result.Output = excerptTail(result.Output + event.Output)
 			if event.Action == "fail" {
 				report.packageFailed = true
+				result.Action = "fail"
 			}
+			packages[event.Package] = result
 			continue
 		}
 		key := event.Package + ": " + event.Test
@@ -127,7 +132,7 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 	var failures strings.Builder
 	for _, key := range slices.Sorted(maps.Keys(results)) {
 		result := results[key]
-		if parents[key] && (result.Action != "fail" || failedParents[key]) {
+		if parents[key] && (result.Action == "pass" || result.Action == "fail" && failedParents[key]) {
 			continue
 		}
 		switch result.Action {
@@ -140,6 +145,16 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 			fmt.Fprintf(&failures, "%s\n%s\n", key, result.Output)
 		case "skip":
 			report.skippedTests = append(report.skippedTests, result)
+		case "":
+			if result.Output != "" {
+				fmt.Fprintf(&failures, "%s\n%s\n", key, result.Output)
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(packages)) {
+		result := packages[name]
+		if result.Action == "fail" && result.Output != "" {
+			fmt.Fprintf(&failures, "%s\n%s\n", name, result.Output)
 		}
 	}
 	if failures.Len() > 0 {

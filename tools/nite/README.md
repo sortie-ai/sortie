@@ -21,8 +21,8 @@ The summary includes the tested version, passed/failed/skipped counts, coverage,
 incident streaks, the action's reason, failure output, and skipped-test output.
 Counts identify tests by package and name and exclude parent suites whose
 results duplicate their children. A parent's own failure is retained when none
-of its children failed. A passing parent with only skipped children is not an
-executed test.
+of its children failed. A parent's skip and its reason are retained even after
+children ran. A passing parent with only skipped children is not an executed test.
 
 | Classification | Meaning |
 | --- | --- |
@@ -37,7 +37,9 @@ suite, not all possible integration behavior. Partial coverage does not change
 the incident policy. Prior samples are still inferred from GitHub job
 conclusions, which do not carry test counts or coverage.
 
-Failure excerpts prefer failing-test output over later successful-test output
-and retain at most 6,000 bytes. A first failure below the incident threshold
-produces a notice; the job still fails. Errors reading history or applying an
-incident action remain errors.
+Failure excerpts include failing-test, unfinished-test, and failed-package
+output instead of later successful-test output, retaining at most 6,000 bytes.
+A first failure below the incident threshold
+produces a notice; the job still fails. For an executed sample, failed history
+or incident-list reads remain errors even below the incident threshold.
+Errors applying an incident action also remain errors.

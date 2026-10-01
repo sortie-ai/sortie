@@ -149,12 +149,31 @@ func TestRunReportsLeafResults(t *testing.T) {
 			want: []string{"| Classification | test_failure |", "1 passed, 1 failed, 1 skipped", "| Coverage | partial |", "a: TestSuite/broken", "model unavailable", "a: TestSuite/missing", "fixture is not configured"},
 		},
 		{
+			name:    "timeout after ordinary failure preserves all failure sources",
+			outcome: "failure",
+			report: `{"Package":"a","Test":"TestBroken","Action":"output","Output":"ordinary failure evidence\n"}
+{"Package":"a","Test":"TestBroken","Action":"fail"}
+{"Package":"a","Test":"TestHung","Action":"output","Output":"panic: test timed out after 100ms\n"}
+{"Package":"a","Action":"output","Output":"package terminated unexpectedly\n"}
+{"Package":"a","Action":"fail"}
+{"Package":"b","Test":"TestOK","Action":"pass"}`,
+			want: []string{"| Classification | test_failure |", "ordinary failure evidence", "panic: test timed out after 100ms", "package terminated unexpectedly"},
+		},
+		{
 			name:    "successful parent with only skipped children is not a sample",
 			outcome: "success",
 			report: `{"Package":"a","Test":"TestSuite/optional","Action":"skip"}
 {"Package":"a","Test":"TestSuite","Action":"pass"}
 {"Package":"a","Action":"pass"}`,
 			want: []string{"| Classification | not_a_sample |", "0 passed, 0 failed, 1 skipped", "| Coverage | none |"},
+		},
+		{
+			name:    "parent skip after a passing child retains its reason",
+			outcome: "success",
+			report: `{"Package":"a","Test":"TestSuite/ok","Action":"pass"}
+{"Package":"a","Test":"TestSuite","Action":"output","Output":"remaining fixtures unavailable\n"}
+{"Package":"a","Test":"TestSuite","Action":"skip"}`,
+			want: []string{"1 passed, 0 failed, 1 skipped", "| Coverage | partial |", "a: TestSuite", "remaining fixtures unavailable"},
 		},
 		{
 			name:    "parent assertion failure survives successful children",
@@ -193,6 +212,49 @@ func TestRunReportsLeafResults(t *testing.T) {
 				if !strings.Contains(decision.Summary, want) {
 					t.Errorf("summary missing %q: %s", want, decision.Summary)
 				}
+			}
+		})
+	}
+}
+
+func TestRunReportsDegradedReadsBelowThreshold(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		state        string
+		outcome      string
+		historyRead  bool
+		incidentRead bool
+		wantAction   string
+		wantEvidence string
+	}{
+		{"missing history before opening", "absent", "failure", false, true, "none", "history"},
+		{"missing history before reopening", "closed", "failure", false, true, "none", "history"},
+		{"missing history before closing", "open", "success", false, true, "comment", "history"},
+		{"missing incidents on failure", "absent", "failure", true, false, "none", "incident listing"},
+		{"missing incidents on success", "absent", "success", true, false, "none", "incident listing"},
+		{"both reads failed", "absent", "failure", false, false, "none", "history"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := validMonitorInput()
+			input.IncidentState, input.Outcome = tt.state, tt.outcome
+			if tt.state != "absent" {
+				input.IncidentNumber = 42
+			}
+			input.HistoryRead, input.IncidentRead = tt.historyRead, tt.incidentRead
+			code, stdout, stderr := runNITE(t, input, "-failure-threshold=2", "-pass-threshold=2")
+			if code != 0 {
+				t.Fatalf("run() = %d: %s", code, stderr)
+			}
+			var got monitorDecision
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Action != tt.wantAction || !strings.HasPrefix(got.Annotation, "::error::") || !strings.Contains(got.Annotation, tt.wantEvidence) {
+				t.Errorf("run() action=%q annotation=%q, want action=%q and error naming %q", got.Action, got.Annotation, tt.wantAction, tt.wantEvidence)
 			}
 		})
 	}
