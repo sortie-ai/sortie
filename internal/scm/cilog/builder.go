@@ -238,7 +238,7 @@ type tailWindow struct {
 }
 
 func (w *tailWindow) push(line string) {
-	if len(w.lines) >= 2*w.max {
+	if len(w.lines)-w.max >= w.max {
 		kept := copy(w.lines, w.lines[len(w.lines)-w.max:])
 		clear(w.lines[kept:])
 		w.lines = w.lines[:kept]

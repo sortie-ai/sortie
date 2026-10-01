@@ -2,6 +2,7 @@ package cilog_test
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -555,6 +556,7 @@ func TestBuilder_TailBody(t *testing.T) {
 		{"exactly the budget", 5, numbered("j", 1, 5), numbered("j", 1, 5)},
 		{"more job lines than the budget keeps the last ones with no omission line", 5, numbered("j", 1, 500), numbered("j", 496, 500)},
 		{"budget of one", 1, numbered("j", 1, 9), []string{"j9"}},
+		{"largest accepted budget", math.MaxInt, numbered("j", 1, 3), numbered("j", 1, 3)},
 	}
 
 	for _, tt := range tests {
