@@ -559,7 +559,8 @@ func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text str
 // block. On version "3" the block is an ADF codeBlock node holding one
 // text node. On version "2" it is a {noformat} block whose content has
 // a zero-width space inserted after every brace that starts a
-// case-insensitive "noformat", so the content cannot close the block.
+// case-insensitive "noformat", so the content cannot close the block,
+// and after every bracket that opens a [~user] mention.
 func (a *JiraAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
 		return a.postComment(ctx, issueID, literalCommentPayload(a.apiVersion, text, literal))
@@ -597,23 +598,25 @@ func commentPayload(apiVersion, text string) any {
 // literal block.
 func literalCommentPayload(apiVersion, text, literal string) any {
 	if apiVersion == "2" {
-		return map[string]any{"body": text + "\n\n{noformat}\n" + breakNoformatMarkers(literal) + "\n{noformat}"}
+		return map[string]any{"body": text + "\n\n{noformat}\n" + inertNoformatContent(literal) + "\n{noformat}"}
 	}
 	return buildADFLiteralComment(text, literal)
 }
 
-// breakNoformatMarkers inserts a zero-width space after every brace that
+// inertNoformatContent inserts a zero-width space after every brace that
 // starts the word noformat, in any letter case, so wiki markup inside the
-// block cannot terminate it.
-func breakNoformatMarkers(literal string) string {
+// block cannot terminate it. It also inserts one after every bracket that
+// opens a [~user] mention, because Jira Server parses mentions inside a
+// {noformat} block and would notify that user.
+func inertNoformatContent(literal string) string {
 	const word = "noformat"
 	var out strings.Builder
 	for i := 0; i < len(literal); i++ {
 		out.WriteByte(literal[i])
-		if literal[i] != '{' {
-			continue
-		}
-		if i+1+len(word) <= len(literal) && strings.EqualFold(literal[i+1:i+1+len(word)], word) {
+		rest := literal[i+1:]
+		switch {
+		case literal[i] == '{' && len(rest) >= len(word) && strings.EqualFold(rest[:len(word)], word),
+			literal[i] == '[' && strings.HasPrefix(rest, "~"):
 			out.WriteString("\u200b")
 		}
 	}
