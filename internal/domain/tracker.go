@@ -106,6 +106,13 @@ type TrackerAdapter interface {
 	// All errors are non-fatal; the orchestrator logs WARN and continues.
 	CommentIssue(ctx context.Context, issueID string, text string) error
 
+	// CommentIssueWithLiteral posts text followed by literal rendered as the
+	// tracker's literal block, so the tracker shows literal verbatim and acts
+	// on nothing in it. literal is non-empty valid UTF-8 holding no C0
+	// control character other than tab and line feed, and no DEL. Errors and
+	// cancellation behave as [TrackerAdapter.CommentIssue] documents.
+	CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error
+
 	// AddLabel adds a label to the specified issue. Used for CI failure
 	// escalation. Returns nil on success.
 	//

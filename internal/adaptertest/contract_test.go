@@ -101,6 +101,7 @@ var contractTrackerAdapterMethods = map[string]bool{
 	"FetchIssueBlockers":            true,
 	"TransitionIssue":               true,
 	"CommentIssue":                  true,
+	"CommentIssueWithLiteral":       true,
 	"AddLabel":                      true,
 }
 

@@ -154,6 +154,7 @@ type mockRetryTracker struct {
 type mockRetryCommentCall struct {
 	IssueID string
 	Text    string
+	Literal string
 }
 
 var _ domain.TrackerAdapter = (*mockRetryTracker)(nil)
@@ -192,6 +193,11 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 // detached goroutine, never synchronously from HandleRetryTimer.
 func (m *mockRetryTracker) CommentIssue(_ context.Context, issueID, text string) error {
 	m.commentCalls = append(m.commentCalls, mockRetryCommentCall{IssueID: issueID, Text: text})
+	return m.commentIssueErr
+}
+
+func (m *mockRetryTracker) CommentIssueWithLiteral(_ context.Context, issueID, text, literal string) error {
+	m.commentCalls = append(m.commentCalls, mockRetryCommentCall{IssueID: issueID, Text: text, Literal: literal})
 	return m.commentIssueErr
 }
 

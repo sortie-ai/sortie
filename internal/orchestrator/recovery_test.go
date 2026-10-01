@@ -698,6 +698,9 @@ func (s *recoveryTrackerStub) TransitionIssue(_ context.Context, _ string, _ str
 func (s *recoveryTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
 	return nil
 }
+func (s *recoveryTrackerStub) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
 func (s *recoveryTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	return nil
 }

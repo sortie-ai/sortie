@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -607,11 +608,23 @@ func (a *LinearAdapter) TransitionIssue(ctx context.Context, issueID, targetStat
 // idempotent and the orchestrator owns retry policy.
 func (a *LinearAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return runMutation(ctx, a.client, a.log, queryCommentCreate, map[string]any{
-			"issueId": issueID,
-			"body":    text,
-		}, decodeCommentCreateSuccess)
+		return a.postComment(ctx, issueID, text)
 	})
+}
+
+// CommentIssueWithLiteral posts text followed by literal in a fenced Markdown
+// code block, so the tracker shows literal verbatim.
+func (a *LinearAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return a.postComment(ctx, issueID, issuekit.MarkdownLiteralComment(text, literal))
+	})
+}
+
+func (a *LinearAdapter) postComment(ctx context.Context, issueID, body string) error {
+	return runMutation(ctx, a.client, a.log, queryCommentCreate, map[string]any{
+		"issueId": issueID,
+		"body":    body,
+	}, decodeCommentCreateSuccess)
 }
 
 // AddLabel attaches the named label to the issue, creating the label

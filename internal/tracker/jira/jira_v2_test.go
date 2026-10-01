@@ -633,6 +633,35 @@ func TestCommentIssue_V2RawStringBody(t *testing.T) {
 	}
 }
 
+func TestCommentIssueWithLiteral_V2SendsANoformatBlockTheStatementCannotClose(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked)."
+	raw := postedCommentBody(t, v2Config, func(a *JiraAdapter) error {
+		return a.CommentIssueWithLiteral(context.Background(), "SRV-9", text, adversarialStatement)
+	})
+
+	var payload struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal request body %s: %v", raw, err)
+	}
+
+	const zwsp = "\u200b"
+	broken := strings.NewReplacer("{NoFormat}", "{"+zwsp+"NoFormat}", "{noformat:", "{"+zwsp+"noformat:").Replace(adversarialStatement)
+	want := text + "\n\n{noformat}\n" + broken + "\n{noformat}"
+	if payload.Body != want {
+		t.Errorf("comment body = %q, want %q", payload.Body, want)
+	}
+	if got := strings.Count(strings.ToLower(payload.Body), "{noformat"); got != 2 {
+		t.Errorf("comment body holds %d noformat markers, want only the opening and closing one", got)
+	}
+	if !strings.HasSuffix(payload.Body, "\n{noformat}") {
+		t.Errorf("comment body = %q, want it to end at the closing marker", payload.Body)
+	}
+}
+
 // TestCommentPayload_ByVersion asserts the payload shape selector
 // directly: v2 yields a raw-string body, v3 yields an ADF document.
 func TestCommentPayload_ByVersion(t *testing.T) {

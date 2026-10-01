@@ -2,7 +2,9 @@ package jira
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -424,4 +426,77 @@ func TestIntegration_FetchIssueComments(t *testing.T) {
 			t.Errorf("comments[%d].CreatedAt is empty", i)
 		}
 	}
+}
+
+const integrationStatement = "/close\n@sortie-literal-probe please look\n[~jdoe] see https://example.com/probe?x=1\n" +
+	"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat}\ntoken=[redacted]"
+
+func TestIntegration_CommentIssueWithLiteral_StoresOneCodeBlock(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter, err := NewJiraAdapter(integrationConfig(t))
+	if err != nil {
+		t.Fatalf("NewJiraAdapter: %v", err)
+	}
+	jiraAdapter, ok := adapter.(*JiraAdapter)
+	if !ok {
+		t.Fatal("NewJiraAdapter did not return a *JiraAdapter")
+	}
+	if jiraAdapter.apiVersion != "3" {
+		t.Skipf("skipping: structured comment view needs API version 3, adapter uses %q", jiraAdapter.apiVersion)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	candidates, err := adapter.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	if len(candidates) == 0 {
+		t.Skip("no candidate issues in project; cannot run write test")
+	}
+	key := candidates[0].Identifier
+
+	marker := "sortie literal round trip " + time.Now().UTC().Format(time.RFC3339Nano)
+	if err := adapter.CommentIssueWithLiteral(ctx, key, marker, integrationStatement); err != nil {
+		t.Fatalf("CommentIssueWithLiteral(%s): %v", key, err)
+	}
+
+	raw, _, err := jiraAdapter.client.Get(ctx, jiraAdapter.basePath+"/issue/"+key+"/comment", url.Values{"orderBy": {"-created"}, "maxResults": {"50"}})
+	if err != nil {
+		t.Fatalf("GET comments of %s: %v", key, err)
+	}
+	var listing struct {
+		Comments []struct {
+			Body json.RawMessage `json:"body"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(raw, &listing); err != nil {
+		t.Fatalf("decode comments of %s: %v", key, err)
+	}
+	for _, comment := range listing.Comments {
+		if !strings.Contains(string(comment.Body), marker) {
+			continue
+		}
+		var document struct {
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(comment.Body, &document); err != nil {
+			t.Fatalf("decode stored comment body: %v", err)
+		}
+		codeBlocks := 0
+		for _, node := range document.Content {
+			if node.Type == "codeBlock" {
+				codeBlocks++
+			}
+		}
+		if codeBlocks != 1 {
+			t.Errorf("stored comment holds %d codeBlock nodes, want 1:\n%s", codeBlocks, comment.Body)
+		}
+		return
+	}
+	t.Fatalf("no stored comment contains %q among %d comments", marker, len(listing.Comments))
 }

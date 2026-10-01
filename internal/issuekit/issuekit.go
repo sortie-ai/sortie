@@ -1,4 +1,4 @@
-// Package issuekit provides shared issue normalization helpers for integration adapters.
+// Package issuekit provides shared issue helpers for integration adapters.
 package issuekit
 
 import (
@@ -64,6 +64,27 @@ func NormalizeComments(in []SourceComment) []domain.Comment {
 		}
 	}
 	return out
+}
+
+// MarkdownLiteralComment returns text followed by literal in a fenced code
+// block. The fence is one backtick longer than the longest backtick run in
+// literal, and at least three, so nothing inside literal can close it.
+func MarkdownLiteralComment(text, literal string) string {
+	fence := strings.Repeat("`", max(3, 1+longestBacktickRun(literal)))
+	return text + "\n\n" + fence + "\n" + literal + "\n" + fence
+}
+
+func longestBacktickRun(s string) int {
+	longest, run := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '`' {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	return longest
 }
 
 func isJSONIntLiteral(s string) bool {

@@ -69,6 +69,26 @@ func flattenADFNode(b *strings.Builder, node any) {
 // becomes a separate paragraph node so that line breaks render
 // correctly in Jira's UI.
 func buildADFComment(text string) map[string]any {
+	return adfCommentDocument(adfParagraphs(text))
+}
+
+// buildADFLiteralComment is [buildADFComment] with one codeBlock node
+// after the paragraphs. The block holds literal as a single text node,
+// which Jira renders without interpreting any markup, mention, or link.
+func buildADFLiteralComment(text, literal string) map[string]any {
+	content := append(adfParagraphs(text), map[string]any{
+		"type": "codeBlock",
+		"content": []any{
+			map[string]any{
+				"type": "text",
+				"text": literal,
+			},
+		},
+	})
+	return adfCommentDocument(content)
+}
+
+func adfParagraphs(text string) []any {
 	lines := strings.Split(text, "\n")
 	paragraphs := make([]any, 0, len(lines))
 
@@ -89,12 +109,15 @@ func buildADFComment(text string) map[string]any {
 			"content": content,
 		})
 	}
+	return paragraphs
+}
 
+func adfCommentDocument(content []any) map[string]any {
 	return map[string]any{
 		"body": map[string]any{
 			"version": 1,
 			"type":    "doc",
-			"content": paragraphs,
+			"content": content,
 		},
 	}
 }

@@ -964,20 +964,32 @@ func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState
 // verbatim with no conversion, and the created-comment response is ignored.
 func (a *GiteaAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
-
-		payload, err := json.Marshal(map[string]string{"body": text})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal comment payload",
-				Err:     err,
-			}
-		}
-
-		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-		return err
+		return a.postComment(ctx, issueID, text)
 	})
+}
+
+// CommentIssueWithLiteral posts text followed by literal in a fenced Markdown
+// code block, so the tracker shows literal verbatim.
+func (a *GiteaAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return a.postComment(ctx, issueID, issuekit.MarkdownLiteralComment(text, literal))
+	})
+}
+
+func (a *GiteaAdapter) postComment(ctx context.Context, issueID, body string) error {
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
+
+	payload, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal comment payload",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	return err
 }
 
 // AddLabel attaches label to the issue, resolving or creating the label id

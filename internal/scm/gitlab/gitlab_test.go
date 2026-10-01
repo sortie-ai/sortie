@@ -2208,6 +2208,55 @@ func TestCommentIssue(t *testing.T) {
 	})
 }
 
+func TestCommentIssueWithLiteral(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked).\nTurns: 2"
+	tests := []struct {
+		name    string
+		literal string
+		want    string
+	}{
+		{
+			name:    "plain statement sits in a three backtick fence",
+			literal: "Which one should the API expose?",
+			want:    text + "\n\n```\nWhich one should the API expose?\n```",
+		},
+		{
+			name: "adversarial statement sits in a fence longer than its longest backtick run",
+			literal: "/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]",
+			want: text + "\n\n`````\n/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]\n`````",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			bodies := make(chan []byte, 1)
+			s := newPreflightServer(t)
+			s.handleMethod(http.MethodPost, "/api/v4/projects/"+testEscapedProject+"/issues/1/notes", func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				bodies <- raw
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":900}`)) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, s)
+
+			if err := a.CommentIssueWithLiteral(context.Background(), "1", text, tt.literal); err != nil {
+				t.Fatalf("CommentIssueWithLiteral: %v", err)
+			}
+
+			want := `{"body":` + strconv.Quote(tt.want) + `}`
+			if got := string(<-bodies); got != want {
+				t.Errorf("POST body = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestAddLabel(t *testing.T) {
 	t.Parallel()
 

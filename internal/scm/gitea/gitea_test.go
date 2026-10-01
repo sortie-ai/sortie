@@ -1986,6 +1986,57 @@ func TestCommentIssue(t *testing.T) {
 	})
 }
 
+func TestCommentIssueWithLiteral(t *testing.T) {
+	t.Parallel()
+
+	const text = "Sortie session completed (agent signaled: blocked).\nTurns: 2"
+	tests := []struct {
+		name    string
+		literal string
+		want    string
+	}{
+		{
+			name:    "plain statement sits in a three backtick fence",
+			literal: "Which one should the API expose?",
+			want:    text + "\n\n```\nWhich one should the API expose?\n```",
+		},
+		{
+			name: "adversarial statement sits in a fence longer than its longest backtick run",
+			literal: "/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]",
+			want: text + "\n\n`````\n/close\n@octocat please review\n[~jdoe] see https://example.com/x?y=1\n" +
+				"*bold* _it_ h1. Heading\n```` fenced ````\n{NoFormat} then {noformat:title=x}\ntoken=[redacted]\n`````",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			bodies := make(chan string, 1)
+			mux := newPreflightMux(t)
+			mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					Body string `json:"body"`
+				}
+				json.NewDecoder(r.Body).Decode(&payload) //nolint:errcheck // asserted through the received body
+				bodies <- payload.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":1}`)) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, mux)
+
+			if err := a.CommentIssueWithLiteral(context.Background(), "42", text, tt.literal); err != nil {
+				t.Fatalf("CommentIssueWithLiteral: %v", err)
+			}
+
+			if got := <-bodies; got != tt.want {
+				t.Errorf("comment body = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteErrorMapping(t *testing.T) {
 	t.Parallel()
 

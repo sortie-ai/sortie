@@ -7920,6 +7920,9 @@ func (s *sweepThrottleTracker) FetchIssueComments(_ context.Context, _ string) (
 func (s *sweepThrottleTracker) TransitionIssue(_ context.Context, _, _ string) error { return nil }
 
 func (s *sweepThrottleTracker) CommentIssue(_ context.Context, _, _ string) error { return nil }
+func (s *sweepThrottleTracker) CommentIssueWithLiteral(_ context.Context, _, _, _ string) error {
+	return nil
+}
 
 func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error { return nil }
 

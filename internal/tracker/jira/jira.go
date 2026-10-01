@@ -551,21 +551,35 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 // version "2" the text is sent verbatim as a raw wiki-markup body.
 func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		path := a.basePath + "/issue/" + url.PathEscape(issueID) + "/comment"
-
-		body := commentPayload(a.apiVersion, text)
-		payload, err := json.Marshal(body)
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal comment request",
-				Err:     err,
-			}
-		}
-
-		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-		return err
+		return a.postComment(ctx, issueID, commentPayload(a.apiVersion, text))
 	})
+}
+
+// CommentIssueWithLiteral posts text followed by literal as a literal
+// block. On version "3" the block is an ADF codeBlock node holding one
+// text node. On version "2" it is a {noformat} block whose content has
+// a zero-width space inserted after every brace that starts a
+// case-insensitive "noformat", so the content cannot close the block.
+func (a *JiraAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return a.postComment(ctx, issueID, literalCommentPayload(a.apiVersion, text, literal))
+	})
+}
+
+func (a *JiraAdapter) postComment(ctx context.Context, issueID string, body any) error {
+	path := a.basePath + "/issue/" + url.PathEscape(issueID) + "/comment"
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal comment request",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	return err
 }
 
 // commentPayload builds the comment-create request body for the given
@@ -577,6 +591,33 @@ func commentPayload(apiVersion, text string) any {
 		return map[string]any{"body": text}
 	}
 	return buildADFComment(text)
+}
+
+// literalCommentPayload is [commentPayload] for a comment that ends in a
+// literal block.
+func literalCommentPayload(apiVersion, text, literal string) any {
+	if apiVersion == "2" {
+		return map[string]any{"body": text + "\n\n{noformat}\n" + breakNoformatMarkers(literal) + "\n{noformat}"}
+	}
+	return buildADFLiteralComment(text, literal)
+}
+
+// breakNoformatMarkers inserts a zero-width space after every brace that
+// starts the word noformat, in any letter case, so wiki markup inside the
+// block cannot terminate it.
+func breakNoformatMarkers(literal string) string {
+	const word = "noformat"
+	var out strings.Builder
+	for i := 0; i < len(literal); i++ {
+		out.WriteByte(literal[i])
+		if literal[i] != '{' {
+			continue
+		}
+		if i+1+len(word) <= len(literal) && strings.EqualFold(literal[i+1:i+1+len(word)], word) {
+			out.WriteString("\u200b")
+		}
+	}
+	return out.String()
 }
 
 // SetMetrics configures the metrics recorder for tracker API call

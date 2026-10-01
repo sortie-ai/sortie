@@ -292,11 +292,22 @@ func (m *mockTrackerAdapter) TransitionIssue(ctx context.Context, issueID string
 type commentIssueCall struct {
 	IssueID string
 	Text    string
+	Literal string
 }
 
 func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
 	m.commentMu.Lock()
 	m.commentCalls = append(m.commentCalls, commentIssueCall{IssueID: issueID, Text: text})
+	m.commentMu.Unlock()
+	if m.commentIssueFn != nil {
+		return m.commentIssueFn(ctx, issueID, text)
+	}
+	return nil
+}
+
+func (m *mockTrackerAdapter) CommentIssueWithLiteral(ctx context.Context, issueID, text, literal string) error {
+	m.commentMu.Lock()
+	m.commentCalls = append(m.commentCalls, commentIssueCall{IssueID: issueID, Text: text, Literal: literal})
 	m.commentMu.Unlock()
 	if m.commentIssueFn != nil {
 		return m.commentIssueFn(ctx, issueID, text)

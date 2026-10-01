@@ -98,6 +98,8 @@ Descriptions and comment bodies are markdown and pass through untouched. There i
 
 What the adapter writes is stored verbatim, and that includes text it might be tempting to treat as rich. An interactive mention is something Linear's editor produces while a human is typing or pasting, not something the stored body encodes, so an issue or user URL an agent puts in a comment reaches human readers as a plain link. Never compose comment text whose meaning depends on a mention rendering.
 
+A comment that carries agent text ends in a Markdown fence: the text, a blank line, the fence, the literal, and the same fence. The fence is at least three backticks and one longer than the longest backtick run in the literal, with no info string, and it comes from the shared issue helper rather than from this adapter. Nothing else in the block is escaped, so what keeps a mention, link, or markup inert is Linear's own handling of a fenced block. Whether Linear renders a fence longer than three backticks as one code block is unchecked.
+
 ## Rate limits
 
 No quota may be hardcoded. Linear derives the request limit from the size of the workspace, scaling it with the number of paid seats, so the published headline figure describes no particular workspace and the limit your test workspace reports will not be the limit an operator's workspace reports. The response headers are the only source of truth for the workspace you are actually calling.

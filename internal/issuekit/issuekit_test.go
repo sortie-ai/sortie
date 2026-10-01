@@ -232,3 +232,63 @@ func TestNormalizeComments_order(t *testing.T) {
 		t.Errorf("NormalizeComments[1] = %+v, want {ID:2 Author:Bob Body:second CreatedAt:2025-01-02}", got[1])
 	}
 }
+
+func TestMarkdownLiteralComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		text    string
+		literal string
+		want    string
+	}{
+		{
+			name:    "literal without backticks gets a three backtick fence",
+			text:    "Sortie session completed.",
+			literal: "Which one should the API expose?",
+			want:    "Sortie session completed.\n\n```\nWhich one should the API expose?\n```",
+		},
+		{
+			name:    "run of three backticks gets a four backtick fence",
+			text:    "stopped",
+			literal: "run ```make``` first",
+			want:    "stopped\n\n````\nrun ```make``` first\n````",
+		},
+		{
+			name:    "run of four backticks gets a five backtick fence",
+			text:    "stopped",
+			literal: "a ```` b",
+			want:    "stopped\n\n`````\na ```` b\n`````",
+		},
+		{
+			name:    "single and double backtick runs keep the minimum fence",
+			text:    "stopped",
+			literal: "`a` and ``b``",
+			want:    "stopped\n\n```\n`a` and ``b``\n```",
+		},
+		{
+			name:    "longest of several runs decides the fence",
+			text:    "stopped",
+			literal: "`` then ````` then ```",
+			want:    "stopped\n\n``````\n`` then ````` then ```\n``````",
+		},
+		{
+			name:    "line-leading commands and mentions stay inside the fence",
+			text:    "Sortie session completed (agent signaled: blocked).",
+			literal: "/close\n@octocat please look\n[~jdoe] too\nhttps://example.com/x",
+			want:    "Sortie session completed (agent signaled: blocked).\n\n```\n/close\n@octocat please look\n[~jdoe] too\nhttps://example.com/x\n```",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := MarkdownLiteralComment(tt.text, tt.literal)
+
+			if got != tt.want {
+				t.Errorf("MarkdownLiteralComment(%q, %q) = %q, want %q", tt.text, tt.literal, got, tt.want)
+			}
+		})
+	}
+}

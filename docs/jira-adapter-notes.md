@@ -62,6 +62,8 @@ On Server the same fields are plain strings carrying wiki markup, passed through
 
 Comment creation mirrors the split. On Cloud the text is split on newlines into one paragraph node per line, because a single node with embedded newlines does not render as line breaks.
 
+A comment that carries agent text keeps the split and ends in a literal block. On Cloud the paragraph nodes for Sortie's text are followed by one `codeBlock` node holding one text node with the whole literal, newlines included. On Server the body is the text, two line feeds, `{noformat}`, a line feed, the literal, a line feed, and `{noformat}`. The closing marker is matched without regard to letter case, so the adapter inserts U+200B after every `{` that starts the word `noformat` in the literal, which keeps the literal from ending the block early. Server rendering is covered by a request-body test only: whether the renderer closes on a case-insensitive match, and whether a `[~user]` inside the block notifies, are unchecked, and the integration suite cannot post a version 2 comment because it refuses a Cloud host.
+
 ## Pagination
 
 Cloud search is cursor based, Server search is offset based, and comments are offset based on both. A read-path change usually touches three loops.
