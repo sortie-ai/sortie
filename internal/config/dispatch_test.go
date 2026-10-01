@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 )
 
 func alwaysRegistered(_ string) bool { return true }
@@ -904,6 +905,182 @@ func TestBuildDispatchConfig_RuleSettingsBlockStored(t *testing.T) {
 			}
 			if rule := got.Rules[0]; rule.SettingsKind != tt.wantKind || !reflect.DeepEqual(rule.Settings, tt.wantSettings) {
 				t.Errorf("Rules[0] SettingsKind, Settings = %q, %#v, want %q, %#v", rule.SettingsKind, rule.Settings, tt.wantKind, tt.wantSettings)
+			}
+		})
+	}
+}
+
+func titleRule(name string, match map[string]any) map[string]any {
+	return map[string]any{"name": name, "match": match}
+}
+
+func mustBuildDispatch(t *testing.T, raw map[string]any) DispatchConfig {
+	t.Helper()
+	got, err := BuildDispatchConfig(raw, mkDispatchDir(t), alwaysRegistered, "kind-a")
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
+	}
+	return got
+}
+
+func TestBuildDispatchConfig_TitlePhrases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		match     map[string]any
+		wantTitle []string
+	}{
+		{name: "a scalar becomes a one-element list", match: map[string]any{"title": "Fix"}, wantTitle: []string{"Fix"}},
+		{name: "a scalar is stored as written", match: map[string]any{"title": "  Fix   Login "}, wantTitle: []string{"  Fix   Login "}},
+		{name: "a list keeps YAML order", match: map[string]any{"title": []any{"zeta", "alpha", "mid"}}, wantTitle: []string{"zeta", "alpha", "mid"}},
+		{name: "phrases are stored as written", match: map[string]any{"title": []any{"  Fix   Login ", "fix", "fix", "[INFRA]", "\u00a0wip:"}}, wantTitle: []string{"  Fix   Login ", "fix", "fix", "[INFRA]", "\u00a0wip:"}},
+		{name: "an absent key leaves Title nil", match: map[string]any{"labels": []any{"bug"}}, wantTitle: nil},
+		{name: "title beside labels stores both", match: map[string]any{"title": "fix", "labels": []any{"bug"}}, wantTitle: []string{"fix"}},
+		{name: "asterisk, question mark and brackets are ordinary text", match: map[string]any{"title": []any{"*", "*infra*", "?", "[abc]"}}, wantTitle: []string{"*", "*infra*", "?", "[abc]"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mustBuildDispatch(t, dispatchRaw("", titleRule("r", tt.match)))
+
+			if !reflect.DeepEqual(got.Rules[0].Match.Title, tt.wantTitle) {
+				t.Errorf("Rules[0].Match.Title = %#v, want %#v", got.Rules[0].Match.Title, tt.wantTitle)
+			}
+		})
+	}
+
+	t.Run("title beside labels keeps the labels", func(t *testing.T) {
+		t.Parallel()
+
+		got := mustBuildDispatch(t, dispatchRaw("", titleRule("r", map[string]any{"title": "fix", "labels": []any{"bug"}})))
+
+		if !slices.Equal(got.Rules[0].Match.Labels, []string{"bug"}) {
+			t.Errorf("Rules[0].Match.Labels = %v, want [bug]", got.Rules[0].Match.Labels)
+		}
+	})
+
+	t.Run("a title-only rule is not a catch-all and may precede a catch-all", func(t *testing.T) {
+		t.Parallel()
+
+		got := mustBuildDispatch(t, dispatchRaw("",
+			titleRule("by-title", map[string]any{"title": "[infra]"}),
+			map[string]any{"name": "rest", "agent": "kind-a"},
+		))
+
+		if len(got.Rules) != 2 {
+			t.Fatalf("Rules count = %d, want 2", len(got.Rules))
+		}
+		if got.Rules[0].IsCatchAll {
+			t.Errorf("Rules[0].IsCatchAll = true, want false for a title-only rule")
+		}
+		if !got.Rules[1].IsCatchAll {
+			t.Errorf("Rules[1].IsCatchAll = false, want true for the rule without match")
+		}
+	})
+
+	nullish := []struct {
+		name          string
+		match         map[string]any
+		wantCatchAll  bool
+		wantNoLabels  bool
+		wantTitleKept bool
+	}{
+		{name: "labels null alone still leaves the rule a catch-all", match: map[string]any{"labels": nil}, wantCatchAll: true, wantNoLabels: true},
+		{name: "labels empty list alone still leaves the rule a catch-all", match: map[string]any{"labels": []any{}}, wantCatchAll: true, wantNoLabels: true},
+		{name: "labels null beside title leaves labels out of the match", match: map[string]any{"labels": nil, "title": "fix"}, wantNoLabels: true, wantTitleKept: true},
+		{name: "labels empty list beside title leaves labels out of the match", match: map[string]any{"labels": []any{}, "title": "fix"}, wantNoLabels: true, wantTitleKept: true},
+	}
+	for _, tt := range nullish {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mustBuildDispatch(t, dispatchRaw("", titleRule("r", tt.match)))
+
+			rule := got.Rules[0]
+			if rule.IsCatchAll != tt.wantCatchAll {
+				t.Errorf("Rules[0].IsCatchAll = %v, want %v", rule.IsCatchAll, tt.wantCatchAll)
+			}
+			if tt.wantNoLabels && len(rule.Match.Labels) != 0 {
+				t.Errorf("Rules[0].Match.Labels = %v, want empty", rule.Match.Labels)
+			}
+			if tt.wantTitleKept && !slices.Equal(rule.Match.Title, []string{"fix"}) {
+				t.Errorf("Rules[0].Match.Title = %v, want [fix]", rule.Match.Title)
+			}
+		})
+	}
+}
+
+func TestBuildDispatchConfig_TitleFaults(t *testing.T) {
+	t.Parallel()
+
+	const (
+		needsPhrase = "needs at least one phrase; remove the key to leave the title out of the match"
+		blankPhrase = "a phrase needs a character other than white space"
+		hintList    = `; quote a phrase that starts with "[", as in "[infra]"`
+		hintMap     = `; quote a phrase that contains ": ", as in "fix: typo"`
+		hintQuote   = "; quote the phrase"
+		titleField  = "dispatch.rules[0].match.title"
+	)
+	scalarFault := func(shape, hint string) string {
+		return "expected a phrase or a list of phrases, got " + shape + hint
+	}
+	elemFault := func(shape, hint string) string {
+		return "expected a phrase, got " + shape + hint
+	}
+	onlyTitle := func(title any) map[string]any {
+		return dispatchRaw("", titleRule("r", map[string]any{"title": title}))
+	}
+
+	tests := []struct {
+		name      string
+		raw       map[string]any
+		wantField string
+		wantMsg   string
+	}{
+		{name: "T-1 null", raw: onlyTitle(nil), wantField: titleField, wantMsg: needsPhrase},
+		{name: "T-1 empty list", raw: onlyTitle([]any{}), wantField: titleField, wantMsg: needsPhrase},
+		{name: "T-1 reports the rule index", raw: dispatchRaw("", titleRule("ok", map[string]any{"labels": []any{"bug"}}), titleRule("bad", map[string]any{"title": nil})), wantField: "dispatch.rules[1].match.title", wantMsg: needsPhrase},
+
+		{name: "T-2 integer", raw: onlyTitle(404), wantField: titleField, wantMsg: scalarFault("a number", hintQuote)},
+		{name: "T-2 float", raw: onlyTitle(1.5), wantField: titleField, wantMsg: scalarFault("a number", hintQuote)},
+		{name: "T-2 true/false value", raw: onlyTitle(true), wantField: titleField, wantMsg: scalarFault("a true/false value", hintQuote)},
+		{name: "T-2 map", raw: onlyTitle(map[string]any{"fix": "typo"}), wantField: titleField, wantMsg: scalarFault("a map", hintMap)},
+		{name: "T-2 timestamp", raw: onlyTitle(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)), wantField: titleField, wantMsg: scalarFault("a value of an unexpected type", hintQuote)},
+
+		{name: "T-3 list element", raw: onlyTitle([]any{"fix", []any{"infra"}}), wantField: titleField + "[1]", wantMsg: elemFault("a list", hintList)},
+		{name: "T-3 map element", raw: onlyTitle([]any{map[string]any{"fix": "typo"}}), wantField: titleField + "[0]", wantMsg: elemFault("a map", hintMap)},
+		{name: "T-3 number element", raw: onlyTitle([]any{"a", "b", 404}), wantField: titleField + "[2]", wantMsg: elemFault("a number", hintQuote)},
+		{name: "T-3 true/false element", raw: onlyTitle([]any{true}), wantField: titleField + "[0]", wantMsg: elemFault("a true/false value", hintQuote)},
+		{name: "T-3 timestamp element", raw: onlyTitle([]any{time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}), wantField: titleField + "[0]", wantMsg: elemFault("a value of an unexpected type", hintQuote)},
+		{name: "T-3 null element carries no hint", raw: onlyTitle([]any{"fix", nil}), wantField: titleField + "[1]", wantMsg: elemFault("no value", "")},
+
+		{name: "T-4 empty scalar", raw: onlyTitle(""), wantField: titleField + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 spaces scalar", raw: onlyTitle("   "), wantField: titleField + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 tab and newline", raw: onlyTitle("\t\n"), wantField: titleField + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 no-break space", raw: onlyTitle("\u00a0"), wantField: titleField + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 ideographic space", raw: onlyTitle("\u3000"), wantField: titleField + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 blank phrase in a list", raw: onlyTitle([]any{"fix", "", "wip:"}), wantField: titleField + "[1]", wantMsg: blankPhrase},
+		{name: "T-4 first blank phrase wins", raw: onlyTitle([]any{"fix", " ", "\u3000"}), wantField: titleField + "[1]", wantMsg: blankPhrase},
+
+		{name: "a fault in labels is reported before a fault in title", raw: dispatchRaw("", titleRule("r", map[string]any{"title": []any{}, "labels": []any{"[unclosed"}})), wantField: "dispatch.rules[0].match.labels[0]", wantMsg: ""},
+		{name: "an unrecognized key still fails as an unknown match key", raw: dispatchRaw("", titleRule("r", map[string]any{"titel": "fix"})), wantField: "dispatch.rules[0].match.titel", wantMsg: "unknown match key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := BuildDispatchConfig(tt.raw, mkDispatchDir(t), alwaysRegistered, "kind-a")
+
+			ce := requireConfigError(t, err)
+			if ce.Field != tt.wantField {
+				t.Errorf("BuildDispatchConfig() error Field = %q, want %q", ce.Field, tt.wantField)
+			}
+			if tt.wantMsg != "" && ce.Message != tt.wantMsg {
+				t.Errorf("BuildDispatchConfig() error Message = %q, want %q", ce.Message, tt.wantMsg)
 			}
 		})
 	}

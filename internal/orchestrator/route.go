@@ -4,6 +4,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -178,6 +180,11 @@ func matchRule(m config.DispatchMatch, issue domain.Issue) bool {
 			return false
 		}
 	}
+	if len(m.Title) > 0 {
+		if !anyTitlePhraseMatch(m.Title, issue.Title) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -215,6 +222,100 @@ func anyCIEq(allowed []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// anyTitlePhraseMatch reports whether any phrase occurs in title as
+// whole words, ignoring letter case and white-space differences. The
+// search is literal: no character of a phrase is a wildcard. An empty
+// title never matches.
+func anyTitlePhraseMatch(phrases []string, title string) bool {
+	t := normalizeTitleText(title)
+	if t == "" {
+		return false
+	}
+	for _, phrase := range phrases {
+		p := normalizeTitleText(phrase)
+		if p == "" {
+			continue
+		}
+		// Every occurrence is tried, overlapping ones included: the
+		// first can sit inside a longer word while a later one is whole.
+		for from := 0; from < len(t); {
+			idx := strings.Index(t[from:], p)
+			if idx < 0 {
+				break
+			}
+			i := from + idx
+			if isWholeOccurrence(t, p, i) {
+				return true
+			}
+			_, size := utf8.DecodeRuneInString(t[i:])
+			from = i + size
+		}
+	}
+	return false
+}
+
+// normalizeTitleText lowercases s, replaces each run of white space
+// with one space, and trims the ends. Nothing else is folded: accents,
+// Unicode forms, and ß stay as written.
+func normalizeTitleText(s string) string {
+	var b strings.Builder
+	pendingSpace := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsSpace(r) {
+			pendingSpace = true
+			continue
+		}
+		if pendingSpace && b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		pendingSpace = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isWholeOccurrence reports whether the occurrence of p in t at byte
+// offset i neither starts nor ends inside a word.
+func isWholeOccurrence(t, p string, i int) bool {
+	if i > 0 {
+		before, _ := utf8.DecodeLastRuneInString(t[:i])
+		first, _ := utf8.DecodeRuneInString(p)
+		if runesJoin(before, first) {
+			return false
+		}
+	}
+	if end := i + len(p); end < len(t) {
+		last, _ := utf8.DecodeLastRuneInString(p)
+		after, _ := utf8.DecodeRuneInString(t[end:])
+		if runesJoin(last, after) {
+			return false
+		}
+	}
+	return true
+}
+
+// runesJoin reports whether adjacent runes a and b belong to one word.
+// A combining mark always stays with the rune before it, in every
+// script, so a match never separates a base character from its vowel,
+// tone, or variation sign.
+func runesJoin(a, b rune) bool {
+	if unicode.IsMark(b) {
+		return true
+	}
+	return isWordRune(a) && isWordRune(b) && !isUnspacedScriptRune(a) && !isUnspacedScriptRune(b)
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsDigit(r)
+}
+
+// isUnspacedScriptRune reports whether r is written without spaces
+// between words, so every character boundary in these scripts is a
+// word boundary. Hangul is excluded because Korean uses spaces.
+func isUnspacedScriptRune(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Thai, unicode.Lao, unicode.Khmer, unicode.Myanmar)
 }
 
 // priorityPredicateMatch dispatches by operator. Unknown operators

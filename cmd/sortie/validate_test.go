@@ -2935,6 +2935,132 @@ func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 	}
 }
 
+func titleRuleDispatch(matchBody string) string {
+	return "dispatch:\n  rules:\n    - name: titled\n      match:\n" + matchBody + "      agent: mock\n"
+}
+
+func validateJSON(t *testing.T, wfPath string) (int, validateOutput) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v; stderr: %s", stdout.String(), err, stderr.String())
+	}
+	return code, out
+}
+
+func TestValidateDispatch_TitleFaults(t *testing.T) {
+	t.Parallel()
+
+	const (
+		needsPhrase = "needs at least one phrase; remove the key to leave the title out of the match"
+		blankPhrase = "a phrase needs a character other than white space"
+		hintList    = `; quote a phrase that starts with "[", as in "[infra]"`
+		hintMap     = `; quote a phrase that contains ": ", as in "fix: typo"`
+		hintQuote   = "; quote the phrase"
+		titleCheck  = "config.dispatch.rules[0].match.title"
+	)
+	tests := []struct {
+		name      string
+		matchBody string
+		wantCheck string
+		wantMsg   string
+	}{
+		{name: "T-1 bare key", matchBody: "        title:\n", wantCheck: titleCheck, wantMsg: needsPhrase},
+		{name: "T-1 null", matchBody: "        title: null\n", wantCheck: titleCheck, wantMsg: needsPhrase},
+		{name: "T-1 empty list", matchBody: "        title: []\n", wantCheck: titleCheck, wantMsg: needsPhrase},
+
+		{name: "T-2 number", matchBody: "        title: 404\n", wantCheck: titleCheck, wantMsg: "expected a phrase or a list of phrases, got a number" + hintQuote},
+		{name: "T-2 true/false value", matchBody: "        title: true\n", wantCheck: titleCheck, wantMsg: "expected a phrase or a list of phrases, got a true/false value" + hintQuote},
+		{name: "T-2 map", matchBody: "        title: {fix: typo}\n", wantCheck: titleCheck, wantMsg: "expected a phrase or a list of phrases, got a map" + hintMap},
+		{name: "T-2 timestamp", matchBody: "        title: 2026-10-01\n", wantCheck: titleCheck, wantMsg: "expected a phrase or a list of phrases, got a value of an unexpected type" + hintQuote},
+
+		{name: "T-3 unquoted bracket phrase", matchBody: "        title:\n          - fix\n          - [infra]\n", wantCheck: titleCheck + "[1]", wantMsg: "expected a phrase, got a list" + hintList},
+		{name: "T-3 unquoted colon phrase", matchBody: "        title:\n          - fix: typo\n", wantCheck: titleCheck + "[0]", wantMsg: "expected a phrase, got a map" + hintMap},
+		{name: "T-3 number element", matchBody: "        title:\n          - fix\n          - 404\n", wantCheck: titleCheck + "[1]", wantMsg: "expected a phrase, got a number" + hintQuote},
+		{name: "T-3 true/false element", matchBody: "        title:\n          - true\n", wantCheck: titleCheck + "[0]", wantMsg: "expected a phrase, got a true/false value" + hintQuote},
+		{name: "T-3 timestamp element", matchBody: "        title:\n          - 2026-10-01\n", wantCheck: titleCheck + "[0]", wantMsg: "expected a phrase, got a value of an unexpected type" + hintQuote},
+		{name: "T-3 null element carries no hint", matchBody: "        title:\n          - fix\n          -\n", wantCheck: titleCheck + "[1]", wantMsg: "expected a phrase, got no value"},
+
+		{name: "T-4 empty scalar", matchBody: "        title: \"\"\n", wantCheck: titleCheck + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 spaces scalar", matchBody: "        title: \"   \"\n", wantCheck: titleCheck + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 no-break space", matchBody: "        title: \"\\u00a0\"\n", wantCheck: titleCheck + "[0]", wantMsg: blankPhrase},
+		{name: "T-4 ideographic space in a list", matchBody: "        title: [\"fix\", \"\\u3000\"]\n", wantCheck: titleCheck + "[1]", wantMsg: blankPhrase},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, out := validateJSON(t, makeDispatchWorkflow(t, t.TempDir(), titleRuleDispatch(tt.matchBody)))
+
+			if code != 1 {
+				t.Errorf("run(validate) = %d, want 1", code)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+			if !slices.ContainsFunc(out.Errors, func(d validateDiag) bool { return d.Check == tt.wantCheck && d.Message == tt.wantMsg }) {
+				t.Errorf("validateOutput.Errors = %+v, want one with check %q and message %q", out.Errors, tt.wantCheck, tt.wantMsg)
+			}
+		})
+	}
+
+	t.Run("text rendering names the phrase index and carries the hint", func(t *testing.T) {
+		t.Parallel()
+
+		wfPath := makeDispatchWorkflow(t, t.TempDir(), titleRuleDispatch("        title:\n          - fix\n          - [infra]\n"))
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+		for _, want := range []string{"config.dispatch.rules[0].match.title[1]", `expected a phrase, got a list; quote a phrase that starts with "[", as in "[infra]"`} {
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("stderr = %q, want to contain %q", stderr.String(), want)
+			}
+		}
+	})
+}
+
+func TestValidateDispatch_TitleAccepted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		dispatch string
+	}{
+		{name: "scalar phrase", dispatch: titleRuleDispatch("        title: \"[docs]\"\n")},
+		{name: "quoted list", dispatch: titleRuleDispatch("        title: [\"[infra]\", \"WIP:\"]\n")},
+		{name: "unquoted bracket scalar reads as the bare word", dispatch: titleRuleDispatch("        title: [infra]\n")},
+		{name: "asterisk phrase is ordinary text", dispatch: titleRuleDispatch("        title: \"*infra*\"\n")},
+		{name: "title beside labels", dispatch: titleRuleDispatch("        title: [\"[docs]\", \"low-cost\", \"*infra*\"]\n        labels: [\"bug\"]\n")},
+		{name: "title-only rule before a later rule", dispatch: "dispatch:\n  rules:\n    - name: by-title\n      match:\n        title: \"[infra]\"\n      agent: mock\n    - name: by-label\n      match:\n        labels: [\"bug\"]\n      agent: mock\n    - name: rest\n      agent: mock\n"},
+		{name: "workflow without title", dispatch: "dispatch:\n  rules:\n    - name: by-label\n      match:\n        labels: [\"bug\"]\n      agent: mock\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, out := validateJSON(t, makeDispatchWorkflow(t, t.TempDir(), tt.dispatch))
+
+			if code != 0 {
+				t.Errorf("run(validate) = %d, want 0; errors: %+v", code, out.Errors)
+			}
+			if !out.Valid || len(out.Errors) != 0 {
+				t.Errorf("validateOutput = {Valid:%v Errors:%+v}, want valid with no errors", out.Valid, out.Errors)
+			}
+			if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
+				t.Errorf("validateOutput.Warnings = %+v, want only agent.kind.no_tool_channel", out.Warnings)
+			}
+		})
+	}
+}
+
 // unresolvedExtVarWorkflow returns a workflow YAML containing an extension block
 // whose api_key references varName, which must be unset when the test runs.
 func unresolvedExtVarWorkflow(varName string) []byte {
