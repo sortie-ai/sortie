@@ -1704,8 +1704,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 				TurnsCompleted: &turns,
 			})
 
-			if signal != tt.wantSignal {
-				t.Errorf("runSelfReviewLoop(...) terminal signal = %q, want %q", signal, tt.wantSignal)
+			if signal.Signal != tt.wantSignal {
+				t.Errorf("runSelfReviewLoop(...) terminal signal = %q, want %q", signal.Signal, tt.wantSignal)
 			}
 
 			statusPath := filepath.Join(wsPath, ".sortie", "status")
@@ -1755,8 +1755,8 @@ func TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues(t *testing.T) {
 		TurnsCompleted: &turns,
 	})
 
-	if signal != workspace.StatusNone {
-		t.Errorf("terminal signal = %q, want %q (needs-human-review must not abort the phase)", signal, workspace.StatusNone)
+	if signal.Signal != workspace.StatusNone {
+		t.Errorf("terminal signal = %q, want %q (needs-human-review must not abort the phase)", signal.Signal, workspace.StatusNone)
 	}
 	if meta.TotalIterations != 2 {
 		t.Errorf("TotalIterations = %d, want 2 (a fix-turn signal must not end the phase)", meta.TotalIterations)
@@ -1798,8 +1798,8 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 		TurnsCompleted: &turns,
 	})
 
-	if signal != workspace.StatusNone {
-		t.Errorf("terminal signal = %q, want %q", signal, workspace.StatusNone)
+	if signal.Signal != workspace.StatusNone {
+		t.Errorf("terminal signal = %q, want %q", signal.Signal, workspace.StatusNone)
 	}
 	if meta.TotalIterations != cfg.MaxIterations {
 		t.Errorf("TotalIterations = %d, want %d", meta.TotalIterations, cfg.MaxIterations)

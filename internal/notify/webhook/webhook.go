@@ -80,9 +80,10 @@ type wirePayload struct {
 	Body           string `json:"body"`
 	Category       string `json:"category,omitempty"`
 
-	// EventType is set only for an orchestrator event, so an agent
-	// message payload keeps its original field set.
+	// EventType and AgentText are set only for an orchestrator event, so
+	// an agent message payload keeps its original field set.
 	EventType string `json:"event_type,omitempty"`
+	AgentText string `json:"agent_text,omitempty"`
 }
 
 // Send posts the notification as a JSON object and returns nil on any
@@ -106,6 +107,7 @@ func (n *notifier) Send(ctx context.Context, notification domain.Notification) e
 	}
 	if notification.Envelope.EventType.FromOrchestrator() {
 		payload.EventType = string(notification.Envelope.EventType)
+		payload.AgentText = notification.Message.AgentText
 	}
 
 	encoded, err := json.Marshal(payload)

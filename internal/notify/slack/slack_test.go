@@ -321,3 +321,62 @@ func TestSlack_ErrorRedaction_URLAbsentFromLog(t *testing.T) {
 		t.Errorf("log output contains secret token: %q", logOutput)
 	}
 }
+
+func TestSlack_Send_AgentText(t *testing.T) {
+	t.Parallel()
+
+	const base = "[CRITICAL] Blocker found\nAgent cannot proceed without operator input."
+	tests := []struct {
+		name      string
+		agentText string
+		want      string
+	}{
+		{
+			name: "empty agent text leaves the text unchanged",
+			want: base,
+		},
+		{
+			name:      "agent text follows after two line feeds",
+			agentText: "Which one should the API expose?\nSoft or hard delete.",
+			want:      base + "\n\nWhich one should the API expose?\nSoft or hard delete.",
+		},
+		{
+			name:      "ampersand and angle brackets are escaped",
+			agentText: "<!channel> a & b <https://example.com|click> > done",
+			want:      base + "\n\n&lt;!channel&gt; a &amp; b &lt;https://example.com|click&gt; &gt; done",
+		},
+		{
+			name:      "an existing entity is escaped again rather than passed through",
+			agentText: "&amp; and &lt;",
+			want:      base + "\n\n&amp;amp; and &amp;lt;",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, getBody := captureServer(t, http.StatusOK)
+			n, err := newNotifier(map[string]any{"webhook_url": srv.URL})
+			if err != nil {
+				t.Fatalf("newNotifier: %v", err)
+			}
+			notification := makeNotification()
+			notification.Message.AgentText = tt.agentText
+
+			if err := n.Send(context.Background(), notification); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+
+			var posted struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(getBody(), &posted); err != nil {
+				t.Fatalf("unmarshal posted body: %v", err)
+			}
+			if posted.Text != tt.want {
+				t.Errorf("Send(AgentText=%q) text = %q, want %q", tt.agentText, posted.Text, tt.want)
+			}
+		})
+	}
+}

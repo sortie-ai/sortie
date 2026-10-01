@@ -293,6 +293,109 @@ func TestMask_UnregisteredValueUnchanged(t *testing.T) {
 	}
 }
 
+func TestMaskTruncated(t *testing.T) {
+	t.Parallel()
+
+	value := randomSecret(t)
+	Add("test.MaskTruncated", value)
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "complete value is masked as Mask does", input: "token=" + value + " done~", want: "token=" + Marker + " done~"},
+		{name: "complete value at the end is masked without a trailing cut", input: "token=" + value, want: "token=" + Marker},
+		{name: "cut after one byte of the value", input: "token=" + value[:1], want: "token="},
+		{name: "cut in the middle of the value", input: "token=" + value[:len(value)/2], want: "token="},
+		{name: "cut one byte short of the value", input: "token=" + value[:len(value)-1], want: "token="},
+		{name: "fragment that is not at the end is kept", input: "token=" + value[:6] + " rest~", want: "token=" + value[:6] + " rest~"},
+		{name: "unrelated tail is kept", input: "plain text~", want: "plain text~"},
+		{name: "fragment after a complete masked value is cut", input: value + " then " + value[:9], want: Marker + " then "},
+		{name: "empty input", input: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := MaskTruncated(tt.input)
+
+			if got != tt.want {
+				t.Errorf("MaskTruncated(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaskTruncated_CutInsideValueLeavesNoPrefixAtAnyOffset(t *testing.T) {
+	t.Parallel()
+
+	value := randomSecret(t)
+	Add("test.MaskTruncated offsets", value)
+
+	for n := 1; n < len(value); n++ {
+		text := "token=" + value[:n]
+
+		got := MaskTruncated(text)
+
+		if got != "token=" {
+			t.Errorf("MaskTruncated(%q) = %q, want %q", text, got, "token=")
+		}
+	}
+}
+
+func TestMaskTruncated_CutFragmentHidingAMaskedValueIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	inner := randomSecret(t)
+	outer := "outer-" + inner + "-" + randomSecret(t)
+	Add("test.MaskTruncated inner", inner)
+	Add("test.MaskTruncated outer", outer)
+	withMarker := randomSecret(t) + Marker + randomSecret(t)
+	Add("test.MaskTruncated marker", withMarker)
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "shorter value inside the cut prefix of a longer one", input: "token=" + outer[:len(outer)-4]},
+		{name: "cut prefix of a value that holds the marker", input: "token=" + withMarker[:len(withMarker)-4]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := MaskTruncated(tt.input); got != "token=" {
+				t.Errorf("MaskTruncated(%q) = %q, want %q", tt.input, got, "token=")
+			}
+		})
+	}
+}
+
+func TestMaskTruncated_CompleteValueOverlappingTheCutStaysMasked(t *testing.T) {
+	t.Parallel()
+
+	first := randomSecret(t)
+	second := first[len(first)-4:] + randomSecret(t)
+	Add("test.MaskTruncated first", first)
+	Add("test.MaskTruncated second", second)
+
+	input := "token=" + first
+	if got, want := MaskTruncated(input), "token="+Marker; got != want {
+		t.Errorf("MaskTruncated(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestMaskTruncated_NothingRegisteredMatchesMask(t *testing.T) {
+	t.Parallel()
+
+	text := "no registered value here " + randomSecret(t)[:12]
+	if got, want := MaskTruncated(text), Mask(text); got != want {
+		t.Errorf("MaskTruncated(%q) = %q, want %q", text, got, want)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	t.Parallel()
 

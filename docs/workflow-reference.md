@@ -1343,7 +1343,7 @@ The catalog is closed. Validation accepts exactly these names and rejects any ot
 | ---------- | --------- | -------- |
 | `session.started` | A session is dispatched on an issue whose dispatch drives issue state, after the in-progress transition and before the workspace is prepared. | `info` |
 | `session.completed` | A worker exits normally. | `info` |
-| `session.stopped` | A worker exits on a soft stop: `blocked`, `needs-human-review`, or `no-change-needed`. | `warning`; `info` for `no-change-needed` |
+| `session.stopped` | A worker exits on a soft stop: `blocked`, `needs-human-review`, or `no-change-needed`. It carries the agent's reason when the agent wrote one ([The agent's reason on a stop](#the-agents-reason-on-a-stop)). | `warning`; `info` for `no-change-needed` |
 | `session.failed` | A worker exits with an error, or its handoff is withheld by the handoff-evidence policy. | `warning` |
 | `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, `escalation.merge_completion` | The matching reaction ([Section 2.9](#29-reactions--reaction-based-feedback-loops)) hands its subject to a person, under any `escalation` value. | `warning` |
 | `auto_merge.merged` | The auto-merge reaction merges a pull request. | `info` |
@@ -1354,13 +1354,29 @@ A run cancelled by Sortie produces no session event. Sortie never counts its own
 
 #### The `tracker_comment` destination
 
-A `tracker_comment` entry posts each event it receives as a comment on the event's issue, using the same text Sortie has always posted for that moment. The comment never carries error text, the agent's session identifier, or the agent kind, because a tracker issue can be read by people outside your deployment. Slack and webhook destinations receive the full notification.
+A `tracker_comment` entry posts each event it receives as a comment on the event's issue, using the same text Sortie has always posted for that moment. Sortie's own text never carries error text, the agent's session identifier, or the agent kind, because a tracker issue can be read by people outside your deployment. Slack and webhook destinations receive the full notification. The one addition is the agent's reason on a stop, which follows Sortie's text in the same comment ([The agent's reason on a stop](#the-agents-reason-on-a-stop)).
 
 - At most one entry has this kind, and it requires a configured `tracker.kind`.
 - It requires `events`, and `agent.message` is rejected there: messages from the agent never reach the issue.
 - It receives the union of three sets: the events its entry lists, the events that the deprecated `tracker.comments` settings and `escalation: comment` enable, and, while no `tracker_comment` entry exists, `auto_merge.merged` and `budget.held`. Writing the new form never withdraws a comment an old setting enabled, and one event is delivered at most once to a destination however many of these select it. Keeping `tracker.comments.on_completion: true` and also listing `session.completed` on the entry gives one comment per completion, not two.
 
 **An explicit entry is authoritative for two comments.** The auto-merge success comment and the budget-hold comment have never had a setting of their own: they post whenever a tracker is configured. They keep posting only while no `tracker_comment` entry exists. Once you write an entry, it posts `auto_merge.merged` and `budget.held` only when it lists them, so an entry that omits them stops those comments. With no `tracker.kind` there is no issue to comment on and nothing posts.
+
+#### The agent's reason on a stop
+
+When an agent stops on `blocked`, `needs-human-review`, or `no-change-needed`, it can write its reason on the lines after the status in `.sortie/status`. The first line is the status and everything after it is the reason. Sortie asks the agent for one in the instructions it adds to the first prompt of every run, and asks it to keep the whole file under 1024 bytes, because Sortie reads no more than that.
+
+Sortie publishes the reason only with the `session.stopped` event. A `session.failed` event never carries one, even when a `needs-human-review` run ended as a failure because its handoff was withheld, and neither does an `agent.message` notification. A reason that comes with an unrecognized status is ignored. When the agent writes a status inside a self-review turn, only a `blocked` there replaces the reason already held, and a `no-change-needed` declaration that self-review retracts takes its reason with it.
+
+Before a reason leaves Sortie, Sortie removes control characters, replaces bytes that are not valid text, masks every secret value it knows from its own configuration and environment (values shorter than 8 bytes are left readable), and, when the file was cut at 1024 bytes, also drops any partial secret left at the cut and ends the reason with an ellipsis. Only those secrets are masked. Sortie does not recognize other credentials or paths, so a statement that quotes one is published as written.
+
+| Destination | What it receives |
+| ----------- | ---------------- |
+| `tracker_comment` | Sortie's usual comment, then the reason in one literal block, shown by the tracker as plain text. A mention, link, markup, or slash command inside it takes no effect. |
+| `slack` | Sortie's usual text, a blank line, and the reason, with `&`, `<`, and `>` written as `&amp;`, `&lt;`, and `&gt;` so it never becomes a mention or a labeled link. Slack still makes a bare web address in it clickable and applies its own text formatting. |
+| `webhook` | The reason in the `agent_text` key, apart from `body`. |
+
+A status with no reason, or a reason that is empty after this cleanup, changes nothing: the comment and the notifications are exactly what Sortie sent before the reason existed.
 
 #### Moving from the deprecated settings
 
@@ -1444,6 +1460,7 @@ The `webhook` backend posts a JSON object whose keys use the generic notifier vo
 | `body` | string | Notification detail: the agent's own for `agent.message`, and the text Sortie posts as the comment for an event it produces. |
 | `category` | string | Optional: `decision_needed`, `progress`, `blocked`, `completed`, or `other`. Absent when the agent did not set it. |
 | `event_type` | string | The event type from the catalog above. Present only on an event Sortie produces. An `agent.message` payload carries exactly the keys above and no `event_type`, so an endpoint configured before this key existed receives the same JSON as before. |
+| `agent_text` | string | The agent's reason for stopping, after the cleanup described in [The agent's reason on a stop](#the-agents-reason-on-a-stop). Present only on a `session.stopped` event whose agent wrote a reason, and never inside `body`. |
 
 **`SORTIE_`-prefixed secret rule:**
 

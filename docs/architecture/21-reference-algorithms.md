@@ -326,6 +326,7 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
   max_turns = config.agent.max_turns
   turn_number = 1
   pending_reason = ""  // set once a post-turn read admits a recognized value
+  pending_statement = empty  // the statement of the read that set pending_reason; empty whenever pending_reason is
 
   while true:
     if worker_ctx is done:
@@ -364,9 +365,10 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), turn_err)
 
-    status = read_sortie_status(workspace.path)
-    if status in ["blocked", "needs-human-review", "no-change-needed"]:
-      pending_reason = status
+    status = read_sortie_status(workspace.path)  // token, plus the statement when the token is recognized
+    if status.token in ["blocked", "needs-human-review", "no-change-needed"]:
+      pending_reason = status.token
+      pending_statement = status.statement
       break  // leaves the loop; the phase and teardown below run regardless of which value this is
 
     // run_ctx, not worker_ctx: an in-flight ceiling stop does not interrupt
@@ -410,12 +412,13 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
     if pending_reason != "":
       log_info("agent signaled a status admitting self-review, entering the phase", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
-    review_metadata, phase_signal, cancelled_at_ending, phase_err = run_self_review_loop(
+    review_metadata, phase_signal, phase_statement, cancelled_at_ending, phase_err = run_self_review_loop(
       session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
       turn_timeout_ms=turn_timeout_ms  // the attempt-start snapshot, bounding both phase turns
     )
     if phase_signal == "blocked":
       pending_reason = "blocked"
+      pending_statement = phase_statement  // replaces the pending one; the other in-phase values discard theirs
     // The phase's own verification commands and review turn are what can
     // falsify a no-change declaration. It stands only where the phase
     // recorded exactly one iteration ending on a "pass" verdict with no
@@ -424,9 +427,11 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       if any result in review_metadata.iterations[*].verification_results has exit_code != 0 OR timed_out:
         log_info("no-change declaration retracted", cause="verification", command, exit_code, timed_out)
         pending_reason = ""
+        pending_statement = empty
       else if review_metadata.total_iterations != 1 OR review_metadata.final_verdict != "pass":
         log_info("no-change declaration retracted", cause="phase_unconfirmed", iterations=review_metadata.total_iterations, final_verdict=review_metadata.final_verdict)
         pending_reason = ""
+        pending_statement = empty
     phase_cut = phase_err == null AND cancelled_at_ending
   else if admitted:
     phase_cut = true  // worker_ctx was already done at the gate
@@ -472,7 +477,7 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
     SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
   })
 
-  exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason)
+  exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason, soft_stop_statement=pending_statement)
 ```
 
 ### 16.6 Worker Exit and Retry Handling

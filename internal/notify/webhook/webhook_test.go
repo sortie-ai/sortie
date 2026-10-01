@@ -459,3 +459,64 @@ func TestWebhook_Send_EventType(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhook_Send_AgentText(t *testing.T) {
+	t.Parallel()
+
+	recorded := string(loadFixture(t, "agent_message_payload.json"))
+	const agentText = "Which one should the API expose?\nSoft or hard delete."
+	const agentTextJSON = `"Which one should the API expose?\nSoft or hard delete."`
+
+	tests := []struct {
+		name      string
+		eventType domain.EventType
+		agentText string
+		want      string
+	}{
+		{
+			name:      "orchestrator event with agent text appends agent_text after event_type",
+			eventType: domain.EventSessionStopped,
+			agentText: agentText,
+			want:      strings.TrimSuffix(recorded, "}") + `,"event_type":"session.stopped","agent_text":` + agentTextJSON + `}`,
+		},
+		{
+			name:      "orchestrator event without agent text omits the key",
+			eventType: domain.EventSessionStopped,
+			want:      strings.TrimSuffix(recorded, "}") + `,"event_type":"session.stopped"}`,
+		},
+		{
+			name:      "agent message never carries agent_text",
+			eventType: domain.EventAgentMessage,
+			agentText: agentText,
+			want:      recorded,
+		},
+		{
+			name:      "a notification without an event type never carries agent_text",
+			agentText: agentText,
+			want:      recorded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, getBody := captureServer(t, http.StatusOK)
+			n, err := newNotifier(map[string]any{"url": srv.URL})
+			if err != nil {
+				t.Fatalf("newNotifier: %v", err)
+			}
+			notification := makeNotification()
+			notification.Envelope.EventType = tt.eventType
+			notification.Message.AgentText = tt.agentText
+
+			if err := n.Send(context.Background(), notification); err != nil {
+				t.Fatalf("Send(%q): %v", tt.eventType, err)
+			}
+
+			if got := string(getBody()); got != tt.want {
+				t.Errorf("Send(%q, AgentText=%q) body = %s, want %s", tt.eventType, tt.agentText, got, tt.want)
+			}
+		})
+	}
+}

@@ -16,6 +16,13 @@ Recognized values:
 
 If the file is absent or contains an unrecognized value, it is ignored.
 
+**Statement.** The lines after the first are the agent's statement: free text that gives its reason for the status. The whole file, token line included, has a 1024-byte budget, and a longer file is read to that bound and no further. A statement accompanies a recognized token only.
+
+- **Capture.** The run keeps the statement of the read that produced the token ending the run. A recognized token read after a coding turn keeps its statement. A `blocked` read inside the self-review phase keeps its own statement in place of any pending one. A `needs-human-review` or `no-change-needed` read inside the phase is consumed and ignored with its statement, and a retracted `no-change-needed` declaration clears the statement with the token. The kept statement is empty whenever the run's soft-stop token is empty.
+- **Publication.** Sortie masks every registered secret in the statement as written, normalizes it (it removes control characters, replaces invalid UTF-8, converts CR line endings, and drops an incomplete sequence left by a cut at the bound), masks every registered secret again, including a prefix of one that the cut left, and then publishes it only with the `session.stopped` event: as one literal block after Sortie's own text in the tracker comment of a `tracker_comment` entry that receives that event (Sections 5.3.10 and 11.5), and as a separate field in every Slack and webhook entry that receives it (Section 10.4.7). It never becomes part of the event body, and `session.failed`, including a `needs-human-review` run whose handoff the evidence verdict withheld, carries none.
+- **Absence.** A file that holds only the token, a statement made only of whitespace, and a statement that normalization empties are equivalent: the comment and the notifications are exactly those of a status without a reason, and nothing is added to them.
+- **Masking scope.** Only registered secrets are masked. The injected status instructions ask the agent to name files by repository path and never to include credentials, but Sortie does not detect other sensitive content.
+
 The `.sortie/status` file is not required for any core orchestration behavior. It is an advisory channel only.
 
 The full protocol specification, including file format, parsing rules, read timing, cleanup obligations, versioning, security considerations, and design rationale, is in [agent-to-orchestrator-protocol.md](../agent-to-orchestrator-protocol.md).

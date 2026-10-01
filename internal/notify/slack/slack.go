@@ -82,9 +82,18 @@ func (n *notifier) Send(ctx context.Context, notification domain.Notification) e
 	return nil
 }
 
+// slackEscaper writes the three characters Slack treats as control
+// characters in message text as HTML entities.
+var slackEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 // renderText composes the Slack message text from the message severity,
-// title, and body.
+// title, and body, followed by the agent-authored text, escaped, after a
+// blank line.
 func renderText(notification domain.Notification) string {
 	severity := strings.ToUpper(notification.Message.Severity)
-	return fmt.Sprintf("[%s] %s\n%s", severity, notification.Message.Title, notification.Message.Body)
+	text := fmt.Sprintf("[%s] %s\n%s", severity, notification.Message.Title, notification.Message.Body)
+	if notification.Message.AgentText == "" {
+		return text
+	}
+	return text + "\n\n" + slackEscaper.Replace(notification.Message.AgentText)
 }
