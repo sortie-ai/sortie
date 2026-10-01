@@ -91,8 +91,8 @@ const (
 // against a scripted model endpoint and fails t unless the run holds every
 // property: the turn ends completed, the reported usage equals everything the
 // endpoint served, the scripted tool call reaches one normalized tool result,
-// the credential stays in its header, and a request beyond the script ends
-// the turn failed with the endpoint's message.
+// the credential stays in its header, and requests beyond the script end the
+// turn failed with the endpoint's last message.
 //
 // It sets environment variables for the rest of the test, so it must not be
 // called from a test that uses t.Parallel.
@@ -201,7 +201,7 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	if scenario == ScenarioExhaustion {
 		failures := recorded.snapshot()
 		reportViolations(t, exhaustionViolations(run, nonce, timedOut, failures))
-		if exhausted := exchangesOfKind(run.Exchanges, ExchangeExhausted); len(exhausted) == 1 && reportsOnly(failures, exhausted[0]) {
+		if exhausted := exchangesOfKind(run.Exchanges, ExchangeExhausted); len(exhausted) > 0 && reportsOnly(failures, exhausted) {
 			recorded.discard()
 		}
 		if b.Inspect != nil {
@@ -643,11 +643,11 @@ func exhaustionViolations(run Run, nonce string, timedOut bool, failures []strin
 	if len(turns) != 1 || turns[0].Step != 0 || turns[0].Answer.Call == nil {
 		v.add("%d turn exchanges, want exactly one, step 0, answered with a call", len(turns))
 	}
-	if len(exhausted) != 1 {
-		v.add("%d exhausted exchanges, want exactly one", len(exhausted))
+	if len(exhausted) == 0 {
+		v.add("0 exhausted exchanges, want at least one")
 	}
-	if len(turns) == 1 && len(exhausted) == 1 {
-		checkExhaustedExchange(v, run, turns[0], exhausted[0], nonce, failures)
+	if len(turns) == 1 && len(exhausted) > 0 {
+		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures)
 	}
 
 	if !run.Result.UsageMeasured {
@@ -659,11 +659,13 @@ func exhaustionViolations(run Run, nonce string, timedOut bool, failures []strin
 	return v.items
 }
 
-// checkExhaustedExchange records a violation unless the request beyond the
-// script carried the first call's result and its message reached the turn's
-// error, its failed event and the endpoint's own failure report.
-func checkExhaustedExchange(v *findings, run Run, call, exhausted Exchange, nonce string, failures []string) {
-	message := exhausted.Answer.Text
+// checkExhaustedExchanges records a violation unless every request beyond the
+// script carried the first call's result, the last one's message reached the
+// turn's error and its failed event, and the endpoint reported each of them.
+// A runtime may resend a rejected request, such as once more without an
+// optional feature, so more than one such request is not a violation.
+func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string) {
+	message := exhausted[len(exhausted)-1].Answer.Text
 	if run.Err == nil || !strings.Contains(run.Err.Error(), message) {
 		v.add("RunTurn error %v does not contain the endpoint message %q", run.Err, message)
 	}
@@ -675,17 +677,28 @@ func checkExhaustedExchange(v *findings, run Run, call, exhausted Exchange, nonc
 		v.add("the last %q event message %q does not contain the endpoint message %q", domain.EventTurnFailed, failed.Message, message)
 	}
 
-	checkToolResult(v, call, exhausted, nonce, run.Environment.Sentinel)
+	for _, ex := range exhausted {
+		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
+	}
 
 	if !reportsOnly(failures, exhausted) {
-		v.add("the endpoint reported %d failures %q, want exactly one containing %q", len(failures), failures, requestLabel(exhausted))
+		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
 	}
 }
 
-// reportsOnly reports whether failures holds exactly one failure, and it
-// names the exhausted request.
-func reportsOnly(failures []string, exhausted Exchange) bool {
-	return len(failures) == 1 && strings.Contains(failures[0], requestLabel(exhausted))
+// reportsOnly reports whether failures holds exactly one failure per
+// exhausted request, each naming its request.
+func reportsOnly(failures []string, exhausted []Exchange) bool {
+	if len(failures) != len(exhausted) {
+		return false
+	}
+	for _, ex := range exhausted {
+		label := requestLabel(ex)
+		if !slices.ContainsFunc(failures, func(f string) bool { return strings.Contains(f, label) }) {
+			return false
+		}
+	}
+	return true
 }
 
 func lastEventOfType(events []domain.AgentEvent, eventType domain.AgentEventType) (domain.AgentEvent, bool) {

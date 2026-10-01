@@ -743,14 +743,35 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 		{
 			name:   "no exhausted exchange",
 			mutate: func(s *conformanceExhaustionState) { s.run.Exchanges = s.run.Exchanges[:1] },
-			want:   []string{"0 exhausted exchanges, want exactly one"},
+			want:   []string{"0 exhausted exchanges, want at least one"},
 		},
 		{
-			name: "second exhausted exchange",
+			name:   "rejected request resent",
+			mutate: conformanceResendExhausted,
+		},
+		{
+			name: "resent request carries no tool result",
 			mutate: func(s *conformanceExhaustionState) {
-				s.run.Exchanges = append(s.run.Exchanges, s.run.Exchanges[1])
+				conformanceResendExhausted(s)
+				s.run.Exchanges[2].ToolResults = nil
 			},
-			want: []string{"2 exhausted exchanges, want exactly one"},
+			want: []string{"request 3 (POST /v1/messages) carries 0 tool results"},
+		},
+		{
+			name: "resent request not reported by the endpoint",
+			mutate: func(s *conformanceExhaustionState) {
+				conformanceResendExhausted(s)
+				s.failures = s.failures[:1]
+			},
+			want: []string{"the endpoint reported 1 failures"},
+		},
+		{
+			name: "turn reports the first rejection instead of the last",
+			mutate: func(s *conformanceExhaustionState) {
+				conformanceResendExhausted(s)
+				s.run.Exchanges[2].Answer.Text = "the second rejection"
+			},
+			want: []string{"does not contain the endpoint message", "the last"},
 		},
 		{
 			name:   "usage not measured",
@@ -819,14 +840,26 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 	)
 }
 
+// conformanceResendExhausted makes the runtime resend the rejected request
+// once, as a runtime that retries without an optional feature does.
+func conformanceResendExhausted(s *conformanceExhaustionState) {
+	resent := s.run.Exchanges[1]
+	resent.Seq = 3
+	resent.ToolResults = slices.Clone(resent.ToolResults)
+	s.run.Exchanges = append(s.run.Exchanges, resent)
+	s.failures = append(s.failures, "scripted model: request 3 (POST /v1/messages) arrived after the last script entry")
+}
+
 func TestConformanceReportsOnly(t *testing.T) {
 	t.Parallel()
 
-	exhausted := Exchange{Seq: 2, Method: "POST", Path: "/v1/messages"}
+	exhausted := []Exchange{{Seq: 2, Method: "POST", Path: "/v1/messages"}}
+	resent := append(slices.Clone(exhausted), Exchange{Seq: 3, Method: "POST", Path: "/v1/messages"})
 	tests := []struct {
-		name     string
-		failures []string
-		want     bool
+		name      string
+		failures  []string
+		exhausted []Exchange
+		want      bool
 	}{
 		{name: "no failures", want: false},
 		{name: "one failure naming the request", failures: []string{"scripted model: request 2 (POST /v1/messages) failed"}, want: true},
@@ -839,16 +872,39 @@ func TestConformanceReportsOnly(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "one failure naming each resent request",
+			failures: []string{
+				"scripted model: request 2 (POST /v1/messages) failed",
+				"scripted model: request 3 (POST /v1/messages) failed",
+			},
+			exhausted: resent,
+			want:      true,
+		},
+		{
+			name: "two failures naming the same request",
+			failures: []string{
+				"scripted model: request 2 (POST /v1/messages) failed",
+				"scripted model: request 2 (POST /v1/messages) failed",
+			},
+			exhausted: resent,
+			want:      false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := reportsOnly(tt.failures, exhausted)
+			requests := tt.exhausted
+			if requests == nil {
+				requests = exhausted
+			}
+
+			got := reportsOnly(tt.failures, requests)
 
 			if got != tt.want {
-				t.Errorf("reportsOnly(%q, request 2) = %t, want %t", tt.failures, got, tt.want)
+				t.Errorf("reportsOnly(%q, %d requests) = %t, want %t", tt.failures, len(requests), got, tt.want)
 			}
 		})
 	}
