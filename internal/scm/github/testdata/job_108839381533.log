@@ -1,0 +1,416 @@
+﻿2026-09-28T08:03:46.7484543Z Current runner version: '2.337.0'
+2026-09-28T08:03:46.7536540Z ##[group]Runner Image Provisioner
+2026-09-28T08:03:46.7537485Z Hosted Compute Agent
+2026-09-28T08:03:46.7538073Z Version: 20260828.587
+2026-09-28T08:03:46.7538813Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-28T08:03:46.7539647Z Build Date: 2026-08-28T16:44:25Z
+2026-09-28T08:03:46.7540381Z Worker ID: {ca3de643-a30e-4c8f-abc7-bcd47755dd58}
+2026-09-28T08:03:46.7541123Z Azure Region: westus2
+2026-09-28T08:03:46.7541686Z ##[endgroup]
+2026-09-28T08:03:46.7543606Z ##[group]Operating System
+2026-09-28T08:03:46.7544344Z Ubuntu
+2026-09-28T08:03:46.7544942Z 24.04.5
+2026-09-28T08:03:46.7545484Z LTS
+2026-09-28T08:03:46.7545992Z ##[endgroup]
+2026-09-28T08:03:46.7546612Z ##[group]Runner Image
+2026-09-28T08:03:46.7547255Z Image: ubuntu-24.04
+2026-09-28T08:03:46.7547805Z Version: 20260920.314.1
+2026-09-28T08:03:46.7549183Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260920.314/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-28T08:03:46.7550806Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+2026-09-28T08:03:46.7551813Z ##[endgroup]
+2026-09-28T08:03:46.7553303Z ##[group]GITHUB_TOKEN Permissions
+2026-09-28T08:03:46.7555670Z Contents: read
+2026-09-28T08:03:46.7556310Z Metadata: read
+2026-09-28T08:03:46.7557047Z ##[endgroup]
+2026-09-28T08:03:46.7559256Z Secret source: Actions
+2026-09-28T08:03:46.7560291Z Cache mode: write
+2026-09-28T08:03:46.7561009Z Prepare workflow directory
+2026-09-28T08:03:46.7916188Z Prepare all required actions
+2026-09-28T08:03:46.7966020Z Getting action download info
+2026-09-28T08:03:47.2245763Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-28T08:03:47.3314559Z Download action repository 'pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413' (SHA:ea17c68df8912ef543352723c149a84f56e3d413)
+2026-09-28T08:03:47.5613848Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-28T08:03:47.6381681Z Download action repository 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' (SHA:3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c)
+2026-09-28T08:03:48.0436067Z Complete job name: Test types
+2026-09-28T08:03:48.1523905Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-09-28T08:03:48.1525736Z with:
+2026-09-28T08:03:48.1526586Z   persist-credentials: false
+2026-09-28T08:03:48.1527604Z   repository: dubzzz/fast-check
+2026-09-28T08:03:48.1535913Z   token: ***
+2026-09-28T08:03:48.1536757Z   ssh-strict: true
+2026-09-28T08:03:48.1537622Z   ssh-user: git
+2026-09-28T08:03:48.1538449Z   clean: true
+2026-09-28T08:03:48.1539307Z   sparse-checkout-cone-mode: true
+2026-09-28T08:03:48.1540345Z   fetch-depth: 1
+2026-09-28T08:03:48.1541195Z   fetch-tags: false
+2026-09-28T08:03:48.1542082Z   show-progress: true
+2026-09-28T08:03:48.1543176Z   lfs: false
+2026-09-28T08:03:48.1544044Z   submodules: false
+2026-09-28T08:03:48.1544945Z   set-safe-directory: true
+2026-09-28T08:03:48.1545934Z   allow-unsafe-pr-checkout: false
+2026-09-28T08:03:48.1547287Z ##[endgroup]
+2026-09-28T08:03:48.2676809Z Syncing repository: dubzzz/fast-check
+2026-09-28T08:03:48.2680164Z ##[group]Getting Git version info
+2026-09-28T08:03:48.2681842Z Working directory is '/home/runner/work/fast-check/fast-check'
+2026-09-28T08:03:48.2684523Z [command]/usr/bin/git version
+2026-09-28T08:03:48.2699114Z git version 2.55.0
+2026-09-28T08:03:48.2729261Z ##[endgroup]
+2026-09-28T08:03:48.2736731Z Temporarily overriding HOME='/home/runner/work/_temp/1b2e9fcd-68e1-4ad0-8a26-5e1a80f2b446' before making global git config changes
+2026-09-28T08:03:48.2739796Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-28T08:03:48.2743322Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/fast-check/fast-check
+2026-09-28T08:03:48.2804293Z Deleting the contents of '/home/runner/work/fast-check/fast-check'
+2026-09-28T08:03:48.2808298Z ##[group]Determining repository object format
+2026-09-28T08:03:48.2811190Z ##[endgroup]
+2026-09-28T08:03:48.2813718Z ##[group]Initializing the repository
+2026-09-28T08:03:48.2816039Z [command]/usr/bin/git init /home/runner/work/fast-check/fast-check
+2026-09-28T08:03:48.2930991Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-28T08:03:48.2934717Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-28T08:03:48.2938266Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-28T08:03:48.2940824Z hint: call:
+2026-09-28T08:03:48.2942101Z hint:
+2026-09-28T08:03:48.2944005Z hint: 	git config --global init.defaultBranch <name>
+2026-09-28T08:03:48.2945948Z hint:
+2026-09-28T08:03:48.2947710Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-28T08:03:48.2950674Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-28T08:03:48.2953429Z hint:
+2026-09-28T08:03:48.2954950Z hint: 	git branch -m <name>
+2026-09-28T08:03:48.2956413Z hint:
+2026-09-28T08:03:48.2957693Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-28T08:03:48.2959642Z Initialized empty Git repository in /home/runner/work/fast-check/fast-check/.git/
+2026-09-28T08:03:48.2963394Z [command]/usr/bin/git remote add origin https://github.com/dubzzz/fast-check
+2026-09-28T08:03:48.3011244Z ##[endgroup]
+2026-09-28T08:03:48.3013461Z ##[group]Disabling automatic garbage collection
+2026-09-28T08:03:48.3017781Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-28T08:03:48.3059976Z ##[endgroup]
+2026-09-28T08:03:48.3062010Z ##[group]Setting up auth
+2026-09-28T08:03:48.3063691Z Removing SSH command configuration
+2026-09-28T08:03:48.3066665Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T08:03:48.3102899Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T08:03:48.3485327Z Removing HTTP extra header
+2026-09-28T08:03:48.3491209Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T08:03:48.3558692Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T08:03:48.3777225Z Removing includeIf entries pointing to credentials config files
+2026-09-28T08:03:48.3781559Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T08:03:48.3818137Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T08:03:48.4047192Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-28T08:03:48.4088950Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/fast-check/fast-check/.git.path /home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:48.4124113Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:48.4162831Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:48.4198192Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:48.4230315Z ##[endgroup]
+2026-09-28T08:03:48.4231660Z ##[group]Fetching the repository
+2026-09-28T08:03:48.4237507Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e5b7b24bc9ac4ae38883f1629dfe548692b77733:refs/remotes/pull/7377/merge
+2026-09-28T08:03:49.0373454Z From https://github.com/dubzzz/fast-check
+2026-09-28T08:03:49.0375966Z  * [new ref]         e5b7b24bc9ac4ae38883f1629dfe548692b77733 -> pull/7377/merge
+2026-09-28T08:03:49.0381015Z ##[endgroup]
+2026-09-28T08:03:49.0382960Z ##[group]Determining the checkout info
+2026-09-28T08:03:49.0384910Z ##[endgroup]
+2026-09-28T08:03:49.0386191Z [command]/usr/bin/git sparse-checkout disable
+2026-09-28T08:03:49.0475566Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-28T08:03:49.0511374Z ##[group]Checking out the ref
+2026-09-28T08:03:49.0516557Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/7377/merge
+2026-09-28T08:03:49.1183624Z Note: switching to 'refs/remotes/pull/7377/merge'.
+2026-09-28T08:03:49.1184737Z 
+2026-09-28T08:03:49.1185497Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-28T08:03:49.1187105Z changes and commit them, and you can discard any commits you make in this
+2026-09-28T08:03:49.1188357Z state without impacting any branches by switching back to a branch.
+2026-09-28T08:03:49.1189485Z 
+2026-09-28T08:03:49.1190287Z If you want to create a new branch to retain commits you create, you may
+2026-09-28T08:03:49.1192728Z do so (now or later) by using -c with the switch command. Example:
+2026-09-28T08:03:49.1193985Z 
+2026-09-28T08:03:49.1194413Z   git switch -c <new-branch-name>
+2026-09-28T08:03:49.1195205Z 
+2026-09-28T08:03:49.1195577Z Or undo this operation with:
+2026-09-28T08:03:49.1196226Z 
+2026-09-28T08:03:49.1196606Z   git switch -
+2026-09-28T08:03:49.1197260Z 
+2026-09-28T08:03:49.1198424Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-28T08:03:49.1200037Z 
+2026-09-28T08:03:49.1201595Z HEAD is now at e5b7b24 Merge fda1980361ec0da64d33571b408ffd090ba1f485 into e442bad7f048721a1635f742510cc1ac828365c2
+2026-09-28T08:03:49.1206321Z ##[endgroup]
+2026-09-28T08:03:49.1251463Z [command]/usr/bin/git log -1 --format=%H
+2026-09-28T08:03:49.1280981Z e5b7b24bc9ac4ae38883f1629dfe548692b77733
+2026-09-28T08:03:49.1294939Z ##[group]Removing auth
+2026-09-28T08:03:49.1295936Z Removing SSH command configuration
+2026-09-28T08:03:49.1297050Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T08:03:49.1334293Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T08:03:49.1575687Z Removing HTTP extra header
+2026-09-28T08:03:49.1581723Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T08:03:49.1622236Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T08:03:49.1849674Z Removing includeIf entries pointing to credentials config files
+2026-09-28T08:03:49.1853216Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T08:03:49.1885346Z includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path
+2026-09-28T08:03:49.1887660Z includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path
+2026-09-28T08:03:49.1889619Z includeif.gitdir:/github/workspace/.git.path
+2026-09-28T08:03:49.1891127Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-28T08:03:49.1894809Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path
+2026-09-28T08:03:49.1921904Z /home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:49.1935716Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-a8d28de2\-7c40\-4fbd\-8b10\-4f1b1980427b\.config
+2026-09-28T08:03:49.1977766Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path
+2026-09-28T08:03:49.2006679Z /home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:49.2016308Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-a8d28de2\-7c40\-4fbd\-8b10\-4f1b1980427b\.config
+2026-09-28T08:03:49.2051283Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-28T08:03:49.2077168Z /github/runner_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:49.2085416Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-a8d28de2\-7c40\-4fbd\-8b10\-4f1b1980427b\.config
+2026-09-28T08:03:49.2126790Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-28T08:03:49.2153950Z /github/runner_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config
+2026-09-28T08:03:49.2206744Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-a8d28de2\-7c40\-4fbd\-8b10\-4f1b1980427b\.config
+2026-09-28T08:03:49.2263295Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T08:03:49.2490199Z Removing credentials config '/home/runner/work/_temp/git-credentials-a8d28de2-7c40-4fbd-8b10-4f1b1980427b.config'
+2026-09-28T08:03:49.2500078Z ##[endgroup]
+2026-09-28T08:03:49.2769142Z ##[group]Run pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+2026-09-28T08:03:49.2770080Z with:
+2026-09-28T08:03:49.2770493Z   dest: ~/setup-pnpm
+2026-09-28T08:03:49.2770952Z   run_install: null
+2026-09-28T08:03:49.2771374Z   cache: false
+2026-09-28T08:03:49.2771838Z   cache_dependency_path: pnpm-lock.yaml
+2026-09-28T08:03:49.2772684Z   package_json_file: package.json
+2026-09-28T08:03:49.2773282Z   standalone: false
+2026-09-28T08:03:49.2773718Z ##[endgroup]
+2026-09-28T08:03:49.4332206Z ##[group]Running self-installer...
+2026-09-28T08:03:51.2872065Z 
+2026-09-28T08:03:51.2873022Z added 2 packages, and audited 3 packages in 2s
+2026-09-28T08:03:51.2879797Z 
+2026-09-28T08:03:51.2880191Z found 0 vulnerabilities
+2026-09-28T08:03:51.3430803Z Checking for updates...
+2026-09-28T08:03:51.6411505Z Switching pnpm from v12.3.4 to v12.5.1...
+2026-09-28T08:03:52.3939906Z Downloading @pnpm/exe.linux-x64@12.5.1: 0.00 B/22.60 MB
+2026-09-28T08:03:52.6964488Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-28T08:03:52.6965871Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-28T08:03:52.6967004Z   Virtual store is at:             node_modules/.bin/global/v11/952-18d96d6acb928ea8-0/node_modules/.pnpm
+2026-09-28T08:03:52.7014904Z .../global/v11/952-18d96d6acb928ea8-0    | Progress: resolved 2, reused 0, downloaded 2, added 2, done
+2026-09-28T08:03:52.7216330Z Successfully updated pnpm to v12.5.1
+2026-09-28T08:03:52.7261671Z ##[endgroup]
+2026-09-28T08:03:52.7261997Z Installation Completed!
+2026-09-28T08:03:52.7455565Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+2026-09-28T08:03:52.7456013Z with:
+2026-09-28T08:03:52.7456215Z   node-version: 24.x
+2026-09-28T08:03:52.7456432Z   cache: pnpm
+2026-09-28T08:03:52.7456641Z   check-latest: false
+2026-09-28T08:03:52.7459027Z   token: ***
+2026-09-28T08:03:52.7459259Z   package-manager-cache: true
+2026-09-28T08:03:52.7459512Z env:
+2026-09-28T08:03:52.7459792Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:03:52.7460110Z ##[endgroup]
+2026-09-28T08:03:52.8735972Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-09-28T08:03:52.8739424Z ##[group]Environment details
+2026-09-28T08:03:53.3570843Z node: v24.21.0
+2026-09-28T08:03:53.3571313Z npm: 11.19.0
+2026-09-28T08:03:53.3571690Z yarn: 1.22.22
+2026-09-28T08:03:53.3573258Z ##[endgroup]
+2026-09-28T08:03:53.3596416Z [command]/home/runner/setup-pnpm/node_modules/.bin/bin/pnpm store path --silent
+2026-09-28T08:03:53.3764171Z /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-28T08:03:53.6320244Z Cache hit for: node-cache-Linux-x64-pnpm-4f28cdc6d05b9e73b2eaef295865701f2643d487cf5658a6a3586ee573df8ec3
+2026-09-28T08:03:54.9270064Z Received 0 of 220505894 (0.0%), 0.0 MBs/sec
+2026-09-28T08:03:55.9303806Z Received 109051904 of 220505894 (49.5%), 52.0 MBs/sec
+2026-09-28T08:03:56.6731136Z Received 220505894 of 220505894 (100.0%), 76.6 MBs/sec
+2026-09-28T08:03:56.6732059Z Cache Size: ~210 MB (220505894 B)
+2026-09-28T08:03:56.6843644Z [command]/usr/bin/tar -xf /home/runner/work/_temp/baab7081-c01c-4cfb-a334-d141d196e9ba/cache.tzst -P -C /home/runner/work/fast-check/fast-check --use-compress-program unzstd
+2026-09-28T08:03:59.6029127Z Cache restored successfully
+2026-09-28T08:03:59.6129327Z Cache restored from key: node-cache-Linux-x64-pnpm-4f28cdc6d05b9e73b2eaef295865701f2643d487cf5658a6a3586ee573df8ec3
+2026-09-28T08:03:59.6317677Z ##[group]Run pnpm install --frozen-lockfile --ignore-scripts --trust-lockfile
+2026-09-28T08:03:59.6318303Z [36;1mpnpm install --frozen-lockfile --ignore-scripts --trust-lockfile[0m
+2026-09-28T08:03:59.6620582Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:03:59.6620863Z env:
+2026-09-28T08:03:59.6621137Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:03:59.6621488Z ##[endgroup]
+2026-09-28T08:03:59.6777380Z ##[group]Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+2026-09-28T08:03:59.6777804Z with:
+2026-09-28T08:03:59.6777994Z   name: bundles
+2026-09-28T08:03:59.6778194Z   path: packages/
+2026-09-28T08:03:59.6778414Z   merge-multiple: false
+2026-09-28T08:03:59.6778712Z   repository: dubzzz/fast-check
+2026-09-28T08:03:59.6778950Z   run-id: 36394749972
+2026-09-28T08:03:59.6779164Z   skip-decompress: false
+2026-09-28T08:03:59.6779398Z   digest-mismatch: error
+2026-09-28T08:03:59.6779608Z env:
+2026-09-28T08:03:59.6779847Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:03:59.6780156Z ##[endgroup]
+2026-09-28T08:03:59.6878037Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:03:59.6943405Z Scope: all 10 workspace projects
+2026-09-28T08:03:59.8360324Z Downloading single artifact
+2026-09-28T08:04:00.0732212Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-28T08:04:00.0734047Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-28T08:04:00.0735158Z   Virtual store is at:             node_modules/.pnpm
+2026-09-28T08:04:00.1495045Z Preparing to download the following artifacts:
+2026-09-28T08:04:00.1496805Z - bundles (ID: 10958036644, Size: 843066, Expected Digest: sha256:17f529e8893425887354efd0e2699f6962166c23b8068a87059ae1a7975a8298)
+2026-09-28T08:04:00.6858160Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/79d7c709-e634-41fc-8af9-448065d90c17/workflow-job-run-90bfb13a-06c7-5b9a-85e8-51c5a2961703/artifacts/114b245d04582869094531c97bc73bff73e33795d966c76c553a72668ca59219.zip
+2026-09-28T08:04:00.6860807Z Starting download of artifact to: /home/runner/work/fast-check/fast-check/packages
+2026-09-28T08:04:01.0008742Z (node:2492) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-09-28T08:04:01.0036851Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-28T08:04:01.0814100Z Progress: resolved 1788, reused 1788, downloaded 0, added 1781
+2026-09-28T08:04:01.2384311Z Packages: +2034
+2026-09-28T08:04:01.2385432Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-09-28T08:04:01.4546172Z SHA256 digest of downloaded artifact is 17f529e8893425887354efd0e2699f6962166c23b8068a87059ae1a7975a8298
+2026-09-28T08:04:01.4547906Z Artifact download completed successfully.
+2026-09-28T08:04:01.4601758Z Total of 1 artifact(s) downloaded
+2026-09-28T08:04:01.4602656Z Download artifact has finished successfully
+2026-09-28T08:04:01.4693779Z Progress: resolved 2034, reused 2034, downloaded 0, added 2034, done
+2026-09-28T08:04:01.4725442Z Waiting for background step(s) to complete: Install dependencies
+2026-09-28T08:04:01.5194709Z Lockfile is up to date, resolution step is skipped
+2026-09-28T08:04:01.5195330Z 
+2026-09-28T08:04:01.5211640Z devDependencies:
+2026-09-28T08:04:01.5212221Z + @atproto/api 0.21.0
+2026-09-28T08:04:01.5213249Z + @changesets/cli 3.0.3
+2026-09-28T08:04:01.5214053Z + @fast-check/packaged link:packages/packaged
+2026-09-28T08:04:01.5214414Z + @types/jest 30.0.0
+2026-09-28T08:04:01.5214706Z + @types/node 24.19.0
+2026-09-28T08:04:01.5214978Z + @vitest/coverage-v8 4.1.5
+2026-09-28T08:04:01.5215267Z + all-contributors-cli 6.26.1
+2026-09-28T08:04:01.5215539Z + cross-env 10.1.0
+2026-09-28T08:04:01.5215774Z + oxfmt 0.70.0
+2026-09-28T08:04:01.5216073Z + oxlint 1.85.0
+2026-09-28T08:04:01.5216323Z + oxlint-tsgolint 7.0.2003
+2026-09-28T08:04:01.5216600Z + pkg-pr-new 0.0.88
+2026-09-28T08:04:01.5216828Z + publint 0.3.24
+2026-09-28T08:04:01.5217053Z + rolldown 1.2.11
+2026-09-28T08:04:01.5217307Z + rolldown-plugin-dts 0.28.6
+2026-09-28T08:04:01.5217590Z + typescript 6.0.3
+2026-09-28T08:04:01.5217812Z + vitest 4.1.11
+2026-09-28T08:04:01.5217945Z 
+2026-09-28T08:04:01.5218402Z Done in 1.8s using pnpm v12.5.1
+2026-09-28T08:04:01.5352081Z Finished waiting for background step(s).
+2026-09-28T08:04:01.5353022Z   Install dependencies: Succeeded
+2026-09-28T08:04:01.5393374Z ##[group]Run pnpm --filter '{./packages/**}' --parallel -c exec '
+2026-09-28T08:04:01.5394203Z [36;1mpnpm --filter '{./packages/**}' --parallel -c exec '[0m
+2026-09-28T08:04:01.5394817Z [36;1m  set -eu[0m
+2026-09-28T08:04:01.5395195Z [36;1m  cd test-types[0m
+2026-09-28T08:04:01.5395606Z [36;1m  for file in *.ts; do[0m
+2026-09-28T08:04:01.5396057Z [36;1m    cp "$file" "${file%.ts}.cts"[0m
+2026-09-28T08:04:01.5396541Z [36;1m    mv "$file" "${file%.ts}.mts"[0m
+2026-09-28T08:04:01.5396999Z [36;1m  done[0m
+2026-09-28T08:04:01.5397336Z [36;1m'[0m
+2026-09-28T08:04:01.5478935Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:01.5479229Z env:
+2026-09-28T08:04:01.5479525Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:01.5479884Z ##[endgroup]
+2026-09-28T08:04:01.5581398Z ##[group]Run node --run unpack
+2026-09-28T08:04:01.5581919Z [36;1mnode --run unpack[0m
+2026-09-28T08:04:01.5659071Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:01.5659531Z env:
+2026-09-28T08:04:01.5659994Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:01.5660560Z ##[endgroup]
+2026-09-28T08:04:01.5754758Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:04:01.6119693Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:04:01.8083090Z ##[group]Run pnpm --filter fast-check run api-extractor
+2026-09-28T08:04:01.8083816Z [36;1mpnpm --filter fast-check run api-extractor[0m
+2026-09-28T08:04:01.8165516Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:01.8165941Z env:
+2026-09-28T08:04:01.8166366Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:01.8166906Z ##[endgroup]
+2026-09-28T08:04:01.8417340Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:04:01.8503190Z $ api-extractor run --local
+2026-09-28T08:04:02.3875294Z 
+2026-09-28T08:04:02.3876493Z [1mapi-extractor 7.59.2 [36m - https://api-extractor.com/[39m
+2026-09-28T08:04:02.3876993Z [22m
+2026-09-28T08:04:02.4426499Z Using configuration from ./api-extractor.json
+2026-09-28T08:04:03.0509536Z Analysis will use the bundled TypeScript version 5.9.3
+2026-09-28T08:04:03.0530792Z *** The target project appears to use TypeScript 6.0.3 which is newer than the bundled compiler engine; consider upgrading API Extractor.
+2026-09-28T08:04:03.5273922Z [33mWarning: lib/fast-check.d.ts:27:1 - (ae-forgotten-export) The symbol "RandomGenerator7x" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5276183Z [33mWarning: lib/fast-check.d.ts:270:1 - (ae-forgotten-export) The symbol "RelativeSize" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5278556Z [33mWarning: lib/fast-check.d.ts:1067:1 - (ae-forgotten-export) The symbol "GeneratorValueFunction" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5281008Z [33mWarning: lib/fast-check.d.ts:1067:1 - (ae-forgotten-export) The symbol "GeneratorValueMethods" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5284254Z [33mWarning: lib/fast-check.d.ts:1207:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "bigInt" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5287501Z [33mWarning: lib/fast-check.d.ts:1439:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "dictionary" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5290680Z [33mWarning: lib/fast-check.d.ts:1781:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "nat" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5292773Z [33mWarning: lib/fast-check.d.ts:1865:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5294701Z [33mWarning: lib/fast-check.d.ts:1873:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5296618Z [33mWarning: lib/fast-check.d.ts:1884:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5298488Z [33mWarning: lib/fast-check.d.ts:1892:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5300338Z [33mWarning: lib/fast-check.d.ts:1900:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5302178Z [33mWarning: lib/fast-check.d.ts:1978:1 - (ae-forgotten-export) The symbol "ArbitraryStructure" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5303684Z [33mWarning: lib/fast-check.d.ts:2096:1 - (ae-forgotten-export) The symbol "Relationship" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5304981Z [33mWarning: lib/fast-check.d.ts:2122:1 - (ae-forgotten-export) The symbol "EntityGraphSingleValue" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5306703Z [33mWarning: lib/fast-check.d.ts:2130:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "uniqueArray" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5308716Z [33mWarning: lib/fast-check.d.ts:2170:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "uniqueArray" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5310839Z [33mWarning: lib/fast-check.d.ts:2198:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "uniqueArray" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5312930Z [33mWarning: lib/fast-check.d.ts:2219:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "uniqueArray" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5314998Z [33mWarning: lib/fast-check.d.ts:2240:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "uniqueArray" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5316829Z [33mWarning: lib/fast-check.d.ts:2621:1 - (ae-unresolved-link) The @link reference could not be resolved: The package "fast-check" does not have an export "char"[39m
+2026-09-28T08:04:03.5318691Z [33mWarning: lib/fast-check.d.ts:2628:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "anything" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5320939Z [33mWarning: lib/fast-check.d.ts:2628:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "object" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5322626Z [33mWarning: lib/fast-check.d.ts:2821:1 - (ae-forgotten-export) The symbol "JsonArray" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5323949Z [33mWarning: lib/fast-check.d.ts:2821:1 - (ae-forgotten-export) The symbol "JsonObject" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5325645Z [33mWarning: lib/fast-check.d.ts:2907:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "oneof" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5327610Z [33mWarning: lib/fast-check.d.ts:2932:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "oneof" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5329574Z [33mWarning: lib/fast-check.d.ts:2938:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "oneof" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5331473Z [33mWarning: lib/fast-check.d.ts:2957:3 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5333977Z [33mWarning: lib/fast-check.d.ts:3025:3 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "letrec" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5335569Z [33mWarning: lib/fast-check.d.ts:3086:1 - (ae-forgotten-export) The symbol "Prettify" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5337226Z [33mWarning: lib/fast-check.d.ts:3628:1 - (ae-unresolved-link) The @link reference could not be resolved: The reference is ambiguous because "commands" has more than one declaration; you need to add a TSDoc member reference selector[39m
+2026-09-28T08:04:03.5338841Z [33mWarning: lib/fast-check.d.ts:4560:1 - (ae-forgotten-export) The symbol "BeforeEachHook" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5340174Z [33mWarning: lib/fast-check.d.ts:4578:1 - (ae-forgotten-export) The symbol "AfterEachHook" needs to be exported by the entry point fast-check.d.ts[39m
+2026-09-28T08:04:03.5340928Z 
+2026-09-28T08:04:03.5341096Z API Extractor completed successfully
+2026-09-28T08:04:03.5828571Z ##[group]Run pnpm --filter {./packages/**} --parallel exec $(pnpm bin)/packaged --keep node_modules --keep test-types
+2026-09-28T08:04:03.5829420Z [36;1mpnpm --filter {./packages/**} --parallel exec $(pnpm bin)/packaged --keep node_modules --keep test-types[0m
+2026-09-28T08:04:03.5893399Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:03.5893691Z env:
+2026-09-28T08:04:03.5893966Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:03.5894299Z ##[endgroup]
+2026-09-28T08:04:03.6119295Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:04:03.6288586Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-28T08:04:17.8781756Z Waiting for background step(s) to complete: Prepare CommonJS and ES module fixtures
+2026-09-28T08:04:17.8784737Z Finished waiting for background step(s).
+2026-09-28T08:04:17.8785155Z   Prepare CommonJS and ES module fixtures: Succeeded
+2026-09-28T08:04:17.8813189Z ##[group]Run pnpm --package "typescript@${TS_VERSION}" dlx tsc --noEmit --skipLibCheck --strict --module NodeNext --moduleResolution NodeNext packages/*/test-types/*.cts packages/*/test-types/*.mts
+2026-09-28T08:04:17.8814623Z [36;1mpnpm --package "typescript@${TS_VERSION}" dlx tsc --noEmit --skipLibCheck --strict --module NodeNext --moduleResolution NodeNext packages/*/test-types/*.cts packages/*/test-types/*.mts[0m
+2026-09-28T08:04:17.8878154Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:17.8878583Z env:
+2026-09-28T08:04:17.8878967Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:17.8879314Z   TS_VERSION: latest
+2026-09-28T08:04:17.8879574Z ##[endgroup]
+2026-09-28T08:04:17.8997739Z ##[group]Run pnpm --package "typescript@${TS_VERSION}" dlx tsc --noEmit --skipLibCheck --strict --module NodeNext --moduleResolution NodeNext packages/*/test-types/*.cts packages/*/test-types/*.mts
+2026-09-28T08:04:17.8999790Z [36;1mpnpm --package "typescript@${TS_VERSION}" dlx tsc --noEmit --skipLibCheck --strict --module NodeNext --moduleResolution NodeNext packages/*/test-types/*.cts packages/*/test-types/*.mts[0m
+2026-09-28T08:04:17.9076174Z shell: /usr/bin/bash -e {0}
+2026-09-28T08:04:17.9076609Z env:
+2026-09-28T08:04:17.9077048Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-28T08:04:17.9077621Z   TS_VERSION: 5.8
+2026-09-28T08:04:17.9077979Z ##[endgroup]
+2026-09-28T08:04:17.9187534Z Waiting for background step(s) to complete: Check types (TypeScript latest), Check types (TypeScript 5.8)
+2026-09-28T08:04:18.6302588Z .../mukyol8t-26t                         | Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-09-28T08:04:18.6612149Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-28T08:04:18.6615050Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-28T08:04:18.6616864Z   Virtual store is at:             ../../../.cache/pnpm/dlx/eb52665f13b1e9613e0cd9abe4eff6e6/mukyol8t-26t/node_modules/.pacquet
+2026-09-28T08:04:18.6669603Z .../mukyol8b-268                         | Progress: resolved 0, reused 0, downloaded 1, added 0
+2026-09-28T08:04:18.6693956Z .../mukyol8t-26t                         | Progress: resolved 1, reused 0, downloaded 1, added 1, done
+2026-09-28T08:04:18.6739442Z 
+2026-09-28T08:04:18.6740900Z dependencies:
+2026-09-28T08:04:18.6741470Z + typescript 5.8.3
+2026-09-28T08:04:18.6741792Z 
+2026-09-28T08:04:18.7163002Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-28T08:04:18.7168190Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-28T08:04:18.7169303Z   Virtual store is at:             ../../../.cache/pnpm/dlx/55dd9346e0ca8702c2d3208d908cb051/mukyol8b-268/node_modules/.pacquet
+2026-09-28T08:04:18.7396544Z Downloading @typescript/typescript-linux-x64@7.0.2: 0.00 B/9.66 MB
+2026-09-28T08:04:18.9560315Z .../mukyol8b-268                         | Progress: resolved 2, reused 0, downloaded 2, added 2, done
+2026-09-28T08:04:18.9615724Z 
+2026-09-28T08:04:18.9616199Z dependencies:
+2026-09-28T08:04:18.9616951Z + typescript 7.0.2
+2026-09-28T08:04:18.9637837Z 
+2026-09-28T08:04:19.4227600Z ##[error]packages/worker/test-types/main.cts(8,14): error TS2353: Object literal may only specify known properties, and 'timeout' does not exist in type 'Parameters<[s: string, num: number]>'.
+2026-09-28T08:04:19.4239446Z ##[error]packages/worker/test-types/main.mts(8,14): error TS2353: Object literal may only specify known properties, and 'timeout' does not exist in type 'Parameters<[s: string, num: number]>'.
+2026-09-28T08:04:19.4428583Z ##[error]Process completed with exit code 1.
+2026-09-28T08:04:20.8805242Z ##[error]packages/worker/test-types/main.cts(8,14): error TS2353: Object literal may only specify known properties, and 'timeout' does not exist in type 'Parameters<[s: string, num: number]>'.
+2026-09-28T08:04:20.8825640Z ##[error]packages/worker/test-types/main.mts(8,14): error TS2353: Object literal may only specify known properties, and 'timeout' does not exist in type 'Parameters<[s: string, num: number]>'.
+2026-09-28T08:04:20.9242045Z ##[error]Process completed with exit code 2.
+2026-09-28T08:04:20.9259415Z Finished waiting for background step(s).
+2026-09-28T08:04:20.9260022Z   Check types (TypeScript latest): Failed
+2026-09-28T08:04:20.9260573Z   Check types (TypeScript 5.8): Failed
+2026-09-28T08:04:20.9342679Z Post job cleanup.
+2026-09-28T08:04:21.0863920Z Pruning is unnecessary.
+2026-09-28T08:04:21.1050468Z Post job cleanup.
+2026-09-28T08:04:21.1981346Z [command]/usr/bin/git version
+2026-09-28T08:04:21.2028753Z git version 2.55.0
+2026-09-28T08:04:21.2072171Z Temporarily overriding HOME='/home/runner/work/_temp/ab798051-47fc-4430-9f73-02ba272b26b6' before making global git config changes
+2026-09-28T08:04:21.2074436Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-28T08:04:21.2078530Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/fast-check/fast-check
+2026-09-28T08:04:21.2133734Z Removing SSH command configuration
+2026-09-28T08:04:21.2134902Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-28T08:04:21.2192942Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-28T08:04:21.2438055Z Removing HTTP extra header
+2026-09-28T08:04:21.2445268Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-28T08:04:21.2483767Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-28T08:04:21.2756491Z Removing includeIf entries pointing to credentials config files
+2026-09-28T08:04:21.2763658Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-28T08:04:21.2806058Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-28T08:04:21.3197234Z Cleaning up orphan processes

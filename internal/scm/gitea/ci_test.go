@@ -16,8 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// mustCIProvider constructs a *GiteaCIProvider against endpoint with a
-// throwaway token and maxLogLines, or fails the test.
 func mustCIProvider(t *testing.T, endpoint string, maxLogLines int) *GiteaCIProvider {
 	t.Helper()
 	p, err := NewGiteaCIProvider(maxLogLines, map[string]any{
@@ -45,13 +43,6 @@ func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {
 	}
 }
 
-// buildStatusPage returns the JSON body of a combined-status page carrying n
-// statuses of the given status value, with contexts numbered from start, so a
-// multi-page test can synthesize pages whose contexts stay distinct across the
-// whole walk without committing a fixture of that size. Distinct contexts match
-// the route's wire shape, which reports one entry per context. total_count is
-// set to n, matching the wire fact that the per-page count equals the page
-// length rather than the grand total.
 func buildStatusPage(t *testing.T, status string, start, n int) []byte {
 	t.Helper()
 	statuses := make([]map[string]string, n)
@@ -252,10 +243,6 @@ func TestGiteaFetchCIStatus(t *testing.T) {
 	})
 }
 
-// TestGiteaFetchCIStatus_MixedRunsMatchesCore pins the aggregate contract
-// against a run set carrying a completed-failing, an in-progress, and a
-// completed-success run together, so the verdict this provider reports is
-// provably the same rule scmcore.AggregateCIStatus implements.
 func TestGiteaFetchCIStatus_MixedRunsMatchesCore(t *testing.T) {
 	t.Parallel()
 
@@ -347,98 +334,33 @@ func TestGiteaFetchCIStatusPagination(t *testing.T) {
 	})
 }
 
-func TestGiteaStripANSI(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
+func failingStatusServer(t *testing.T, description, targetURL string) *httptest.Server {
+	t.Helper()
+	type status struct {
+		ID          int    `json:"id"`
+		Status      string `json:"status"`
+		Context     string `json:"context"`
+		Description string `json:"description"`
+		TargetURL   string `json:"target_url"`
+	}
+	body, err := json.Marshal(struct {
+		State      string   `json:"state"`
+		TotalCount int      `json:"total_count"`
+		Statuses   []status `json:"statuses"`
 	}{
-		{"plain text is unchanged", "unit tests failed", "unit tests failed"},
-		{"CSI color sequence is stripped", "\x1b[0;31mFAIL\x1b[0m", "FAIL"},
-		{"OSC sequence terminated by BEL is stripped", "\x1b]0;title\atext", "text"},
-		{"OSC sequence terminated by ST is stripped", "\x1b]0;title\x1b\\text", "text"},
-		{"empty string is unchanged", "", ""},
+		State:      "failure",
+		TotalCount: 1,
+		Statuses:   []status{{ID: 20, Status: "failure", Context: "ci/test", Description: description, TargetURL: targetURL}},
+	})
+	if err != nil {
+		t.Fatalf("marshal combined status: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := stripANSI(tt.input)
-
-			if got != tt.want {
-				t.Errorf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGiteaTruncateLines(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		maxLines int
-		want     string
-	}{
-		{
-			name:     "zero maxLines yields empty",
-			input:    "a\nb\nc",
-			maxLines: 0,
-			want:     "",
-		},
-		{
-			name:     "negative maxLines yields empty",
-			input:    "a\nb\nc",
-			maxLines: -1,
-			want:     "",
-		},
-		{
-			name:     "empty input yields empty",
-			input:    "",
-			maxLines: 5,
-			want:     "",
-		},
-		{
-			name:     "input at or below maxLines is unchanged",
-			input:    "a\nb",
-			maxLines: 5,
-			want:     "a\nb",
-		},
-		{
-			name:     "input above maxLines keeps the tail",
-			input:    "a\nb\nc\nd",
-			maxLines: 2,
-			want:     "c\nd",
-		},
-		{
-			name:     "maxLines of one keeps only the last line",
-			input:    "unit tests failed\nhttps://ci.example.invalid/builds/10",
-			maxLines: 1,
-			want:     "https://ci.example.invalid/builds/10",
-		},
-		{
-			name:     "CRLF line endings have their trailing carriage return trimmed",
-			input:    "a\r\nb\r\nc",
-			maxLines: 5,
-			want:     "a\nb\nc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := truncateLines(tt.input, tt.maxLines)
-
-			if got != tt.want {
-				t.Errorf("truncateLines(%q, %d) = %q, want %q", tt.input, tt.maxLines, got, tt.want)
-			}
-		})
-	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func TestGiteaCILogExcerpt(t *testing.T) {
@@ -547,6 +469,66 @@ func TestGiteaCILogExcerpt(t *testing.T) {
 		const want = "Tests failed"
 		if got.LogExcerpt != want {
 			t.Errorf("LogExcerpt = %q, want %q", got.LogExcerpt, want)
+		}
+	})
+
+	t.Run("escape sequences, blank lines and one line too many leave the last lines, sanitized", func(t *testing.T) {
+		t.Parallel()
+
+		description := strings.Join([]string{
+			"\x1b[31mline1\x1b[0m",
+			"",
+			"line2 \t",
+			"\x1b[0K",
+			"line3\x00\r",
+			"   ",
+			"\x1b]0;title\x07line4",
+		}, "\n")
+		provider := mustCIProvider(t, failingStatusServer(t, description, "").URL, 3)
+
+		got, err := provider.FetchCIStatus(context.Background(), "main")
+
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		const want = "line2\nline3\nline4"
+		if got.LogExcerpt != want {
+			t.Errorf("LogExcerpt = %q, want %q", got.LogExcerpt, want)
+		}
+		if strings.Contains(got.LogExcerpt, "[sortie]") {
+			t.Errorf("LogExcerpt = %q, want no Sortie line", got.LogExcerpt)
+		}
+	})
+
+	t.Run("the target url counts as the last line", func(t *testing.T) {
+		t.Parallel()
+
+		provider := mustCIProvider(t, failingStatusServer(t, "first\n\nsecond", "https://ci.example.invalid/builds/10").URL, 2)
+
+		got, err := provider.FetchCIStatus(context.Background(), "main")
+
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		const want = "second\nhttps://ci.example.invalid/builds/10"
+		if got.LogExcerpt != want {
+			t.Errorf("LogExcerpt = %q, want %q", got.LogExcerpt, want)
+		}
+	})
+
+	t.Run("a line over 4096 bytes is cut and marked", func(t *testing.T) {
+		t.Parallel()
+
+		provider := mustCIProvider(t, failingStatusServer(t, strings.Repeat("a", 5000), "").URL, 5)
+
+		got, err := provider.FetchCIStatus(context.Background(), "main")
+
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		want := strings.Repeat("a", 4096) + " [sortie: line cut]"
+		if got.LogExcerpt != want {
+			t.Errorf("LogExcerpt has %d bytes, want the first 4096 bytes plus the cut marker (%d bytes)", len(got.LogExcerpt), len(want))
 		}
 	})
 
@@ -826,11 +808,6 @@ func TestNewGiteaCIProvider(t *testing.T) {
 	})
 }
 
-// TestNewGiteaCIProvider_TypeFaultVsAbsentKey covers the distinction
-// between a wrong-typed config key and an absent one for the two keys
-// whose absent-key checks precede the endpoint check: api_key (a
-// different kind, ErrCIAuth vs ErrCIPayload) and project (the same kind,
-// distinguished by message).
 func TestNewGiteaCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
 	t.Parallel()
 
@@ -897,10 +874,6 @@ func TestNewGiteaCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
 	})
 }
 
-// TestNewGiteaCIProvider_RejectsInvalidEndpoint proves the endpoint values
-// in endpointRejectionCases fail construction with ErrCIPayload; none of
-// the config maps here register a server, since construction performs no
-// network I/O.
 func TestNewGiteaCIProvider_RejectsInvalidEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -922,9 +895,6 @@ func TestNewGiteaCIProvider_RejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
-// TestNewGiteaCIProvider_RedactsUserinfoInEndpointError proves the
-// credential disclosure this fix closes stays closed for the CI provider,
-// which previously accepted a userinfo-bearing endpoint silently.
 func TestNewGiteaCIProvider_RedactsUserinfoInEndpointError(t *testing.T) {
 	t.Parallel()
 
@@ -951,9 +921,6 @@ func TestNewGiteaCIProvider_RedactsUserinfoInEndpointError(t *testing.T) {
 	}
 }
 
-// TestNewGiteaCIProvider_EmptyEndpointMessageIsPinned pins the pre-existing
-// empty-endpoint message: the shared httpkit.ParseEndpoint guard must not
-// have changed this operator-facing text.
 func TestNewGiteaCIProvider_EmptyEndpointMessageIsPinned(t *testing.T) {
 	t.Parallel()
 

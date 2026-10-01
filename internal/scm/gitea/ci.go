@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/cilog"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -29,10 +29,6 @@ var _ domain.CIStatusProvider = (*GiteaCIProvider)(nil)
 // gate. At 50 entries per page this bounds a read at 2500 entries, generous
 // for the short-lived, low-traffic pull requests Sortie manages.
 const scmMaxPages = 50
-
-// ansiPattern matches the ANSI escape sequences a CI-produced status
-// description may carry (CSI color and cursor codes, and OSC sequences).
-var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\|\x1b\].*?\a`)
 
 // GiteaCIProvider implements [domain.CIStatusProvider] for Gitea over the
 // combined commit-status route. All fields are set once at construction and
@@ -259,26 +255,7 @@ func buildLogExcerpt(statuses []giteaCommitState, maxLogLines int) string {
 		if excerpt == "" {
 			return ""
 		}
-		return truncateLines(stripANSI(excerpt), maxLogLines)
+		return cilog.TailLines(excerpt, maxLogLines)
 	}
 	return ""
-}
-
-func truncateLines(raw string, maxLines int) string {
-	if maxLines <= 0 {
-		return ""
-	}
-
-	lines := strings.Split(raw, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, "\r")
-	}
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, "\n")
-}
-
-func stripANSI(s string) string {
-	return ansiPattern.ReplaceAllString(s, "")
 }

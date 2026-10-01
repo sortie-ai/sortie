@@ -35,3 +35,6 @@ go.work.sum
 # Python cache files.
 __pycache__
 *.pyc
+
+# Recorded CI job logs used as test fixtures; a global *.log rule must not hide them.
+!**/testdata/*.log

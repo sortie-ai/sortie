@@ -81,6 +81,10 @@ var contractBanTable = map[string]string{
 	"subtractUsage":          "agentcore.SubtractUsage",
 	"maxUsage":               "agentcore.MaxUsage",
 	"componentwiseMaxUsage":  "agentcore.MaxUsage",
+	"truncateLog":            "cilog.Builder",
+	"traceExcerpt":           "cilog.Builder",
+	"truncateLines":          "cilog.TailLines",
+	"stripANSI":              "cilog.Builder.Line or cilog.TailLines",
 }
 
 // contractTrackerAdapterMethods are the tracker operation methods rule
@@ -166,6 +170,7 @@ type contractSharedPackage struct {
 // stays importable across family roots but not by the orchestrator.
 var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/scm/scmcore":                     {reason: "shared forge decision core; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/scm/cilog":                       {reason: "shared CI log excerpt assembly for the forge CI providers; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/procutil":                  {reason: "shared subprocess group handling, Windows process containment, and bounded output capture; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},

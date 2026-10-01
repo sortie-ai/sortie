@@ -1,0 +1,212 @@
+2026-09-30T18:11:59.081995Z 00O [0KRunning with gitlab-runner 19.3.0~pre.1657.g433525f9 (433525f9)[0;m
+2026-09-30T18:11:59.082020Z 00O [0K  on gitlab-runner-l-amd64-b OwTQbN_qe, system ID: r_1VJ3qvoH4XCw[0;m
+2026-09-30T18:11:59.082032Z 00O [0K  feature flags: FF_USE_FASTZIP:true, FF_SCRIPT_SECTIONS:true, FF_EXPORT_HIGH_CARDINALITY_METRICS:true, FF_USE_ADAPTIVE_REQUEST_CONCURRENCY:false, FF_CONCRETE:true[0;m
+2026-09-30T18:11:59.082077Z 00O [0K[36;1mResolving secrets[0;m[0;m
+2026-09-30T18:11:59.082368Z 00O section_start:1790791919:prepare_executor[0K
+2026-09-30T18:11:59.082376Z 00O+[0K[36;1mPreparing the "docker-autoscaler" executor[0;m[0;m
+2026-09-30T18:11:59.082535Z 00O [0KDialing instance https://www.googleapis.com/compute/v1/projects/group-verify-df9383/zones/us-east1-c/instances/gitlab-runner-l-amd64-b-eb815b3dea9edd56...[0;m
+2026-09-30T18:11:59.140241Z 00O [0KInstance https://www.googleapis.com/compute/v1/projects/group-verify-df9383/zones/us-east1-c/instances/gitlab-runner-l-amd64-b-eb815b3dea9edd56 connected[0;m
+2026-09-30T18:11:59.174414Z 00O [0KUsing Docker executor with image gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3 ...[0;m
+2026-09-30T18:11:59.174463Z 00O [0KUsing helper image:  us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:concrete-x86_64-v19.3.0 )[0;m
+2026-09-30T18:11:59.174472Z 00O [0KUsing effective pull policy of [always] for container us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9[0;m
+2026-09-30T18:11:59.175306Z 00O [0KPulling docker image us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9 ...[0;m
+2026-09-30T18:12:01.029705Z 00O [0KUsing docker image sha256:e9eee0ba4f870722c923092bf175762176030f6e72eb06233b9134ec47d677d5 for us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9 with digest us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper@sha256:8bc069db36bac7fdde98049d66d9cddd6362d8e3b4f46ec6881e51e1f9eb1049 ...[0;m
+2026-09-30T18:12:03.043194Z 00O [0KUsing helper image:  us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:concrete-x86_64-v19.3.0 )[0;m
+2026-09-30T18:12:03.043215Z 00O [0KUsing effective pull policy of [always] for container us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9[0;m
+2026-09-30T18:12:03.044123Z 00O [0KUsing docker image sha256:e9eee0ba4f870722c923092bf175762176030f6e72eb06233b9134ec47d677d5 for us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9 with digest us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper@sha256:8bc069db36bac7fdde98049d66d9cddd6362d8e3b4f46ec6881e51e1f9eb1049 ...[0;m
+2026-09-30T18:12:03.959969Z 00O [0KUsing helper image:  us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:concrete-x86_64-v19.3.0 )[0;m
+2026-09-30T18:12:03.959988Z 00O [0KUsing effective pull policy of [always] for container us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9[0;m
+2026-09-30T18:12:03.961043Z 00O [0KUsing docker image sha256:e9eee0ba4f870722c923092bf175762176030f6e72eb06233b9134ec47d677d5 for us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper:concrete-433525f9 with digest us-east1-docker.pkg.dev/group-verify-df9383/pilot-runners/helper@sha256:8bc069db36bac7fdde98049d66d9cddd6362d8e3b4f46ec6881e51e1f9eb1049 ...[0;m
+2026-09-30T18:12:03.961060Z 00O [0KUsing effective pull policy of [always] for container gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3[0;m
+2026-09-30T18:12:03.961715Z 00O [0KAuthenticating with credentials from job payload (GitLab Registry)[0;m
+2026-09-30T18:12:03.961725Z 00O [0KPulling docker image gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3 ...[0;m
+2026-09-30T18:12:17.770467Z 00O [0KUsing docker image sha256:30be7df3a0af60753f7f888b0b74da7084c66f70e9fa1084e97af53d965e5448 for gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3 with digest gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby@sha256:21e6a5125535e13999143c49b6471f68c92a74d8faad0a3541c51b11de0266ad ...[0;m
+2026-09-30T18:12:17.770484Z 00O section_end:1790791937:prepare_executor[0K
+2026-09-30T18:12:17.770698Z 00O+section_start:1790791937:concrete[0K
+2026-09-30T18:12:17.770707Z 00O+[0K[36;1mExecuting "concrete" stage of the job script[0;m[0;m
+2026-09-30T18:12:17.770735Z 00O [0KUsing effective pull policy of [always] for container gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3[0;m
+2026-09-30T18:12:17.771765Z 00O [0KUsing docker image sha256:30be7df3a0af60753f7f888b0b74da7084c66f70e9fa1084e97af53d965e5448 for gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby:3.3 with digest gitlab.com:443/gitlab-org/dependency_proxy/containers/ruby@sha256:21e6a5125535e13999143c49b6471f68c92a74d8faad0a3541c51b11de0266ad ...[0;m
+2026-09-30T18:12:22.600329Z 01E step-runner is listening on socket /tmp/step-runner.sock
+2026-09-30T18:12:22.685387Z 02E [32;1mRunning step name=concrete[0;m
+2026-09-30T18:12:22.687000Z 01O section_start:1790791942:get_sources[0K
+2026-09-30T18:12:22.696032Z 01E [32;1mGitaly correlation ID: a43531718e30bd25-ATL[0;m
+2026-09-30T18:12:22.704798Z 01O+Initialized empty Git repository in /builds/gitlab-org/gitlab-runner/.git/
+2026-09-30T18:12:22.707897Z 01E [32;1mCreated fresh repository.[0;m
+2026-09-30T18:12:22.707914Z 01E [32;1mFetching changes...[0;m
+2026-09-30T18:13:13.666105Z 01E [32;1mChecking out ca2a533f as detached HEAD (ref is refs/merge-requests/7496/merge)...[0;m
+2026-09-30T18:13:13.776873Z 01E [32;1mSkipping Git submodules setup[0;m
+2026-09-30T18:13:13.777011Z 01O section_end:1790791942:get_sources[0K
+2026-09-30T18:13:13.777047Z 01O+section_start:1790791993:step_script[0K
+2026-09-30T18:13:13.781085Z 01O+[32;1m$ [[ -f "Gemfile" ]] || (bundle init && bundle add gitlab-dangerfiles --version "")[0m
+2026-09-30T18:13:13.892584Z 01O Writing new Gemfile to /builds/gitlab-org/gitlab-runner/Gemfile
+2026-09-30T18:13:14.786378Z 01O Fetching gem metadata from https://rubygems.org/..............
+2026-09-30T18:13:15.864871Z 01O Resolving dependencies...
+2026-09-30T18:13:16.741539Z 01O Fetching gem metadata from https://rubygems.org/...........
+2026-09-30T18:13:17.025968Z 01O Fetching rake 13.4.2
+2026-09-30T18:13:17.137146Z 01O Installing rake 13.4.2
+2026-09-30T18:13:17.149883Z 01O Fetching base64 0.3.0
+2026-09-30T18:13:17.150871Z 01O Fetching bigdecimal 4.1.3
+2026-09-30T18:13:17.150886Z 01O Fetching concurrent-ruby 1.3.8
+2026-09-30T18:13:17.150889Z 01O Fetching connection_pool 3.0.2
+2026-09-30T18:13:17.167594Z 01O Installing base64 0.3.0
+2026-09-30T18:13:17.171001Z 01O Fetching drb 2.2.3
+2026-09-30T18:13:17.188351Z 01O Installing bigdecimal 4.1.3 with native extensions
+2026-09-30T18:13:17.235579Z 01O Installing connection_pool 3.0.2
+2026-09-30T18:13:17.249639Z 01O Installing concurrent-ruby 1.3.8
+2026-09-30T18:13:17.256541Z 01O Fetching json 3.0.2
+2026-09-30T18:13:17.259555Z 01O Installing drb 2.2.3
+2026-09-30T18:13:17.270356Z 01O Fetching logger 1.7.0
+2026-09-30T18:13:17.283702Z 01O Installing json 3.0.2 with native extensions
+2026-09-30T18:13:17.291680Z 01O Installing logger 1.7.0
+2026-09-30T18:13:17.312712Z 01O Fetching prism 1.9.0
+2026-09-30T18:13:17.389709Z 01O Fetching securerandom 0.4.1
+2026-09-30T18:13:17.407675Z 01O Installing securerandom 0.4.1
+2026-09-30T18:13:17.412404Z 01O Installing prism 1.9.0 with native extensions
+2026-09-30T18:13:17.415808Z 01O Fetching uri 1.1.1
+2026-09-30T18:13:17.439158Z 01O Installing uri 1.1.1
+2026-09-30T18:13:17.452901Z 01O Fetching public_suffix 7.0.5
+2026-09-30T18:13:17.519755Z 01O Installing public_suffix 7.0.5
+2026-09-30T18:13:17.535336Z 01O Fetching claide 1.1.0
+2026-09-30T18:13:17.563379Z 01O Installing claide 1.1.0
+2026-09-30T18:13:17.576573Z 01O Fetching colored2 3.1.2
+2026-09-30T18:13:17.597021Z 01O Installing colored2 3.1.2
+2026-09-30T18:13:17.603719Z 01O Fetching nap 1.1.0
+2026-09-30T18:13:17.625408Z 01O Installing nap 1.1.0
+2026-09-30T18:13:17.633148Z 01O Fetching open4 1.3.4
+2026-09-30T18:13:17.650095Z 01O Installing open4 1.3.4
+2026-09-30T18:13:17.656074Z 01O Fetching csv 3.3.6
+2026-09-30T18:13:17.675095Z 01O Installing csv 3.3.6
+2026-09-30T18:13:17.687583Z 01O Fetching track_open_instances 0.1.15
+2026-09-30T18:13:17.708025Z 01O Installing track_open_instances 0.1.15
+2026-09-30T18:13:17.714588Z 01O Fetching rchardet 1.10.2
+2026-09-30T18:13:17.752942Z 01O Installing rchardet 1.10.2
+2026-09-30T18:13:17.769742Z 01O Fetching pstore 0.2.1
+2026-09-30T18:13:17.786644Z 01O Installing pstore 0.2.1
+2026-09-30T18:13:17.791579Z 01O Fetching unicode-emoji 4.3.0
+2026-09-30T18:13:17.814616Z 01O Installing unicode-emoji 4.3.0
+2026-09-30T18:13:17.831233Z 01O Fetching mini_mime 1.1.5
+2026-09-30T18:13:17.849954Z 01O Installing mini_mime 1.1.5
+2026-09-30T18:13:17.858130Z 01O Fetching i18n 1.15.2
+2026-09-30T18:13:17.876439Z 01O Installing i18n 1.15.2
+2026-09-30T18:13:17.889226Z 01O Fetching tzinfo 2.0.6
+2026-09-30T18:13:17.910751Z 01O Installing tzinfo 2.0.6
+2026-09-30T18:13:17.927670Z 01O Fetching net-http 0.9.1
+2026-09-30T18:13:17.948194Z 01O Installing net-http 0.9.1
+2026-09-30T18:13:17.957058Z 01O Fetching addressable 2.9.0
+2026-09-30T18:13:17.977941Z 01O Installing addressable 2.9.0
+2026-09-30T18:13:17.984541Z 01O Fetching cork 0.3.0
+2026-09-30T18:13:18.001109Z 01O Installing cork 0.3.0
+2026-09-30T18:13:18.005166Z 01O Fetching process_executer 4.1.1
+2026-09-30T18:13:18.027292Z 01O Installing process_executer 4.1.1
+2026-09-30T18:13:18.044314Z 01O Fetching kramdown 2.5.2
+2026-09-30T18:13:18.077875Z 01O Installing kramdown 2.5.2
+2026-09-30T18:13:18.237997Z 01O Fetching unicode-display_width 3.3.0
+2026-09-30T18:13:18.259872Z 01O Installing unicode-display_width 3.3.0
+2026-09-30T18:13:18.267395Z 01O Fetching faraday-net_http 3.4.4
+2026-09-30T18:13:18.285912Z 01O Installing faraday-net_http 3.4.4
+2026-09-30T18:13:18.291641Z 01O Fetching claide-plugins 0.9.2
+2026-09-30T18:13:18.312912Z 01O Installing claide-plugins 0.9.2
+2026-09-30T18:13:18.339274Z 01O Fetching kramdown-parser-gfm 1.1.0
+2026-09-30T18:13:18.356484Z 01O Installing kramdown-parser-gfm 1.1.0
+2026-09-30T18:13:18.368253Z 01O Fetching terminal-table 4.0.0
+2026-09-30T18:13:18.387080Z 01O Installing terminal-table 4.0.0
+2026-09-30T18:13:27.217420Z 01O Fetching faraday 2.14.4
+2026-09-30T18:13:27.284131Z 01O Installing faraday 2.14.4
+2026-09-30T18:13:27.300807Z 01O Fetching faraday-http-cache 2.8.0
+2026-09-30T18:13:27.301184Z 01O Fetching sawyer 0.9.3
+2026-09-30T18:13:27.323050Z 01O Installing faraday-http-cache 2.8.0
+2026-09-30T18:13:27.337426Z 01O Installing sawyer 0.9.3
+2026-09-30T18:13:27.343609Z 01O Fetching octokit 10.0.0
+2026-09-30T18:13:27.366985Z 01O Installing octokit 10.0.0
+2026-09-30T18:13:28.353732Z 01O Fetching multi_xml 0.9.1
+2026-09-30T18:13:28.373395Z 01O Installing multi_xml 0.9.1
+2026-09-30T18:13:28.383726Z 01O Fetching httparty 0.24.3
+2026-09-30T18:13:28.403257Z 01O Installing httparty 0.24.3
+2026-09-30T18:13:28.415822Z 01O Fetching gitlab 6.1.0
+2026-09-30T18:13:28.435153Z 01O Installing gitlab 6.1.0
+2026-09-30T18:13:39.201177Z 01O Fetching minitest 6.0.6
+2026-09-30T18:13:39.272283Z 01O Installing minitest 6.0.6
+2026-09-30T18:13:39.282164Z 01O Fetching activesupport 8.1.4
+2026-09-30T18:13:39.321739Z 01O Installing activesupport 8.1.4
+2026-09-30T18:13:39.360703Z 01O Fetching git 5.6.0
+2026-09-30T18:13:39.401568Z 01O Installing git 5.6.0
+2026-09-30T18:13:39.437644Z 01O Fetching danger 9.6.1
+2026-09-30T18:13:39.457642Z 01O Installing danger 9.6.1
+2026-09-30T18:13:39.479020Z 01O Fetching danger-gitlab 10.0.0
+2026-09-30T18:13:39.493812Z 01O Installing danger-gitlab 10.0.0
+2026-09-30T18:13:39.495841Z 01O Fetching gitlab-dangerfiles 4.12.0
+2026-09-30T18:13:39.518105Z 01O Installing gitlab-dangerfiles 4.12.0
+2026-09-30T18:13:39.564862Z 01O [32;1m$ [[ ! -f "Gemfile.lock" ]] || bundle config set --local frozen "true"[0m
+2026-09-30T18:13:39.682844Z 01O [32;1m$ bundle install[0m
+2026-09-30T18:13:39.911621Z 01O Bundle complete! 1 Gemfile dependency, 49 gems now installed.
+2026-09-30T18:13:39.911650Z 01O Use `bundle info [gemname]` to see where a bundled gem is installed.
+2026-09-30T18:13:39.917906Z 01O section_start:1790792019:script_4[hide_duration=true,collapsed=true][0K
+2026-09-30T18:13:39.917971Z 01O+[32;1m$ if [[ "$CI_MERGE_REQUEST_PROJECT_URL" != "$CI_MERGE_REQUEST_SOURCE_PROJECT_URL" || -z "${DANGER_GITLAB_API_TOKEN}" ]]; then
+2026-09-30T18:13:39.917974Z 01O   git fetch "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${CI_MERGE_REQUEST_SOURCE_PROJECT_PATH}.git" "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+2026-09-30T18:13:39.917976Z 01O fi[0m
+2026-09-30T18:13:39.919381Z 01O section_end:1790792019:script_4[0K
+2026-09-30T18:13:39.920707Z 01O+section_start:1790792019:script_5[hide_duration=true,collapsed=true][0K
+2026-09-30T18:13:39.920781Z 01O+[32;1m$ if [ -z "${DANGER_GITLAB_API_TOKEN}" ]; then
+2026-09-30T18:13:39.920794Z 01O   echo '`DANGER_GITLAB_API_TOKEN` is not set. Skipping CI source GitLab and falling back to "local only git repo".'
+2026-09-30T18:13:39.920797Z 01O   unset GITLAB_CI;
+2026-09-30T18:13:39.920807Z 01O   # We need to base SHA to help danger determine the base commit for this shallow clone.
+2026-09-30T18:13:39.920818Z 01O   bundle exec danger dry_run --fail-on-errors=true --verbose --base="${CI_MERGE_REQUEST_DIFF_BASE_SHA}" --head="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}" --dangerfile="Dangerfile";
+2026-09-30T18:13:39.920820Z 01O else
+2026-09-30T18:13:39.920822Z 01O   danger_id=$(echo -n ${DANGER_GITLAB_API_TOKEN} | md5sum | awk '{print $1}' | cut -c5-10);
+2026-09-30T18:13:39.920825Z 01O   bundle exec danger --fail-on-errors=true --verbose --danger_id="${danger_id}" --dangerfile="Dangerfile";
+2026-09-30T18:13:39.920827Z 01O fi[0m
+2026-09-30T18:13:39.922036Z 01O section_end:1790792019:script_5[0K
+2026-09-30T18:13:40.374160Z 01E To use retry middleware with Faraday v2.0+, install `faraday-retry` gem
+2026-09-30T18:13:41.064207Z 01O+Importing rule changelog at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/changelog
+2026-09-30T18:13:41.086697Z 01E DEPRECATION WARNING: Calling Git::Log#each is deprecated and will be removed in v6.0.0. Call #execute and then #each on the result object. (called from block in eval_file at Dangerfile:5)
+2026-09-30T18:13:41.631447Z 01E DEPRECATION WARNING: Calling Git::Log#each is deprecated and will be removed in v6.0.0. Call #execute and then #each on the result object. (called from block in eval_file at Dangerfile:5)
+2026-09-30T18:13:41.633484Z 01O Importing rule changes_size at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/changes_size
+2026-09-30T18:13:41.647256Z 01E DEPRECATION WARNING: Calling Git::Log#each is deprecated and will be removed in v6.0.0. Call #execute and then #each on the result object. (called from block in eval_file at Dangerfile:5)
+2026-09-30T18:13:41.648848Z 01O Importing rule commit_messages at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/commit_messages
+2026-09-30T18:13:41.684851Z 01E DEPRECATION WARNING: Calling Git::Log#each is deprecated and will be removed in v6.0.0. Call #execute and then #each on the result object. (called from block in eval_file at Dangerfile:5)
+2026-09-30T18:13:43.063092Z 01O Importing rule commits_counter at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/commits_counter
+2026-09-30T18:13:43.063152Z 01O Importing rule duo_code_review at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/duo_code_review
+2026-09-30T18:13:43.063154Z 01O Importing rule metadata at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/metadata
+2026-09-30T18:13:43.063156Z 01O Importing rule simple_roulette at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/simple_roulette
+2026-09-30T18:13:43.063158Z 01O Importing rule type_label at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/type_label
+2026-09-30T18:13:43.063160Z 01O Importing rule z_add_labels at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/z_add_labels
+2026-09-30T18:13:43.063162Z 01O Importing rule z_retry_link at /usr/local/bundle/gems/gitlab-dangerfiles-4.12.0/lib/danger/rules/z_retry_link
+2026-09-30T18:13:43.063164Z 01O Results:
+2026-09-30T18:13:43.063166Z 01O [32m
+2026-09-30T18:13:43.063168Z 01O [31mErrors:[0m
+2026-09-30T18:13:43.063170Z 01O - [ ] 3923aa83b37958e3cde554e98e3130e363fbc447: Use full URLs instead of short references (`gitlab-org/gitlab#123`, `!123`, or `%12.3`), as short references are displayed as plain text outside of GitLab. For more information, take a look at our [Commit message guidelines](https://docs.gitlab.com/ee/development/contributing/merge_request_workflow.html#commit-messages-guidelines).
+2026-09-30T18:13:43.063172Z 01O [32m
+2026-09-30T18:13:43.063174Z 01O [33mWarnings:[0m
+2026-09-30T18:13:43.063176Z 01O - [ ] d6834af6a4264014fbe8aa36c0a8f8dbfa37cba7: The commit subject must start with a capital letter. For more information, take a look at our [Commit message guidelines](https://docs.gitlab.com/ee/development/contributing/merge_request_workflow.html#commit-messages-guidelines).
+2026-09-30T18:13:43.063198Z 01O [32m
+2026-09-30T18:13:43.063306Z 01O Markdown:[0m
+2026-09-30T18:13:43.063309Z 01O We advise getting a review from GitLab Duo Code. You can assign `@GitLabDuo` as a reviewer to this merge request.
+2026-09-30T18:13:43.063311Z 01O ## Reviewer roulette
+2026-09-30T18:13:43.063313Z 01O 
+2026-09-30T18:13:43.063315Z 01O Changes that require review have been detected! A merge request is normally
+2026-09-30T18:13:43.063318Z 01O reviewed by both a reviewer and a maintainer in its primary category and by a
+2026-09-30T18:13:43.063319Z 01O maintainer in all other categories.
+2026-09-30T18:13:43.063322Z 01O 
+2026-09-30T18:13:43.063324Z 01O To spread load more evenly across eligible reviewers, Danger has picked a candidate for each
+2026-09-30T18:13:43.063326Z 01O review slot. Feel free to
+2026-09-30T18:13:43.063329Z 01O [override these selections](https://about.gitlab.com/handbook/engineering/projects/#gitlab-runner)
+2026-09-30T18:13:43.063331Z 01O if you think someone else would be better-suited
+2026-09-30T18:13:43.063332Z 01O or use the [GitLab Review Workload Dashboard](https://gitlab-org.gitlab.io/gitlab-roulette/?currentProject=gitlab-runner)
+2026-09-30T18:13:43.063335Z 01O to find other available reviewers.
+2026-09-30T18:13:43.063337Z 01O 
+2026-09-30T18:13:43.063339Z 01O To read more on how to use the reviewer roulette, please take a look at the
+2026-09-30T18:13:43.063341Z 01O [Engineering workflow](https://about.gitlab.com/handbook/engineering/workflow/#basics)
+2026-09-30T18:13:43.063343Z 01O and [code review guidelines](https://docs.gitlab.com/ee/development/code_review.html).
+2026-09-30T18:13:43.063345Z 01O Please consider assigning a reviewer or maintainer who is a
+2026-09-30T18:13:43.063348Z 01O [domain expert](https://about.gitlab.com/handbook/engineering/projects/#gitlab-runner)
+2026-09-30T18:13:43.063350Z 01O in the area of the merge request.
+2026-09-30T18:13:43.063352Z 01O 
+2026-09-30T18:13:43.063354Z 01O | Reviewer | Maintainer |
+2026-09-30T18:13:43.063356Z 01O | -------- | ---------- |
+2026-09-30T18:13:43.063358Z 01O | `@lachie-gitlab` [![profile link](https://gitlab-org.gitlab.io/gitlab-roulette/status-png/_user.png){width=12}](https://gitlab.com/lachie-gitlab) ![current availability](https://gitlab-org.gitlab.io/gitlab-roulette/status-png/lachie-gitlab.png){width=12} (UTC+7, 5 hours ahead of author) | `@josephburnett` [![profile link](https://gitlab-org.gitlab.io/gitlab-roulette/status-png/_user.png){width=12}](https://gitlab.com/josephburnett) ![current availability](https://gitlab-org.gitlab.io/gitlab-roulette/status-png/josephburnett.png){width=12} (UTC-7, 9 hours behind author) |
+2026-09-30T18:13:43.063360Z 01O Once you've decided who will review this merge request, mention them as you
+2026-09-30T18:13:43.063363Z 01O normally would! Danger does not automatically notify them for you.
+2026-09-30T18:13:43.063365Z 01O **If needed, you can retry the [🔁 `danger-review` job](https://gitlab.com/gitlab-org/gitlab-runner/-/jobs/16845977955) that generated this comment.**
+2026-09-30T18:13:43.085923Z 01O section_end:1790791993:step_script[0K
+2026-09-30T18:13:43.510067Z 00O section_end:1790792023:concrete[0K
+2026-09-30T18:13:43.684529Z 00O [31;1mERROR: Job failed: step "concrete": exec: step script:exit code 1[0;m

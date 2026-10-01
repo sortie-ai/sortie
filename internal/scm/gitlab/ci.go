@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/cilog"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -24,24 +26,10 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.CIStatusProvider = (*GitLabCIProvider)(nil)
 
-// maxTraceBytes caps a single job-trace read. GitLab ignores the Range
-// header on this route, so a trace larger than the cap yields the tail of
-// its first mebibyte rather than the true tail.
-const maxTraceBytes int64 = 1 << 20
-
 // runnerPrefixPattern matches the timestamp and stream-token prefix a
 // GitLab runner writes at the start of every trace line, including the
 // continuation form that ends in "+" with no trailing space.
 var runnerPrefixPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z \d{2}[OE]\+? ?`)
-
-// ansiEscapePattern matches ANSI CSI and OSC escape sequences a trace line
-// may carry.
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\|\x1b\].*?\a`)
-
-// sectionMarkerPattern matches a section_start or section_end marker
-// token. The token ends at the carriage return that terminates it
-// mid-line, which \S+ stops at without consuming.
-var sectionMarkerPattern = regexp.MustCompile(`section_(?:start|end):\d+:\S+`)
 
 // gitlabResolvedCommit is the commit-resolution response. Two fields are
 // consumed: the canonical full SHA, and the id of the pipeline the
@@ -275,7 +263,9 @@ func (p *GitLabCIProvider) fetchPipelineJobIDs(ctx context.Context, pipelineID i
 }
 
 // logExcerpt selects the first failing entry of statuses that is a member
-// of pipelineID's job set and returns a sanitized tail of its trace.
+// of pipelineID's job set and returns an excerpt of its trace: the output of
+// the runner stage in which the job stopped, or the end of the trace when
+// that stage cannot be located, opened by a note line saying which.
 // statuses and runs MUST be index-aligned. It returns the empty string,
 // never a non-nil error, whenever the job set cannot be resolved, no
 // failing entry is a job, or the trace read fails; a log-path failure
@@ -303,46 +293,40 @@ func (p *GitLabCIProvider) logExcerpt(ctx context.Context, statuses []gitlabComm
 		return ""
 	}
 
-	path := "/projects/" + p.project + "/jobs/" + strconv.FormatInt(statuses[idx].ID, 10) + "/trace"
-	raw, err := p.client.GetRaw(ctx, path, maxTraceBytes)
+	jobID := statuses[idx].ID
+	builder := cilog.NewBuilder(p.maxLogLines)
+	scanner := newTraceScanner(builder)
+
+	var (
+		complete bool
+		scanErr  error
+	)
+	path := "/projects/" + p.project + "/jobs/" + strconv.FormatInt(jobID, 10) + "/trace"
+	err = p.client.GetStream(ctx, path, func(body io.Reader) error {
+		complete, scanErr = cilog.Scan(body, scanner.line)
+		return nil
+	})
 	if err != nil {
 		p.log.Warn("failed to fetch job trace", slog.Any("error", err))
 		return ""
 	}
-
-	return traceExcerpt(raw, p.maxLogLines)
-}
-
-// traceExcerpt sanitizes raw into at most maxLines surviving lines,
-// joined by the newline character. It returns the empty string when
-// maxLines is zero or less. Each line has its runner-prefix, ANSI escape,
-// and section-marker markup stripped, every carriage return removed, and
-// trailing spaces and tabs trimmed; a line left empty after sanitization
-// is dropped before the line-count limit is applied, and the excerpt
-// keeps the last surviving lines rather than the first.
-func traceExcerpt(raw []byte, maxLines int) string {
-	if maxLines <= 0 {
-		return ""
-	}
-
-	lines := strings.Split(string(raw), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = runnerPrefixPattern.ReplaceAllString(line, "")
-		line = ansiEscapePattern.ReplaceAllString(line, "")
-		line = sectionMarkerPattern.ReplaceAllString(line, "")
-		line = strings.ReplaceAll(line, "\r", "")
-		line = strings.TrimRight(line, " \t")
-		if line == "" {
-			continue
+	if scanErr != nil {
+		if ctx.Err() != nil {
+			p.log.Warn("failed to fetch job trace", slog.Any("error", scanErr))
+			return ""
 		}
-		kept = append(kept, line)
+		p.log.Warn("job trace read ended early",
+			slog.Int64("job_id", jobID),
+			slog.Any("error", scanErr))
 	}
 
-	if len(kept) > maxLines {
-		kept = kept[len(kept)-maxLines:]
+	text, fallback := builder.Excerpt(complete)
+	if fallback != cilog.NoFallback {
+		p.log.Debug("log excerpt fell back to the job tail",
+			slog.Int64("job_id", jobID),
+			slog.String("reason", string(fallback)))
 	}
-	return strings.Join(kept, "\n")
+	return text
 }
 
 // FetchCIStatus returns the aggregate CI status for ref by resolving it to
@@ -353,8 +337,9 @@ func traceExcerpt(raw []byte, maxLines int) string {
 // FailingCount come from [scmcore.AggregateCIStatus] and
 // [scmcore.FailingCount]; Ref echoes the caller's ref verbatim, never the
 // resolved SHA. On a failing verdict with log fetching enabled, LogExcerpt
-// carries a sanitized tail of the first failing job's trace, or the empty
-// string when no failing entry is a job or the trace could not be read. A
+// carries an excerpt of the first failing job's trace anchored on the runner
+// stage in which the job stopped, or the empty string when no failing entry
+// is a job or the trace could not be read. A
 // failure returns a [*domain.CIError]; a context cancellation or deadline
 // error is returned without conversion to one, so a caller can still
 // match it with [errors.Is].

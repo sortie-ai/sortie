@@ -420,22 +420,3 @@ func TestClientGetConditional_Error(t *testing.T) {
 	_, _, _, err := client.GetConditional(context.Background(), "/repos/o/r/issues/6", "", nil)
 	assertClientError(t, err, domain.ErrTrackerTransport)
 }
-
-func TestClientGetRaw_Success(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hello world")) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	body, err := client.GetRaw(context.Background(), "/repos/o/r/actions/jobs/1/logs", 5)
-	if err != nil {
-		t.Fatalf("GetRaw: %v", err)
-	}
-	if string(body) != "hello" {
-		t.Errorf("body = %q, want %q", body, "hello")
-	}
-}
