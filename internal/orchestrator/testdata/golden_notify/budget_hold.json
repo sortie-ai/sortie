@@ -1,0 +1,32 @@
+[
+  {
+    "step": "budget_hold_session",
+    "ops": [
+      {
+        "op": "budget_notice_row",
+        "issue_id": "GOLD-1",
+        "text": "session_budget"
+      },
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie stopped dispatching this issue.\nRecorded: 2026-03-15T12:00:00Z\nCeiling: session budget (agent.max_sessions)\nSessions: 4 of 3\nRaising agent.max_sessions raises this ceiling."
+      }
+    ]
+  },
+  {
+    "step": "budget_hold_token",
+    "ops": [
+      {
+        "op": "budget_notice_row",
+        "issue_id": "GOLD-1",
+        "text": "token_budget"
+      },
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie stopped dispatching this issue.\nRecorded: 2026-03-15T12:00:00Z\nCeiling: token budget (agent.max_tokens)\nTokens: 1200000 of 1000000\nSessions: 2 of 5\nStopped in flight: 2 sessions\nRaising agent.max_tokens raises this ceiling."
+      }
+    ]
+  }
+]

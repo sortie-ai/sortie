@@ -1,0 +1,1 @@
+{"notification_id":"notif-uuid-001","timestamp":"2026-06-10T14:00:00Z","source":"test-host","issue_id":"issue-7","identifier":"PROJ-7","dispatch_id":"dispatch-uuid-001","session_id":"sess-xyz","attempt":2,"agent":"claude-code","severity":"warning","title":"Needs review","body":"Agent paused for human decision.","category":"decision_needed"}

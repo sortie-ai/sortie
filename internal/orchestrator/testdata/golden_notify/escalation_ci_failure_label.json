@@ -1,0 +1,22 @@
+[
+  {
+    "step": "ci_budget_exhausted",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  },
+  {
+    "step": "ci_triage",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  }
+]

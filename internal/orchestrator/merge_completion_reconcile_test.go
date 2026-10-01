@@ -814,6 +814,7 @@ func TestReconcileMergeCompletion_MissingSHAExpiryEscalatesOnceAndStops(t *testi
 	}}
 	params := mgcParams(store, scm, tracker)
 	params.MergeCompletionConfig.Escalation = "comment"
+	params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 	now := mgcBaseTime
 	params.NowFunc = func() time.Time { return now }
 
@@ -895,6 +896,7 @@ func TestReconcileMergeCompletion_MissingSHAEscalationFailureStopsAndFreshPendin
 			}}
 			params := mgcParams(store, scm, tracker)
 			params.MergeCompletionConfig.Escalation = tt.escalation
+			params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 			now := mgcBaseTime
 			params.NowFunc = func() time.Time { return now }
 
@@ -1343,6 +1345,7 @@ func TestReconcileMergeCompletion_EscalationDispatchesConfiguredAction(t *testin
 		scm := &mgcSCMFake{fn: func(int, string, string) (domain.PRMergeStatus, error) { return mergedStatus("sha-13"), nil }}
 		params := mgcParams(store, scm, tracker)
 		params.MergeCompletionConfig.Escalation = "comment"
+		params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 
 		reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
 		state.TrackerOpsWg.Wait()
@@ -1745,6 +1748,7 @@ func TestReconcileMergeCompletion_MissingSHAEscalationSharesDeadlineWithMarkerWr
 			}}
 			params := mgcParams(store, scm, tracker)
 			params.MergeCompletionConfig.Escalation = tt.escalation
+			params.Router = escalationRouter(t, tracker, domain.EventEscalationMergeCompletion, params.MergeCompletionConfig.Escalation)
 			now := mgcBaseTime
 			params.NowFunc = func() time.Time { return now }
 

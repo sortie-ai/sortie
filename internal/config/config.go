@@ -211,6 +211,9 @@ func (p HandoffEvidencePolicy) Effective() HandoffEvidencePolicy {
 
 // TrackerCommentsConfig holds the boolean flags controlling whether
 // the orchestrator posts tracker comments at session lifecycle points.
+// The flags are deprecated: each one subscribes the tracker comment
+// destination to the matching session events, and a notifications entry
+// of kind tracker_comment replaces them.
 type TrackerCommentsConfig struct {
 	OnDispatch   bool
 	OnCompletion bool
@@ -743,6 +746,9 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 
 	notifications, err := buildNotificationsConfig(raw)
 	if err != nil {
+		return ServiceConfig{}, err
+	}
+	if err := validateTrackerCommentEntries(notifications, tracker); err != nil {
 		return ServiceConfig{}, err
 	}
 
@@ -1907,7 +1913,8 @@ type CIFeedbackConfig struct {
 
 	// Escalation controls what happens when max_retries is exceeded.
 	// Valid values: "label" (default) adds a label to the issue,
-	// "comment" posts a comment on the issue.
+	// "comment" (deprecated) posts a comment on the issue, and "none"
+	// does neither, leaving the escalation event to its subscribers.
 	Escalation string
 
 	// EscalationLabel is the label applied when escalation is "label".
@@ -1945,7 +1952,7 @@ type ReactionConfig struct {
 	MaxRetries int
 
 	// Escalation controls what happens when MaxRetries is exceeded.
-	// Valid values: "label" (default), "comment".
+	// Valid values: "label" (default), "comment" (deprecated), "none".
 	Escalation string
 
 	// EscalationLabel is the label applied when Escalation is "label".
@@ -2014,6 +2021,12 @@ var knownReactionFields = map[string]bool{
 	"triage":           true,
 }
 
+// validEscalation reports whether v is a value a reaction's escalation
+// key accepts.
+func validEscalation(v string) bool {
+	return v == "label" || v == "comment" || v == "none"
+}
+
 func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 	result := make(map[string]ReactionConfig)
 	if len(m) == 0 {
@@ -2073,10 +2086,10 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 		} else if found && s != "" {
 			escalation = s
 		}
-		if escalation != "label" && escalation != "comment" {
+		if !validEscalation(escalation) {
 			return nil, &ConfigError{
 				Field:   "reactions." + k + ".escalation",
-				Message: fmt.Sprintf("must be \"label\" or \"comment\", got %q", escalation),
+				Message: fmt.Sprintf("must be \"label\", \"comment\", or \"none\", got %q", escalation),
 			}
 		}
 

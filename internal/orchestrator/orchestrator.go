@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 )
@@ -108,6 +109,10 @@ type OrchestratorParams struct {
 	Metrics         domain.Metrics       // may be nil; defaults to NoopMetrics
 	ToolRegistry    *domain.ToolRegistry // may be nil
 	HostPool        *HostPool            // may be nil; defaults to local-mode pool
+
+	// Router selects the destinations of every outbound event. Nil
+	// routes nothing, so no event reaches a tracker or a notifier.
+	Router *route.Router
 
 	// SessionToolRegistryFunc builds the per-session tool registry so the
 	// first-turn advertisement matches the MCP sidecar's set. May be nil,
@@ -207,6 +212,7 @@ type Orchestrator struct {
 	logger *slog.Logger
 
 	trackerAdapter     domain.TrackerAdapter
+	router             *route.Router
 	agentAdapter       domain.AgentAdapter
 	agentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 	workflowManager    WorkflowManager
@@ -362,6 +368,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		state:                             params.State,
 		logger:                            logger,
 		trackerAdapter:                    params.TrackerAdapter,
+		router:                            params.Router,
 		agentAdapter:                      params.AgentAdapter,
 		agentAdapterByKind:                agentAdapterByKind,
 		workflowManager:                   params.WorkflowManager,
@@ -401,6 +408,9 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		ciTriage:                          ciTriage,
 		blockerResolver:                   params.BlockerResolver,
 		abandonCh:                         params.AbandonCh,
+	}
+	if params.WorkflowManager != nil {
+		o.updateRouter(params.WorkflowManager.Config())
 	}
 	// Startup preflight must have passed for construction to reach here.
 	o.preflightOK.Store(true)
@@ -486,6 +496,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 	o.applyQueuedAheadOfExit(ctx, exitingIssueIDs)
 
 	cfg := o.workflowManager.Config()
+	o.updateRouter(cfg)
 	for _, result := range exits {
 		HandleWorkerExit(o.state, result, HandleWorkerExitParams{
 			Store:                             o.store,
@@ -504,7 +515,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 			TerminalStates:                    cfg.Tracker.TerminalStates,
 			Metrics:                           o.metrics,
 			HostPool:                          o.hostPool,
-			CommentsConfig:                    cfg.Tracker.Comments,
+			Router:                            o.router,
 			CIProvider:                        o.ciProvider,
 			SCMAdapter:                        o.scmAdapter,
 			AutoMergeReactionConfigured:       o.autoMergeReactionConfigured,
@@ -564,6 +575,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
 				Store:                  o.store,
 				TrackerAdapter:         o.trackerAdapter,
+				Router:                 o.router,
 				ActiveStates:           cfg.Tracker.ActiveStates,
 				TerminalStates:         cfg.Tracker.TerminalStates,
 				HandoffState:           cfg.Tracker.HandoffState,
@@ -671,6 +683,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 
 	// On reload failure the workflow manager retains last-known-good config.
 	cfg := o.workflowManager.Config()
+	o.updateRouter(cfg)
 
 	// Applied unconditionally, not gated on preflight success.
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
@@ -687,6 +700,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// dispatch is skipped.
 	ReconcileRunningIssues(o.state, ReconcileParams{
 		TrackerAdapter:                    o.trackerAdapter,
+		Router:                            o.router,
 		ActiveStates:                      cfg.Tracker.ActiveStates,
 		TerminalStates:                    cfg.Tracker.TerminalStates,
 		HandoffState:                      cfg.Tracker.HandoffState,
@@ -979,6 +993,8 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 
 		deps := WorkerDeps{
 			TrackerAdapter:         o.trackerAdapter,
+			Router:                 o.router,
+			TrackerOpsWg:           &o.state.TrackerOpsWg,
 			AgentAdapter:           adapter,
 			ConfigFunc:             o.workflowManager.Config,
 			PromptTemplateByIDFunc: o.workflowManager.PromptTemplateByID,
@@ -1430,38 +1446,40 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 		o.metrics.IncBudgetExhaustions(entry.Reason)
 	}
 
-	if o.trackerAdapter != nil {
-		noticeIDs := make([]string, 0, len(fresh))
-		for id := range fresh {
-			noticeIDs = append(noticeIDs, id)
+	noticeIDs := make([]string, 0, len(fresh))
+	for id := range fresh {
+		noticeIDs = append(noticeIDs, id)
+	}
+	slices.SortFunc(noticeIDs, func(a, b string) int {
+		if c := cmp.Compare(fresh[a].Identifier, fresh[b].Identifier); c != 0 {
+			return c
 		}
-		slices.SortFunc(noticeIDs, func(a, b string) int {
-			if c := cmp.Compare(fresh[a].Identifier, fresh[b].Identifier); c != 0 {
-				return c
-			}
-			return cmp.Compare(a, b)
-		})
+		return cmp.Compare(a, b)
+	})
 
-		for _, id := range noticeIDs {
-			if _, folded := foldedForward[id]; folded {
-				continue
-			}
-			if o.state.BudgetHoldNoticed[id] == fresh[id].Reason {
-				continue
-			}
-			if !budgetHoldNoticeAllowed(o.state, now) {
-				break
-			}
-			postBudgetHoldNotice(o.state, budgetHoldNoticeParams{
-				IssueID:        id,
-				Entry:          fresh[id],
-				Store:          o.store,
-				TrackerAdapter: o.trackerAdapter,
-				Metrics:        o.metrics,
-				Logger:         logging.WithIssue(o.logger, id, fresh[id].Identifier),
-				Ctx:            ctx,
-			})
+	for _, id := range noticeIDs {
+		if _, folded := foldedForward[id]; folded {
+			continue
 		}
+		if o.state.BudgetHoldNoticed[id] == fresh[id].Reason {
+			continue
+		}
+		delivery := o.router.Route(budgetHeldNotification(id, fresh[id]))
+		if delivery.Empty() {
+			continue
+		}
+		if !budgetHoldNoticeAllowed(o.state, now) {
+			break
+		}
+		postBudgetHoldNotice(o.state, budgetHoldNoticeParams{
+			IssueID:  id,
+			Entry:    fresh[id],
+			Store:    o.store,
+			Delivery: delivery,
+			Metrics:  o.metrics,
+			Logger:   logging.WithIssue(o.logger, id, fresh[id].Identifier),
+			Ctx:      ctx,
+		})
 	}
 
 	for _, id := range candidateIDs {
@@ -1517,6 +1535,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 			applyQueued(o.selfReviewCh, o.applySelfReviewProgress)
 			applyQueued(o.turnStartedCh, o.applyTurnStarted)
 			cfg := o.workflowManager.Config()
+			o.updateRouter(cfg)
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:                             o.store,
 				MaxRetryBackoffMS:                 cfg.Agent.MaxRetryBackoffMS,
@@ -1533,7 +1552,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				TerminalStates:                    cfg.Tracker.TerminalStates,
 				Metrics:                           o.metrics,
 				HostPool:                          o.hostPool,
-				CommentsConfig:                    cfg.Tracker.Comments,
+				Router:                            o.router,
 				CIProvider:                        o.ciProvider,
 				SCMAdapter:                        o.scmAdapter,
 				AutoMergeReactionConfigured:       o.autoMergeReactionConfigured,

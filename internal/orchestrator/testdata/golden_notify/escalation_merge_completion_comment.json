@@ -1,0 +1,37 @@
+[
+  {
+    "step": "merge_completion_escalated",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie attempted 3 time(s) and could not transition the issue to \"Done\" after PR #42 (acme/widgets) merged. Manual transition required."
+      }
+    ]
+  },
+  {
+    "step": "missing_sha_delivered",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie stopped monitoring acme/widgets PR #42 after waiting 10m0s because the pull request is reported merged but no merge commit identifier was provided. Verify the merge in the forge and transition this issue to \"Done\" manually if appropriate."
+      },
+      {
+        "op": "observation_dispatched",
+        "issue_id": "GOLD-1",
+        "text": "merge-completion-missing-sha"
+      }
+    ]
+  },
+  {
+    "step": "missing_sha_tracker_write_fails",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie stopped monitoring acme/widgets PR #42 after waiting 10m0s because the pull request is reported merged but no merge commit identifier was provided. Verify the merge in the forge and transition this issue to \"Done\" manually if appropriate."
+      }
+    ]
+  }
+]

@@ -100,7 +100,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	logger := slog.New(slog.DiscardHandler)
 
 	mgr, err := workflow.NewManager(path, logger,
-		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
+		workflow.WithValidateFunc(workflowValidate),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
 		workflow.WithRetiredAgents(registry.RetiredAgentOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))

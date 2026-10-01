@@ -12,6 +12,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -225,6 +226,7 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 	return HandleRetryTimerParams{
 		Store:             store,
 		TrackerAdapter:    tracker,
+		Router:            route.NewRouter(tracker, nil),
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,

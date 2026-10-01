@@ -2573,3 +2573,85 @@ func TestRuntimeSnapshot_TokensAwaited(t *testing.T) {
 		})
 	}
 }
+
+func reactionEscalationBuilders() map[string]func(escalation string) (string, error) {
+	tracker := config.TrackerConfig{
+		HandoffState:   "in-review",
+		ActiveStates:   []string{"doing"},
+		TerminalStates: []string{"done"},
+	}
+	rc := func(escalation string) config.ReactionConfig {
+		return config.ReactionConfig{Escalation: escalation, Extra: map[string]any{"target_state": "done"}}
+	}
+
+	return map[string]func(string) (string, error){
+		"review": func(escalation string) (string, error) {
+			got, err := BuildReviewReactionConfig(rc(escalation))
+			return got.Escalation, err
+		},
+		"bot review": func(escalation string) (string, error) {
+			got, err := BuildBotReviewReactionConfig(rc(escalation))
+			return got.Escalation, err
+		},
+		"auto merge": func(escalation string) (string, error) {
+			got, err := BuildAutoMergeReactionConfig(rc(escalation))
+			return got.Escalation, err
+		},
+		"merge conflict": func(escalation string) (string, error) {
+			got, err := BuildMergeConflictReactionConfig(rc(escalation))
+			return got.Escalation, err
+		},
+		"merge completion": func(escalation string) (string, error) {
+			got, err := BuildMergeCompletionReactionConfig(rc(escalation), tracker, registry.TrackerMeta{})
+			return got.Escalation, err
+		},
+	}
+}
+
+func TestReactionConfigBuilders_Escalation(t *testing.T) {
+	t.Parallel()
+
+	for name, build := range reactionEscalationBuilders() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, escalation := range []string{"label", "comment", "none"} {
+				got, err := build(escalation)
+				if err != nil {
+					t.Errorf("build(%q) error = %v, want nil", escalation, err)
+					continue
+				}
+				if got != escalation {
+					t.Errorf("build(%q).Escalation = %q, want %q", escalation, got, escalation)
+				}
+			}
+
+			_, err := build("email")
+			if err == nil {
+				t.Fatal(`build("email") error = nil, want an invalid escalation error`)
+			}
+			if want := `must be "label", "comment", or "none", got "email"`; !strings.Contains(err.Error(), want) {
+				t.Errorf(`build("email") error = %q, want it to contain %q`, err, want)
+			}
+		})
+	}
+}
+
+func TestBuildAutoMergeReactionConfig_OmittedEscalationResolvesToLabel(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewServiceConfig(map[string]any{
+		"reactions": map[string]any{"auto_merge": map[string]any{"provider": "github"}},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceConfig: %v", err)
+	}
+
+	got, err := BuildAutoMergeReactionConfig(cfg.Reactions["auto_merge"])
+	if err != nil {
+		t.Fatalf("BuildAutoMergeReactionConfig: %v", err)
+	}
+	if got.Escalation != "label" {
+		t.Errorf("BuildAutoMergeReactionConfig(omitted escalation).Escalation = %q, want %q", got.Escalation, "label")
+	}
+}

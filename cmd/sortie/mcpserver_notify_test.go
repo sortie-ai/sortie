@@ -528,7 +528,7 @@ func TestMCPServerNotify_EndToEnd(t *testing.T) {
 
 	srv, bodies := newCapturingServer(t)
 	cfg.Notifications = config.NotificationsConfig{Backends: []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}, MaxPerSession: 3},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}, MaxPerSession: 3},
 	}}
 
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-e2e.db"))
@@ -598,7 +598,7 @@ func TestMCPServerNotify_Continuation(t *testing.T) {
 
 	srv, bodies := newCapturingServer(t)
 	cfg.Notifications = config.NotificationsConfig{Backends: []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
 	}}
 
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-continuation.db"))
@@ -666,7 +666,7 @@ func TestMCPServerNotify_NoSessionID(t *testing.T) {
 
 	srv, bodies := newCapturingServer(t)
 	cfg.Notifications = config.NotificationsConfig{Backends: []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
 	}}
 
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-nosession.db"))
@@ -714,7 +714,7 @@ func TestMCPServerNotify_Concurrent(t *testing.T) {
 
 	srv, bodies := newCapturingServer(t)
 	cfg.Notifications = config.NotificationsConfig{Backends: []config.NotificationBackend{
-		{Kind: "webhook", Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
+		{Kind: "webhook", Events: agentMessageEvents, Config: map[string]any{"url": srv.URL}, MaxPerSession: 10},
 	}}
 
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-concurrent.db"))

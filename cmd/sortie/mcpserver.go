@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -146,12 +147,14 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 	}
 }
 
-// buildNotifyTool resolves the configured notifier backends into the
-// notify_operator tool, returning (nil, nil) when none are configured. An
+// buildNotifyTool resolves the configured notifier backends that receive
+// agent.message into the notify_operator tool, returning (nil, nil) when
+// none does. An
 // unknown kind or constructor error (including a required secret that
 // resolved empty) is fatal and returned as a non-nil error rather than a
 // partial registration.
 func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext, sessionID notify.SessionIDFunc, reserveSlot notify.SlotReserver) (domain.AgentTool, error) {
+	configured = route.AgentMessageEntries(configured)
 	if len(configured) == 0 {
 		return nil, nil
 	}

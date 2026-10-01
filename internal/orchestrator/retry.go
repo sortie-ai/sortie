@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
@@ -41,6 +42,10 @@ type HandleRetryTimerParams struct {
 	Store RetryTimerStore
 
 	TrackerAdapter domain.TrackerAdapter
+
+	// Router selects the destinations of the budget-hold event. Nil
+	// routes nothing.
+	Router *route.Router
 
 	ActiveStates []string
 
@@ -346,18 +351,19 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			metrics.IncBudgetExhaustions(held.Reason)
 		}
 
-		if params.TrackerAdapter != nil &&
-			state.BudgetHoldNoticed[issueID] != held.Reason &&
-			budgetHoldNoticeAllowed(state, time.Now().UTC()) {
-			postBudgetHoldNotice(state, budgetHoldNoticeParams{
-				IssueID:        issueID,
-				Entry:          held,
-				Store:          params.Store,
-				TrackerAdapter: params.TrackerAdapter,
-				Metrics:        metrics,
-				Logger:         log,
-				Ctx:            ctx,
-			})
+		if state.BudgetHoldNoticed[issueID] != held.Reason {
+			delivery := params.Router.Route(budgetHeldNotification(issueID, held))
+			if !delivery.Empty() && budgetHoldNoticeAllowed(state, time.Now().UTC()) {
+				postBudgetHoldNotice(state, budgetHoldNoticeParams{
+					IssueID:  issueID,
+					Entry:    held,
+					Store:    params.Store,
+					Delivery: delivery,
+					Metrics:  metrics,
+					Logger:   log,
+					Ctx:      ctx,
+				})
+			}
 		}
 		return
 	}

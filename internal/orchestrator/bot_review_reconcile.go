@@ -247,8 +247,13 @@ func escalateBotReviewFailure(
 		)
 	}
 
-	switch params.BotReviewConfig.Escalation {
-	case "label":
+	commentText := buildBotReviewEscalationComment(botReviewData, turnCount)
+	if trigger == EscalationTriggerTriage {
+		commentText = buildTriageEscalationComment("bot-review", fmt.Sprintf("PR #%d", botReviewData.PRNumber))
+	}
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationBotReview, pending, commentText))
+
+	if params.BotReviewConfig.Escalation == "label" {
 		label := params.BotReviewConfig.EscalationLabel
 		if label == "" {
 			label = "needs-human"
@@ -274,35 +279,16 @@ func escalateBotReviewFailure(
 				}
 			})
 		}
-
-	case "comment", "":
-		commentText := buildBotReviewEscalationComment(botReviewData, turnCount)
-		if trigger == EscalationTriggerTriage {
-			commentText = buildTriageEscalationComment("bot-review", fmt.Sprintf("PR #%d", botReviewData.PRNumber))
-		}
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			m := metrics
-			escalLog := log
-			ct := commentText
-
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
-
-				if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-					escalLog.Warn("bot review escalation comment failed",
-						slog.Any("error", err),
-					)
-					m.IncBotReviewEscalations("error")
-				} else {
-					m.IncBotReviewEscalations("comment")
-				}
-			})
-		}
 	}
+
+	// A label owns the escalation counter, so only the other modes record it.
+	var record func(action string)
+	if params.BotReviewConfig.Escalation != "label" {
+		record = metrics.IncBotReviewEscalations
+	}
+	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
+		log.Warn("bot review escalation comment failed", slog.Any("error", err))
+	})
 
 	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindBotReview))
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindBotReview); err != nil {

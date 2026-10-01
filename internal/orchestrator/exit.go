@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/workspace"
@@ -100,8 +102,9 @@ type HandleWorkerExitParams struct {
 	// [domain.NoopMetrics].
 	Metrics domain.Metrics
 
-	// CommentsConfig holds the completion/failure comment flags.
-	CommentsConfig config.TrackerCommentsConfig
+	// Router selects the destinations of the session events the exit
+	// publishes. Nil routes nothing.
+	Router *route.Router
 
 	// HostPool releases hosts on exit. Nil means no release (local or tests).
 	HostPool *HostPool
@@ -1254,69 +1257,64 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 	}
 
-	// Build the comment text synchronously to capture exit-time data, then
-	// fire CommentIssue in a detached goroutine so the event loop never
-	// blocks.
-	var commentText string
-	var lifecycle string
-
 	runDuration := max(now.Sub(entry.StartedAt), 0)
 
 	// A deferral leaves work queued exactly as a scheduled retry does, so the
 	// comments report re-queuing for either outcome.
 	retryPending := retryScheduled || retryDeferred
 
-	switch workerResult.ExitKind {
-	case WorkerExitNormal:
-		if evidenceWithheld {
-			if params.CommentsConfig.OnFailure {
-				commentText = buildFailureComment(runDuration, retryPending, nextAttempt)
-				lifecycle = "failure"
+	// The body is built synchronously to capture exit-time data; the
+	// delivery is detached so the event loop never blocks.
+	var eventType domain.EventType
+	var severity, body, lifecycle string
+	switch {
+	case workerResult.ExitKind == WorkerExitCancelled:
+		return
+	case workerResult.ExitKind == WorkerExitNormal && !evidenceWithheld:
+		lifecycle = "completion"
+		if workerResult.SoftStop {
+			eventType = domain.EventSessionStopped
+			body = buildSoftStopComment(runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
+			if workerResult.SoftStopReason == string(workspace.StatusNoChangeNeeded) {
+				severity = "info"
 			}
-		} else if params.CommentsConfig.OnCompletion {
-			if workerResult.SoftStop {
-				commentText = buildSoftStopComment(runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
-			} else {
-				commentText = buildCompletionComment(runDuration, workerResult.TurnsCompleted, retryPending)
-			}
-			lifecycle = "completion"
+		} else {
+			eventType = domain.EventSessionCompleted
+			body = buildCompletionComment(runDuration, workerResult.TurnsCompleted, retryPending)
 		}
-	case WorkerExitCancelled:
-		// No comment on cancellation.
 	default:
-		if params.CommentsConfig.OnFailure {
-			commentText = buildFailureComment(runDuration, retryPending, nextAttempt)
-			lifecycle = "failure"
+		lifecycle = "failure"
+		eventType = domain.EventSessionFailed
+		body = buildFailureComment(runDuration, retryPending, nextAttempt)
+	}
+
+	delivery := params.Router.Route(sessionEvent{
+		IssueID:    workerResult.IssueID,
+		Identifier: cmp.Or(workerResult.Identifier, entry.Identifier),
+		DisplayID:  entry.Issue.DisplayID,
+		DispatchID: entry.DispatchID,
+		SessionID:  cmp.Or(workerResult.SessionID, entry.SessionID),
+		Attempt:    workerResult.Attempt,
+		Agent:      workerResult.AgentAdapter,
+	}.notification(eventType, severity, body))
+
+	deliverDetached(ctx, &state.TrackerOpsWg, delivery, log, func(received bool, err error) {
+		if !received {
+			return
 		}
-	}
-
-	if commentText != "" && params.TrackerAdapter != nil {
-		issueID := workerResult.IssueID
-		tracker := params.TrackerAdapter
-		m := metrics
-		commentLog := log
-		lc := lifecycle
-		ct := commentText
-
-		state.TrackerOpsWg.Go(func() {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-
-			if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-				commentLog.Warn("tracker comment failed",
-					slog.String("lifecycle", lc),
-					slog.Any("error", err),
-				)
-				m.IncTrackerComments(lc, "error")
-			} else {
-				commentLog.Info("tracker comment posted",
-					slog.String("lifecycle", lc),
-				)
-				m.IncTrackerComments(lc, "success")
-			}
-		})
-	}
-
+		if err != nil {
+			log.Warn("tracker comment failed",
+				slog.String("lifecycle", lifecycle),
+				slog.Any("error", err),
+			)
+			metrics.IncTrackerComments(lifecycle, "error")
+			return
+		}
+		log.Info("tracker comment posted",
+			slog.String("lifecycle", lifecycle),
+		)
+		metrics.IncTrackerComments(lifecycle, "success")
+	})
 }
 
 // computeBackoffDelay returns the exponential backoff delay in ms for the

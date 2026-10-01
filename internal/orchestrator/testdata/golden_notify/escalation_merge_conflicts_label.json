@@ -1,0 +1,22 @@
+[
+  {
+    "step": "merge_conflict_budget_exhausted",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  },
+  {
+    "step": "merge_conflict_triage",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  }
+]

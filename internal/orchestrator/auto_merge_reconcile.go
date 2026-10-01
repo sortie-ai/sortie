@@ -354,24 +354,16 @@ func postAutoMergeSuccess(state *State, params ReconcileParams, pending *Pending
 		})
 	}
 
-	if params.TrackerAdapter != nil {
-		commentText := buildAutoMergeComment(autoMergeData, mergeResult, params.AutoMergeConfig.Strategy)
-		issueID := pending.IssueID
-		tracker := params.TrackerAdapter
-		commentLog := log
-
-		state.TrackerOpsWg.Go(func() {
-			dctx, cancel := context.WithTimeout(
-				context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-
-			if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
-				commentLog.Warn("auto_merge tracker comment failed",
-					slog.Any("error", err),
-				)
-			}
-		})
-	}
+	commentText := buildAutoMergeComment(autoMergeData, mergeResult, params.AutoMergeConfig.Strategy)
+	delivery := params.Router.Route(reactionNotification(domain.EventAutoMergeMerged, pending, commentText))
+	commentLog := log
+	deliverDetached(ctx, &state.TrackerOpsWg, delivery, log, func(received bool, err error) {
+		if received && err != nil {
+			commentLog.Warn("auto_merge tracker comment failed",
+				slog.Any("error", err),
+			)
+		}
+	})
 
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindAutoMerge); err != nil {
 		log.Warn("auto_merge fingerprint delete failed",
@@ -477,7 +469,7 @@ func handleMergeError(state *State, params ReconcileParams, key string, pending 
 }
 
 // escalateAutoMergeFailure applies the configured escalation action
-// (label or comment) after MaxRetries exhaustion or on a hard failure,
+// (label, comment, or none) after MaxRetries exhaustion or on a hard failure,
 // then removes the merge-kind pending entry and clears the fingerprint.
 // MUST NOT touch state.Claimed or any other reaction kind's entries.
 func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *PendingReaction, turnCount int, autoMergeData *AutoMergeReactionData, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
@@ -487,8 +479,10 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 		slog.Int("pr_number", autoMergeData.PRNumber),
 	)
 
-	switch params.AutoMergeConfig.Escalation {
-	case "label":
+	commentText := buildAutoMergeEscalationComment(autoMergeData, turnCount)
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationAutoMerge, pending, commentText))
+
+	if params.AutoMergeConfig.Escalation == "label" {
 		label := params.AutoMergeConfig.EscalationLabel
 		if label == "" {
 			label = "needs-human"
@@ -510,27 +504,10 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 				}
 			})
 		}
-
-	case "comment", "":
-		commentText := buildAutoMergeEscalationComment(autoMergeData, turnCount)
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			escalLog := log
-
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
-
-				if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
-					escalLog.Warn("auto_merge escalation comment failed",
-						slog.Any("error", err),
-					)
-				}
-			})
-		}
 	}
+	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, nil, func(err error) {
+		log.Warn("auto_merge escalation comment failed", slog.Any("error", err))
+	})
 
 	metrics.IncAutoMergeReactions("escalated")
 

@@ -1,0 +1,50 @@
+[
+  {
+    "step": "dispatch",
+    "ops": []
+  },
+  {
+    "step": "dispatch_review_posture",
+    "ops": []
+  },
+  {
+    "step": "exit_completed",
+    "ops": []
+  },
+  {
+    "step": "exit_completed_requeued",
+    "ops": []
+  },
+  {
+    "step": "exit_soft_stop_no_change",
+    "ops": []
+  },
+  {
+    "step": "exit_soft_stop_blocked",
+    "ops": []
+  },
+  {
+    "step": "exit_handoff_withheld",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session failed.\nDuration: 1m30s\nRetry: yes (attempt 1)"
+      }
+    ]
+  },
+  {
+    "step": "exit_failed",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie session failed.\nDuration: 1m30s\nRetry: yes (attempt 1)"
+      }
+    ]
+  },
+  {
+    "step": "exit_cancelled",
+    "ops": []
+  }
+]

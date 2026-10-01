@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -17,6 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -263,6 +265,15 @@ func dispatchPostureForReactionKind(kind string) DispatchPosture {
 type WorkerDeps struct {
 	// TrackerAdapter fetches issue states for mid-turn re-checks.
 	TrackerAdapter domain.TrackerAdapter
+
+	// Router selects the destinations of the session.started event. Nil
+	// routes nothing.
+	Router *route.Router
+
+	// TrackerOpsWg counts the detached part of the session.started
+	// delivery, so shutdown drains it with the other tracker writes. Nil
+	// leaves that delivery untracked.
+	TrackerOpsWg *sync.WaitGroup
 
 	// AgentAdapter manages agent session lifecycle.
 	AgentAdapter domain.AgentAdapter
@@ -717,17 +728,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}
 
-	// Post a claim-acknowledging comment, after the transition and before
-	// workspace prep. Failure is non-fatal. A dispatch that does not drive
-	// issue state is not a work claim, so it posts none.
-	if cfg.Tracker.Comments.OnDispatch && deps.Posture.DrivesIssueState() {
-		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, dispatchComment); err != nil {
-			logger.Warn("dispatch comment failed", slog.Any("error", err))
-			deps.Metrics.IncTrackerComments("dispatch", "error")
-		} else {
-			logger.Info("dispatch comment posted")
-			deps.Metrics.IncTrackerComments("dispatch", "success")
-		}
+	// A dispatch that does not drive issue state is not a work claim, so
+	// it publishes no session.started event.
+	if deps.Posture.DrivesIssueState() {
+		publishSessionStarted(ctx, issue, attempt, agentKind, deps, logger)
 	}
 
 	// Pre-declared so the panic recovery defer can access them.

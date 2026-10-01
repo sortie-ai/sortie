@@ -117,3 +117,72 @@ func TestNotification_SelfContained(t *testing.T) {
 		t.Errorf("zero Message.Category = %q, want empty string", n.Message.Category)
 	}
 }
+
+func TestEventTypes_Catalog(t *testing.T) {
+	t.Parallel()
+
+	want := []EventType{
+		"session.started", "session.completed", "session.stopped", "session.failed",
+		"escalation.ci_failure", "escalation.review_comments", "escalation.bot_review",
+		"escalation.merge_conflicts", "escalation.auto_merge", "escalation.merge_completion",
+		"auto_merge.merged", "budget.held", "agent.message",
+	}
+
+	got := EventTypes()
+	if len(got) != len(want) {
+		t.Fatalf("EventTypes() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("EventTypes()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	got[0] = "tampered"
+	if EventTypes()[0] != want[0] {
+		t.Errorf("EventTypes()[0] after modifying a returned slice = %q, want %q", EventTypes()[0], want[0])
+	}
+}
+
+func TestEventType_Classification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		eventType        EventType
+		wantValid        bool
+		wantOrchestrator bool
+		wantSeverity     string
+	}{
+		{"session.started", true, true, "info"},
+		{"session.completed", true, true, "info"},
+		{"session.stopped", true, true, "warning"},
+		{"session.failed", true, true, "warning"},
+		{"escalation.ci_failure", true, true, "warning"},
+		{"escalation.review_comments", true, true, "warning"},
+		{"escalation.bot_review", true, true, "warning"},
+		{"escalation.merge_conflicts", true, true, "warning"},
+		{"escalation.auto_merge", true, true, "warning"},
+		{"escalation.merge_completion", true, true, "warning"},
+		{"auto_merge.merged", true, true, "info"},
+		{"budget.held", true, true, "warning"},
+		{"agent.message", true, false, ""},
+		{"session.begun", false, false, ""},
+		{"", false, false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.eventType), func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.eventType.Valid(); got != tt.wantValid {
+				t.Errorf("EventType(%q).Valid() = %v, want %v", tt.eventType, got, tt.wantValid)
+			}
+			if got := tt.eventType.FromOrchestrator(); got != tt.wantOrchestrator {
+				t.Errorf("EventType(%q).FromOrchestrator() = %v, want %v", tt.eventType, got, tt.wantOrchestrator)
+			}
+			if got := tt.eventType.Severity(); got != tt.wantSeverity {
+				t.Errorf("EventType(%q).Severity() = %q, want %q", tt.eventType, got, tt.wantSeverity)
+			}
+		})
+	}
+}

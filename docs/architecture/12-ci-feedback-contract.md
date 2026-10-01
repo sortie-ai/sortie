@@ -133,12 +133,15 @@ CI-fix dispatches count toward the regular retry machinery but use a fixed delay
 
 ### 11A.7 Escalation behavior
 
-Two conditions reach the escalation: `reaction_attempts[issue_id:ci]` exceeding `reactions.ci_failure.max_retries`, and a triage command answering `escalate` (Section 11A.6). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and, on the `comment` action, the posted text differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
+Two conditions reach the escalation: `reaction_attempts[issue_id:ci]` exceeding `reactions.ci_failure.max_retries`, and a triage command answering `escalate` (Section 11A.6). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and the event body differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
 
 In either case:
 
-- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second timeout.
-- `escalation: comment`: post a plain-text comment listing the ref, attempt count, and the names, conclusions, and details URLs of exactly the checks the verdict counted as failing. The reaction layer applies the same shared classification rather than restating the conclusion set; it MUST NOT import an adapter package. The comment call runs in a detached goroutine with a 30-second timeout.
+Every escalation emits the `escalation.ci_failure` event (Section 10.4.7) under every posture, in a detached goroutine with a 30-second timeout. The event body is a plain-text message listing the ref, attempt count, and the names, conclusions, and details URLs of exactly the checks the verdict counted as failing. The reaction layer applies the same shared classification rather than restating the conclusion set; it MUST NOT import an adapter package. The posture decides whether a label is applied and which destination receives the event without further configuration:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue via `TrackerAdapter.AddLabel`. The label call runs in its own detached goroutine with a 30-second timeout. The event reaches only destinations that subscribe to `escalation.ci_failure`, so the issue receives no comment unless a `tracker_comment` entry lists it.
+- `escalation: comment` (deprecated): apply no label; the `tracker_comment` destination receives the event through a subscription Sortie synthesizes from this value. The comment keeps posting and a deprecation advisory names the replacement: `escalation: none` plus `escalation.ci_failure` in the events of a `tracker_comment` entry (Section 5.3.10).
+- `escalation: none`: apply no label; the event reaches only destinations subscribed to it.
 
 Escalation is a per-epoch soft stop, not a terminal action. The configured action applies at most once per recorded head: a further pass over an already-escalated head neither re-applies the action nor dispatches. After escalation:
 
@@ -147,7 +150,7 @@ Escalation is a per-epoch soft stop, not a terminal action. The configured actio
 - Release the claim (`delete claimed[issue_id]`).
 - The pending entry, its `reaction_attempts` counter, and its reaction fingerprint row for kind `ci` all survive. The counter stays over budget so no further continuation dispatches until a new epoch resets it (Section 11A.9), and the fingerprint row is the epoch record. The entry re-enqueues with backoff rather than being dropped, so the watch continues past exhaustion.
 
-Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do not block claim release.
+Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do not block claim release. Under `comment` and `none`, the counter records `comment` when the `tracker_comment` destination accepted the event, `error` when it failed, and `none` when it was not a destination of the event.
 
 ### 11A.8 Adapter registration
 

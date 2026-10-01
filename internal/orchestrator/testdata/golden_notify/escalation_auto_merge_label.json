@@ -1,0 +1,22 @@
+[
+  {
+    "step": "auto_merge_escalated",
+    "ops": [
+      {
+        "op": "label",
+        "issue_id": "GOLD-1",
+        "text": "needs-human"
+      }
+    ]
+  },
+  {
+    "step": "auto_merge_succeeded",
+    "ops": [
+      {
+        "op": "comment",
+        "issue_id": "GOLD-1",
+        "text": "Sortie auto-merged PR #42 (acme/widgets).\nStrategy: squash.\nMerge commit: deadbeefcafe."
+      }
+    ]
+  }
+]

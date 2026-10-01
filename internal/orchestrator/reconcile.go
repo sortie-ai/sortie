@@ -9,6 +9,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -41,6 +42,10 @@ var _ ReconcileStore = (*persistence.Store)(nil)
 type ReconcileParams struct {
 	// TrackerAdapter fetches current issue states for running issues.
 	TrackerAdapter domain.TrackerAdapter
+
+	// Router selects the destinations of the events the reaction
+	// escalations publish. Nil routes nothing.
+	Router *route.Router
 
 	// ActiveStates is the current list of configured active issue states.
 	ActiveStates []string

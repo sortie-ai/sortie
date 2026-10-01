@@ -356,7 +356,7 @@ func buildMergeConflictTemplateMap(data *MergeConflictReactionData, status domai
 }
 
 // escalateMergeConflictFailure applies the configured escalation action
-// (label or comment) after the per-episode retry budget is exhausted, then
+// (label, comment, or none) after the per-episode retry budget is exhausted, then
 // removes the merge-conflict slot, fingerprint, and per-episode attempt
 // counter. The attempts value is captured at the call boundary, so the
 // scoped counter delete below cannot disturb the reported count.
@@ -391,8 +391,13 @@ func escalateMergeConflictFailure(
 		)
 	}
 
-	switch params.MergeConflictConfig.Escalation {
-	case "label":
+	commentText := buildMergeConflictEscalationComment(data, attempts)
+	if trigger == EscalationTriggerTriage {
+		commentText = buildTriageEscalationComment("merge-conflict", fmt.Sprintf("PR #%d", data.PRNumber))
+	}
+	delivery := params.Router.Route(reactionNotification(domain.EventEscalationMergeConflicts, pending, commentText))
+
+	if params.MergeConflictConfig.Escalation == "label" {
 		label := params.MergeConflictConfig.EscalationLabel
 		if label == "" {
 			label = "needs-human"
@@ -418,35 +423,16 @@ func escalateMergeConflictFailure(
 				}
 			})
 		}
-
-	case "comment", "":
-		commentText := buildMergeConflictEscalationComment(data, attempts)
-		if trigger == EscalationTriggerTriage {
-			commentText = buildTriageEscalationComment("merge-conflict", fmt.Sprintf("PR #%d", data.PRNumber))
-		}
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			m := metrics
-			escalLog := log
-			ct := commentText
-
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
-
-				if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-					escalLog.Warn("merge conflict escalation comment failed",
-						slog.Any("error", err),
-					)
-					m.IncMergeConflictEscalations("error")
-				} else {
-					m.IncMergeConflictEscalations("comment")
-				}
-			})
-		}
 	}
+
+	// A label owns the escalation counter, so only the other modes record it.
+	var record func(action string)
+	if params.MergeConflictConfig.Escalation != "label" {
+		record = metrics.IncMergeConflictEscalations
+	}
+	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
+		log.Warn("merge conflict escalation comment failed", slog.Any("error", err))
+	})
 
 	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict); err != nil {

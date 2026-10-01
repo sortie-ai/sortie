@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -389,5 +390,72 @@ func TestWebhook_ErrorRedaction_URLAbsentFromLog(t *testing.T) {
 	}
 	if strings.Contains(logOutput, secretToken) {
 		t.Errorf("log output contains secret token: %q", logOutput)
+	}
+}
+
+func loadFixture(t *testing.T, name string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatalf("reading fixture %s: %v", name, err)
+	}
+	return data
+}
+
+func TestWebhook_Send_EventType(t *testing.T) {
+	t.Parallel()
+
+	recorded := string(loadFixture(t, "agent_message_payload.json"))
+
+	tests := []struct {
+		name      string
+		eventType domain.EventType
+		want      string
+	}{
+		{
+			name:      "agent message keeps the recorded payload",
+			eventType: domain.EventAgentMessage,
+			want:      recorded,
+		},
+		{
+			name: "a notification without an event type keeps the recorded payload",
+			want: recorded,
+		},
+	}
+	for _, eventType := range domain.EventTypes() {
+		if eventType.FromOrchestrator() {
+			tests = append(tests, struct {
+				name      string
+				eventType domain.EventType
+				want      string
+			}{
+				name:      "orchestrator event " + string(eventType) + " appends event_type after category",
+				eventType: eventType,
+				want:      strings.TrimSuffix(recorded, "}") + `,"event_type":"` + string(eventType) + `"}`,
+			})
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, getBody := captureServer(t, http.StatusOK)
+			n, err := newNotifier(map[string]any{"url": srv.URL})
+			if err != nil {
+				t.Fatalf("newNotifier: %v", err)
+			}
+			notification := makeNotification()
+			notification.Envelope.EventType = tt.eventType
+
+			if err := n.Send(context.Background(), notification); err != nil {
+				t.Fatalf("Send(%s): %v", tt.eventType, err)
+			}
+
+			if got := string(getBody()); got != tt.want {
+				t.Errorf("Send(%q) body = %s, want %s", tt.eventType, got, tt.want)
+			}
+		})
 	}
 }

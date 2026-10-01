@@ -878,6 +878,7 @@ func TestEscalateBotReviewFailure_CommentAction(t *testing.T) {
 		MaxContinuationTurns: 5,
 		PollIntervalMS:       60000,
 	}
+	params.Router = commentRouter(t, tracker, domain.EventEscalationBotReview)
 
 	botData := botPending.KindData.(*BotReviewReactionData)
 	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
@@ -894,9 +895,7 @@ func TestEscalateBotReviewFailure_CommentAction(t *testing.T) {
 	}
 }
 
-// TestEscalateBotReviewFailure_EmptyEscalation verifies that empty-string escalation
-// falls back to the comment action (same as "comment").
-func TestEscalateBotReviewFailure_EmptyEscalation(t *testing.T) {
+func TestEscalateBotReviewFailure_NoneEscalationPostsNothing(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-EMPTY-1"
@@ -915,17 +914,24 @@ func TestEscalateBotReviewFailure_EmptyEscalation(t *testing.T) {
 	tracker := &reviewTrackerStub{}
 	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
 	params.BotReviewConfig = BotReviewReactionConfig{
-		Escalation:           "", // empty -> comment branch
+		Escalation:           "none",
 		MaxContinuationTurns: 5,
 		PollIntervalMS:       60000,
 	}
+	params.Router = commentRouter(t, tracker)
 
 	botData := botPending.KindData.(*BotReviewReactionData)
 	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	if tracker.commentIssueCalls != 1 {
-		t.Errorf("CommentIssue calls = %d, want 1 for empty escalation (comment branch)", tracker.commentIssueCalls)
+	if tracker.commentIssueCalls != 0 {
+		t.Errorf("CommentIssue calls = %d, want 0 for none escalation", tracker.commentIssueCalls)
+	}
+	if tracker.addLabelCalled != 0 {
+		t.Errorf("AddLabel calls = %d, want 0 for none escalation", tracker.addLabelCalled)
+	}
+	if got := metrics.botReviewEscalations["none"]; got != 1 {
+		t.Errorf(`IncBotReviewEscalations("none") = %d, want 1`, got)
 	}
 }
 
@@ -1440,6 +1446,7 @@ func TestEscalateBotReviewFailure_CommentActionError(t *testing.T) {
 		MaxContinuationTurns: 5,
 		PollIntervalMS:       60000,
 	}
+	params.Router = commentRouter(t, tracker, domain.EventEscalationBotReview)
 
 	botData := botPending.KindData.(*BotReviewReactionData)
 	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
