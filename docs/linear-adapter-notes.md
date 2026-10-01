@@ -94,7 +94,7 @@ The assignee is strictly a human user. Agents and applications surface through s
 
 Blockers come from the issue's inverse relations. The relation record lives on the blocked issue, and the blocker is the relation's source issue, so reading a blocked issue gives you the blockers directly. The relation type is compared case-insensitively after trimming, and the blocker slice is always non-nil.
 
-Descriptions and comment bodies are markdown and pass through untouched. There is nothing to flatten and no wrapper to build on the write side either.
+Descriptions and comment bodies are markdown and pass through untouched. There is nothing to flatten and, apart from the literal fence described below, no wrapper to build on the write side either.
 
 What the adapter writes is stored verbatim, and that includes text it might be tempting to treat as rich. An interactive mention is something Linear's editor produces while a human is typing or pasting, not something the stored body encodes, so an issue or user URL an agent puts in a comment reaches human readers as a plain link. Never compose comment text whose meaning depends on a mention rendering.
 
