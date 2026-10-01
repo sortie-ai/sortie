@@ -278,6 +278,17 @@ jobs:
         if: ${{ matrix.provision_script != '' }}
         run: ${{ matrix.provision_script }} "${{ matrix.container_image }}"
 
+      - name: Enable Codex sandbox namespaces
+        if: matrix.adapter == 'codex'
+        run: |
+          # Bubblewrap needs user namespaces on the disposable Ubuntu runner.
+          if [ -f /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Run integration check
         id: check
         env:
@@ -301,8 +312,8 @@ jobs:
 
           if [ -n "${INSTALL_CMD}" ]; then
             echo "::group::Install ${ADAPTER} CLI"
-            bash -c "${INSTALL_CMD}"
-            install_status=$?
+            bash -c "${INSTALL_CMD}" 2>&1 | tee gotest.json
+            install_status=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ "${install_status}" -ne 0 ]; then
               echo "ADAPTER_VERSION=install failed (exit ${install_status})" >> "$GITHUB_ENV"
@@ -318,6 +329,14 @@ jobs:
             if [ -z "${VER}" ]; then VER="unknown"; fi
           fi
           echo "ADAPTER_VERSION=${VER}" >> "$GITHUB_ENV"
+
+          if [ "${ADAPTER}" = codex ]; then
+            if ! codex sandbox -- /usr/bin/true > gotest.json 2>&1; then
+              cat gotest.json
+              echo "outcome=failure" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
           # Enable only the targeted adapter's integration tests.
           export "${GUARD}=1"
@@ -348,6 +367,7 @@ jobs:
           RUN_HISTORY_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           NITE_BIN: ${{ runner.temp }}/nite
+          NITE_REPORT_DIR: ${{ runner.temp }}/nightly-report
           ADAPTER: ${{ matrix.adapter }}
           ADAPTER_NAME: ${{ matrix.name }}
           KIND: ${{ matrix.kind }}
@@ -360,12 +380,21 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: scripts/nightly-issue.sh decide
 
+      - name: Upload integration report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-${{ matrix.adapter }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly-report/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Report integration failure
         if: steps.check.outputs.outcome == 'failure'
         env:
           ADAPTER: ${{ matrix.adapter }}
         run: |
-          echo "::error::Integration check failed for ${ADAPTER}"
+          echo "Integration check failed for ${ADAPTER}; see the NITE summary and report artifact."
           exit 1
 
   hook-stress:

@@ -607,7 +607,9 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 
 	delayMS := max(params.DelayMS, 0)
 
-	dueAtMS := time.Now().UnixMilli() + delayMS
+	// A timer that has fired must not look premature after a scheduling pause.
+	scheduledAt := time.Now()
+	dueAtMS := scheduledAt.UnixMilli() + delayMS
 
 	timer := time.AfterFunc(time.Duration(delayMS)*time.Millisecond, func() {
 		onFire(params.IssueID)
@@ -629,7 +631,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		RuleSettingsApplied: params.RuleSettingsApplied,
 		TemplateID:          params.TemplateID,
 		AgentKind:           params.AgentKind,
-		scheduledAt:         time.Now(),
+		scheduledAt:         scheduledAt,
 		scheduledDelayMS:    delayMS,
 	}
 }

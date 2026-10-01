@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -16,61 +18,43 @@ const excerptByteLimit = 6000
 // sampleClassification is what classifySample decided about one nightly
 // sample, plus the evidence a renderer needs to describe it.
 type sampleClassification struct {
-	Classification string // "pass", "contract", "environment", or "not_a_sample"
-	failedTests    []string
-	packageFailed  bool
-	excerpt        string
+	Classification string
+	testReport
 }
 
-// goTestEvent is one decoded line of a `go test -json` event stream.
 type goTestEvent struct {
-	Action string
-	Test   string
-	Output string
+	Action  string
+	Package string
+	Test    string
+	Output  string
 }
 
-// testReport is what readTestReport counts out of a decoded `go test
-// -json` event stream.
 type testReport struct {
 	executed      int
+	passed        int
 	failedTests   []string
+	skippedTests  []goTestEvent
 	packageFailed bool
 	excerpt       string
 }
 
-// classifySample decides which of the five classification rows outcome
-// and the `go test -json` stream at testReportPath reach. A success
-// outcome that executed no test is "not_a_sample"; any other success is
-// "pass". A failure outcome whose report is absent, unreadable, or ran
-// no test without a package-level failure is "environment"; every
-// other failure is "contract".
 func classifySample(outcome, testReportPath string) sampleClassification {
-	report, reportUsable := readTestReport(testReportPath)
-
-	if outcome != "failure" {
-		if report.executed == 0 {
-			return sampleClassification{Classification: "not_a_sample"}
-		}
-		return sampleClassification{Classification: "pass"}
+	report, usable := readTestReport(testReportPath)
+	result := sampleClassification{testReport: report}
+	switch {
+	case outcome != "failure" && report.executed == 0:
+		result.Classification = "not_a_sample"
+	case outcome != "failure":
+		result.Classification = "pass"
+	case !usable:
+		result.Classification = "environment"
+		result.excerpt = "no test output was captured"
+	case report.executed == 0 && !report.packageFailed:
+		result.Classification = "environment"
+	default:
+		result.Classification = "test_failure"
 	}
-
-	if !reportUsable {
-		return sampleClassification{
-			Classification: "environment",
-			excerpt:        "no test output was captured",
-		}
-	}
-
-	classification := "contract"
-	if report.executed == 0 && !report.packageFailed {
-		classification = "environment"
-	}
-	return sampleClassification{
-		Classification: classification,
-		failedTests:    report.failedTests,
-		packageFailed:  report.packageFailed,
-		excerpt:        report.excerpt,
-	}
+	return result
 }
 
 // readTestReport decodes testReportPath as a `go test -json` event
@@ -91,7 +75,10 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 	defer func() { _ = file.Close() }()
 
 	var output strings.Builder
-	failed := make(map[string]bool)
+	results := make(map[string]goTestEvent)
+	packages := make(map[string]goTestEvent)
+	parents := make(map[string]bool)
+	failedParents := make(map[string]bool)
 	var decoded int
 
 	scanner := bufio.NewScanner(file)
@@ -104,18 +91,30 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 		decoded++
 		output.WriteString(event.Output)
 
-		if event.Action != "pass" && event.Action != "fail" {
-			continue
-		}
 		if event.Test == "" {
+			result := packages[event.Package]
+			result.Output = excerptTail(result.Output + event.Output)
 			if event.Action == "fail" {
 				report.packageFailed = true
+				result.Action = "fail"
 			}
+			packages[event.Package] = result
 			continue
 		}
-		report.executed++
-		if event.Action == "fail" {
-			failed[event.Test] = true
+		key := event.Package + ": " + event.Test
+		result := results[key]
+		result.Package, result.Test = event.Package, event.Test
+		result.Output = excerptTail(result.Output + event.Output)
+		if event.Action == "pass" || event.Action == "fail" || event.Action == "skip" {
+			result.Action = event.Action
+		}
+		results[key] = result
+		for name := event.Test; strings.Contains(name, "/"); {
+			name = name[:strings.LastIndexByte(name, '/')]
+			parents[event.Package+": "+name] = true
+			if event.Action == "fail" {
+				failedParents[event.Package+": "+name] = true
+			}
 		}
 	}
 	if scanner.Err() != nil {
@@ -124,31 +123,49 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 
 	if decoded == 0 {
 		if raw, readErr := os.ReadFile(testReportPath); readErr == nil { //nolint:gosec // G304: testReportPath is the workflow's own test-report location
-			report.excerpt = lastBytes(string(raw), excerptByteLimit)
+			report.excerpt = excerptTail(string(raw))
 		}
 		return report, true
 	}
 
-	report.excerpt = lastBytes(output.String(), excerptByteLimit)
-	report.failedTests = sortedKeys(failed)
+	report.excerpt = excerptTail(output.String())
+	var failures strings.Builder
+	for _, key := range slices.Sorted(maps.Keys(results)) {
+		result := results[key]
+		if parents[key] && (result.Action == "pass" || result.Action == "fail" && failedParents[key]) {
+			continue
+		}
+		switch result.Action {
+		case "pass":
+			report.passed++
+			report.executed++
+		case "fail":
+			report.executed++
+			report.failedTests = append(report.failedTests, key)
+			fmt.Fprintf(&failures, "%s\n%s\n", key, result.Output)
+		case "skip":
+			report.skippedTests = append(report.skippedTests, result)
+		case "":
+			if result.Output != "" {
+				fmt.Fprintf(&failures, "%s\n%s\n", key, result.Output)
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(packages)) {
+		result := packages[name]
+		if result.Action == "fail" && result.Output != "" {
+			fmt.Fprintf(&failures, "%s\n%s\n", name, result.Output)
+		}
+	}
+	if failures.Len() > 0 {
+		report.excerpt = excerptTail(failures.String())
+	}
 	return report, true
 }
 
-// lastBytes returns the last n bytes of s, or s unchanged when it is no
-// longer than n.
-func lastBytes(s string, n int) string {
-	if len(s) <= n {
+func excerptTail(s string) string {
+	if len(s) <= excerptByteLimit {
 		return s
 	}
-	return s[len(s)-n:]
-}
-
-// sortedKeys returns the keys of m sorted ascending.
-func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return s[len(s)-excerptByteLimit:]
 }

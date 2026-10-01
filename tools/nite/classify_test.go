@@ -62,10 +62,10 @@ func TestClassifySample(t *testing.T) {
 			want:           "environment",
 		},
 		{
-			name:           "row5_failure_any_is_contract",
+			name:           "row5_failure_any_is_test_failure",
 			outcome:        "failure",
 			testReportPath: "testdata/contract_failure.json",
-			want:           "contract",
+			want:           "test_failure",
 		},
 	}
 
@@ -89,7 +89,7 @@ func TestClassifySample(t *testing.T) {
 		// and keep classifying the lines that do decode.
 		got := classifySample("failure", "testdata/contract_failure.json")
 
-		wantFailed := []string{"TestRecordedShapeViolations/S-9/tool_result_event_missing"}
+		wantFailed := []string{"github.com/sortie-ai/sortie/internal/agent/clientprotocol: TestRecordedShapeViolations/S-9/tool_result_event_missing"}
 		if !slices.Equal(got.failedTests, wantFailed) {
 			t.Errorf("classifySample(...).failedTests = %v, want %v", got.failedTests, wantFailed)
 		}
@@ -118,13 +118,13 @@ func TestClassifySample(t *testing.T) {
 
 		got := classifySample("failure", path)
 
-		if got.Classification != "contract" {
-			t.Fatalf("classifySample(...).Classification = %q, want %q", got.Classification, "contract")
+		if got.Classification != "test_failure" {
+			t.Fatalf("classifySample(...).Classification = %q, want %q", got.Classification, "test_failure")
 		}
 		if len(got.excerpt) != excerptByteLimit {
 			t.Errorf("len(classifySample(...).excerpt) = %d, want %d", len(got.excerpt), excerptByteLimit)
 		}
-		wantExcerpt := longOutput[len(longOutput)-excerptByteLimit:]
+		wantExcerpt := excerptTail(longOutput + "\n")
 		if got.excerpt != wantExcerpt {
 			t.Errorf("classifySample(...).excerpt = last %d bytes mismatch, want the tail of the written output", excerptByteLimit)
 		}

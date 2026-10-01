@@ -188,8 +188,7 @@ func TestIntegration_SessionResume(t *testing.T) {
 	}
 
 	resumedSettings := integrationConfig()
-	resumedSettings["model"] = "opencode/gpt-5-nano"
-	resumedSettings["effort"] = "low"
+	resumedSettings["disable_autocompact"] = false
 	session2 := mustStartIntegrationSessionIn(t, a, sessionID, workspace, resumedSettings)
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session2) })
 

@@ -23,9 +23,8 @@ func baseRenderContext() renderContext {
 			AdapterName: "Example",
 		},
 		classification: sampleClassification{
-			Classification: "contract",
-			failedTests:    []string{"TestFoo"},
-			excerpt:        "FAIL\n",
+			Classification: "test_failure",
+			testReport:     testReport{failedTests: []string{"TestFoo"}, excerpt: "FAIL\n"},
 		},
 		streaks:          streakResult{failStreak: 2},
 		failureThreshold: 2,
@@ -207,6 +206,35 @@ func TestRenderSummary(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("renderSummary(..., %q, %d) = %q, want it to contain %q", tt.action, tt.incidentNumber, got, want)
 				}
+			}
+		})
+	}
+}
+
+func TestFencedOutputPreservesEmbeddedFences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "embedded code block",
+			output: "```text\ntool failed\n```",
+			want:   "````text\n```text\ntool failed\n```\n````\n",
+		},
+		{
+			name:   "mixed fence lengths",
+			output: "```\n````\n# tool output",
+			want:   "`````text\n```\n````\n# tool output\n`````\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := fencedOutput(tt.output); got != tt.want {
+				t.Errorf("fencedOutput(%q) = %q, want %q", tt.output, got, tt.want)
 			}
 		})
 	}
