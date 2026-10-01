@@ -861,6 +861,7 @@ func TestIntegration_CommentIssueWithLiteral_RendersInertAndLeavesTheIssueOpen(t
 	defer cancel()
 
 	issue := firstCandidate(t, ctx, adapter)
+	before := nativeIssueState(t, ctx, adapter, issue.ID)
 	marker := "sortie literal round trip " + time.Now().UTC().Format(time.RFC3339Nano)
 	if err := adapter.CommentIssueWithLiteral(ctx, issue.ID, marker, integrationStatement); err != nil {
 		t.Fatalf("CommentIssueWithLiteral(%s): %v", issue.Identifier, err)
@@ -902,11 +903,23 @@ func TestIntegration_CommentIssueWithLiteral_RendersInertAndLeavesTheIssueOpen(t
 		t.Errorf("rendered comment holds a link or mention, want the statement inert:\n%s", rendered.HTML)
 	}
 
-	after, err := adapter.FetchIssueByID(ctx, issue.ID)
+	if after := nativeIssueState(t, ctx, adapter, issue.ID); after != before {
+		t.Errorf("native state after the comment = %q, want %q (no quick action may run)", after, before)
+	}
+}
+
+// nativeIssueState reads GitLab's own opened or closed state, which a
+// configured state label would hide from [GitLabAdapter.FetchIssueByID].
+func nativeIssueState(t *testing.T, ctx context.Context, adapter *GitLabAdapter, issueID string) string {
+	t.Helper()
+
+	raw, _, err := adapter.client.Get(ctx, "/projects/"+adapter.projectPath+"/issues/"+issueID, nil)
 	if err != nil {
-		t.Fatalf("FetchIssueByID(%s): %v", issue.ID, err)
+		t.Fatalf("GET issue %s: %v", issueID, err)
 	}
-	if after.State != issue.State {
-		t.Errorf("State after the comment = %q, want %q (no quick action may run)", after.State, issue.State)
+	var issue gitlabIssue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		t.Fatalf("decode issue %s: %v", issueID, err)
 	}
+	return issue.State
 }
