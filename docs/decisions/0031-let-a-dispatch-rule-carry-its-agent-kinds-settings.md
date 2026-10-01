@@ -21,7 +21,7 @@ The decision settles five questions: which settings a rule may override, how a r
 
 ## Decision Drivers
 
-1. **Serve the stated need directly.** Routing cheap and hard work to different models and reasoning levels through dispatch rules is the need. Matching on issue text is a separate question and is not part of this decision.
+1. **Serve the stated need directly.** Routing cheap and hard work to different models and reasoning levels through dispatch rules is the need. Matching on an issue's title is part of this decision; matching on its description or its comments is a separate question and is not part of it.
 2. **Grow toward work profiles without rework.** One workflow should hold several profiles, each a kind, a template and that kind's settings, and the shape chosen now must extend toward automatic stage transitions and per-profile reactions without being replaced.
 3. **Strict backward compatibility.** Every workflow that loads today loads unchanged and behaves the same. Every new key is optional.
 4. **Least surprise for an operator.** One merge rule, one binding rule and one validation path. A setting must never appear to be applied while it is not, and a correction to the workflow must reach the next attempt.
@@ -70,6 +70,7 @@ dispatch:
         priority: { lte: 2 }         # exactly one of eq, in, lt, lte, gt, gte
         identifier: ["FE-*"]         # glob list, any-of
         assignee: ["alice", "bob"]   # case-insensitive exact list, any-of
+        title: ["[docs]", "wip:"]    # case-insensitive whole-word phrase list, any-of
       agent: <kind>                  # optional; falls back as described below
       template: ./prompts/bug.md     # optional; falls back as described below
       <kind>:                        # optional; settings block for the kind this rule runs
@@ -85,7 +86,9 @@ Both `rules` and `default` are optional; a workflow with no `dispatch` section b
 
 ### Matching
 
-A `match` block is evaluated against the normalized issue at dispatch time. All keys present must match (AND across keys); a list matches when any element matches (OR within a key), and a scalar is a one-element list. `labels` and `identifier` use glob matching (`*`, `?`, `[set]`): `labels` against the adapter-normalized lowercase label set, `identifier` against the identifier as the adapter produced it. `issue_type` and `assignee` compare case-insensitively, without globs. `priority` takes exactly one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`, and an issue with no priority never matches it. There are no regular expressions and no expression language: the key set is closed and small, so a typo cannot silently disable a rule and a reviewer can predict a match by reading it.
+A `match` block is evaluated against the normalized issue at dispatch time. All keys present must match (AND across keys); a list matches when any element matches (OR within a key), and a scalar is a one-element list. `labels` and `identifier` use glob matching (`*`, `?`, `[set]`): `labels` against the adapter-normalized lowercase label set, `identifier` against the identifier as the adapter produced it. `issue_type` and `assignee` compare case-insensitively, without globs. `priority` takes exactly one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`, and an issue with no priority never matches it. `title` matches when one of its phrases appears in the issue's title as whole words, ignoring letter case, and an issue with an empty title never matches it. There are no regular expressions and no expression language: the key set is closed and small, so a typo cannot silently disable a rule and a reviewer can predict a match by reading it.
+
+A title is written for people rather than for Sortie, so a phrase that could match anywhere in it would match words nobody meant. A phrase therefore matches only where it neither starts nor ends inside a word, a word being a run of letters, digits, and combining marks: `fix` matches `Fix login redirect` but neither `Add prefix to logs` nor `Fixes typo`. A phrase that starts or ends with any other character, as `[docs]` does, is held to no word boundary on that side. Each character of the Han, Hiragana, Katakana, Thai, Lao, Khmer, and Myanmar scripts, which are written without spaces between words, counts as a word of its own. A combining mark, such as a Thai vowel or tone mark, belongs to the character before it in every script, so a match never separates the two. Only letter case and white space are normalized: white space at either end is ignored and each run of it compares as one space, while `*`, `?`, brackets, accents, and every other character match only themselves. A `title` key must list at least one phrase, so that a title-only rule cannot become a catch-all, and every phrase must hold a character other than white space.
 
 ### Resolution and fallback
 
@@ -150,7 +153,7 @@ Every check runs offline and through one code path at startup, on reload, before
 
 Errors, which fail the load or block dispatch:
 
-- The structural checks: `dispatch` is a map, `rules` a sequence, `default` a map; each rule is a map with at least one of `match`, `agent`, `template` or a settings block; names match `^[a-z][a-z0-9_-]*$` and are unique; at most one catch-all, and last; `match` keys come from the closed set; a `priority` predicate has exactly one operator; every glob is well-formed.
+- The structural checks: `dispatch` is a map, `rules` a sequence, `default` a map; each rule is a map with at least one of `match`, `agent`, `template` or a settings block; names match `^[a-z][a-z0-9_-]*$` and are unique; at most one catch-all, and last; `match` keys come from the closed set; a `priority` predicate has exactly one operator; every glob is well-formed; a `title` key lists at least one phrase, and no phrase is white space alone.
 - The cross-reference checks: every referenced kind is registered; every referenced template resolves inside the workflow tree, is readable and parses.
 - Unknown keys: any key inside a rule, inside `dispatch.default` or inside `match` that is not recognized is an error. A key inside a rule that names a registered agent kind is a settings block; any other unrecognized key stays an error.
 - A rule's settings block is named for a kind other than the one the rule runs. This also catches a block left behind after the rule's `agent`, `dispatch.default.agent` or `agent.kind` changed.
