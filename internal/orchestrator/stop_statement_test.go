@@ -137,6 +137,19 @@ func TestStopStatement_PublicStatementMasksSecretHoldingARewrittenByte(t *testin
 	}
 }
 
+func TestStopStatement_PublicStatementCutsAFragmentHoldingAShorterSecret(t *testing.T) {
+	t.Parallel()
+
+	inner := registeredSecret(t)
+	outer := "outer-" + inner + "-" + registeredSecret(t)
+	redact.Add("stop statement test", outer)
+	statement := workspace.StatusStatement{Text: "see: " + outer[:len(outer)-4], Truncated: true}
+
+	if got, want := publicStatement(statement), "see:…"; got != want {
+		t.Errorf("publicStatement(cut inside a secret holding another) = %q, want %q", got, want)
+	}
+}
+
 func TestStopStatement_PublicStatementLeavesNoSecretPrefixAtAnyCut(t *testing.T) {
 	t.Parallel()
 

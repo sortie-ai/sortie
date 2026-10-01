@@ -1482,17 +1482,19 @@ func publicStatement(statement workspace.StatusStatement) string {
 	if statement.Truncated {
 		text = dropIncompleteTrailingRune(text)
 	}
+	mask := redact.Mask
+	if statement.Truncated {
+		mask = redact.MaskTruncated
+	}
 	// A registered value may itself hold a byte the cleanup rewrites, so
 	// it is masked as written before the cleanup and once more after it.
-	text = redact.Mask(text)
+	// Both passes look for a fragment the cut left, since the first one
+	// can mask a shorter value inside that fragment.
+	text = mask(text)
 	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
 	text = removeControlBytes(text)
 	text = strings.ToValidUTF8(text, "\uFFFD")
-	if statement.Truncated {
-		text = redact.MaskTruncated(text)
-	} else {
-		text = redact.Mask(text)
-	}
+	text = mask(text)
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
