@@ -1,0 +1,462 @@
+2026-10-01T02:09:11.323929Z 00O [0KRunning with gitlab-runner 19.5.0~pre.2159.ga8432a3e (a8432a3e)[0;m
+2026-10-01T02:09:11.323980Z 00O [0K  on k8s.private.runners-manager.gitlab.com/gitlab.com/gitlab-org/medium Jn8J2S38P, system ID: r_2d0rLDhFuXFg[0;m
+2026-10-01T02:09:11.323987Z 00O [0K  UUID: 019f4719-229a-79c1-8dac-e07178d07050[0;m
+2026-10-01T02:09:11.324011Z 00O [0K  feature flags: FF_NETWORK_PER_BUILD:true, FF_USE_GIT_PROACTIVE_AUTH:true, FF_HASH_CACHE_KEYS:true, FF_USE_JOB_ROUTER:true, FF_USE_PARALLEL_CACHE_TRANSFER:true, FF_USE_PARALLEL_ARTIFACT_TRANSFER:true, FF_MACHINE_OPTIONS_EXPAND_ENV:true, FF_DOCKER_MACHINE_JSON_OUTPUT:true[0;m
+2026-10-01T02:09:11.324113Z 00O [0K[36;1mResolving secrets[0;m[0;m
+2026-10-01T02:09:11.324630Z 00O section_start:1790820551:prepare_executor[0K
+2026-10-01T02:09:11.324642Z 00O+[0K[36;1mPreparing the "docker+machine" executor[0;m[0;m
+2026-10-01T02:09:11.535550Z 00O [0KUsing Docker executor with image registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2 ...[0;m
+2026-10-01T02:09:11.570603Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:11.570636Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:11.571755Z 00O [0KAuthenticating with credentials from job payload (GitLab Registry)[0;m
+2026-10-01T02:09:11.571773Z 00O [0KPulling docker image registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e ...[0;m
+2026-10-01T02:09:11.791389Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:13.199017Z 00O [0KStarting service registry.gitlab.com/gitlab-org/gitlab-build-images:postgres-17...[0;m
+2026-10-01T02:09:13.199044Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-build-images:postgres-17[0;m
+2026-10-01T02:09:13.200436Z 00O [0KAuthenticating with credentials from job payload (GitLab Registry)[0;m
+2026-10-01T02:09:13.200457Z 00O [0KPulling docker image registry.gitlab.com/gitlab-org/gitlab-build-images:postgres-17 ...[0;m
+2026-10-01T02:09:13.379361Z 00O [0KUsing docker image sha256:fef31262995b9b3b2e632c547efc484cf4c9d9d1be0bf1b6303c500cb8b79246 for registry.gitlab.com/gitlab-org/gitlab-build-images:postgres-17 with digest registry.gitlab.com/gitlab-org/gitlab-build-images@sha256:8ffbbb3f64b90c5423cc693ddcd281cd74f54b4f07772c569257766ee13e17ba ...[0;m
+2026-10-01T02:09:13.654046Z 00O [0;33mWARNING: Skipping alias "registry.gitlab.com__gitlab-org__gitlab-build-images" for service "registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11" (services[1]): alias is already in use by another service.[0;m
+2026-10-01T02:09:13.654139Z 00O [0;33mWARNING: Skipping alias "registry.gitlab.com-gitlab-org-gitlab-build-images" for service "registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11" (services[1]): alias is already in use by another service.[0;m
+2026-10-01T02:09:13.654173Z 00O [0KStarting service registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11...[0;m
+2026-10-01T02:09:13.654193Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11[0;m
+2026-10-01T02:09:13.655268Z 00O [0KAuthenticating with credentials from job payload (GitLab Registry)[0;m
+2026-10-01T02:09:13.655281Z 00O [0KPulling docker image registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11 ...[0;m
+2026-10-01T02:09:13.892121Z 00O [0KUsing docker image sha256:eff0e1871b29855a96c51c6555ae87bed58d51b2485b7b84bf73ba9c1ccf3948 for registry.gitlab.com/gitlab-org/gitlab-build-images:redis-cluster-7.0.11 with digest registry.gitlab.com/gitlab-org/gitlab-build-images@sha256:fefdb7593970cd5f306cd1b341488a2a97a6e4da17d87037b4b7aa7398ea6648 ...[0;m
+2026-10-01T02:09:14.174305Z 00O [0KStarting service redis:7.2-alpine...[0;m
+2026-10-01T02:09:14.174329Z 00O [0KUsing effective pull policy of [always] for container redis:7.2-alpine[0;m
+2026-10-01T02:09:14.175705Z 00O [0KPulling docker image redis:7.2-alpine ...[0;m
+2026-10-01T02:09:14.615287Z 00O [0KUsing docker image sha256:dba89ec3fc9542f476086f4468763aeb23a45ef61ffcf6108ec5d2be5a82f182 for redis:7.2-alpine with digest redis@sha256:29e8589c3f9ba699b5f7aa4b3c7733c58852a3626439e619aa0ee78de08c6ca0 ...[0;m
+2026-10-01T02:09:14.867958Z 00O [0;33mWARNING: Skipping alias "redis" for service "redis:7.2-alpine" (services[2]): alias is already in use by another service.[0;m
+2026-10-01T02:09:14.868033Z 00O [0KWaiting for services to be up and running (timeout 30 seconds)...[0;m
+2026-10-01T02:09:14.868101Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:14.868125Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:14.868264Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:14.868293Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:14.868366Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:14.868415Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:14.869547Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:14.873752Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:14.876529Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:16.560673Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:16.560699Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:16.561657Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:16.561682Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2[0;m
+2026-10-01T02:09:16.562397Z 00O [0KAuthenticating with credentials from job payload (GitLab Registry)[0;m
+2026-10-01T02:09:16.562426Z 00O [0KPulling docker image registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2 ...[0;m
+2026-10-01T02:09:39.817042Z 00O [0KUsing docker image sha256:c825d2d55472abaac02b8a4aa6c5dbfc1f06210ef11e0c8495740a9024028f6e for registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2 with digest registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17@sha256:45a39655c124e3b79479c7b459559300d9da5ea85fa86790fe0f3bf61564a037 ...[0;m
+2026-10-01T02:09:39.817137Z 00O section_end:1790820579:prepare_executor[0K
+2026-10-01T02:09:39.817284Z 00O+section_start:1790820579:prepare_script[0K
+2026-10-01T02:09:39.817293Z 00O+[0K[36;1mPreparing environment[0;m[0;m
+2026-10-01T02:09:39.817314Z 00O [0KUsing helper image:  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e  (overridden, default would be  registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.5.0 )[0;m
+2026-10-01T02:09:39.817365Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e[0;m
+2026-10-01T02:09:39.818300Z 00O [0KUsing docker image sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31 for registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-a8432a3e with digest registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper@sha256:2a3ccd2182c1ebedd2fa8efd30198b39b62861240c9bd07f1ffe0fe67871588a ...[0;m
+2026-10-01T02:09:39.818315Z 00O [0KUsing effective pull policy of [always] for container sha256:6bb853b7a2cda0cf31469babeb7e0edbdf202c63c5221070cfcf756214613e31[0;m
+2026-10-01T02:09:50.362219Z 01O Running on runner-jn8j2s38p-project-278964-concurrent-0 via runner-jn8j2s38p-private-1790816512-4c9e55a4...
+2026-10-01T02:09:50.465610Z 00O section_end:1790820590:prepare_script[0K
+2026-10-01T02:09:50.467065Z 00O+section_start:1790820590:get_sources[0K
+2026-10-01T02:09:50.467083Z 00O+[0K[36;1mGetting source from Git repository[0;m[0;m
+2026-10-01T02:09:50.739662Z 01O [32;1mSkipping Git repository setup[0;m
+2026-10-01T02:09:50.741365Z 01O [32;1mSkipping Git checkout[0;m
+2026-10-01T02:09:50.741369Z 01O [32;1mSkipping Git submodules setup[0;m
+2026-10-01T02:09:50.848221Z 00O section_end:1790820590:get_sources[0K
+2026-10-01T02:09:50.988031Z 00O+section_start:1790820590:restore_cache[0K
+2026-10-01T02:09:50.988046Z 00O+[0K[36;1mRestoring cache[0;m[0;m
+2026-10-01T02:09:51.326842Z 01O [32;1mChecking cache for ruby-gems-debian-trixie-ruby-3.3.12-gemfile-Gemfile-go-1.25-rust-1.89-git-2.51-48480e2d0b072d1be08bc4a7a4881793590d9d70-26-protected...[0;m
+2026-10-01T02:09:51.369948Z 01E Using presigned URL for cache download            [0;m 
+2026-10-01T02:09:51.443709Z 01E Selecting alternate cache URL: newer timestamp    [0;m  alternate_modified[0;m=2026-09-25 16:46:59 +0000 UTC alternate_url[0;m=https://storage.googleapis.com/gitlab-com-runners-cache/project/278964/ruby-gems-debian-trixie-ruby-3.3.12-gemfile-Gemfile-go-1.25-rust-1.89-git-2.51-48480e2d0b072d1be08bc4a7a4881793590d9d70-26-protected primary_modified[0;m=2026-09-25 15:17:59 +0000 UTC primary_url[0;m=https://storage.googleapis.com/gitlab-com-runners-cache/project/278964/db/dbc5f6d280572e70b97f268cfc766868afc1babde9a0dbd45660739bbd201644
+2026-10-01T02:09:51.479272Z 01E Downloading cache from https://storage.googleapis.com/gitlab-com-runners-cache/project/278964/ruby-gems-debian-trixie-ruby-3.3.12-gemfile-Gemfile-go-1.25-rust-1.89-git-2.51-48480e2d0b072d1be08bc4a7a4881793590d9d70-26-protected (parallel)[0;m  etag[0;m="8b28ca4d261c4f72ca41348b7a6d2130"
+2026-10-01T02:09:55.957033Z 01O [32;1mSuccessfully extracted cache[0;m
+2026-10-01T02:10:08.139332Z 00O section_end:1790820608:restore_cache[0K
+2026-10-01T02:10:08.140532Z 00O+section_start:1790820608:download_artifacts[0K
+2026-10-01T02:10:08.140542Z 00O+[0K[36;1mDownloading artifacts[0;m[0;m
+2026-10-01T02:10:08.472650Z 01O [32;1mDownloading artifacts for clone-gitlab-repo (16853455620)...[0;m
+2026-10-01T02:10:08.696223Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=6e55171d106548d7933ed509dbabb19a id[0;m=16853455620 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:08.741698Z 01E Artifact download: parallel, 16 streams, 16 MiB chunk size[0;m  correlation_id[0;m=6e55171d106548d7933ed509dbabb19a id[0;m=16853455620 status[0;m=302 token[0;m=xxxxxxxxx url[0;m=https://storage.googleapis.com/gitlab-gprd-artifacts/a6/80/a68072e80f075e89bc74a300101a9e71e8363bdb542182580162553462480a52/@final/d4/bf/a7e4736708e3c728552d3b5b5965dac0a7c3b696d4da0a91e144e101f2b2
+2026-10-01T02:10:09.280296Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=6e55171d106548d7933ed509dbabb19a id[0;m=16853455620 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:16.911650Z 01O [32;1mDownloading artifacts for compile-test-assets (16853455639)...[0;m
+2026-10-01T02:10:17.111963Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=a8846346d0db4c95b2a5f2afc2f8160f id[0;m=16853455639 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:17.156687Z 01E Artifact download: parallel, 16 streams, 16 MiB chunk size[0;m  correlation_id[0;m=a8846346d0db4c95b2a5f2afc2f8160f id[0;m=16853455639 status[0;m=302 token[0;m=xxxxxxxxx url[0;m=https://storage.googleapis.com/gitlab-gprd-artifacts/a6/80/a68072e80f075e89bc74a300101a9e71e8363bdb542182580162553462480a52/@final/e4/9d/4a26f4c43825e2076c893110acc381091153ea8f4fd8a017d63ed0a336f9
+2026-10-01T02:10:17.717249Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=a8846346d0db4c95b2a5f2afc2f8160f id[0;m=16853455639 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:29.968329Z 01O [32;1mDownloading artifacts for db:setup pg17 (16853455634)...[0;m
+2026-10-01T02:10:30.165913Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=43a96131835149f4983effa68dad09fa id[0;m=16853455634 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:30.202763Z 01E Artifact download: file size <= 16 MiB (chunk size), using single download stream[0;m  correlation_id[0;m=43a96131835149f4983effa68dad09fa id[0;m=16853455634 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:30.202771Z 01E Artifact download: using single download stream   [0;m  correlation_id[0;m=43a96131835149f4983effa68dad09fa id[0;m=16853455634 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:30.569529Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=43a96131835149f4983effa68dad09fa id[0;m=16853455634 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:31.133238Z 01O [32;1mDownloading artifacts for detect-tests (16853455647)...[0;m
+2026-10-01T02:10:31.450757Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=7c6d2c94ba574d26956da978254b5c73 id[0;m=16853455647 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:31.482538Z 01E Artifact download: file size <= 16 MiB (chunk size), using single download stream[0;m  correlation_id[0;m=7c6d2c94ba574d26956da978254b5c73 id[0;m=16853455647 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:31.482543Z 01E Artifact download: using single download stream   [0;m  correlation_id[0;m=7c6d2c94ba574d26956da978254b5c73 id[0;m=16853455647 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:31.664613Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=7c6d2c94ba574d26956da978254b5c73 id[0;m=16853455647 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:31.800491Z 01O [32;1mDownloading artifacts for retrieve-tests-metadata (16853455651)...[0;m
+2026-10-01T02:10:32.273673Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=6f137edf49254107b4240db36cd466e5 id[0;m=16853455651 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:32.301842Z 01E Artifact download: file size <= 16 MiB (chunk size), using single download stream[0;m  correlation_id[0;m=6f137edf49254107b4240db36cd466e5 id[0;m=16853455651 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:32.301851Z 01E Artifact download: using single download stream   [0;m  correlation_id[0;m=6f137edf49254107b4240db36cd466e5 id[0;m=16853455651 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:32.529256Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=6f137edf49254107b4240db36cd466e5 id[0;m=16853455651 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:32.621139Z 01O [32;1mDownloading artifacts for setup-test-env (16853455644)...[0;m
+2026-10-01T02:10:32.856585Z 01E Direct download from storage.googleapis.com       [0;m  correlation_id[0;m=20bf68297e8044f898425197a69edf5d id[0;m=16853455644 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:32.896770Z 01E Artifact download: parallel, 16 streams, 16 MiB chunk size[0;m  correlation_id[0;m=20bf68297e8044f898425197a69edf5d id[0;m=16853455644 status[0;m=302 token[0;m=xxxxxxxxx url[0;m=https://storage.googleapis.com/gitlab-gprd-artifacts/a6/80/a68072e80f075e89bc74a300101a9e71e8363bdb542182580162553462480a52/@final/3b/94/330020b261beddfb6c973a16281c07d420a641b1ccb5465cc4744008edcd
+2026-10-01T02:10:35.497402Z 01E Downloading artifacts from coordinator... ok      [0;m  correlation_id[0;m=20bf68297e8044f898425197a69edf5d id[0;m=16853455644 status[0;m=302 token[0;m=xxxxxxxxx
+2026-10-01T02:10:58.556106Z 00O section_end:1790820658:download_artifacts[0K
+2026-10-01T02:10:58.558063Z 00O+section_start:1790820658:step_script[0K
+2026-10-01T02:10:58.558091Z 00O+[0K[36;1mExecuting "step_script" stage of the job script[0;m[0;m
+2026-10-01T02:10:58.558123Z 00O [0KUsing effective pull policy of [always] for container registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2[0;m
+2026-10-01T02:10:58.560965Z 00O [0KUsing docker image sha256:c825d2d55472abaac02b8a4aa6c5dbfc1f06210ef11e0c8495740a9024028f6e for registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17:rubygems-3.6-git-2.51-lfs-2.9-chrome-151-yarn-1.22-graphicsmagick-1.3.36-poetry-2.2 with digest registry.gitlab.com/gitlab-org/gitlab-build-images/ci/debian-trixie-slim-ruby-3.3.12-golang-1.25-node-22.23-python-3.12-postgresql-17@sha256:45a39655c124e3b79479c7b459559300d9da5ea85fa86790fe0f3bf61564a037 ...[0;m
+2026-10-01T02:10:58.847328Z 01O [32;1m$ echo $FOSS_ONLY[0;m
+2026-10-01T02:10:58.847337Z 01O 
+2026-10-01T02:10:58.847337Z 01O [32;1m$ [ "$FOSS_ONLY" = "1" ] && rm -rf ee/ qa/spec/ee/ qa/qa/specs/features/ee/ qa/qa/ee/ qa/qa/ee.rb[0;m
+2026-10-01T02:10:58.847338Z 01O [32;1m$ export GOPATH=$CI_PROJECT_DIR/.go[0;m
+2026-10-01T02:10:58.847340Z 01O [32;1m$ mkdir -p $GOPATH[0;m
+2026-10-01T02:10:58.848608Z 01O [32;1m$ (command -v git &> /dev/null && git config --global http.https://gitlab.com/gitlab-org/gitlab.proactiveAuth basic) || true[0;m
+2026-10-01T02:10:58.850556Z 01O [32;1m$ source scripts/utils.sh[0;m
+2026-10-01T02:10:58.851427Z 01O [32;1m$ log_disk_usage "true"[0;m
+2026-10-01T02:10:58.854880Z 01O section_start:1790820658:log_disk_usage[collapsed=true][0KDisk usage detail
+2026-10-01T02:10:58.854889Z 01O *******************************************************
+2026-10-01T02:10:58.854891Z 01O This runner currently has 74G free disk space.
+2026-10-01T02:10:58.854892Z 01O *******************************************************
+2026-10-01T02:10:58.854893Z 01O df -h
+2026-10-01T02:10:58.855722Z 01O Filesystem      Size  Used Avail Use% Mounted on
+2026-10-01T02:10:58.855728Z 01O overlay          95G   21G   74G  22% /
+2026-10-01T02:10:58.855729Z 01O tmpfs            64M     0   64M   0% /dev
+2026-10-01T02:10:58.855730Z 01O shm              64M     0   64M   0% /dev/shm
+2026-10-01T02:10:58.855731Z 01O /dev/nvme0n1p1   95G   21G   74G  22% /cache
+2026-10-01T02:10:58.855731Z 01O tmpfs           7.9G  4.0K  7.9G   1% /sys/devices/virtual/dmi/id
+2026-10-01T02:10:58.857231Z 01O section_end:1790820658:log_disk_usage[0K
+2026-10-01T02:10:58.860737Z 01O [32;1m$ source scripts/prepare_build.sh[0;m
+2026-10-01T02:10:58.863268Z 01O section_start:1790820658:bundle-info[collapsed=true][0KRuby env info and bundle config
+2026-10-01T02:10:58.923034Z 01O 3.6.2
+2026-10-01T02:10:59.032558Z 01O Bundler version 2.6.2
+2026-10-01T02:10:59.369900Z 01O development
+2026-10-01T02:10:59.598342Z 01O Settings are listed in order of priority. The top value will be used.
+2026-10-01T02:10:59.598349Z 01O clean
+2026-10-01T02:10:59.598350Z 01O Set for your local app (/builds/gitlab-org/gitlab/.bundle/config): true
+2026-10-01T02:10:59.598351Z 01O 
+2026-10-01T02:10:59.598351Z 01O frozen
+2026-10-01T02:10:59.598352Z 01O Set via BUNDLE_FROZEN: true
+2026-10-01T02:10:59.598353Z 01O 
+2026-10-01T02:10:59.598353Z 01O gemfile
+2026-10-01T02:10:59.598420Z 01E [DEPRECATED] Using the `config` command without a subcommand [list, get, set, unset] is deprecated and will be removed in the future. Use `bundle config list` instead.
+2026-10-01T02:10:59.598432Z 01O Set via BUNDLE_GEMFILE: "Gemfile"
+2026-10-01T02:10:59.598433Z 01O 
+2026-10-01T02:10:59.598433Z 01O install_flags
+2026-10-01T02:10:59.598434Z 01O Set via BUNDLE_INSTALL_FLAGS: "--jobs=$(nproc) --retry=3"
+2026-10-01T02:10:59.598434Z 01O 
+2026-10-01T02:10:59.598435Z 01O path
+2026-10-01T02:10:59.598435Z 01O Set for your local app (/builds/gitlab-org/gitlab/.bundle/config): "/builds/gitlab-org/gitlab/vendor"
+2026-10-01T02:10:59.598436Z 01O 
+2026-10-01T02:10:59.598436Z 01O without
+2026-10-01T02:10:59.598439Z 01O Set via BUNDLE_WITHOUT: [:development]
+2026-10-01T02:10:59.598439Z 01O 
+2026-10-01T02:10:59.602065Z 01O section_end:1790820659:bundle-info[0K
+2026-10-01T02:10:59.603847Z 01O section_start:1790820659:bundle-install[collapsed=true][0KInstalling gems
+2026-10-01T02:10:59.603858Z 01O Checking if all dependencies are satisfied
+2026-10-01T02:11:00.127132Z 01O The Gemfile's dependencies are satisfied
+2026-10-01T02:11:00.133181Z 01O section_end:1790820660:bundle-install[0K
+2026-10-01T02:11:00.145559Z 01O Using SEC decomposed database config (config/database.yml.decomposed-sec-postgresql)
+2026-10-01T02:11:00.146704Z 01E [0;33mGeo DB won't be set up.
+2026-10-01T02:11:00.146707Z 01E [0m[0;33mEmbedding DB won't be set up.
+2026-10-01T02:11:00.154647Z 01O section_start:1790820660:setup-db[collapsed=true][0KSetting up DBs
+2026-10-01T02:11:00.154661Z 01O Found pg_dumpall.sql, applying!
+2026-10-01T02:11:00.147974Z 01E [0mERROR:  role "postgres" already exists
+2026-10-01T02:11:16.073821Z 01O section_end:1790820676:setup-db[0K
+2026-10-01T02:11:16.073826Z 01O [32;1m$ source ./scripts/rspec_helpers.sh[0;m
+2026-10-01T02:11:16.074597Z 01O [32;1m$ gem install knapsack --no-document[0;m
+2026-10-01T02:11:16.532213Z 01O Successfully installed knapsack-4.0.0
+2026-10-01T02:11:16.532223Z 01O 1 gem installed
+2026-10-01T02:11:16.534902Z 01O [32;1m$ section_start "gitaly-test-spawn" "Spawning Gitaly"; scripts/gitaly-test-spawn; section_end "gitaly-test-spawn"[0;m
+2026-10-01T02:11:16.536574Z 01O section_start:1790820676:gitaly-test-spawn[collapsed=true][0KSpawning Gitaly
+2026-10-01T02:11:19.000011Z 01O 
+2026-10-01T02:11:19.000017Z 01O [before_spawn] load=2.14 1.31 1.33 io_wait=0% mem=15104MB
+2026-10-01T02:11:19.302644Z 01O Trying to connect to gitaly: ... OK
+2026-10-01T02:11:20.319793Z 01O 
+2026-10-01T02:11:20.319805Z 01O [after_success_0.3s] load=1.97 1.29 1.32 io_wait=4% mem=14976MB
+2026-10-01T02:11:21.334511Z 01O 
+2026-10-01T02:11:21.334521Z 01O [before_spawn] load=1.97 1.29 1.32 io_wait=0% mem=14959MB
+2026-10-01T02:11:21.637185Z 01O Trying to connect to gitaly2: ... OK
+2026-10-01T02:11:22.654281Z 01O 
+2026-10-01T02:11:22.654288Z 01O [after_success_0.3s] load=1.97 1.29 1.32 io_wait=0% mem=14821MB
+2026-10-01T02:11:22.654289Z 01O Starting Praefect with in-memory election strategy
+2026-10-01T02:11:23.669248Z 01O [before_spawn] load=1.97 1.29 1.32 io_wait=0% mem=14803MB
+2026-10-01T02:11:23.871538Z 01O Trying to connect to praefect: .. OK
+2026-10-01T02:11:24.891621Z 01O 
+2026-10-01T02:11:24.891627Z 01O [after_success_0.2s] load=1.89 1.29 1.32 io_wait=0% mem=14760MB
+2026-10-01T02:11:24.897294Z 01O section_end:1790820684:gitaly-test-spawn[0K
+2026-10-01T02:11:24.897300Z 01O [32;1m$ export RSPEC_SKIPPED_TESTS_REPORT_PATH="rspec/skipped_tests-${CI_JOB_ID}.txt"[0;m
+2026-10-01T02:11:24.897307Z 01O [32;1m$ export RSPEC_RETRIED_TESTS_REPORT_PATH="rspec/retried_tests-${CI_JOB_ID}.txt"[0;m
+2026-10-01T02:11:24.897315Z 01O [32;1m$ rspec_section rspec_fail_fast "${MATCHING_TESTS_PATH}" "--fail-fast=${RSPEC_FAIL_FAST_THRESHOLD} --tag ~zoekt --tag ~click_house"[0;m
+2026-10-01T02:11:24.899260Z 01O section_start:1790820684:rspec[collapsed=false][0KRSpec
+2026-10-01T02:11:24.904239Z 01E [0;33mRunning RSpec command: bin/rspec -Ispec -rspec_helper --color --failure-exit-code 1 --error-exit-code 2 --format documentation --format Support::Formatters::JsonFormatter --out rspec/rspec-16853455906.json --format RspecJunitFormatter --out rspec/rspec-16853455906.xml --fail-fast=20 --tag ~zoekt --tag ~click_house spec/workers/authz/reverify_project_authorizations_cron_worker_spec.rb spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb spec/workers/every_sidekiq_worker_spec.rb
+2026-10-01T02:12:20.047231Z 01O I, [2026-10-01T02:12:20.046213 #211]  INFO -- : Test metrics export is enabled for run type: backend-rspec-tests
+2026-10-01T02:12:26.474662Z 01O Run options: exclude {:zoekt=>true, :click_house=>true}
+2026-10-01T02:12:26.474675Z 01O 
+2026-10-01T02:12:26.474676Z 01O # [RSpecRunTime] Starting RSpec timer...
+2026-10-01T02:12:26.484864Z 01O [TEST PROF INFO] EventProf enabled (sql.active_record)
+2026-10-01T02:11:24.904244Z 01E [0munknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:12:26.493142Z 01E unknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:12:26.498740Z 01E unknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:12:30.123847Z 01O 
+2026-10-01T02:12:30.123855Z 01O Test environment set up in 0.3699893150005664 seconds
+2026-10-01T02:12:30.982526Z 01O # [RSpecRunTime] Starting example group spec/workers/authz/reverify_project_authorizations_cron_worker_spec.rb. Expected to take 3.45 seconds.
+2026-10-01T02:12:31.030071Z 01O 
+2026-10-01T02:12:31.030077Z 01O Authz::ReverifyProjectAuthorizationsCronWorker
+2026-10-01T02:12:31.036300Z 01O   #perform_work
+2026-10-01T02:12:37.364823Z 01O     when a queued user is missing a project authorization
+2026-10-01T02:12:37.636497Z 01O       restores the project authorization and removes the queued record
+2026-10-01T02:12:37.844675Z 01O       records the refresh against the safety-net counter
+2026-10-01T02:12:37.952297Z 01O       logs the number of users processed
+2026-10-01T02:12:37.954188Z 01O     when a queued user was added less than MIN_AGE ago
+2026-10-01T02:12:38.044979Z 01O       leaves the record pending without refreshing the user
+2026-10-01T02:12:38.047649Z 01O     when the feature flag `use_db_to_queue_safety_net_auth_refresh` is disabled
+2026-10-01T02:12:38.588156Z 01O       still drains records queued while the flag was enabled
+2026-10-01T02:12:38.589515Z 01O     when the feature flag `do_not_run_safety_net_auth_refresh_jobs` is enabled
+2026-10-01T02:12:38.628019Z 01O       leaves the record pending
+2026-10-01T02:12:38.629256Z 01O     when a record is still being processed by another worker
+2026-10-01T02:12:38.672134Z 01O       does not process the record
+2026-10-01T02:12:38.673199Z 01O     when refreshing a queued user fails
+2026-10-01T02:12:38.727466Z 01O       tracks the error and leaves the record claimed for the abandoned sweep
+2026-10-01T02:12:38.728901Z 01O     when the runtime limit is reached before the queue is drained
+2026-10-01T02:12:38.850525Z 01O       finishes the claimed batch and reports the queue as not drained
+2026-10-01T02:12:38.851730Z 01O     when the queue is empty
+2026-10-01T02:12:38.887006Z 01O       reports an empty queue as drained
+2026-10-01T02:12:38.887026Z 01O     when the user is re-queued while being processed
+2026-10-01T02:12:38.998903Z 01O       refreshes the user and keeps the re-queued record
+2026-10-01T02:12:39.002307Z 01O   #max_running_jobs
+2026-10-01T02:12:39.028983Z 01O     allows at most 10 jobs to run at once
+2026-10-01T02:12:39.029028Z 01O   behaves like an idempotent worker
+2026-10-01T02:12:39.054925Z 01O     is labeled as idempotent
+2026-10-01T02:12:39.102970Z 01O     performs multiple times sequentially without raising an exception
+2026-10-01T02:12:39.102976Z 01O   #remaining_work_count
+2026-10-01T02:12:39.324118Z 01O     counts only the records ready to be processed
+2026-10-01T02:12:39.324129Z 01O     when the count exceeds max_running_jobs
+2026-10-01T02:12:39.351600Z 01O       is capped at max_running_jobs
+2026-10-01T02:12:39.351612Z 01O     when the feature flag `do_not_run_safety_net_auth_refresh_jobs` is enabled
+2026-10-01T02:12:39.376550Z 01O       reports no remaining work
+2026-10-01T02:12:39.471194Z 01O 
+2026-10-01T02:12:39.471198Z 01O # [RSpecRunTime] Finishing example group spec/workers/authz/reverify_project_authorizations_cron_worker_spec.rb. It took 8.49 seconds. Expected to take 3.45 seconds.
+2026-10-01T02:12:39.471200Z 01O # [RSpecRunTime] Starting example group spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb. Missing expected duration from Knapsack report for spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb.
+2026-10-01T02:12:39.471227Z 01O 
+2026-10-01T02:12:39.471228Z 01O Authz::ScheduleReverifyProjectAuthorizationsWorker
+2026-10-01T02:12:39.494173Z 01O   has the `until_executing` deduplicate strategy
+2026-10-01T02:12:39.494196Z 01O   behaves like an idempotent worker
+2026-10-01T02:12:39.519599Z 01O     is labeled as idempotent
+2026-10-01T02:12:39.552239Z 01O     performs multiple times sequentially without raising an exception
+2026-10-01T02:12:39.552251Z 01O   #perform
+2026-10-01T02:12:39.552305Z 01O     when a record is ready to be processed
+2026-10-01T02:12:39.639014Z 01O       schedules the reverification worker with capacity
+2026-10-01T02:12:39.640316Z 01O     when no record is ready to be processed
+2026-10-01T02:12:39.725739Z 01O       does not schedule the reverification worker
+2026-10-01T02:12:39.727169Z 01O     when a record was abandoned by a previous run
+2026-10-01T02:12:39.823426Z 01O       returns the record to pending and schedules the reverification worker
+2026-10-01T02:12:39.824622Z 01O     when a record is still being processed by another worker
+2026-10-01T02:12:39.916959Z 01O       neither requeues the record nor schedules the reverification worker
+2026-10-01T02:12:39.918694Z 01O     when the feature flag `do_not_run_safety_net_auth_refresh_jobs` is enabled
+2026-10-01T02:12:40.005832Z 01O       neither requeues abandoned records nor schedules the reverification worker
+2026-10-01T02:12:40.021451Z 01O 
+2026-10-01T02:12:40.021457Z 01O # [RSpecRunTime] Finishing example group spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb. It took 0.55 second. Missing expected duration from Knapsack report for spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb.
+2026-10-01T02:12:40.021459Z 01O # [RSpecRunTime] Starting example group spec/workers/every_sidekiq_worker_spec.rb. Expected to take 2.77 seconds.
+2026-10-01T02:12:40.021460Z 01O 
+2026-10-01T02:12:40.021461Z 01O Every Sidekiq worker
+2026-10-01T02:12:40.483150Z 01O   uses the cronjob queue when the worker runs as a cronjob
+2026-10-01T02:12:42.189993Z 01O   has its queue in Gitlab::SidekiqConfig::QUEUE_CONFIG_PATHS
+2026-10-01T02:12:42.638122Z 01O   has its queue or namespace in config/sidekiq_queues.yml
+2026-10-01T02:12:42.669809Z 01O   has a value for loggable_arguments
+2026-10-01T02:12:42.744874Z 01O   does not use the default queue
+2026-10-01T02:12:42.745580Z 01O   feature category declarations
+2026-10-01T02:12:42.830099Z 01O     has a feature_category attribute
+2026-10-01T02:12:42.937794Z 01O     has a feature_category that maps to a value in feature_categories.yml
+2026-10-01T02:12:43.010556Z 01O     is (exclusively) memory-bound or high urgency, not both
+2026-10-01T02:12:43.077159Z 01O     has (exclusively) external dependencies or is high urgency, not both
+2026-10-01T02:12:43.119538Z 01O # [RSpecRunTime] RSpec elapsed time: 16.6 seconds. Current RSS: ~1431M. Threads: 2. load average: 1.23 1.20 1.29 1/300 386
+2026-10-01T02:12:43.119548Z 01O , available cpu cores: 4.
+2026-10-01T02:12:43.119549Z 01O 
+2026-10-01T02:12:43.119557Z 01O   when retries
+2026-10-01T02:12:43.202734Z 01O     defines `retry_exceptions` only for existing workers
+2026-10-01T02:12:43.330893Z 01O     uses the default number of retries for new jobs (FAILED - 1)
+2026-10-01T02:12:43.423799Z 01O     uses zero retries for cronjobs
+2026-10-01T02:12:43.502560Z 01O     uses specified numbers of retries for workers with exceptions encoded here
+2026-10-01T02:12:43.534586Z 01O 
+2026-10-01T02:12:43.534591Z 01O # [RSpecRunTime] Finishing example group spec/workers/every_sidekiq_worker_spec.rb. It took 3.51 seconds. Expected to take 2.77 seconds.
+2026-10-01T02:12:43.602228Z 01O auto_explain log contains 99 entries for main, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.211.main.ndjson.gz
+2026-10-01T02:12:43.602241Z 01O took 0.04445801
+2026-10-01T02:12:43.621922Z 01O auto_explain log contains 11 entries for ci, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.211.ci.ndjson.gz
+2026-10-01T02:12:43.621934Z 01O took 0.008098759
+2026-10-01T02:12:43.639339Z 01O auto_explain log contains 11 entries for sec, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.211.sec.ndjson.gz
+2026-10-01T02:12:43.639346Z 01O took 0.007812288
+2026-10-01T02:12:43.657362Z 01O [TEST PROF INFO] EventProf results for sql.active_record
+2026-10-01T02:12:43.657369Z 01O 
+2026-10-01T02:12:43.657370Z 01O Total time: 00:00.836 of 00:12.504 (6.69%)
+2026-10-01T02:12:43.657393Z 01O Total events: 1137
+2026-10-01T02:12:43.657394Z 01O 
+2026-10-01T02:12:43.657394Z 01O Top 5 slowest suites (by time):
+2026-10-01T02:12:43.657395Z 01O 
+2026-10-01T02:12:43.657395Z 01O Authz::Reveri...ionsCronWorker (./spec/workers/authz/reverify_project_authorizations_cron_worker_spec.rb:5) – 00:00.739 (763 / 17) of 00:08.440 (8.76%)
+2026-10-01T02:12:43.657397Z 01O Authz::Schedu...izationsWorker (./spec/workers/authz/schedule_reverify_project_authorizations_worker_spec.rb:5) – 00:00.081 (287 / 8) of 00:00.550 (14.82%)
+2026-10-01T02:12:43.657398Z 01O Every Sidekiq worker (./spec/workers/every_sidekiq_worker_spec.rb:5) – 00:00.015 (87 / 13) of 00:03.512 (0.45%)
+2026-10-01T02:12:43.657399Z 01O 
+2026-10-01T02:12:43.812742Z 01O I, [2026-10-01T02:12:43.812259 #211]  INFO -- : [MetricsExporter] Successfully pushed 38 entries to Observer!
+2026-10-01T02:12:43.973390Z 01O 
+2026-10-01T02:12:43.973395Z 01O Failures:
+2026-10-01T02:12:43.973396Z 01O 
+2026-10-01T02:12:43.973397Z 01O   1) Every Sidekiq worker when retries uses the default number of retries for new jobs
+2026-10-01T02:12:43.973398Z 01O      Failure/Error: expect(workers_without_defaults - cronjobs - retry_exception_workers).to all(have_attributes(retries: true))
+2026-10-01T02:12:43.973399Z 01O 
+2026-10-01T02:12:43.973400Z 01O        expected [#<Gitlab::SidekiqConfig::Worker:0x00007b40965ec1b0 @klass=ActivityPub::Projects::ReleasesSubscriptio...fig::Worker:0x00007b407a651680 @klass=WorkItems::Weights::UpdateWeightsWorker, @ee=true, @jh=false>] to all have attributes {:retries => true}
+2026-10-01T02:12:43.973402Z 01O 
+2026-10-01T02:12:43.973403Z 01O           object at index 8 failed to match:
+2026-10-01T02:12:43.973404Z 01O              expected #<Gitlab::SidekiqConfig::Worker:0x00007b40965eac98 @klass=Authz::ReverifyProjectAuthorizationsCronWorker, @ee=false, @jh=false> to have attributes {:retries => true} but had attributes {:retries => 0}
+2026-10-01T02:12:43.973406Z 01O      # ./spec/workers/every_sidekiq_worker_spec.rb:558:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973407Z 01O      # ./spec/spec_helper.rb:593:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973408Z 01O      # ./spec/spec_helper.rb:482:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973409Z 01O      # ./lib/gitlab/sidekiq_sharding/validator.rb:42:in `enabled'
+2026-10-01T02:12:43.973410Z 01O      # ./spec/spec_helper.rb:481:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973411Z 01O      # ./spec/spec_helper.rb:476:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973412Z 01O      # ./spec/support/sidekiq_middleware.rb:9:in `with_sidekiq_server_middleware'
+2026-10-01T02:12:43.973412Z 01O      # ./spec/spec_helper.rb:465:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973413Z 01O      # ./spec/spec_helper.rb:461:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973414Z 01O      # ./lib/gitlab/application_context.rb:117:in `with_raw_context'
+2026-10-01T02:12:43.973415Z 01O      # ./spec/spec_helper.rb:461:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973416Z 01O      # ./spec/spec_helper.rb:426:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973417Z 01O      # ./lib/gitlab/ci/config/feature_flags.rb:38:in `ensure_correct_usage'
+2026-10-01T02:12:43.973418Z 01O      # ./spec/spec_helper.rb:425:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973450Z 01O      # ./spec/support/system_exit_detected.rb:7:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973451Z 01O      # ./spec/support/fast_quarantine.rb:22:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.973451Z 01O      # ./spec/support/database/prevent_cross_joins.rb:107:in `block (3 levels) in <top (required)>'
+2026-10-01T02:12:43.973452Z 01O      # ./spec/support/database/prevent_cross_joins.rb:61:in `with_cross_joins_prevented'
+2026-10-01T02:12:43.973452Z 01O      # ./spec/support/database/prevent_cross_joins.rb:107:in `block (2 levels) in <top (required)>'
+2026-10-01T02:12:43.974127Z 01O 
+2026-10-01T02:12:43.974128Z 01O Finished in 17.18 seconds (files took 1 minute 0.89 seconds to load)
+2026-10-01T02:12:43.974128Z 01O 38 examples, 1 failure
+2026-10-01T02:12:43.974129Z 01O 
+2026-10-01T02:12:43.974129Z 01O Failed examples:
+2026-10-01T02:12:43.974129Z 01O 
+2026-10-01T02:12:43.974130Z 01O rspec ./spec/workers/every_sidekiq_worker_spec.rb:557 # Every Sidekiq worker when retries uses the default number of retries for new jobs
+2026-10-01T02:12:43.981951Z 01O 
+2026-10-01T02:12:43.981968Z 01O Randomized with seed 22350
+2026-10-01T02:12:43.981969Z 01O 
+2026-10-01T02:12:43.991518Z 01O [TEST PROF INFO] Time spent in factories: 00:04.557 (14.33% of total time)
+2026-10-01T02:12:44.016231Z 01O LABKIT_LOGGING_OFFENSE: {"callsite":"Labkit::Context","lineno":0,"deprecated_field":"meta.user","standard_field":"gl_user_name","logger_class":"*"}
+2026-10-01T02:12:44.016238Z 01O LABKIT_LOGGING_OFFENSE: {"callsite":"app/services/users/refresh_authorized_projects_service.rb","lineno":74,"deprecated_field":"user_id","standard_field":"gl_user_id","logger_class":"Gitlab::AppJsonLogger"}
+2026-10-01T02:12:48.442580Z 01E [33mStopped processing SimpleCov as a previous error not related to SimpleCov has been detected[0m
+2026-10-01T02:12:48.655623Z 01E [0;33mRSPEC_RETRIED_TESTS_REPORT_PATH: rspec/retried_tests-16853455906.txt
+2026-10-01T02:12:48.655630Z 01E [0m[0;33mRetrying the failing examples in a new RSpec process...
+2026-10-01T02:12:49.460010Z 01O Successfully installed nokogiri-1.19.4-x86_64-linux-gnu
+2026-10-01T02:12:49.460021Z 01O Successfully installed junit_merge-0.1.2
+2026-10-01T02:12:49.460022Z 01O 2 gems installed
+2026-10-01T02:12:48.655773Z 01E [0m[0;33mRunning RSpec command: bin/rspec -Ispec -rspec_helper --color --failure-exit-code 1 --error-exit-code 2 --format documentation --format Support::Formatters::JsonFormatter --out rspec/rspec-retry-16853455906.json --format RspecJunitFormatter --out rspec/rspec-retry-16853455906.xml --only-failures --pattern "{,ee/,jh/}spec/{,**/}*_spec.rb"
+2026-10-01T02:13:35.698926Z 01O I, [2026-10-01T02:13:35.698376 #407]  INFO -- : Test metrics export is enabled for run type: backend-rspec-tests
+2026-10-01T02:13:40.942059Z 01O Run options: include {:last_run_status=>"failed"}
+2026-10-01T02:13:40.942106Z 01O 
+2026-10-01T02:13:40.942107Z 01O # [RSpecRunTime] Starting RSpec timer...
+2026-10-01T02:13:40.954435Z 01O [TEST PROF INFO] EventProf enabled (sql.active_record)
+2026-10-01T02:12:49.466832Z 01E [0munknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:13:40.961549Z 01E unknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:13:40.965728Z 01E unknown OID 2249: failed to recognize type of 'pg_stat_file'. It will be treated as String.
+2026-10-01T02:13:43.766080Z 01O 
+2026-10-01T02:13:43.766086Z 01O Test environment set up in 0.15573716600010812 seconds
+2026-10-01T02:13:43.860433Z 01O # [RSpecRunTime] Starting example group spec/workers/every_sidekiq_worker_spec.rb. Expected to take 2.77 seconds.
+2026-10-01T02:13:43.901420Z 01O 
+2026-10-01T02:13:43.901426Z 01O Every Sidekiq worker
+2026-10-01T02:13:43.904459Z 01O   when retries
+2026-10-01T02:13:47.055553Z 01O     uses the default number of retries for new jobs (FAILED - 1)
+2026-10-01T02:13:47.221778Z 01O 
+2026-10-01T02:13:47.221784Z 01O # [RSpecRunTime] Finishing example group spec/workers/every_sidekiq_worker_spec.rb. It took 3.36 seconds. Expected to take 2.77 seconds.
+2026-10-01T02:13:47.323636Z 01O auto_explain log contains 99 entries for main, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.407.main.ndjson.gz
+2026-10-01T02:13:47.323644Z 01O took 0.098138054
+2026-10-01T02:13:47.339236Z 01O auto_explain log contains 12 entries for ci, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.407.ci.ndjson.gz
+2026-10-01T02:13:47.339242Z 01O took 0.008625496
+2026-10-01T02:13:47.354554Z 01O auto_explain log contains 12 entries for sec, writing to /builds/gitlab-org/gitlab/auto_explain/rspec-fail-fast.407.sec.ndjson.gz
+2026-10-01T02:13:47.354560Z 01O took 0.008671154
+2026-10-01T02:13:47.363007Z 01O [TEST PROF INFO] EventProf results for sql.active_record
+2026-10-01T02:13:47.363016Z 01O 
+2026-10-01T02:13:47.363017Z 01O Total time: 00:00.275 of 00:03.320 (8.3%)
+2026-10-01T02:13:47.363018Z 01O Total events: 15
+2026-10-01T02:13:47.363019Z 01O 
+2026-10-01T02:13:47.363019Z 01O Top 5 slowest suites (by time):
+2026-10-01T02:13:47.363020Z 01O 
+2026-10-01T02:13:47.363021Z 01O Every Sidekiq worker (./spec/workers/every_sidekiq_worker_spec.rb:5) – 00:00.275 (15 / 1) of 00:03.320 (8.3%)
+2026-10-01T02:13:47.363023Z 01O 
+2026-10-01T02:13:47.662048Z 01O I, [2026-10-01T02:13:47.661570 #407]  INFO -- : [MetricsExporter] Successfully pushed 1 entries to Observer!
+2026-10-01T02:13:47.712664Z 01O 
+2026-10-01T02:13:47.712670Z 01O Failures:
+2026-10-01T02:13:47.712671Z 01O 
+2026-10-01T02:13:47.712671Z 01O   1) Every Sidekiq worker when retries uses the default number of retries for new jobs
+2026-10-01T02:13:47.712673Z 01O      Failure/Error: expect(workers_without_defaults - cronjobs - retry_exception_workers).to all(have_attributes(retries: true))
+2026-10-01T02:13:47.712674Z 01O 
+2026-10-01T02:13:47.712674Z 01O        expected [#<Gitlab::SidekiqConfig::Worker:0x000079d2210ce1b8 @klass=ActivityPub::Projects::ReleasesSubscriptio...fig::Worker:0x000079d205d6e060 @klass=WorkItems::Weights::UpdateWeightsWorker, @ee=true, @jh=false>] to all have attributes {:retries => true}
+2026-10-01T02:13:47.712675Z 01O 
+2026-10-01T02:13:47.712676Z 01O           object at index 8 failed to match:
+2026-10-01T02:13:47.712677Z 01O              expected #<Gitlab::SidekiqConfig::Worker:0x000079d2210cdd30 @klass=Authz::ReverifyProjectAuthorizationsCronWorker, @ee=false, @jh=false> to have attributes {:retries => true} but had attributes {:retries => 0}
+2026-10-01T02:13:47.712678Z 01O      # ./spec/workers/every_sidekiq_worker_spec.rb:558:in `block (3 levels) in <main>'
+2026-10-01T02:13:47.712678Z 01O      # ./spec/spec_helper.rb:593:in `block (2 levels) in <top (required)>'
+2026-10-01T02:13:47.712711Z 01O      # ./spec/spec_helper.rb:482:in `block (3 levels) in <top (required)>'
+2026-10-01T02:13:47.712711Z 01O      # ./lib/gitlab/sidekiq_sharding/validator.rb:42:in `enabled'
+2026-10-01T02:13:47.712712Z 01O      # ./spec/spec_helper.rb:481:in `block (2 levels) in <top (required)>'
+2026-10-01T02:13:47.712713Z 01O      # ./spec/spec_helper.rb:476:in `block (3 levels) in <top (required)>'
+2026-10-01T02:13:47.712713Z 01O      # ./spec/support/sidekiq_middleware.rb:9:in `with_sidekiq_server_middleware'
+2026-10-01T02:13:47.712714Z 01O      # ./spec/spec_helper.rb:465:in `block (2 levels) in <top (required)>'
+2026-10-01T02:13:47.712714Z 01O      # ./spec/spec_helper.rb:461:in `block (3 levels) in <top (required)>'
+2026-10-01T02:13:47.712715Z 01O      # ./lib/gitlab/application_context.rb:117:in `with_raw_context'
+2026-10-01T02:13:47.712716Z 01O      # ./spec/spec_helper.rb:461:in `block (2 levels) in <top (required)>'
+2026-10-01T02:13:47.712716Z 01O      # ./spec/spec_helper.rb:426:in `block (3 levels) in <top (required)>'
+2026-10-01T02:13:47.712717Z 01O      # ./lib/gitlab/ci/config/feature_flags.rb:38:in `ensure_correct_usage'
+2026-10-01T02:13:47.712718Z 01O      # ./spec/spec_helper.rb:425:in `block (2 levels) in <top (required)>'
+2026-10-01T02:13:47.712718Z 01O      # ./spec/support/system_exit_detected.rb:7:in `block (2 levels) in <main>'
+2026-10-01T02:13:47.712719Z 01O      # ./spec/support/fast_quarantine.rb:22:in `block (2 levels) in <main>'
+2026-10-01T02:13:47.712720Z 01O      # ./spec/support/database/prevent_cross_joins.rb:107:in `block (3 levels) in <main>'
+2026-10-01T02:13:47.712720Z 01O      # ./spec/support/database/prevent_cross_joins.rb:61:in `with_cross_joins_prevented'
+2026-10-01T02:13:47.712721Z 01O      # ./spec/support/database/prevent_cross_joins.rb:107:in `block (2 levels) in <main>'
+2026-10-01T02:13:47.712731Z 01O 
+2026-10-01T02:13:47.712732Z 01O Finished in 6.42 seconds (files took 50.79 seconds to load)
+2026-10-01T02:13:47.712733Z 01O 1 example, 1 failure
+2026-10-01T02:13:47.712733Z 01O 
+2026-10-01T02:13:47.712733Z 01O Failed examples:
+2026-10-01T02:13:47.712734Z 01O 
+2026-10-01T02:13:47.712734Z 01O rspec ./spec/workers/every_sidekiq_worker_spec.rb:557 # Every Sidekiq worker when retries uses the default number of retries for new jobs
+2026-10-01T02:13:47.713563Z 01O 
+2026-10-01T02:13:47.713566Z 01O Randomized with seed 22135
+2026-10-01T02:13:47.713567Z 01O 
+2026-10-01T02:13:47.715333Z 01O [TEST PROF INFO] Time spent in factories: 00:00.041 (0.21% of total time)
+2026-10-01T02:13:47.941092Z 01O Loading rspec/rspec-16853455906.json...
+2026-10-01T02:13:47.941099Z 01O Merged rspec/rspec-retry-16853455906.json adding 5 results.
+2026-10-01T02:13:47.941101Z 01O Saved rspec/rspec-16853455906.json.
+2026-10-01T02:13:49.816046Z 00O section_end:1790820829:step_script[0K
+2026-10-01T02:13:49.816999Z 00O+section_start:1790820829:after_script[0K
+2026-10-01T02:13:49.817012Z 00O+[0K[36;1mRunning after_script[0;m[0;m
+2026-10-01T02:13:50.098543Z 01O [32;1mRunning after script...[0;m
+2026-10-01T02:13:50.098549Z 01O [32;1m$ source scripts/utils.sh[0;m
+2026-10-01T02:13:50.099321Z 01O [32;1m$ log_disk_usage[0;m
+2026-10-01T02:13:50.103575Z 01O section_start:1790820830:log_disk_usage[collapsed=true][0KDisk usage detail
+2026-10-01T02:13:50.103585Z 01O *******************************************************
+2026-10-01T02:13:50.103587Z 01O This runner currently has 73G free disk space.
+2026-10-01T02:13:50.103588Z 01O *******************************************************
+2026-10-01T02:13:50.103589Z 01O df -h
+2026-10-01T02:13:50.104317Z 01O Filesystem      Size  Used Avail Use% Mounted on
+2026-10-01T02:13:50.104321Z 01O overlay          95G   22G   73G  24% /
+2026-10-01T02:13:50.104323Z 01O tmpfs            64M     0   64M   0% /dev
+2026-10-01T02:13:50.104323Z 01O shm              64M     0   64M   0% /dev/shm
+2026-10-01T02:13:50.104324Z 01O /dev/nvme0n1p1   95G   22G   73G  24% /cache
+2026-10-01T02:13:50.104324Z 01O tmpfs           7.9G  4.0K  7.9G   1% /sys/devices/virtual/dmi/id
+2026-10-01T02:13:50.105793Z 01O section_end:1790820830:log_disk_usage[0K
+2026-10-01T02:13:50.105918Z 01O [32;1m$ scripts/minify-simplecov-resultsets.rb[0;m
+2026-10-01T02:13:50.624809Z 01O Minified coverage/rspec-fail-fast-278964/.resultset.json: 21384KB -> 21384KB (-1%)
+2026-10-01T02:13:51.420490Z 00O section_end:1790820831:after_script[0K
+2026-10-01T02:13:51.422171Z 00O+section_start:1790820831:upload_artifacts_on_failure[0K
+2026-10-01T02:13:51.422180Z 00O+[0K[36;1mUploading artifacts for failed job[0;m[0;m
+2026-10-01T02:13:51.767371Z 01O [32;1mUploading artifacts...[0;m
+2026-10-01T02:13:51.809837Z 01E auto_explain/: found 7 matching artifact files and directories[0;m 
+2026-10-01T02:13:51.809844Z 01E coverage/: found 4 matching artifact files and directories[0;m 
+2026-10-01T02:13:51.809844Z 01E crystalball/: found 2 matching artifact files and directories[0;m 
+2026-10-01T02:13:51.809845Z 01E [0;33mWARNING: deprecations/: no matching files. Ensure that the artifact path is relative to the working directory (/builds/gitlab-org/gitlab)[0;m 
+2026-10-01T02:13:51.809847Z 01E knapsack/: found 2 matching artifact files and directories[0;m 
+2026-10-01T02:13:51.809859Z 01E rspec/: found 15 matching artifact files and directories[0;m 
+2026-10-01T02:13:51.809868Z 01E [0;33mWARNING: tmp/capybara/: no matching files. Ensure that the artifact path is relative to the working directory (/builds/gitlab-org/gitlab)[0;m 
+2026-10-01T02:13:51.809971Z 01E log/*.log: found 13 matching artifact files and directories[0;m 
+2026-10-01T02:13:52.898427Z 01E Uploading artifacts as "archive" to coordinator... 201 Created[0;m  correlation_id[0;m=4e78b5a827f74e989fa4a9cd31e51a68 id[0;m=16853455906 status[0;m=201 token[0;m=xxxxxxxxx
+2026-10-01T02:13:52.944726Z 01O [32;1mUploading artifacts...[0;m
+2026-10-01T02:13:52.988605Z 01E rspec/rspec-*.xml: found 2 matching artifact files and directories[0;m 
+2026-10-01T02:13:53.451438Z 01E Uploading artifacts as "junit" to coordinator... 201 Created[0;m  correlation_id[0;m=7e9dcd9efcf344319a3cc2b0eaa78856 id[0;m=16853455906 status[0;m=201 token[0;m=xxxxxxxxx
+2026-10-01T02:13:53.558804Z 00O section_end:1790820833:upload_artifacts_on_failure[0K
+2026-10-01T02:13:53.559597Z 00O+section_start:1790820833:cleanup_file_variables[0K
+2026-10-01T02:13:53.559605Z 00O+[0K[36;1mCleaning up project directory and file based variables[0;m[0;m
+2026-10-01T02:13:53.948304Z 00O section_end:1790820833:cleanup_file_variables[0K
+2026-10-01T02:13:59.958092Z 00O [31;1mERROR: Job failed: exit code 1[0;m

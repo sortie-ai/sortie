@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/cilog"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -24,12 +25,6 @@ func init() {
 var _ domain.CIStatusProvider = (*GitHubCIProvider)(nil)
 
 const maxCIPages = 10
-
-const maxLogBytes int64 = 1 << 20
-
-var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\|\x1b\].*?\a`)
-
-var timestampPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z `)
 
 type checkRunsResponse struct {
 	TotalCount int              `json:"total_count"`
@@ -60,8 +55,8 @@ type GitHubCIProvider struct {
 
 // NewGitHubCIProvider creates a [GitHubCIProvider] from primitives and
 // the GitHub adapter pass-through config. maxLogLines controls the
-// maximum number of log tail lines returned for failing checks (0
-// disables log fetching). Required adapter config keys: "api_key",
+// maximum number of log lines in the excerpt returned for failing checks
+// (0 disables log fetching). Required adapter config keys: "api_key",
 // "project" (owner/repo format). Optional: "endpoint" (defaults to
 // https://api.github.com; a value that does not parse as an absolute
 // http or https URL with a host returns a [*domain.CIError] of kind
@@ -127,9 +122,11 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 
 // FetchCIStatus returns the aggregate CI pipeline status for the given
 // git ref by querying the GitHub Checks API. Check runs are mapped to
-// domain types, aggregate status is computed, and a truncated log
-// excerpt is fetched from the first failing GitHub Actions check run
-// when maxLogLines is positive.
+// domain types, aggregate status is computed, and a log excerpt is built
+// from the first failing GitHub Actions check run when maxLogLines is
+// positive. The excerpt holds the output of the step that failed, or the
+// end of the job log when that step cannot be located, and opens with a
+// note line saying which.
 func (p *GitHubCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain.CIResult, error) {
 	raw, err := p.fetchAllCheckRuns(ctx, ref)
 	if err != nil {
@@ -206,18 +203,69 @@ func (p *GitHubCIProvider) fetchLogExcerpt(ctx context.Context, failing githubCh
 	}
 
 	// GitHub Actions creates check runs 1:1 with workflow jobs, so the
-	// check run ID doubles as the job ID for the Actions logs endpoint.
-	path := fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", p.owner, p.repo, failing.ID)
+	// check run ID doubles as the job ID for the Actions endpoints.
+	selected, reason := p.locateFailingStep(ctx, failing.ID)
 
-	body, err := p.client.GetRaw(ctx, path, maxLogBytes)
+	builder := cilog.NewBuilder(p.maxLogLines)
+	scanner := newStepLogScanner(selected, builder)
+
+	var (
+		complete bool
+		scanErr  error
+	)
+	path := fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", p.owner, p.repo, failing.ID)
+	err := p.client.GetStream(ctx, path, func(body io.Reader) error {
+		complete, scanErr = cilog.Scan(body, scanner.line)
+		return nil
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "failed to fetch job log",
 			slog.Int64("job_id", failing.ID),
 			slog.Any("error", err))
 		return ""
 	}
+	if scanErr != nil {
+		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "failed to fetch job log",
+				slog.Int64("job_id", failing.ID),
+				slog.Any("error", scanErr))
+			return ""
+		}
+		slog.WarnContext(ctx, "job log read ended early",
+			slog.Int64("job_id", failing.ID),
+			slog.Any("error", scanErr))
+	}
 
-	return truncateLog(string(body), p.maxLogLines)
+	text, fallback := builder.Excerpt(complete)
+	if fallback != cilog.NoFallback {
+		if selected != nil {
+			reason = string(fallback)
+		}
+		slog.DebugContext(ctx, "log excerpt fell back to the job tail",
+			slog.Int64("job_id", failing.ID),
+			slog.String("reason", reason))
+	}
+	return text
+}
+
+// locateFailingStep reads the job object and picks the step the excerpt is
+// anchored on. It returns nil and the reason when there is none; a failure to
+// read the job object degrades the excerpt to the job tail rather than
+// failing the check.
+func (p *GitHubCIProvider) locateFailingStep(ctx context.Context, jobID int64) (*failingStep, string) {
+	steps, err := p.fetchJobSteps(ctx, jobID)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to fetch job steps for log excerpt",
+			slog.Int64("job_id", jobID),
+			slog.Any("error", err))
+		return nil, "job_steps_unavailable"
+	}
+
+	step, ok := selectFailingStep(steps)
+	if !ok {
+		return nil, "no_failing_step"
+	}
+	return &step, ""
 }
 
 func mapCheckRunStatus(s string) domain.CheckRunStatus {
@@ -263,29 +311,4 @@ func mapCheckConclusion(c *string) domain.CheckConclusion {
 	default:
 		return domain.CheckConclusionPending
 	}
-}
-
-func stripANSI(s string) string {
-	s = ansiPattern.ReplaceAllString(s, "")
-	s = timestampPattern.ReplaceAllString(s, "")
-	return s
-}
-
-func truncateLog(raw string, maxLines int) string {
-	if maxLines <= 0 {
-		return ""
-	}
-
-	lines := strings.Split(raw, "\n")
-	cleaned := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimRight(line, "\r")
-		cleaned = append(cleaned, stripANSI(line))
-	}
-
-	if len(cleaned) > maxLines {
-		cleaned = cleaned[len(cleaned)-maxLines:]
-	}
-
-	return strings.Join(cleaned, "\n")
 }

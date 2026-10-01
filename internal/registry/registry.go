@@ -36,8 +36,8 @@ var Agents = NewRegistry[AgentConstructor, AgentMeta]("agent")
 
 // CIProviderConstructor creates a [domain.CIStatusProvider] from
 // a maximum log-line count and opaque adapter-specific configuration.
-// The maxLogLines parameter controls how many tail lines of CI log
-// output to include for failing checks (0 disables log fetching).
+// The maxLogLines parameter controls how many log lines of the excerpt
+// to include for failing checks (0 disables log fetching).
 // The adapterConfig parameter is the raw map from the adapter's
 // pass-through config sub-object. Implementations must validate
 // adapterConfig and return an error if required fields are missing.

@@ -146,28 +146,25 @@ func (c *Client) GetConditional(ctx context.Context, path, ifNoneMatch string, p
 	return body, resp.Header.Get("ETag"), false, nil
 }
 
-// GetRaw issues a GET request and returns up to maxBytes from the response body on HTTP 200.
-func (c *Client) GetRaw(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
-	if maxBytes < 0 {
-		maxBytes = 0
-	}
-
+// GetStream issues a GET request against BaseURL plus path and, on HTTP 200,
+// calls read with the response body, closing the body when read returns.
+// read's error is returned unchanged. A non-200 status, a request-construction
+// failure, or a transport failure is classified as [Client.Get] classifies it,
+// and read is not called. The client applies no size cap; the caller bounds
+// what it reads.
+func (c *Client) GetStream(ctx context.Context, path string, read func(body io.Reader) error) error {
 	reqURL := c.baseURL + path
 	resp, err := c.do(ctx, http.MethodGet, path, reqURL, nil, "", "")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, c.classifyResponse(resp, http.MethodGet, path)
+		return c.classifyResponse(resp, http.MethodGet, path)
 	}
 
-	body, err := c.readBody(ctx, io.LimitReader(resp.Body, maxBytes), http.MethodGet, path)
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
+	return read(resp.Body)
 }
 
 // Send issues a request with a JSON body and returns the response body on any HTTP 2xx status.

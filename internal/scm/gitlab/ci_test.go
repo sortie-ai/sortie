@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,16 +19,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// testCommitSHA and testPipelineID are the full SHA and last_pipeline.id
-// carried by testdata/commit_resolved.json, so a test can address the
-// status and pipeline-jobs routes without re-parsing the fixture.
 const (
 	testCommitSHA  = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 	testPipelineID = 501
 )
 
-// mustCIProvider constructs a *GitLabCIProvider against endpoint with a
-// throwaway token and testProject, or fails the test.
 func mustCIProvider(t *testing.T, endpoint string, maxLogLines int) *GitLabCIProvider {
 	t.Helper()
 	p, err := NewGitLabCIProvider(maxLogLines, map[string]any{
@@ -55,9 +51,6 @@ func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {
 	}
 }
 
-// staticJSONHandler returns a handler that serves body as a 200
-// application/json response, for a route whose content does not depend
-// on the request.
 func staticJSONHandler(body []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -66,29 +59,21 @@ func staticJSONHandler(body []byte) http.HandlerFunc {
 	}
 }
 
-// withCommitResolution registers the commit-resolution route for the
-// "main" ref on s, serving fixture as the response body.
 func withCommitResolution(t *testing.T, s *fakeServer, fixture []byte) {
 	t.Helper()
 	s.handle("/api/v4/projects/"+testEscapedProject+"/repository/commits/main", staticJSONHandler(fixture))
 }
 
-// withCommitStatuses registers fn as the handler for [testCommitSHA]'s
-// commit-status route on s.
 func withCommitStatuses(t *testing.T, s *fakeServer, fn http.HandlerFunc) {
 	t.Helper()
 	s.handle("/api/v4/projects/"+testEscapedProject+"/repository/commits/"+testCommitSHA+"/statuses", fn)
 }
 
-// withPipelineJobs registers the pipeline-jobs route for [testPipelineID]
-// on s, serving body as the response.
 func withPipelineJobs(t *testing.T, s *fakeServer, body []byte) {
 	t.Helper()
 	s.handle("/api/v4/projects/"+testEscapedProject+"/pipelines/"+strconv.Itoa(testPipelineID)+"/jobs", staticJSONHandler(body))
 }
 
-// withJobTrace registers the job-trace route for jobID on s, serving body
-// as a 200 text response.
 func withJobTrace(t *testing.T, s *fakeServer, jobID int64, body []byte) {
 	t.Helper()
 	s.handle("/api/v4/projects/"+testEscapedProject+"/jobs/"+strconv.FormatInt(jobID, 10)+"/trace", func(w http.ResponseWriter, r *http.Request) {
@@ -97,10 +82,6 @@ func withJobTrace(t *testing.T, s *fakeServer, jobID int64, body []byte) {
 	})
 }
 
-// buildStatusesPage returns the JSON body of a commit-statuses page
-// carrying n entries of the given status, ids numbered from start and
-// scoped to [testPipelineID], so a multi-page test can synthesize pages
-// without committing a fixture of that size.
 func buildStatusesPage(t *testing.T, status string, start, n int) []byte {
 	t.Helper()
 	entries := make([]map[string]any, n)
@@ -164,40 +145,6 @@ func TestMapJobOutcome(t *testing.T) {
 			}
 			if recognized != tt.wantRecognized {
 				t.Errorf("mapJobOutcome(%q, %v) recognized = %v, want %v", tt.status, tt.allowFailure, recognized, tt.wantRecognized)
-			}
-		})
-	}
-}
-
-func TestTraceExcerpt(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		raw      string
-		maxLines int
-		want     string
-	}{
-		{"maxLines zero yields empty", "a\nb\nc", 0, ""},
-		{"negative maxLines yields empty", "a\nb\nc", -1, ""},
-		{"empty input yields empty", "", 5, ""},
-		{"a runner timestamp and stream-token prefix is stripped", "2026-08-10T14:24:53.1000000Z 00O hello world", 5, "hello world"},
-		{"a continuation-form prefix ending in + with no trailing space is stripped", "2026-08-10T14:24:53.1000000Z 00O+continued output", 5, "continued output"},
-		{"an ANSI CSI sequence is stripped", "\x1b[0;31mFAIL\x1b[0m", 5, "FAIL"},
-		{"a section_start/section_end marker pair is stripped", "section_start:1691568000:step_script\nbuild output\nsection_end:1691568010:step_script", 5, "build output"},
-		{"a carriage return is removed and trailing whitespace trimmed", "line one \t\r\nline two", 5, "line one\nline two"},
-		{"a line left empty after sanitization is dropped before the line-count limit", "\x1b[0m\nkept line", 5, "kept line"},
-		{"more surviving lines than maxLines keeps the tail", "a\nb\nc\nd", 2, "c\nd"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := traceExcerpt([]byte(tt.raw), tt.maxLines)
-
-			if got != tt.want {
-				t.Errorf("traceExcerpt(%q, %d) = %q, want %q", tt.raw, tt.maxLines, got, tt.want)
 			}
 		})
 	}
@@ -356,11 +303,6 @@ func TestNewGitLabCIProvider_Validation(t *testing.T) {
 	})
 }
 
-// TestNewGitLabCIProvider_TypeFaultVsAbsentKey covers the distinction
-// between a wrong-typed config key and an absent one for the two keys
-// whose absent-key checks precede the endpoint check: api_key (a
-// different kind, ErrCIAuth vs ErrCIPayload) and project (the same kind,
-// distinguished by message).
 func TestNewGitLabCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
 	t.Parallel()
 
@@ -898,7 +840,7 @@ func TestFetchCIStatus_LogExcerpt(t *testing.T) {
 		}
 	})
 
-	t.Run("a job-shaped failing entry yields a sanitized trace tail", func(t *testing.T) {
+	t.Run("a job-shaped failing entry yields the failing stage of its trace", func(t *testing.T) {
 		t.Parallel()
 
 		s := newFakeServer(t)
@@ -917,11 +859,20 @@ func TestFetchCIStatus_LogExcerpt(t *testing.T) {
 			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
 		}
 		if got.LogExcerpt == "" {
-			t.Fatal("LogExcerpt is empty, want a sanitized trace tail")
+			t.Fatal("LogExcerpt is empty, want the failing stage of the trace")
 		}
 		lines := strings.Split(got.LogExcerpt, "\n")
-		if len(lines) > maxLogLines {
-			t.Errorf("LogExcerpt has %d lines, want at most %d", len(lines), maxLogLines)
+		wantLines := []string{
+			locatedNote("step_script"),
+			omitted(4),
+			"--- FAIL: TestBuildPackage (0.02s)",
+			"    build_test.go:42: unexpected artifact checksum",
+			"FAIL",
+			"FAIL\tgithub.com/acme/widgets/build\t0.031s",
+			"ERROR: Job failed: exit code 1",
+		}
+		if !slices.Equal(lines, wantLines) {
+			t.Errorf("LogExcerpt =\n%q\nwant\n%q", lines, wantLines)
 		}
 		if strings.Contains(got.LogExcerpt, "\x1b") {
 			t.Error("LogExcerpt contains a raw ANSI escape byte")
@@ -931,9 +882,6 @@ func TestFetchCIStatus_LogExcerpt(t *testing.T) {
 		}
 		if strings.Contains(got.LogExcerpt, "section_start") || strings.Contains(got.LogExcerpt, "section_end") {
 			t.Errorf("LogExcerpt = %q, want no section marker", got.LogExcerpt)
-		}
-		if !strings.Contains(got.LogExcerpt, "exit code 1") {
-			t.Errorf("LogExcerpt = %q, want it to carry the trace's tail", got.LogExcerpt)
 		}
 	})
 

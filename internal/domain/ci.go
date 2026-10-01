@@ -105,11 +105,13 @@ type CIResult struct {
 	// means check runs were not fetched).
 	CheckRuns []CheckRun
 
-	// LogExcerpt is a truncated log from the first failing check run.
-	// Empty string when all checks pass, the provider does not support
-	// log fetching, MaxLogLines is zero in config, or the log could
-	// not be retrieved. The orchestrator omits the log section from
-	// the continuation prompt when this field is empty.
+	// LogExcerpt is the output of the failing step of the first failing
+	// check run, or the end of that run's log when the step cannot be
+	// located. A log-derived excerpt opens with a note line that says
+	// which. Empty string when all checks pass, the provider does not
+	// support log fetching, MaxLogLines is zero in config, or the log
+	// could not be retrieved. The orchestrator omits the log section
+	// from the continuation prompt when this field is empty.
 	//
 	// CI logs may contain secrets accidentally printed by build
 	// scripts. Adapters must truncate to a configurable line count

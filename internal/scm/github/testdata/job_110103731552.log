@@ -1,0 +1,450 @@
+﻿2026-09-30T21:21:55.0064351Z Current runner version: '2.337.0'
+2026-09-30T21:21:55.0088262Z ##[group]Runner Image Provisioner
+2026-09-30T21:21:55.0089025Z Hosted Compute Agent
+2026-09-30T21:21:55.0089512Z Version: 20260901.588
+2026-09-30T21:21:55.0090050Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-09-30T21:21:55.0090695Z Build Date: 2026-09-01T19:56:44Z
+2026-09-30T21:21:55.0091298Z Worker ID: {e286173f-22d2-4da7-8eca-60795e5dd1a7}
+2026-09-30T21:21:55.0091929Z Azure Region: westus
+2026-09-30T21:21:55.0092406Z ##[endgroup]
+2026-09-30T21:21:55.0093762Z ##[group]Operating System
+2026-09-30T21:21:55.0094335Z Ubuntu
+2026-09-30T21:21:55.0094757Z 24.04.5
+2026-09-30T21:21:55.0095181Z LTS
+2026-09-30T21:21:55.0095600Z ##[endgroup]
+2026-09-30T21:21:55.0096060Z ##[group]Runner Image
+2026-09-30T21:21:55.0096569Z Image: ubuntu-24.04
+2026-09-30T21:21:55.0097041Z Version: 20260927.320.1
+2026-09-30T21:21:55.0098345Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-30T21:21:55.0099760Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-09-30T21:21:55.0100631Z ##[endgroup]
+2026-09-30T21:21:55.0101568Z ##[group]GITHUB_TOKEN Permissions
+2026-09-30T21:21:55.0103531Z Contents: read
+2026-09-30T21:21:55.0104037Z Metadata: read
+2026-09-30T21:21:55.0104500Z ##[endgroup]
+2026-09-30T21:21:55.0106454Z Secret source: Actions
+2026-09-30T21:21:55.0107248Z Cache mode: write
+2026-09-30T21:21:55.0108307Z Prepare workflow directory
+2026-09-30T21:21:55.0436719Z Prepare all required actions
+2026-09-30T21:21:55.0487572Z Getting action download info
+2026-09-30T21:21:55.4702080Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-30T21:21:55.5643090Z Download action repository 'pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413' (SHA:ea17c68df8912ef543352723c149a84f56e3d413)
+2026-09-30T21:21:55.8986035Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-30T21:21:56.0831693Z Complete job name: Sanity checks
+2026-09-30T21:21:56.1759748Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-09-30T21:21:56.1760835Z with:
+2026-09-30T21:21:56.1761274Z   persist-credentials: false
+2026-09-30T21:21:56.1761797Z   repository: dubzzz/fast-check
+2026-09-30T21:21:56.1765768Z   token: ***
+2026-09-30T21:21:56.1766198Z   ssh-strict: true
+2026-09-30T21:21:56.1766634Z   ssh-user: git
+2026-09-30T21:21:56.1767049Z   clean: true
+2026-09-30T21:21:56.1767736Z   sparse-checkout-cone-mode: true
+2026-09-30T21:21:56.1768273Z   fetch-depth: 1
+2026-09-30T21:21:56.1768692Z   fetch-tags: false
+2026-09-30T21:21:56.1769127Z   show-progress: true
+2026-09-30T21:21:56.1769570Z   lfs: false
+2026-09-30T21:21:56.1769978Z   submodules: false
+2026-09-30T21:21:56.1770441Z   set-safe-directory: true
+2026-09-30T21:21:56.1770944Z   allow-unsafe-pr-checkout: false
+2026-09-30T21:21:56.1771750Z ##[endgroup]
+2026-09-30T21:21:56.2802794Z Syncing repository: dubzzz/fast-check
+2026-09-30T21:21:56.2805512Z ##[group]Getting Git version info
+2026-09-30T21:21:56.2806823Z Working directory is '/home/runner/work/fast-check/fast-check'
+2026-09-30T21:21:56.2808785Z [command]/usr/bin/git version
+2026-09-30T21:21:56.2882355Z git version 2.55.0
+2026-09-30T21:21:56.2905679Z ##[endgroup]
+2026-09-30T21:21:56.2918501Z Temporarily overriding HOME='/home/runner/work/_temp/0987cb18-fa54-40d2-992b-cd4f22c74aad' before making global git config changes
+2026-09-30T21:21:56.2921100Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-30T21:21:56.2926365Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/fast-check/fast-check
+2026-09-30T21:21:56.2980927Z Deleting the contents of '/home/runner/work/fast-check/fast-check'
+2026-09-30T21:21:56.2984642Z ##[group]Determining repository object format
+2026-09-30T21:21:56.2986397Z ##[endgroup]
+2026-09-30T21:21:56.2988198Z ##[group]Initializing the repository
+2026-09-30T21:21:56.2991271Z [command]/usr/bin/git init /home/runner/work/fast-check/fast-check
+2026-09-30T21:21:56.3094846Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-30T21:21:56.3097274Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-30T21:21:56.3100072Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-30T21:21:56.3101551Z hint: call:
+2026-09-30T21:21:56.3102620Z hint:
+2026-09-30T21:21:56.3104084Z hint: 	git config --global init.defaultBranch <name>
+2026-09-30T21:21:56.3105356Z hint:
+2026-09-30T21:21:56.3106572Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-30T21:21:56.3108442Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-30T21:21:56.3109857Z hint:
+2026-09-30T21:21:56.3110642Z hint: 	git branch -m <name>
+2026-09-30T21:21:56.3111438Z hint:
+2026-09-30T21:21:56.3112436Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-30T21:21:56.3114217Z Initialized empty Git repository in /home/runner/work/fast-check/fast-check/.git/
+2026-09-30T21:21:56.3117336Z [command]/usr/bin/git remote add origin https://github.com/dubzzz/fast-check
+2026-09-30T21:21:56.3175334Z ##[endgroup]
+2026-09-30T21:21:56.3176177Z ##[group]Disabling automatic garbage collection
+2026-09-30T21:21:56.3180184Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-30T21:21:56.3230405Z ##[endgroup]
+2026-09-30T21:21:56.3231748Z ##[group]Setting up auth
+2026-09-30T21:21:56.3232810Z Removing SSH command configuration
+2026-09-30T21:21:56.3238780Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-30T21:21:56.3276662Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-30T21:21:56.3664926Z Removing HTTP extra header
+2026-09-30T21:21:56.3674084Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-30T21:21:56.3713876Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-30T21:21:56.3953343Z Removing includeIf entries pointing to credentials config files
+2026-09-30T21:21:56.3959227Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-30T21:21:56.3995311Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-30T21:21:56.4228618Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-30T21:21:56.4273015Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/fast-check/fast-check/.git.path /home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:56.4308689Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:56.4347187Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:56.4383638Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:56.4415898Z ##[endgroup]
+2026-09-30T21:21:56.4416657Z ##[group]Fetching the repository
+2026-09-30T21:21:56.4422937Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +52b6a27a8cae29cd25c8cef353490534cdcadd70:refs/remotes/pull/7278/merge
+2026-09-30T21:21:57.6559676Z From https://github.com/dubzzz/fast-check
+2026-09-30T21:21:57.6560653Z  * [new ref]         52b6a27a8cae29cd25c8cef353490534cdcadd70 -> pull/7278/merge
+2026-09-30T21:21:57.6563774Z ##[endgroup]
+2026-09-30T21:21:57.6564955Z ##[group]Determining the checkout info
+2026-09-30T21:21:57.6566392Z ##[endgroup]
+2026-09-30T21:21:57.6571294Z [command]/usr/bin/git sparse-checkout disable
+2026-09-30T21:21:57.6626281Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-30T21:21:57.6659991Z ##[group]Checking out the ref
+2026-09-30T21:21:57.6663582Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/7278/merge
+2026-09-30T21:21:57.7349253Z Note: switching to 'refs/remotes/pull/7278/merge'.
+2026-09-30T21:21:57.7349749Z 
+2026-09-30T21:21:57.7350077Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-30T21:21:57.7350826Z changes and commit them, and you can discard any commits you make in this
+2026-09-30T21:21:57.7351537Z state without impacting any branches by switching back to a branch.
+2026-09-30T21:21:57.7351938Z 
+2026-09-30T21:21:57.7352228Z If you want to create a new branch to retain commits you create, you may
+2026-09-30T21:21:57.7352865Z do so (now or later) by using -c with the switch command. Example:
+2026-09-30T21:21:57.7353272Z 
+2026-09-30T21:21:57.7353517Z   git switch -c <new-branch-name>
+2026-09-30T21:21:57.7353850Z 
+2026-09-30T21:21:57.7354089Z Or undo this operation with:
+2026-09-30T21:21:57.7354401Z 
+2026-09-30T21:21:57.7354612Z   git switch -
+2026-09-30T21:21:57.7354893Z 
+2026-09-30T21:21:57.7355260Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-30T21:21:57.7355739Z 
+2026-09-30T21:21:57.7356258Z HEAD is now at 52b6a27 Merge 08aacabaa5a478a45dd027209448bdaf7195c6b2 into 85eeab9e87c9d37e66cc7819260e3df1e72305ae
+2026-09-30T21:21:57.7360746Z ##[endgroup]
+2026-09-30T21:21:57.7411137Z [command]/usr/bin/git log -1 --format=%H
+2026-09-30T21:21:57.7441608Z 52b6a27a8cae29cd25c8cef353490534cdcadd70
+2026-09-30T21:21:57.7452581Z ##[group]Removing auth
+2026-09-30T21:21:57.7453885Z Removing SSH command configuration
+2026-09-30T21:21:57.7457878Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-30T21:21:57.7497214Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-30T21:21:57.7725775Z Removing HTTP extra header
+2026-09-30T21:21:57.7729615Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-30T21:21:57.7769565Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-30T21:21:57.8003283Z Removing includeIf entries pointing to credentials config files
+2026-09-30T21:21:57.8006051Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-30T21:21:57.8037933Z includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path
+2026-09-30T21:21:57.8038910Z includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path
+2026-09-30T21:21:57.8039675Z includeif.gitdir:/github/workspace/.git.path
+2026-09-30T21:21:57.8040433Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-30T21:21:57.8046493Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path
+2026-09-30T21:21:57.8073482Z /home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:57.8084860Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/fast-check/fast-check/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-3cddb3db\-4cb7\-4643\-8d5f\-95d5c3280169\.config
+2026-09-30T21:21:57.8124215Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path
+2026-09-30T21:21:57.8151544Z /home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:57.8160047Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/fast-check/fast-check/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-3cddb3db\-4cb7\-4643\-8d5f\-95d5c3280169\.config
+2026-09-30T21:21:57.8196209Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-30T21:21:57.8222128Z /github/runner_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:57.8231039Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-3cddb3db\-4cb7\-4643\-8d5f\-95d5c3280169\.config
+2026-09-30T21:21:57.8280336Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-30T21:21:57.8313096Z /github/runner_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config
+2026-09-30T21:21:57.8346547Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-3cddb3db\-4cb7\-4643\-8d5f\-95d5c3280169\.config
+2026-09-30T21:21:57.8391006Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-30T21:21:57.8618033Z Removing credentials config '/home/runner/work/_temp/git-credentials-3cddb3db-4cb7-4643-8d5f-95d5c3280169.config'
+2026-09-30T21:21:57.8627738Z ##[endgroup]
+2026-09-30T21:21:57.8875115Z ##[group]Run pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+2026-09-30T21:21:57.8875778Z with:
+2026-09-30T21:21:57.8876155Z   dest: ~/setup-pnpm
+2026-09-30T21:21:57.8876550Z   run_install: null
+2026-09-30T21:21:57.8876929Z   cache: false
+2026-09-30T21:21:57.8877354Z   cache_dependency_path: pnpm-lock.yaml
+2026-09-30T21:21:57.8878048Z   package_json_file: package.json
+2026-09-30T21:21:57.8878498Z   standalone: false
+2026-09-30T21:21:57.8878884Z ##[endgroup]
+2026-09-30T21:21:58.0436875Z ##[group]Running self-installer...
+2026-09-30T21:21:59.7642008Z 
+2026-09-30T21:21:59.7642714Z added 2 packages, and audited 3 packages in 1s
+2026-09-30T21:21:59.7652961Z 
+2026-09-30T21:21:59.7653351Z found 0 vulnerabilities
+2026-09-30T21:21:59.8220692Z Checking for updates...
+2026-09-30T21:22:00.1488825Z Switching pnpm from v12.3.4 to v12.5.1...
+2026-09-30T21:22:00.9341130Z Downloading @pnpm/exe.linux-x64@12.5.1: 0.00 B/22.60 MB
+2026-09-30T21:22:01.2443974Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-30T21:22:01.2446020Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-30T21:22:01.2447994Z   Virtual store is at:             node_modules/.bin/global/v11/989-18da3621da6b339e-0/node_modules/.pnpm
+2026-09-30T21:22:01.2505054Z .../global/v11/989-18da3621da6b339e-0    | Progress: resolved 2, reused 0, downloaded 2, added 2, done
+2026-09-30T21:22:01.2707011Z Successfully updated pnpm to v12.5.1
+2026-09-30T21:22:01.2761598Z ##[endgroup]
+2026-09-30T21:22:01.2778505Z Installation Completed!
+2026-09-30T21:22:01.3050858Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+2026-09-30T21:22:01.3051308Z with:
+2026-09-30T21:22:01.3051516Z   node-version: 24.x
+2026-09-30T21:22:01.3051751Z   cache: pnpm
+2026-09-30T21:22:01.3051962Z   check-latest: false
+2026-09-30T21:22:01.3054702Z   token: ***
+2026-09-30T21:22:01.3054937Z   package-manager-cache: true
+2026-09-30T21:22:01.3055190Z env:
+2026-09-30T21:22:01.3055463Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:01.3055782Z ##[endgroup]
+2026-09-30T21:22:01.4323579Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-09-30T21:22:01.4324433Z ##[group]Environment details
+2026-09-30T21:22:01.8487801Z node: v24.21.0
+2026-09-30T21:22:01.8488861Z npm: 11.19.0
+2026-09-30T21:22:01.8489215Z yarn: 1.22.22
+2026-09-30T21:22:01.8490200Z ##[endgroup]
+2026-09-30T21:22:01.8513818Z [command]/home/runner/setup-pnpm/node_modules/.bin/bin/pnpm store path --silent
+2026-09-30T21:22:01.8683328Z /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-30T21:22:02.1347374Z Cache hit for: node-cache-Linux-x64-pnpm-ebbf0a6c370164a4dc51b023e60616c39419c4670291501e35e99d4789df304f
+2026-09-30T21:22:03.4459016Z Received 0 of 219520203 (0.0%), 0.0 MBs/sec
+2026-09-30T21:22:04.4468718Z Received 104857600 of 219520203 (47.8%), 50.0 MBs/sec
+2026-09-30T21:22:05.4413789Z Received 219520203 of 219520203 (100.0%), 69.9 MBs/sec
+2026-09-30T21:22:05.4415081Z Cache Size: ~209 MB (219520203 B)
+2026-09-30T21:22:05.4455055Z [command]/usr/bin/tar -xf /home/runner/work/_temp/cd8640b9-2439-40c5-b4ef-e56bb04ae04b/cache.tzst -P -C /home/runner/work/fast-check/fast-check --use-compress-program unzstd
+2026-09-30T21:22:08.5400851Z Cache restored successfully
+2026-09-30T21:22:08.5502498Z Cache restored from key: node-cache-Linux-x64-pnpm-ebbf0a6c370164a4dc51b023e60616c39419c4670291501e35e99d4789df304f
+2026-09-30T21:22:08.5690000Z ##[group]Run pnpm install --frozen-lockfile --ignore-scripts --trust-lockfile
+2026-09-30T21:22:08.5690659Z [36;1mpnpm install --frozen-lockfile --ignore-scripts --trust-lockfile[0m
+2026-09-30T21:22:08.5950856Z shell: /usr/bin/bash -e {0}
+2026-09-30T21:22:08.5951236Z env:
+2026-09-30T21:22:08.5951592Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:08.5952060Z ##[endgroup]
+2026-09-30T21:22:08.6216604Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-30T21:22:08.6269209Z Scope: all 10 workspace projects
+2026-09-30T21:22:08.9433112Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-09-30T21:22:08.9434140Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-09-30T21:22:08.9435188Z   Virtual store is at:             node_modules/.pnpm
+2026-09-30T21:22:09.9828988Z Packages: +2020
+2026-09-30T21:22:09.9830196Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-09-30T21:22:10.0924937Z Progress: resolved 2020, reused 2020, downloaded 0, added 2020, done
+2026-09-30T21:22:10.1689671Z Lockfile is up to date, resolution step is skipped
+2026-09-30T21:22:10.1690467Z 
+2026-09-30T21:22:10.1691202Z devDependencies:
+2026-09-30T21:22:10.1692107Z + @atproto/api 0.21.0
+2026-09-30T21:22:10.1693090Z + @changesets/cli 3.0.3
+2026-09-30T21:22:10.1694037Z + @fast-check/packaged link:packages/packaged
+2026-09-30T21:22:10.1694649Z + @types/jest 30.0.0
+2026-09-30T21:22:10.1695072Z + @types/node 24.19.0
+2026-09-30T21:22:10.1695514Z + @vitest/coverage-v8 5.0.2
+2026-09-30T21:22:10.1695995Z + all-contributors-cli 6.26.1
+2026-09-30T21:22:10.1696470Z + cross-env 10.1.0
+2026-09-30T21:22:10.1696833Z + oxfmt 0.71.0
+2026-09-30T21:22:10.1697193Z + oxlint 1.85.0
+2026-09-30T21:22:10.1697902Z + oxlint-tsgolint 7.0.2003
+2026-09-30T21:22:10.1698426Z + pkg-pr-new 0.0.88
+2026-09-30T21:22:10.1698813Z + publint 0.3.24
+2026-09-30T21:22:10.1699226Z + rolldown 1.2.11
+2026-09-30T21:22:10.1699660Z + rolldown-plugin-dts 0.28.6
+2026-09-30T21:22:10.1700137Z + typescript 6.0.3
+2026-09-30T21:22:10.1700560Z + vitest 5.0.2
+2026-09-30T21:22:10.1700778Z 
+2026-09-30T21:22:10.1701051Z Done in 1.5s using pnpm v12.5.1
+2026-09-30T21:22:10.1881209Z ##[group]Run node --run format:check
+2026-09-30T21:22:10.1881783Z [36;1mnode --run format:check[0m
+2026-09-30T21:22:10.1971962Z shell: /usr/bin/bash -e {0}
+2026-09-30T21:22:10.1972385Z env:
+2026-09-30T21:22:10.1972808Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:10.1973365Z ##[endgroup]
+2026-09-30T21:22:10.2146346Z ##[group]Run node --run lint:check
+2026-09-30T21:22:10.2146693Z [36;1mnode --run lint:check[0m
+2026-09-30T21:22:10.2238340Z shell: /usr/bin/bash -e {0}
+2026-09-30T21:22:10.2238779Z env:
+2026-09-30T21:22:10.2239198Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:10.2239989Z ##[endgroup]
+2026-09-30T21:22:10.2385010Z ##[group]Run pnpm dedupe --check --ignore-scripts
+2026-09-30T21:22:10.2385687Z [36;1mpnpm dedupe --check --ignore-scripts[0m
+2026-09-30T21:22:10.2484314Z shell: /usr/bin/bash -e {0}
+2026-09-30T21:22:10.2484773Z env:
+2026-09-30T21:22:10.2485225Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:10.2485809Z ##[endgroup]
+2026-09-30T21:22:10.2650124Z ##[group]Run node --run typecheck
+2026-09-30T21:22:10.2650672Z [36;1mnode --run typecheck[0m
+2026-09-30T21:22:10.2829727Z shell: /usr/bin/bash -e {0}
+2026-09-30T21:22:10.2830241Z env:
+2026-09-30T21:22:10.2830722Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-09-30T21:22:10.2831320Z ##[endgroup]
+2026-09-30T21:22:10.2878130Z Checking formatting...
+2026-09-30T21:22:10.2927171Z 
+2026-09-30T21:22:10.3413694Z Waiting for background step(s) to complete: Check format, Check lint, Check dependency trust and deduplication, Typecheck
+2026-09-30T21:22:10.3459218Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-30T21:22:10.4012744Z [WARN] This project requires a Node.js runtime but does not specify a version range
+2026-09-30T21:22:10.4302736Z Scope: 9 of 10 workspace projects
+2026-09-30T21:22:10.4400574Z examples typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4499370Z packages/ava typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4501057Z packages/fast-check typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4506953Z packages/jest typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4538474Z packages/packaged typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4539491Z packages/poisoning typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4650695Z packages/vitest typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4785882Z packages/worker typecheck$ tsc --noEmit
+2026-09-30T21:22:10.4848856Z website typecheck$ tsc --noEmit
+2026-09-30T21:22:11.2081898Z ? Verifying lockfile against supply-chain policies (2180 entries)...
+2026-09-30T21:22:12.2796762Z Progress: resolved 11, reused 9, downloaded 0, added 0
+2026-09-30T21:22:13.2839925Z Progress: resolved 47, reused 28, downloaded 0, added 0
+2026-09-30T21:22:14.2899107Z Progress: resolved 95, reused 61, downloaded 0, added 0
+2026-09-30T21:22:15.3019448Z Progress: resolved 135, reused 84, downloaded 0, added 0
+2026-09-30T21:22:16.3258267Z Progress: resolved 156, reused 103, downloaded 0, added 0
+2026-09-30T21:22:16.9748370Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/UnicodePropertyData.ts:63:62: 'inverseMap' was used before it was defined.
+2026-09-30T21:22:16.9882666Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/UnicodePropertyData.ts:106:74: 'inverseMap' was used before it was defined.
+2026-09-30T21:22:17.0061671Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/UnicodePropertyData.ts:259:64: 'inverseMap' was used before it was defined.
+2026-09-30T21:22:17.0078091Z ##[warning]packages/fast-check/src/check/runner/configuration/QualifiedParameters.ts:37:17: 'readSeed' was used before it was defined.
+2026-09-30T21:22:17.0083554Z ##[warning]packages/fast-check/src/check/runner/configuration/QualifiedParameters.ts:38:23: 'readRandomType' was used before it was defined.
+2026-09-30T21:22:17.0089029Z ##[warning]packages/fast-check/src/check/runner/configuration/QualifiedParameters.ts:39:20: 'readNumRuns' was used before it was defined.
+2026-09-30T21:22:17.0558038Z ##[warning]packages/fast-check/src/check/runner/configuration/QualifiedParameters.ts:40:20: 'readVerbose' was used before it was defined.
+2026-09-30T21:22:17.0562939Z ##[warning]packages/fast-check/src/check/runner/configuration/QualifiedParameters.ts:42:20: 'safeTimeout' was used before it was defined.
+2026-09-30T21:22:17.0566860Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.ts:161:54: Do not add `then` to an object.
+2026-09-30T21:22:17.0570897Z ##[warning]packages/fast-check/src/arbitrary/gen.ts:5:15: Do not rename import, export, or destructured assignments to the same name
+2026-09-30T21:22:17.0574738Z ##[warning]packages/fast-check/src/check/model/ModelRunner.ts:53:5: Do not add `then` to an object.
+2026-09-30T21:22:17.0697258Z ##[warning]packages/fast-check/src/check/model/ModelRunner.ts:84:5: Do not add `then` to an object.
+2026-09-30T21:22:17.0702205Z ##[warning]packages/fast-check/src/arbitrary/_internals/builders/AnyArbitraryBuilder.spec.ts:233:5: eval can be harmful.
+2026-09-30T21:22:17.0705910Z ##[warning]packages/fast-check/src/arbitrary/_internals/builders/AnyArbitraryBuilder.spec.ts:246:7: eval can be harmful.
+2026-09-30T21:22:17.0710051Z ##[warning]packages/fast-check/src/arbitrary/__test-helpers__/ToStringIsSameFunction.ts:17:38: eval can be harmful.
+2026-09-30T21:22:17.0713671Z ##[warning]packages/fast-check/src/arbitrary/__test-helpers__/ToStringIsSameFunction.ts:19:32: eval can be harmful.
+2026-09-30T21:22:17.0868279Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:207:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0873436Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:215:7: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0877911Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:227:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0882151Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:228:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0886202Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:236:7: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0890861Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:238:7: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.0894900Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:351:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1125669Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:386:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1131291Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:387:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1135958Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:400:7: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1140463Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:1614:13: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1144551Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2334:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1289848Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2335:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1295014Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2336:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1299988Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2339:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1304152Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2340:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1308794Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2341:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1313183Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2344:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1525895Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2345:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1532472Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2346:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1537288Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2349:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1554737Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2350:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1559319Z ##[warning]packages/fast-check/src/arbitrary/_internals/implementations/SchedulerImplem.spec.ts:2351:9: Unexpected `await` on a non-Promise value
+2026-09-30T21:22:17.1563196Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/TextEscaper.spec.ts:28:16: eval can be harmful.
+2026-09-30T21:22:17.1566790Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/TextEscaper.spec.ts:39:16: eval can be harmful.
+2026-09-30T21:22:17.1653908Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/TextEscaper.spec.ts:63:16: eval can be harmful.
+2026-09-30T21:22:17.1658099Z ##[warning]packages/fast-check/src/arbitrary/_internals/TupleArbitrary.spec.ts:232:26: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.1662661Z ##[warning]packages/fast-check/src/arbitrary/_internals/TupleArbitrary.spec.ts:238:26: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.1666957Z ##[warning]packages/fast-check/src/arbitrary/_internals/TupleArbitrary.spec.ts:242:26: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.1671453Z ##[warning]packages/fast-check/src/check/runner/SourceValuesIterator.spec.ts:101:15: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.1675683Z ##[warning]packages/fast-check/src/check/runner/SourceValuesIterator.spec.ts:123:37: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.1883186Z ##[warning]packages/fast-check/src/arbitrary/ipV4Extended.spec.ts:30:41: Unexpected constant comparison
+2026-09-30T21:22:17.1886429Z ##[warning]packages/fast-check/test/documentation/Docs.md.spec.ts:205:18: eval can be harmful.
+2026-09-30T21:22:17.2020363Z ##[warning]packages/fast-check/test/documentation/Docs.md.spec.ts:255:13: eval can be harmful.
+2026-09-30T21:22:17.2024505Z ##[warning]packages/fast-check/src/arbitrary/entityGraph.spec.ts:56:13: Using a spread operator here creates a new object unnecessarily.
+2026-09-30T21:22:17.2028773Z ##[warning]packages/fast-check/src/arbitrary/entityGraph.spec.ts:61:13: Using a spread operator here creates a new object unnecessarily.
+2026-09-30T21:22:17.2032704Z ##[warning]packages/fast-check/src/check/runner/Tosser.spec.ts:34:13: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.2036531Z ##[warning]packages/fast-check/src/check/runner/Tosser.spec.ts:47:13: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.2120279Z ##[warning]packages/fast-check/src/check/runner/Tosser.spec.ts:51:13: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.2124378Z ##[warning]packages/fast-check/src/arbitrary/commands.spec.ts:261:13: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.2128324Z ##[warning]packages/fast-check/src/arbitrary/commands.spec.ts:284:13: Using a spread operator here creates a new array unnecessarily.
+2026-09-30T21:22:17.2211297Z ##[warning]packages/fast-check/src/arbitrary/webUrl.spec.ts:49:13: Both sides of the logical operator are the same
+2026-09-30T21:22:17.2214765Z ##[warning]packages/fast-check/test/AsyncScheduler.spec.ts:161:40: eval can be harmful.
+2026-09-30T21:22:17.2217939Z ##[warning]packages/fast-check/src/utils/stringify.spec.ts:84:16: eval can be harmful.
+2026-09-30T21:22:17.2220890Z ##[warning]packages/fast-check/src/utils/stringify.spec.ts:226:16: eval can be harmful.
+2026-09-30T21:22:17.2224314Z ##[warning]packages/fast-check/src/utils/stringify.spec.ts:328:39: eval can be harmful.
+2026-09-30T21:22:17.2227205Z ##[warning]packages/fast-check/src/utils/stringify.spec.ts:678:60: eval can be harmful.
+2026-09-30T21:22:17.2436207Z ##[warning]packages/fast-check/src/arbitrary/ipV6.spec.ts:31:41: Unexpected constant comparison
+2026-09-30T21:22:17.2440360Z ##[warning]packages/fast-check/test/NoRegression.spec.ts:512:91: `Promise.all` accepts an iterable, so it's unnecessary to convert the iterable to an array.
+2026-09-30T21:22:17.2444430Z ##[warning]packages/fast-check/test/NoRegression.spec.ts:519:37: `Promise.all` accepts an iterable, so it's unnecessary to convert the iterable to an array.
+2026-09-30T21:22:17.2447919Z ##[warning]packages/packaged/test-types/empty.ts:1:1: Empty files are not allowed.
+2026-09-30T21:22:17.2501702Z ##[warning]packages/ava/test/ava-specs/testProp.js:178:89: Unexpected constant comparison
+2026-09-30T21:22:17.2628114Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.ts:46:20: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2635745Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.ts:75:29: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2643922Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.ts:76:38: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2680536Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.ts:97:25: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2836727Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.ts:108:24: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2843237Z ##[warning]packages/fast-check/src/arbitrary/_internals/mappers/CodePointsToString.ts:10:11: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2849453Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:37:20: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.2855394Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:38:21: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3182970Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:39:21: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3189347Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:40:23: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3233844Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:41:26: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3414552Z ##[warning]packages/fast-check/src/arbitrary/_internals/helpers/TokenizeRegex.ts:465:24: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3422068Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:180:16: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3428617Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.ts:281:41: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3434801Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.spec.ts:96:5: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3549295Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.spec.ts:97:5: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3555582Z ##[warning]packages/fast-check/src/arbitrary/stringMatching.spec.ts:98:5: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3562213Z ##[warning]packages/fast-check/src/arbitrary/string.spec.ts:56:17: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3650668Z ##[warning]packages/fast-check/src/arbitrary/string.spec.ts:70:78: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3657094Z ##[warning]packages/fast-check/src/arbitrary/string.spec.ts:75:17: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3663427Z ##[warning]packages/fast-check/src/arbitrary/string.spec.ts:84:17: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3670153Z ##[warning]packages/fast-check/src/arbitrary/_internals/MixedCaseArbitrary.spec.ts:157:42: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3676706Z ##[warning]packages/fast-check/test/arbitraries/CharacterArbitrary.spec.ts:36:19: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3776762Z ##[warning]packages/fast-check/test/arbitraries/CharacterArbitrary.spec.ts:42:15: Using the spread operator on a string can mishandle special characters, because it produces Unicode code points, which will break complex characters (like emojis) into multiple parts.
+2026-09-30T21:22:17.3781926Z ##[warning]packages/poisoning/test/internals/PoisoningFreeArray.spec.ts:17:14: Using the `delete` operator with an array expression is unsafe.
+2026-09-30T21:22:17.3783858Z 
+2026-09-30T21:22:17.3784226Z Found 93 warnings and 0 errors.
+2026-09-30T21:22:17.3785454Z Finished in 6.7s on 600 files with 134 rules using 4 threads.
+2026-09-30T21:22:18.1963356Z Progress: resolved 202, reused 133, downloaded 0, added 0
+2026-09-30T21:22:19.1457891Z Progress: resolved 242, reused 164, downloaded 0, added 0
+2026-09-30T21:22:19.3828697Z Progress: resolved 279, reused 201, downloaded 0, added 0
+2026-09-30T21:22:20.7661075Z Progress: resolved 292, reused 214, downloaded 0, added 0
+2026-09-30T21:22:20.7788849Z packages/packaged typecheck: Done
+2026-09-30T21:22:22.6850689Z packages/poisoning typecheck: Done
+2026-09-30T21:22:22.7358506Z Progress: resolved 296, reused 218, downloaded 0, added 0
+2026-09-30T21:22:24.1668916Z Progress: resolved 318, reused 240, downloaded 0, added 0
+2026-09-30T21:22:25.3707755Z Progress: resolved 320, reused 242, downloaded 0, added 0
+2026-09-30T21:22:25.6910645Z All matched files use the correct format.
+2026-09-30T21:22:25.7054400Z Finished in 15400ms on 945 files using 4 threads.
+2026-09-30T21:22:26.3798970Z Progress: resolved 425, reused 347, downloaded 0, added 0
+2026-09-30T21:22:27.5039056Z Progress: resolved 488, reused 410, downloaded 0, added 0
+2026-09-30T21:22:28.5186854Z Progress: resolved 566, reused 488, downloaded 0, added 0
+2026-09-30T21:22:29.7119335Z Progress: resolved 682, reused 572, downloaded 0, added 0
+2026-09-30T21:22:30.1112678Z packages/ava typecheck: Done
+2026-09-30T21:22:30.8598535Z packages/worker typecheck: Done
+2026-09-30T21:22:31.1684191Z Progress: resolved 696, reused 586, downloaded 0, added 0
+2026-09-30T21:22:31.8890193Z packages/jest typecheck: Done
+2026-09-30T21:22:31.9489682Z website typecheck: Done
+2026-09-30T21:22:31.9835767Z packages/vitest typecheck: Done
+2026-09-30T21:22:32.1779348Z Progress: resolved 828, reused 707, downloaded 0, added 0
+2026-09-30T21:22:33.1814831Z Progress: resolved 896, reused 771, downloaded 0, added 0
+2026-09-30T21:22:33.5853277Z examples typecheck: Done
+2026-09-30T21:22:34.1945641Z Progress: resolved 1054, reused 918, downloaded 0, added 0
+2026-09-30T21:22:35.2292726Z Progress: resolved 1309, reused 1166, downloaded 0, added 0
+2026-09-30T21:22:36.2441249Z Progress: resolved 1503, reused 1355, downloaded 0, added 0
+2026-09-30T21:22:37.2728981Z Progress: resolved 2035, reused 1883, downloaded 0, added 0
+2026-09-30T21:22:38.0379953Z [WARN] 6 deprecated subdependencies found: @ungap/structured-clone@1.3.0, glob@10.5.0, glob@11.1.0, source-map@0.8.0-beta.0, sourcemap-codec@1.4.8, uuid@8.3.2
+2026-09-30T21:22:38.1364092Z ##[error]packages/fast-check typecheck: src/arbitrary/_internals/helpers/BiasNumericRange.spec.ts(126,13): error TS2428: All declarations of 'Assertion' must have identical type parameters.
+2026-09-30T21:22:38.2214991Z [ELIFECYCLE] Command failed with exit code 2.
+2026-09-30T21:22:38.2215706Z packages/fast-check typecheck: Failed
+2026-09-30T21:22:38.2458345Z Error: ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL
+2026-09-30T21:22:38.2458994Z 
+2026-09-30T21:22:38.2460636Z   × "pnpm recursive run" failed in /home/runner/work/fast-check/fast-check/
+2026-09-30T21:22:38.2462246Z   │ packages/fast-check
+2026-09-30T21:22:38.2462528Z 
+2026-09-30T21:22:38.2501215Z ##[error]Process completed with exit code 1.
+2026-09-30T21:22:40.1236470Z ✓ Lockfile passes supply-chain policies (2180 entries in 28.9s)
+2026-09-30T21:22:40.1575525Z Progress: resolved 2180, reused 2029, downloaded 0, added 0, done
+2026-09-30T21:22:40.8762042Z Done in 30.6s using pnpm v12.5.1
+2026-09-30T21:22:41.0081511Z Finished waiting for background step(s).
+2026-09-30T21:22:41.0081972Z   Check format: Succeeded
+2026-09-30T21:22:41.0082253Z   Check lint: Succeeded
+2026-09-30T21:22:41.0082542Z   Check dependency trust and deduplication: Succeeded
+2026-09-30T21:22:41.0082871Z   Typecheck: Failed
+2026-09-30T21:22:41.0203852Z Post job cleanup.
+2026-09-30T21:22:41.1756908Z Pruning is unnecessary.
+2026-09-30T21:22:41.2612441Z Post job cleanup.
+2026-09-30T21:22:41.3559899Z [command]/usr/bin/git version
+2026-09-30T21:22:41.3605984Z git version 2.55.0
+2026-09-30T21:22:41.3643917Z Temporarily overriding HOME='/home/runner/work/_temp/2905edf9-a765-493f-bf19-403ceea53297' before making global git config changes
+2026-09-30T21:22:41.3646036Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-30T21:22:41.3650233Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/fast-check/fast-check
+2026-09-30T21:22:41.3687786Z Removing SSH command configuration
+2026-09-30T21:22:41.3708671Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-30T21:22:41.3731176Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-30T21:22:41.3969791Z Removing HTTP extra header
+2026-09-30T21:22:41.3975581Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-30T21:22:41.4014116Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-30T21:22:41.4276778Z Removing includeIf entries pointing to credentials config files
+2026-09-30T21:22:41.4286659Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-30T21:22:41.4332709Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-30T21:22:41.6786062Z Cleaning up orphan processes

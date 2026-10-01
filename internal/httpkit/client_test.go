@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -213,48 +214,6 @@ func TestClient_GetConditional_emptyIfNoneMatch(t *testing.T) {
 	}
 	if notModified {
 		t.Error("GetConditional emptyIfNoneMatch notModified = true, want false")
-	}
-}
-
-func TestClient_GetRaw_truncation(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "hello world")
-	}))
-	defer srv.Close()
-
-	c := mustClient(t, ClientOptions{BaseURL: srv.URL})
-
-	body, err := c.GetRaw(context.Background(), "/file", 5)
-	if err != nil {
-		t.Fatalf("GetRaw: %v", err)
-	}
-	if string(body) != "hello" {
-		t.Errorf("GetRaw body = %q, want %q", body, "hello")
-	}
-}
-
-func TestClient_GetRaw_non200(t *testing.T) {
-	t.Parallel()
-
-	sentinel := errors.New("classified-500")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	c := mustClient(t, ClientOptions{
-		BaseURL: srv.URL,
-		ClassifyError: func(resp *http.Response, method, path string) error {
-			return fmt.Errorf("%w: %d", sentinel, resp.StatusCode)
-		},
-	})
-
-	_, err := c.GetRaw(context.Background(), "/file", 1024)
-	if !errors.Is(err, sentinel) {
-		t.Errorf("GetRaw non-200 error = %v, want to wrap %v", err, sentinel)
 	}
 }
 
@@ -512,5 +471,237 @@ func TestClient_Cancellation(t *testing.T) {
 	_, _, err := c.Get(ctx, "/test", nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Get cancelled error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestClient_GetStream_handsBodyToReadAndClosesIt(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth, gotPath, gotMethod atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("X-Auth"))
+		gotPath.Store(r.URL.Path)
+		gotMethod.Store(r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, strings.Repeat("0123456789", 100_000))
+	}))
+	defer srv.Close()
+	c := mustClient(t, ClientOptions{
+		BaseURL:   srv.URL,
+		Authorize: func(req *http.Request) { req.Header.Set("X-Auth", "token") },
+	})
+
+	var body io.Reader
+	var firstBytes []byte
+	err := c.GetStream(context.Background(), "/jobs/7/logs", func(r io.Reader) error {
+		body = r
+		firstBytes = make([]byte, 10)
+		_, readErr := io.ReadFull(r, firstBytes)
+		return readErr
+	})
+
+	if err != nil {
+		t.Fatalf("GetStream: %v", err)
+	}
+	if string(firstBytes) != "0123456789" {
+		t.Errorf("read saw %q, want the start of the body", firstBytes)
+	}
+	if auth, _ := gotAuth.Load().(string); auth != "token" {
+		t.Errorf("X-Auth = %q, want %q", auth, "token")
+	}
+	if path, _ := gotPath.Load().(string); path != "/jobs/7/logs" {
+		t.Errorf("request path = %q, want %q", path, "/jobs/7/logs")
+	}
+	if method, _ := gotMethod.Load().(string); method != http.MethodGet {
+		t.Errorf("request method = %q, want %q", method, http.MethodGet)
+	}
+	if _, readErr := body.Read(make([]byte, 1)); readErr == nil {
+		t.Error("body is still readable after GetStream returned, want it closed")
+	}
+}
+
+func TestClient_GetStream_returnsReadErrorUnchanged(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "body")
+	}))
+	defer srv.Close()
+	c := mustClient(t, ClientOptions{
+		BaseURL:           srv.URL,
+		ClassifyError:     func(*http.Response, string, string) error { return errors.New("classifier must not run") },
+		ClassifyTransport: func(error, string, string) error { return errors.New("classifier must not run") },
+	})
+	sentinel := errors.New("reader gave up")
+
+	err := c.GetStream(context.Background(), "/log", func(io.Reader) error { return sentinel })
+
+	if err != sentinel { //nolint:errorlint // identity proves the error is not wrapped
+		t.Errorf("GetStream error = %v, want the reader's own error %v unchanged", err, sentinel)
+	}
+}
+
+func TestClient_GetStream_notCalledOnFailure(t *testing.T) {
+	t.Parallel()
+
+	sentinelStatus := errors.New("classified-status")
+	sentinelTransport := errors.New("classified-transport")
+	opts := func(baseURL string) ClientOptions {
+		return ClientOptions{
+			BaseURL: baseURL,
+			ClassifyError: func(resp *http.Response, method, path string) error {
+				return fmt.Errorf("%w: %s %s %d", sentinelStatus, method, path, resp.StatusCode)
+			},
+			ClassifyTransport: func(err error, method, path string) error {
+				return fmt.Errorf("%w: %s %s", sentinelTransport, method, path)
+			},
+		}
+	}
+
+	t.Run("non-200 status is classified as Get classifies it", func(t *testing.T) {
+		t.Parallel()
+
+		for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusNoContent} {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			c := mustClient(t, opts(srv.URL))
+			var called atomic.Bool
+
+			streamErr := c.GetStream(context.Background(), "/log", func(io.Reader) error {
+				called.Store(true)
+				return nil
+			})
+			_, _, getErr := c.Get(context.Background(), "/log", nil)
+			srv.Close()
+
+			if called.Load() {
+				t.Errorf("status %d: read was called", status)
+			}
+			if !errors.Is(streamErr, sentinelStatus) {
+				t.Errorf("status %d: GetStream error = %v, want to wrap %v", status, streamErr, sentinelStatus)
+			}
+			if streamErr == nil || getErr == nil || streamErr.Error() != getErr.Error() {
+				t.Errorf("status %d: GetStream error = %v, want the error Get returns %v", status, streamErr, getErr)
+			}
+		}
+	})
+
+	t.Run("unbuildable request is classified as a transport failure", func(t *testing.T) {
+		t.Parallel()
+
+		c := mustClient(t, opts("://bad"))
+		var called atomic.Bool
+
+		err := c.GetStream(context.Background(), "/log", func(io.Reader) error {
+			called.Store(true)
+			return nil
+		})
+
+		if called.Load() {
+			t.Error("read was called")
+		}
+		if !errors.Is(err, sentinelTransport) {
+			t.Errorf("GetStream error = %v, want to wrap %v", err, sentinelTransport)
+		}
+	})
+
+	t.Run("refused connection is classified as a transport failure", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close()
+		c := mustClient(t, opts(url))
+		var called atomic.Bool
+
+		err := c.GetStream(context.Background(), "/log", func(io.Reader) error {
+			called.Store(true)
+			return nil
+		})
+
+		if called.Load() {
+			t.Error("read was called")
+		}
+		if !errors.Is(err, sentinelTransport) {
+			t.Errorf("GetStream error = %v, want to wrap %v", err, sentinelTransport)
+		}
+	})
+
+	t.Run("cancelled context is returned as cancellation", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, "body")
+		}))
+		defer srv.Close()
+		c := mustClient(t, opts(srv.URL))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var called atomic.Bool
+
+		err := c.GetStream(ctx, "/log", func(io.Reader) error {
+			called.Store(true)
+			return nil
+		})
+
+		if called.Load() {
+			t.Error("read was called")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("GetStream error = %v, want %v", err, context.Canceled)
+		}
+	})
+}
+
+func TestClient_GetStream_streamsWithoutBuffering(t *testing.T) {
+	t.Parallel()
+
+	const (
+		total = 16<<20 + 1
+		chunk = 64 << 10
+	)
+	proceed := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		block := make([]byte, chunk)
+		_, _ = w.Write(block)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case <-proceed:
+		case <-r.Context().Done():
+			return
+		}
+		for sent := chunk; sent < total; {
+			n := min(chunk, total-sent)
+			if _, err := w.Write(block[:n]); err != nil {
+				return
+			}
+			sent += n
+		}
+	}))
+	defer srv.Close()
+	c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var received int64
+	err := c.GetStream(ctx, "/log", func(r io.Reader) error {
+		first := make([]byte, 1)
+		if _, err := io.ReadFull(r, first); err != nil {
+			return err
+		}
+		close(proceed)
+		rest, err := io.Copy(io.Discard, r)
+		received = 1 + rest
+		return err
+	})
+
+	if err != nil {
+		t.Fatalf("GetStream: %v", err)
+	}
+	if received != total {
+		t.Errorf("read received %d bytes, want all %d with no cap applied by the client", received, total)
 	}
 }

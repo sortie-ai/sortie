@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -104,127 +105,6 @@ func TestMapCheckConclusion(t *testing.T) {
 	}
 }
 
-func TestStripANSI(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"plain text unchanged", "hello world", "hello world"},
-		{"CSI color sequence stripped", "\x1b[0;32mgreen\x1b[0m", "green"},
-		{"CSI bold stripped", "\x1b[1mBold\x1b[0m", "Bold"},
-		{"OSC with BEL stripped", "\x1b]0;title\a", ""},
-		{"OSC with ST stripped", "\x1b]0;title\x1b\\", ""},
-		{"timestamp prefix stripped", "2026-01-15T10:30:00.1234567Z hello", "hello"},
-		{"ANSI and timestamp together", "2026-01-15T10:30:00.0000000Z \x1b[0;31mFAIL\x1b[0m", "FAIL"},
-		{"empty string unchanged", "", ""},
-		{"multiple CSI sequences", "\x1b[1mBold\x1b[0m and \x1b[32mnormal\x1b[0m", "Bold and normal"},
-		{"no escape sequences unchanged", "plain log line here", "plain log line here"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := stripANSI(tt.input)
-			if got != tt.want {
-				t.Errorf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTruncateLog(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		input     string
-		maxLines  int
-		wantExact string
-	}{
-		{
-			name:      "empty string returns empty",
-			input:     "",
-			maxLines:  10,
-			wantExact: "",
-		},
-		{
-			name:      "maxLines zero returns empty",
-			input:     "line1\nline2",
-			maxLines:  0,
-			wantExact: "",
-		},
-		{
-			name:      "negative maxLines returns empty",
-			input:     "line1\nline2",
-			maxLines:  -1,
-			wantExact: "",
-		},
-		{
-			name:      "tail N lines taken",
-			input:     "a\nb\nc\nd\ne\nf",
-			maxLines:  3,
-			wantExact: "d\ne\nf",
-		},
-		{
-			name:      "input shorter than maxLines returns all",
-			input:     "a\nb",
-			maxLines:  10,
-			wantExact: "a\nb",
-		},
-		{
-			name:      "CRLF line endings normalized",
-			input:     "line1\r\nline2\r\n",
-			maxLines:  5,
-			wantExact: "line1\nline2\n",
-		},
-		{
-			name:      "strips ANSI sequences per line",
-			input:     "\x1b[0;32mgreen\x1b[0m\nplain",
-			maxLines:  5,
-			wantExact: "green\nplain",
-		},
-		{
-			name:      "single line no truncation",
-			input:     "only one",
-			maxLines:  1,
-			wantExact: "only one",
-		},
-		{
-			name:      "exactly maxLines returns all",
-			input:     "a\nb\nc",
-			maxLines:  3,
-			wantExact: "a\nb\nc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := truncateLog(tt.input, tt.maxLines)
-			if got != tt.wantExact {
-				t.Errorf("truncateLog(%q, %d) = %q, want %q", tt.input, tt.maxLines, got, tt.wantExact)
-			}
-		})
-	}
-}
-
-func TestTruncateLog_FixtureTail(t *testing.T) {
-	t.Parallel()
-	raw := string(loadFixture(t, "job_log_sample.txt"))
-	const maxLines = 5
-	got := truncateLog(raw, maxLines)
-	parts := strings.Split(got, "\n")
-	if len(parts) > maxLines {
-		t.Errorf("truncateLog with maxLines=%d: got %d parts, want ≤%d", maxLines, len(parts), maxLines)
-	}
-	if strings.Contains(got, "\x1b") {
-		t.Error("truncateLog result contains ANSI escape sequences")
-	}
-}
-
 func TestNewGitHubCIProvider_Valid(t *testing.T) {
 	t.Parallel()
 
@@ -259,9 +139,6 @@ func TestNewGitHubCIProvider_MissingProject(t *testing.T) {
 	assertCIErrorKind(t, err, domain.ErrCIPayload)
 }
 
-// TestNewGitHubCIProvider_TypeFaultVsAbsentKey covers the distinction
-// between a wrong-typed api_key and an absent one: the type fault reports
-// domain.ErrCIPayload, distinct from the absent key's domain.ErrCIAuth.
 func TestNewGitHubCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
 	t.Parallel()
 
@@ -313,7 +190,6 @@ func TestNewGitHubCIProvider_DefaultEndpoint(t *testing.T) {
 	p, err := NewGitHubCIProvider(0, map[string]any{
 		"api_key": "tok",
 		"project": "org/repo",
-		// endpoint omitted; should default to https://api.github.com
 	})
 	if err != nil {
 		t.Fatalf("NewGitHubCIProvider without endpoint: unexpected error: %v", err)
@@ -379,34 +255,16 @@ func TestFetchCIStatus_AllPassing(t *testing.T) {
 func TestFetchCIStatus_Failing(t *testing.T) {
 	t.Parallel()
 
-	checkRunsFixture := loadFixture(t, "check_runs_failing.json")
-	logFixture := loadFixture(t, "job_log_sample.txt")
+	f := fakeForJob(t, 2001, loadFixture(t, "job_101566349874_steps.json"), loadFixture(t, "job_101566349874.log"))
+	f.checkRuns = loadFixture(t, "check_runs_failing.json")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/check-runs"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write(checkRunsFixture) //nolint:errcheck // test helper
-		case strings.Contains(r.URL.Path, "/actions/jobs/"):
-			w.WriteHeader(http.StatusOK)
-			w.Write(logFixture) //nolint:errcheck // test helper
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
+	result := fetchFromFake(context.Background(), t, f, 50)
 
-	provider := newTestCIProvider(t, srv.URL, 50)
-	result, err := provider.FetchCIStatus(context.Background(), "main")
-	if err != nil {
-		t.Fatalf("FetchCIStatus: unexpected error: %v", err)
-	}
 	if result.Status != domain.CIStatusFailing {
 		t.Errorf("Status = %q, want %q", result.Status, domain.CIStatusFailing)
 	}
-	if result.LogExcerpt == "" {
-		t.Error("LogExcerpt is empty, want non-empty for failing CI")
+	if first, _, _ := strings.Cut(result.LogExcerpt, "\n"); first != locatedNote("Run tests") {
+		t.Errorf("LogExcerpt first line = %q, want %q", first, locatedNote("Run tests"))
 	}
 	if result.FailingCount != 1 {
 		t.Errorf("FailingCount = %d, want 1", result.FailingCount)
@@ -414,12 +272,11 @@ func TestFetchCIStatus_Failing(t *testing.T) {
 	if len(result.CheckRuns) != 2 {
 		t.Errorf("len(CheckRuns) = %d, want 2", len(result.CheckRuns))
 	}
+	if n := f.requested("/repos/owner/repo/actions/jobs/2001"); n != 1 {
+		t.Errorf("job object requested %d times for the failing check run's id, want 1", n)
+	}
 }
 
-// TestFetchCIStatus_MixedRunsMatchesCore pins the aggregate contract
-// against a run set carrying a completed-failing, an in-progress, and a
-// completed-success run together, so the verdict this provider reports
-// is provably the same rule scmcore.AggregateCIStatus implements.
 func TestFetchCIStatus_MixedRunsMatchesCore(t *testing.T) {
 	t.Parallel()
 
@@ -504,33 +361,19 @@ func TestFetchCIStatus_EmptyCheckRuns(t *testing.T) {
 func TestFetchCIStatus_LogTruncation(t *testing.T) {
 	t.Parallel()
 
-	checkRunsFixture := loadFixture(t, "check_runs_failing.json")
-	logFixture := loadFixture(t, "job_log_sample.txt")
+	f := fakeForJob(t, 2001, loadFixture(t, "job_101566349874_steps.json"), loadFixture(t, "job_101566349874.log"))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/check-runs"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write(checkRunsFixture) //nolint:errcheck // test helper
-		case strings.Contains(r.URL.Path, "/actions/jobs/"):
-			w.WriteHeader(http.StatusOK)
-			w.Write(logFixture) //nolint:errcheck // test helper
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
+	got := excerptFrom(t, f, 5)
 
-	const maxLines = 5
-	provider := newTestCIProvider(t, srv.URL, maxLines)
-	result, err := provider.FetchCIStatus(context.Background(), "main")
-	if err != nil {
-		t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+	want := []string{locatedNote("Run tests"), "##[group]Run go test -count=1 ./...", omitted(71)}
+	if len(got) != 7 {
+		t.Fatalf("LogExcerpt has %d lines, want 7 (note, one head line, one omission, four tail lines): %q", len(got), got)
 	}
-	parts := strings.Split(result.LogExcerpt, "\n")
-	if len(parts) > maxLines {
-		t.Errorf("LogExcerpt has %d lines, want ≤%d", len(parts), maxLines)
+	if !slices.Equal(got[:3], want) {
+		t.Errorf("LogExcerpt head = %q, want %q", got[:3], want)
+	}
+	if last := got[len(got)-1]; last != sortieLastLine {
+		t.Errorf("LogExcerpt last line = %q, want %q", last, sortieLastLine)
 	}
 }
 
@@ -556,7 +399,7 @@ func TestFetchCIStatus_LogDisabledWhenZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := newTestCIProvider(t, srv.URL, 0) // maxLogLines=0 disables log fetch
+	provider := newTestCIProvider(t, srv.URL, 0)
 	result, err := provider.FetchCIStatus(context.Background(), "main")
 	if err != nil {
 		t.Fatalf("FetchCIStatus: unexpected error: %v", err)
@@ -572,30 +415,18 @@ func TestFetchCIStatus_LogDisabledWhenZero(t *testing.T) {
 func TestFetchCIStatus_ANSIStripped(t *testing.T) {
 	t.Parallel()
 
-	checkRunsFixture := loadFixture(t, "check_runs_failing.json")
-	logFixture := loadFixture(t, "job_log_sample.txt")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/check-runs"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write(checkRunsFixture) //nolint:errcheck // test helper
-		case strings.Contains(r.URL.Path, "/actions/jobs/"):
-			w.WriteHeader(http.StatusOK)
-			w.Write(logFixture) //nolint:errcheck // test helper
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	provider := newTestCIProvider(t, srv.URL, 100)
-	result, err := provider.FetchCIStatus(context.Background(), "main")
-	if err != nil {
-		t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+	jobLog := loadFixture(t, "job_101566349874.log")
+	if !strings.Contains(string(jobLog), "\x1b[36;1mgo test") {
+		t.Fatal("fixture holds no escape sequence inside the failing step")
 	}
-	if strings.Contains(result.LogExcerpt, "\x1b") {
+	f := fakeForJob(t, 2001, loadFixture(t, "job_101566349874_steps.json"), jobLog)
+
+	got := excerptFrom(t, f, 100)
+
+	if len(got) < 3 || got[2] != "go test -count=1 ./..." {
+		t.Fatalf("LogExcerpt = %q, want the command line without its color codes as the second body line", got)
+	}
+	if joined := strings.Join(got, "\n"); strings.Contains(joined, "\x1b") {
 		t.Error("LogExcerpt contains ANSI escape sequences after stripping")
 	}
 }
@@ -603,27 +434,13 @@ func TestFetchCIStatus_ANSIStripped(t *testing.T) {
 func TestFetchCIStatus_LogFetchFailure_NonFatal(t *testing.T) {
 	t.Parallel()
 
-	checkRunsFixture := loadFixture(t, "check_runs_failing.json")
+	f := fakeForJob(t, 2001, loadFixture(t, "job_101566349874_steps.json"), nil)
+	f.checkRuns = loadFixture(t, "check_runs_failing.json")
+	f.jobs[2001] = reply{status: http.StatusInternalServerError}
+	f.logs[2001] = reply{status: http.StatusInternalServerError}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/check-runs"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write(checkRunsFixture) //nolint:errcheck // test helper
-		case strings.Contains(r.URL.Path, "/actions/jobs/"):
-			w.WriteHeader(http.StatusInternalServerError)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
+	result := fetchFromFake(context.Background(), t, f, 50)
 
-	provider := newTestCIProvider(t, srv.URL, 50)
-	result, err := provider.FetchCIStatus(context.Background(), "main")
-	if err != nil {
-		t.Fatalf("FetchCIStatus: expected no error when log fetch fails, got: %v", err)
-	}
 	if result.Status != domain.CIStatusFailing {
 		t.Errorf("Status = %q, want %q", result.Status, domain.CIStatusFailing)
 	}
