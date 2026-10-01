@@ -256,13 +256,16 @@ func anyTitlePhraseMatch(phrases []string, title string) bool {
 	return false
 }
 
-// normalizeTitleText lowercases s, replaces each run of white space
-// with one space, and trims the ends. Nothing else is folded: accents,
-// Unicode forms, and ß stay as written.
+// normalizeTitleText lowercases s, drops the emoji variation selectors,
+// replaces each run of white space with one space, and trims the ends.
+// Nothing else is folded: accents, Unicode forms, and ß stay as written.
 func normalizeTitleText(s string) string {
 	var b strings.Builder
 	pendingSpace := false
 	for _, r := range strings.ToLower(s) {
+		if isEmojiPresentationSelector(r) {
+			continue
+		}
 		if unicode.IsSpace(r) {
 			pendingSpace = true
 			continue
@@ -274,6 +277,14 @@ func normalizeTitleText(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// isEmojiPresentationSelector reports whether r is U+FE0E or U+FE0F.
+// They only pick the glyph style of the rune before them and are
+// invisible, so a phrase typed without one must match a title that
+// carries one.
+func isEmojiPresentationSelector(r rune) bool {
+	return r == '\uFE0E' || r == '\uFE0F'
 }
 
 // isWholeOccurrence reports whether the occurrence of p in t at byte

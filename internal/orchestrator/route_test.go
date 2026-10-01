@@ -828,6 +828,10 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		thaiThiNee   = "\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48"
 		warning      = "\u26a0"
 		warningVS16  = "\u26a0\ufe0f"
+		warningVS15  = "\u26a0\ufe0e"
+		bug          = "\U0001f41b"
+		bugVS16      = "\U0001f41b\ufe0f"
+		bugVS15      = "\U0001f41b\ufe0e"
 		acuteMark    = "\u0301"
 		eAcute       = "\u00e9"
 		noBreakSpace = "\u00a0"
@@ -855,8 +859,18 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		{name: "question mark is literal", phrases: []string{"?"}, title: "Why does sync stall?", want: true},
 		{name: "asterisks match only asterisks", phrases: []string{"*infra*"}, title: "*INFRA* rotate keys", want: true},
 		{name: "asterisks are not wildcards", phrases: []string{"*infra*"}, title: "Improve infra docs", want: false},
-		{name: "a symbol carries no boundary constraint", phrases: []string{"\U0001f41b"}, title: "\U0001f41b Crash on start", want: true},
-		{name: "a variation selector joins the symbol before it", phrases: []string{warning}, title: warningVS16 + " deprecate v1 API", want: false},
+		{name: "a symbol carries no boundary constraint", phrases: []string{bug}, title: bug + " Crash on start", want: true},
+		{name: "a variation selector after the symbol is ignored", phrases: []string{warning}, title: warningVS16 + " deprecate v1 API", want: true},
+		{name: "a text-style variation selector after the symbol is ignored", phrases: []string{warning}, title: warningVS15 + " deprecate v1 API", want: true},
+		{name: "a variation selector in the phrase is ignored", phrases: []string{warningVS16}, title: warning + " deprecate v1 API", want: true},
+		{name: "a text-style variation selector in the phrase is ignored", phrases: []string{warningVS15}, title: warning + " deprecate v1 API", want: true},
+		{name: "a variation selector on both sides is ignored", phrases: []string{warningVS16}, title: warningVS16 + " deprecate v1 API", want: true},
+		{name: "the two variation selectors are interchangeable", phrases: []string{warningVS15}, title: warningVS16 + " deprecate v1 API", want: true},
+		{name: "a variation selector inside a longer phrase is ignored", phrases: []string{warningVS16 + " deprecate"}, title: warning + " deprecate v1 API", want: true},
+		{name: "a variation selector after a word is ignored", phrases: []string{"fix"}, title: "fix\ufe0f login redirect", want: true},
+		{name: "a variation selector does not hide an inner word boundary", phrases: []string{"fix"}, title: "prefix\ufe0f login", want: false},
+		{name: "a combining mark after a variation selector still blocks the match", phrases: []string{warning}, title: warningVS16 + acuteMark + " deprecate v1 API", want: false},
+		{name: "a combining mark after the symbol still blocks the match", phrases: []string{warning}, title: warning + acuteMark + " deprecate v1 API", want: false},
 		{name: "Han boundaries are word boundaries", phrases: []string{"\u8bbe\u8ba1"}, title: "\u7f13\u5b58\u8bbe\u8ba1\u6587\u6863", want: true},
 		{name: "a Thai tone mark joins the consonant before it", phrases: []string{thaiKo}, title: thaiKoTone, want: false},
 		{name: "the boundary after a Thai tone mark is ordinary", phrases: []string{thaiThi}, title: thaiThiNee, want: true},
@@ -885,7 +899,11 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		{name: "a precomposed accent does not match its bare base", phrases: []string{"caf"}, title: "caf" + eAcute + " opening hours", want: false},
 		{name: "a phrase ending in a non-word rune is constrained by a following mark", phrases: []string{"[infra]"}, title: "[infra]" + acuteMark + " rotate keys", want: false},
 		{name: "a phrase ending in a non-word rune is free before an ordinary letter", phrases: []string{"[infra]"}, title: "[infra]rotate keys", want: true},
-		{name: "a mark after an emoji joins it", phrases: []string{"\U0001f41b"}, title: "\U0001f41b\ufe0f Crash on start", want: false},
+		{name: "a variation selector after an emoji is ignored", phrases: []string{bug}, title: bugVS16 + " Crash on start", want: true},
+		{name: "a text-style variation selector after an emoji is ignored", phrases: []string{bug}, title: bugVS15 + " Crash on start", want: true},
+		{name: "a variation selector in an emoji phrase is ignored", phrases: []string{bugVS16}, title: bug + " Crash on start", want: true},
+		{name: "a combining mark after a letter and a variation selector still blocks the match", phrases: []string{"cafe"}, title: "cafe\ufe0f" + acuteMark + " opening hours", want: false},
+		{name: "a base letter with a combining accent does not match the bare base as a prefix", phrases: []string{"e"}, title: "e" + acuteMark + "cole", want: false},
 		{name: "sharp s is not folded to ss", phrases: []string{"stra\u00dfe"}, title: "STRASSE closed", want: false},
 	}
 
