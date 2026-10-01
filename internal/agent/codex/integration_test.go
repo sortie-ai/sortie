@@ -312,8 +312,11 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		Kind: "codex",
 		Passthrough: map[string]any{
 			"approval_policy": "never",
-			"thread_sandbox":  "workspaceWrite",
-			"model":           "scripted-model",
+			// The scripted tool call runs a shell command, and on a hosted CI
+			// runner the workspaceWrite sandbox cannot bring up loopback in
+			// its network namespace, so every command fails before it runs.
+			"thread_sandbox": "dangerFullAccess",
+			"model":          "scripted-model",
 		},
 		CredentialEnv: []string{"CODEX_API_KEY"},
 		Read:          fakemodel.CatFile,
