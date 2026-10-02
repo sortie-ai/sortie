@@ -445,7 +445,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "${DISCORD_WEBHOOK}" ]; then
-            echo "::warning::DISCORD_WEBHOOK_CI is not configured; skipping"
+            echo "::warning::Discord webhook is not configured; skipping"
             exit 0
           fi
 

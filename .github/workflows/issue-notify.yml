@@ -30,7 +30,7 @@ jobs:
       - name: Post new issue
         continue-on-error: true
         env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_ISSUES }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -40,7 +40,7 @@ jobs:
           ISSUE_LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
         run: |
           if [ -z "${DISCORD_WEBHOOK}" ]; then
-            echo "::warning::DISCORD_WEBHOOK_CI is not configured; skipping"
+            echo "::warning::Discord webhook is not configured; skipping"
             exit 0
           fi
 
