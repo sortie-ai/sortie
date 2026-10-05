@@ -19,7 +19,7 @@ For larger work - new features, new adapters, architectural changes - open an is
 
 ## Setup
 
-**Requirements:** Go 1.26.1 (see [go.mod](go.mod)), golangci-lint, gopls.
+**Requirements:** Go 1.26.1 (see [go.mod](go.mod)), golangci-lint, gopls, and [lychee](https://github.com/lycheeverse/lychee) for documentation changes.
 
 ```bash
 git clone https://github.com/sortie-ai/sortie.git
@@ -28,6 +28,7 @@ make test    # runs all tests with -race
 make build   # compiles to ./sortie
 make lint    # golangci-lint and comment style of changed files
 make fmt     # gofmt + goimports
+make lint-docs  # links and anchors in tracked Markdown files
 ```
 
 All commands go through the Makefile. If `make test` passes, the change is safe to submit.

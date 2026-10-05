@@ -28,6 +28,13 @@ GO      ?= go
 LINTER  ?= golangci-lint
 SHELLCHECK ?= shellcheck
 GOPLS   ?= gopls
+LYCHEE  ?= lychee
+
+# --offline checks links between tracked files and their anchors without the
+# network, so an unreachable external site cannot fail a pull request.  The
+# scheduled Docs workflow checks external links too.
+
+LYCHEE_FLAGS ?= --offline
 
 ACP_VERSION ?= 1.23.0
 

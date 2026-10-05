@@ -1,0 +1,4 @@
+# Read by "make lint-docs" and by the Docs workflow, so a local run and CI
+# check the same things.
+
+include_fragments = "full"
