@@ -38,6 +38,50 @@ test-coverage-html: test-coverage ## Generate an HTML coverage report
 	$(GO) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
 	@printf '$(GREEN)Coverage report written to $(BOLD)$(COVERAGE_HTML)$(RESET)\n'
 
+.PHONY: test-darwin
+test-darwin: ## Run the darwin-only tests on a macOS host; fails on a skipped test or an empty selection
+	@goos=$$($(GO) env GOOS); \
+	if [ "$$goos" != "darwin" ]; then \
+		printf '$(RED)test-darwin needs a macOS host: go env GOOS reports "%s"$(RESET)\n' "$$goos"; \
+		exit 1; \
+	fi; \
+	tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/darwin_test.XXXXXX") && \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	files=$$(find . \( -name '.?*' -o -path ./tools \) -prune -o -type f -name '*_darwin_test.go' -print); \
+	dirs=$$(printf '%s\n' "$$files" | sed -n 's|/[^/]*$$||p' | sort -u); \
+	: >"$$tmp/declared"; : >"$$tmp/missing"; : >"$$tmp/skipped"; \
+	run_failed=0; runs=0; \
+	for dir in $$dirs; do \
+		names=$$(cat "$$dir"/*_darwin_test.go | sed -n 's/^func \(Test[A-Z0-9_][A-Za-z0-9_]*\)(.*\*testing\.T).*/\1/p' | sort -u); \
+		if [ -z "$$names" ]; then continue; fi; \
+		pattern=$$(printf '%s\n' $$names | paste -s -d '|' -); \
+		runs=$$((runs + 1)); \
+		stream="$$tmp/run$$runs.json"; \
+		CGO_ENABLED=0 $(GO) test -race -count=1 -json -run "^($$pattern)\$$" "$$dir" >"$$stream" || run_failed=1; \
+		for name in $$names; do \
+			printf '%s\n' "$$dir $$name" >>"$$tmp/declared"; \
+			grep -q "\"Action\":\"pass\".*\"Test\":\"$$name\"" "$$stream" || printf '%s\n' "$$dir $$name" >>"$$tmp/missing"; \
+		done; \
+		sed -n 's/.*"Action":"skip".*"Test":"\([^"]*\)".*/\1/p' "$$stream" | while read -r skipped; do \
+			printf '%s\n' "$$dir $$skipped" >>"$$tmp/skipped"; \
+		done; \
+	done; \
+	if [ ! -s "$$tmp/declared" ]; then \
+		printf '$(RED)test-darwin: no top-level test declared in any *_darwin_test.go file$(RESET)\n'; \
+		exit 1; \
+	fi; \
+	if [ -s "$$tmp/missing" ] || [ -s "$$tmp/skipped" ] || [ "$$run_failed" -ne 0 ]; then \
+		printf '$(RED)test-darwin: the darwin-only tests did not all pass$(RESET)\n'; \
+		if [ -s "$$tmp/missing" ]; then printf 'declared tests without a pass event:\n'; sed 's/^/  /' "$$tmp/missing"; fi; \
+		if [ -s "$$tmp/skipped" ]; then printf 'skipped tests:\n'; sed 's/^/  /' "$$tmp/skipped"; fi; \
+		if [ "$$run_failed" -ne 0 ]; then printf 'a go test run exited non-zero\n'; fi; \
+		cat "$$tmp"/run*.json; \
+		exit 1; \
+	fi; \
+	cat "$$tmp"/run*.json | sed -n 's/.*"Action":"pass".*"Test":"\([^"]*\)".*/\1/p'; \
+	passed=$$(cat "$$tmp"/run*.json | grep -cE '"Action":"pass".*"Test":"[^"]'); \
+	printf '$(GREEN)test-darwin: %s darwin-only tests executed$(RESET)\n' "$$passed"
+
 ##@ Quality
 
 .PHONY: fmt
