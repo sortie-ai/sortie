@@ -142,7 +142,7 @@ type sessionState struct {
 	// through reportStderr. It guards no write to the peer; conn owns
 	// its own outgoing queue and writer goroutine.
 	mu              sync.Mutex
-	proc            *os.Process
+	group           *procutil.Group
 	waitCh          <-chan struct{}
 	stdin           io.WriteCloser
 	pipes           *procutil.OwnedPipes
@@ -446,7 +446,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	prefixedStdin := launch.PrefixStdin(stdinPipe)
 
 	logger := slog.Default().With(slog.String("component", "codex-adapter"))
-	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
 		var startErr *procutil.StartError
 		if !errors.As(err, &startErr) {
@@ -484,7 +484,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		}
 	}
 
-	state.proc = cmd.Process
+	state.group = group
 	state.stdin = prefixedStdin
 	state.pipes = pipes
 	state.drainGrace = a.drainGrace
@@ -505,7 +505,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			state.pipes.CloseStdout() //nolint:errcheck,gosec // unblock the reader goroutine on the read end
 		}
 		state.mu.Unlock()
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup
+		group.Kill() //nolint:errcheck,gosec // best-effort cleanup
 		// Wait briefly for cleanup.
 		select {
 		case <-state.waitCh:
@@ -518,7 +518,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		state.reportStderr(logger)
 
 		state.mu.Lock()
-		state.proc = nil
+		state.group = nil
 		state.stdin = nil
 		if state.pipes != nil {
 			state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup; StartSession's failure paths return no session to close these later
@@ -1178,15 +1178,10 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	procutil.CloseWithoutWaiting(state.stdin)
 	waitCh := state.waitCh
 	pipes := state.pipes
-	pid := 0
-	if state.proc != nil {
-		pid = state.proc.Pid
-	}
+	group := state.group
 	state.mu.Unlock()
 
-	if pid > 0 {
-		procutil.SignalGraceful(pid) //nolint:errcheck,gosec // best-effort graceful shutdown
-	}
+	group.SignalGraceful() //nolint:errcheck,gosec // best-effort graceful shutdown
 
 	logger := logging.WithSession(
 		slog.Default().With(slog.String("component", "codex-adapter")),
@@ -1203,9 +1198,7 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 			logger.Warn("agent did not exit inside the graceful period and was force-terminated",
 				slog.String("outcome", outcome), slog.Duration("grace", grace),
 				slog.Duration("elapsed", time.Since(started)))
-			if pid > 0 {
-				procutil.KillProcessGroup(pid) //nolint:errcheck,gosec // best-effort force kill
-			}
+			group.Kill() //nolint:errcheck,gosec // best-effort force kill
 			// Wait again briefly for cleanup.
 			select {
 			case <-waitCh:
@@ -1247,7 +1240,7 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	// reported a runtime that failed, and there is nothing to explain
 	// for one that stopped on request.
 	state.mu.Lock()
-	state.proc = nil
+	state.group = nil
 	state.stdin = nil
 	if state.pipes != nil {
 		state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup

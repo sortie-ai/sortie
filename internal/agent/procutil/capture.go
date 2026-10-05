@@ -43,9 +43,11 @@ type CaptureResult struct {
 	// OutputComplete is true when every captured stream reached end of
 	// file within DrainGrace after the reap.
 	OutputComplete bool
-	// TerminatedLeftovers is true when the reap's termination reached a
-	// process of the launch's process group or Job Object other than
-	// the direct child. On Windows a console host is never counted.
+	// TerminatedLeftovers is true when the reap found a live process of
+	// the launch's process group or Job Object other than the direct
+	// child: on Unix a live member observed before or during the reap's
+	// group drain, on Windows a running Job Object member, where a
+	// console host is never counted.
 	TerminatedLeftovers bool
 }
 
@@ -225,7 +227,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 		}
 	}
 
-	jobHandle, startedAt, startErr := startAndAssign(cmd, logger, true)
+	_, jobHandle, startedAt, startErr := startAndAssign(cmd, logger, true)
 	if startErr != nil {
 		stage := StageProcessResume
 		if cmd.Process == nil {

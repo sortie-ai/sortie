@@ -63,16 +63,21 @@ func (e *StartError) Unwrap() error {
 // nil logger resolves to slog.Default. A caller whose subprocess state
 // is guarded by a mutex MUST hold that mutex across this call, because
 // the call starts the process.
-func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, error) {
+//
+// On success it also returns the launch's [Group], which the caller
+// keeps to call [Group.SignalGraceful] and [Group.Kill] for the rest of
+// the launch, and to which [StartReaper] binds the reap; on every error
+// the returned Group is nil.
+func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, *Group, error) {
 	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
-		return nil, &StartError{Stage: StageStdoutPipe, Err: err}
+		return nil, nil, &StartError{Stage: StageStdoutPipe, Err: err}
 	}
 
 	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
 		closeFiles(stdoutRead, stdoutWrite)
-		return nil, &StartError{Stage: StageStderrPipe, Err: err}
+		return nil, nil, &StartError{Stage: StageStderrPipe, Err: err}
 	}
 
 	cmd.Stdout = stdoutWrite
@@ -81,14 +86,15 @@ func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, error
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if _, _, startErr := startAndAssign(cmd, logger, false); startErr != nil {
+	g, _, _, startErr := startAndAssign(cmd, logger, false)
+	if startErr != nil {
 		closeFiles(stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 		if cmd.Process == nil {
-			return nil, &StartError{Stage: StageProcessStart, Err: startErr}
+			return nil, nil, &StartError{Stage: StageProcessStart, Err: startErr}
 		}
-		return nil, &StartError{Stage: StageProcessResume, Err: startErr}
+		return nil, nil, &StartError{Stage: StageProcessResume, Err: startErr}
 	}
 
 	// A write end passed to exec.Cmd as an *os.File is never closed by
@@ -99,7 +105,7 @@ func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, error
 	stdoutWrite.Close() //nolint:errcheck,gosec // best-effort; only the read end matters from here
 	stderrWrite.Close() //nolint:errcheck,gosec // best-effort; only the read end matters from here
 
-	return &OwnedPipes{Stdout: stdoutRead, Stderr: stderrRead}, nil
+	return &OwnedPipes{Stdout: stdoutRead, Stderr: stderrRead}, g, nil
 }
 
 func closeFiles(files ...*os.File) {

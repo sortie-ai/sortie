@@ -20,10 +20,6 @@ func init() {
 	fakeScenarios["procutil.reaper-leader"] = agenttest.Typed(runReaperLeader)
 }
 
-// reaperLeaderParams parameterizes the procutil.reaper-leader scenario:
-// a fake runtime that starts a child fake runtime as a background job,
-// records its PID, and exits, leaving the child a surviving member of
-// the leader's process group.
 type reaperLeaderParams struct {
 	ChildPath string
 	PIDFile   string
@@ -42,8 +38,6 @@ func runReaperLeader(_ []string, params reaperLeaderParams) int {
 	return 0
 }
 
-// isReaperTestZombie reports whether pid is a zombie by reading
-// /proc/<pid>/stat. Returns false if the file cannot be read.
 func isReaperTestZombie(pid int) bool {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -55,8 +49,6 @@ func isReaperTestZombie(pid int) bool {
 	return false
 }
 
-// assertReaperTestProcessDead polls until pid is gone or a zombie, or
-// fails t after timeout.
 func assertReaperTestProcessDead(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -72,10 +64,6 @@ func assertReaperTestProcessDead(t *testing.T, pid int, timeout time.Duration) {
 	t.Errorf("process %d still alive after %v, want gone", pid, timeout)
 }
 
-// TestReaper_KillsProcessGroupBeforeDoneCloses asserts the ordering
-// StartReaper's doc comment states: by the time Done closes, the
-// subprocess's process group has already been killed, including a
-// descendant that stayed in the group.
 func TestReaper_KillsProcessGroupBeforeDoneCloses(t *testing.T) {
 	t.Parallel()
 
@@ -88,25 +76,16 @@ func TestReaper_KillsProcessGroupBeforeDoneCloses(t *testing.T) {
 	})
 
 	cmd := exec.Command(leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
-	SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	startOwned(t, cmd)
 
 	childPID := pollReaperTestPIDFile(t, pidFile, 5*time.Second)
 
 	r := StartReaper(cmd, nil)
-	select {
-	case <-r.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("Done() did not close within 5s (the leader exits on its own once it finishes writing the pid file)")
-	}
+	awaitDone(t, r, 5*time.Second)
 
 	assertReaperTestProcessDead(t, childPID, 3*time.Second)
 }
 
-// pollReaperTestPIDFile polls pidFile until it contains a valid positive
-// PID, or fails t after timeout.
 func pollReaperTestPIDFile(t *testing.T, pidFile string, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

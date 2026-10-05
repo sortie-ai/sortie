@@ -230,7 +230,7 @@ func (a *fakeAgent) StopSession(_ context.Context, session domain.Session) error
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	_ = procutil.SignalProcessGroup(fs.cmd.Process.Pid, syscall.SIGKILL)
+	_ = procgroup.Signal(fs.cmd.Process.Pid, syscall.SIGKILL)
 	_, _ = fs.cmd.Process.Wait()
 
 	a.mu.Lock()

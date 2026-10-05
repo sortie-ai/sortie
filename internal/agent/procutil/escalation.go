@@ -2,8 +2,8 @@ package procutil
 
 import "time"
 
-func armGroupEscalation(pid int, grace time.Duration) {
-	target, ok := captureGroupEscalation(pid)
+func armGroupEscalation(g *Group, grace time.Duration) {
+	target, ok := g.captureEscalation()
 	if !ok {
 		return
 	}

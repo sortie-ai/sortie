@@ -11,19 +11,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
-// TestStartWithOwnedPipes_Success asserts that a successful launch wires
-// both pipes so data written by the child is readable by the caller, and
-// that the parent's own write-end copies are closed, which is what lets a
-// clean exit reach end of file promptly.
 func TestStartWithOwnedPipes_Success(t *testing.T) {
 	t.Parallel()
 
 	cmd := fakeRuntimeCmd(t, agenttest.Output{Stdout: "out-line\n", Stderr: "err-line\n"})
-	pipes, err := StartWithOwnedPipes(cmd, nil)
-	if err != nil {
-		t.Fatalf("StartWithOwnedPipes() error = %v, want nil", err)
-	}
-	t.Cleanup(func() { pipes.Close() }) //nolint:errcheck // best-effort cleanup
+	pipes, _ := startOwned(t, cmd)
 
 	outCh := make(chan []byte, 1)
 	errCh := make(chan []byte, 1)
@@ -54,14 +46,11 @@ func TestStartWithOwnedPipes_Success(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_StageProcessStart asserts that a launch failing
-// at cmd.Start reports StageProcessStart and unwraps to the exec error
-// unchanged, and that no pipes are returned.
 func TestStartWithOwnedPipes_StageProcessStart(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.Command("sortie-nonexistent-binary-99999")
-	pipes, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(cmd, nil)
 	if pipes != nil {
 		t.Errorf("StartWithOwnedPipes() pipes = %v, want nil", pipes)
 	}
@@ -81,11 +70,35 @@ func TestStartWithOwnedPipes_StageProcessStart(t *testing.T) {
 	if cmd.Stdout != nil || cmd.Stderr != nil {
 		t.Errorf("cmd.Stdout=%v cmd.Stderr=%v after a failed Start, want both nil", cmd.Stdout, cmd.Stderr)
 	}
+	if group != nil {
+		t.Errorf("StartWithOwnedPipes() group = %v, want nil after a failed Start", group)
+	}
+	if got := lookupGroup(cmd); got != nil {
+		t.Errorf("lookupGroup(cmd) after a failed Start = %v, want nil", got)
+	}
 }
 
-// TestStartError_Discrimination pins StartError's contract for each stage
-// via direct construction: the Stage field round-trips, Unwrap returns the
-// operating-system error unchanged, and Error's message names the stage.
+func TestStartWithOwnedPipes_ReturnsRecord(t *testing.T) {
+	t.Parallel()
+
+	cmd := fakeRuntimeCmd(t, agenttest.Output{})
+	_, group := startOwned(t, cmd)
+
+	if group == nil {
+		t.Fatal("StartWithOwnedPipes() group = nil, want the launch's record")
+	}
+	if got := lookupGroup(cmd); got != group {
+		t.Errorf("lookupGroup(cmd) while the launch runs = %p, want the returned record %p", got, group)
+	}
+
+	r := StartReaper(cmd, nil)
+	awaitDone(t, r, 5*time.Second)
+
+	if got := lookupGroup(cmd); got != nil {
+		t.Errorf("lookupGroup(cmd) after Done = %p, want nil (the reaper unregisters the launch)", got)
+	}
+}
+
 func TestStartError_Discrimination(t *testing.T) {
 	t.Parallel()
 
@@ -117,9 +130,6 @@ func TestStartError_Discrimination(t *testing.T) {
 	}
 }
 
-// TestOwnedPipes_CloseIdempotent asserts that Close and CloseStdout are
-// each safe to call more than once, and that a Close following CloseStdout
-// still closes the standard-error end.
 func TestOwnedPipes_CloseIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -143,9 +153,6 @@ func TestOwnedPipes_CloseIdempotent(t *testing.T) {
 		t.Errorf("CloseStdout() second call = %v, want nil (idempotent)", err)
 	}
 
-	// The standard-error end is still open: a read blocks until the
-	// caller writes or closes it, proving CloseStdout touched only the
-	// standard-output end.
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
@@ -172,15 +179,9 @@ func TestOwnedPipes_CloseIdempotent(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing is the
-// negative control for the parent write-end close: it reproduces
-// StartWithOwnedPipes's pipe wiring locally, minus the parent write-end
-// close the real function performs immediately after a successful
-// cmd.Start, and shows that a caller's read on the standard-output pipe
-// does not reach end of file within a short bounded wait even though
-// the subprocess it feeds has already exited. The real
-// StartWithOwnedPipes does not have this problem, which the second half
-// of this test confirms.
+// The first subtest is a negative control: without the parent write-end close
+// a reader hangs past an exited child, so the second subtest cannot pass by
+// accident.
 func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 	t.Parallel()
 
@@ -198,8 +199,6 @@ func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("cmd.Start() = %v", err)
 		}
-		// Deliberately omit the parent write-end close StartWithOwnedPipes
-		// performs here, reproducing the defect it exists to prevent.
 		t.Cleanup(func() { cmd.Wait() }) //nolint:errcheck // best-effort reap
 
 		readDone := make(chan struct{})
@@ -229,11 +228,7 @@ func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 		t.Parallel()
 
 		cmd := fakeRuntimeCmd(t, agenttest.Output{})
-		pipes, err := StartWithOwnedPipes(cmd, nil)
-		if err != nil {
-			t.Fatalf("StartWithOwnedPipes() error = %v, want nil", err)
-		}
-		t.Cleanup(func() { pipes.Close() }) //nolint:errcheck // best-effort
+		pipes, _ := startOwned(t, cmd)
 
 		readDone := make(chan struct{})
 		go func() {
@@ -259,15 +254,9 @@ func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 	})
 }
 
-// TestOwnedPipes_DeferredCloseAfterStderrBoundIsLoadBearing is the
-// procutil half of the deferred-close check: closing the standard-error
-// read end before a StderrCollector built over it has drained a
-// descendant's late write loses those lines, with no marker and no
-// record, which is why the shared skeleton and opencode defer
-// OwnedPipes.Close until after the collector's own bound has run rather
-// than closing eagerly. The clientprotocol half of this check, where
-// close_pipes moves ahead of drain_stderr_and_reap, is covered at that
-// package's own level.
+// Adapters defer OwnedPipes.Close until after the collector's own bound
+// because closing the read end first loses late descendant writes with no
+// marker and no record.
 func TestOwnedPipes_DeferredCloseAfterStderrBoundIsLoadBearing(t *testing.T) {
 	t.Parallel()
 
@@ -284,9 +273,6 @@ func TestOwnedPipes_DeferredCloseAfterStderrBoundIsLoadBearing(t *testing.T) {
 			t.Fatalf("WriteString() = %v", err)
 		}
 
-		// Reproduces the defect this property guards against: closing the
-		// read end before the collector has had a chance to drain it,
-		// rather than after the collector's own bound.
 		if err := pipes.closeStderr(); err != nil {
 			t.Fatalf("closeStderr() = %v", err)
 		}

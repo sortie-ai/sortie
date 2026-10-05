@@ -36,16 +36,15 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 		return
 	}
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(stopGraceMS))
-	stdout, err := cmd.StdoutPipe()
+	pipes, _, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
 		logger.Warn("failed to delete credential verification session", slog.Any("error", err))
 		return
 	}
-	if err := cmd.Start(); err != nil {
-		logger.Warn("failed to delete credential verification session", slog.Any("error", err))
-		return
-	}
-	defer func() { _ = cmd.Wait() }() //nolint:errcheck // best-effort; the deletion outcome already logged
+	defer pipes.Close() //nolint:errcheck,gosec // best-effort cleanup; runs after the reap wait below
+	procutil.NewStderrCollector(pipes.Stderr, logger)
+	reaper := procutil.StartReaper(cmd, logger)
+	defer func() { <-reaper.Done() }()
 
 	payload, err := json.Marshal(struct {
 		JSONRPC string `json:"jsonrpc"`
@@ -72,7 +71,7 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 		return
 	}
 
-	success, err := readSessionDeleteResponse(deadlineCtx, stdout)
+	success, err := readSessionDeleteResponse(deadlineCtx, pipes.Stdout)
 	_ = stdin.Close() //nolint:errcheck // deletion outcome already resolved or timed out
 	if err == nil && !success {
 		err = errSessionDeleteNotSuccessful

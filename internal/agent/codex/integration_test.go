@@ -48,7 +48,6 @@ func skipUnlessCodexIntegration(t *testing.T) {
 	}
 }
 
-// skipUnlessCodexGate is the skip check for cases that read no credential.
 func skipUnlessCodexGate(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SORTIE_CODEX_TEST") != "1" {
@@ -56,7 +55,6 @@ func skipUnlessCodexGate(t *testing.T) {
 	}
 }
 
-// integrationConfig builds the adapter config map for integration tests.
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_CODEX_MODEL")
 	if model == "" {
@@ -69,8 +67,6 @@ func integrationConfig() map[string]any {
 	}
 }
 
-// integrationCommand returns the Codex CLI binary command from the
-// SORTIE_CODEX_COMMAND environment variable, defaulting to "codex app-server".
 func integrationCommand() string {
 	if cmd := os.Getenv("SORTIE_CODEX_COMMAND"); cmd != "" {
 		return cmd
@@ -78,9 +74,6 @@ func integrationCommand() string {
 	return "codex app-server"
 }
 
-// integrationAgentConfig returns the [domain.AgentConfig] used by
-// integration tests. Timeouts are deliberately generous to accommodate
-// API latency variance.
 func integrationAgentConfig() domain.AgentConfig {
 	return domain.AgentConfig{
 		Command:       integrationCommand(),
@@ -102,8 +95,6 @@ func gitInitWorkspace(t *testing.T) string {
 	return dir
 }
 
-// assertContainsEventType asserts that at least one event in the slice
-// has the given type.
 func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
 	t.Helper()
 	for _, e := range events {
@@ -118,7 +109,6 @@ func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType
 	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
 }
 
-// assertNoEventType asserts that no event in the slice has the given type.
 func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
 	t.Helper()
 	for _, e := range events {
@@ -129,7 +119,6 @@ func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domai
 	}
 }
 
-// requireAgentErrorKind asserts err is a *domain.AgentError with the given Kind.
 func requireAgentErrorKind(t *testing.T, err error, wantKind domain.AgentErrorKind) {
 	t.Helper()
 	if err == nil {
@@ -144,9 +133,6 @@ func requireAgentErrorKind(t *testing.T, err error, wantKind domain.AgentErrorKi
 	}
 }
 
-// makeEventCollector returns an OnEvent callback and a snapshot function.
-// The snapshot function returns a copy of all events collected so far
-// and is safe to call from any goroutine.
 func makeEventCollector(t *testing.T) (onEvent func(domain.AgentEvent), collected func() []domain.AgentEvent) {
 	t.Helper()
 	var mu sync.Mutex
@@ -175,8 +161,6 @@ func mustNewAdapter(t *testing.T) *CodexAdapter {
 	return a.(*CodexAdapter)
 }
 
-// mustStartSession calls StartSession with the standard integration config and
-// registers a StopSession cleanup. It fails the test immediately on error.
 func mustStartSession(t *testing.T, ctx context.Context, adapter *CodexAdapter, workspace string) domain.Session {
 	t.Helper()
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
@@ -191,8 +175,6 @@ func mustStartSession(t *testing.T, ctx context.Context, adapter *CodexAdapter, 
 	return session
 }
 
-// TestIntegration_StartSession verifies that StartSession returns a populated
-// Session with a non-empty thread ID and process PID.
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -264,9 +246,6 @@ func TestIntegration_StopSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_StartSession_InvalidCommand verifies that StartSession
-// returns a properly typed ErrAgentNotFound error when the agent binary
-// does not exist on PATH.
 func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -407,7 +386,7 @@ func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 // Codex adapter: the subprocess and thread persist across turns within a
 // session. Turn 1 emits EventSessionStarted; turn 2 emits only
 // EventNotification for the turn/started notification. Both turns share the
-// same SessionID (the thread ID), and the subprocess PID does not change.
+// same SessionID (the thread ID), and the subprocess launch record does not change.
 func TestIntegration_MultiTurn(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -420,8 +399,11 @@ func TestIntegration_MultiTurn(t *testing.T) {
 	session := mustStartSession(t, ctx, adapter, workspace)
 	state := session.Internal.(*sessionState)
 	state.mu.Lock()
-	pidAfterStart := state.proc.Pid
+	groupAfterStart := state.group
 	state.mu.Unlock()
+	if groupAfterStart == nil {
+		t.Fatal("state.group = nil after StartSession, want the subprocess's launch record")
+	}
 
 	// Turn 1: must emit EventSessionStarted and complete successfully.
 	onEvent1, collected1 := makeEventCollector(t)
@@ -444,12 +426,12 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("state.turnCount after turn 1 = %d, want 1", state.turnCount)
 	}
 
-	// Verify the subprocess PID has not changed after turn 1.
+	// The launch record stays the same after turn 1.
 	state.mu.Lock()
-	pidAfterTurn1 := state.proc.Pid
+	groupAfterTurn1 := state.group
 	state.mu.Unlock()
-	if pidAfterTurn1 != pidAfterStart {
-		t.Errorf("subprocess PID changed after turn 1: before=%d after=%d (persistent subprocess must survive turns)", pidAfterStart, pidAfterTurn1)
+	if groupAfterTurn1 != groupAfterStart {
+		t.Errorf("launch record changed after turn 1: before=%p after=%p (persistent subprocess must survive turns)", groupAfterStart, groupAfterTurn1)
 	}
 
 	// Turn 2: must NOT emit EventSessionStarted (only turn 1 does that).
@@ -477,12 +459,12 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("state.turnCount after turn 2 = %d, want 2", state.turnCount)
 	}
 
-	// The subprocess PID must still be the same original PID.
+	// The launch record must still be the original one.
 	state.mu.Lock()
-	pidAfterTurn2 := state.proc.Pid
+	groupAfterTurn2 := state.group
 	state.mu.Unlock()
-	if pidAfterTurn2 != pidAfterStart {
-		t.Errorf("subprocess PID changed after turn 2: original=%d current=%d (persistent subprocess must survive all turns)", pidAfterStart, pidAfterTurn2)
+	if groupAfterTurn2 != groupAfterStart {
+		t.Errorf("launch record changed after turn 2: original=%p current=%p (persistent subprocess must survive all turns)", groupAfterStart, groupAfterTurn2)
 	}
 
 	// Thread ID must be identical across both turns.
@@ -578,8 +560,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 }
 
-// repoRoot returns the absolute path to the repository root, derived
-// from this test file's known location at internal/agent/codex/.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs("../../../")
@@ -606,10 +586,6 @@ func buildSortieBinary(t *testing.T) string {
 	return binPath
 }
 
-// minimalMCPServerWorkflow is a WORKFLOW.md body with no tracker
-// section: just enough for workflow.Load and config.NewServiceConfig
-// to succeed, matching cmd/sortie's own mcpServerWorkflow test
-// fixture shape.
 const minimalMCPServerWorkflow = "---\npolling:\n  interval_ms: 30000\nagent:\n  kind: mock\n---\nDo something.\n"
 
 // writeIntegrationMCPConfig writes a real generated-shape MCP config
@@ -636,7 +612,6 @@ func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string
 	return mcpConfigPath
 }
 
-// mustJSONString renders s as a JSON string literal.
 func mustJSONString(t *testing.T, s string) string {
 	t.Helper()
 	encoded, err := json.Marshal(s)

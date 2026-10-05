@@ -74,22 +74,22 @@ func defaultResumeProcess(pid int) error {
 }
 
 // startAndAssign creates cmd suspended within a new process group,
-// starts it, and assigns, registers, and resumes it. keepJobHandle
-// requests a duplicate Job Object handle for a caller that drains the
-// job itself later (a Capture); the returned handle is zero when
-// keepJobHandle is false, when assignment failed, or when Unix has no
-// Job Object analogue.
+// registers its launch record, starts it, and assigns and resumes it.
+// keepJobHandle requests a duplicate Job Object handle for a caller
+// that drains the job itself later (a Capture); the returned handle is
+// zero when keepJobHandle is false, when assignment failed, or when
+// Unix has no Job Object analogue.
 //
-// A returned error with a nil cmd.Process means cmd.Start failed. Any
-// other error means the process started but could not be resumed: by
-// the time startAndAssign returns, the process has already been
-// killed, reaped, and, when keepJobHandle, had its job drained and its
-// teardown record logged.
+// The returned record is nil on every error. An error with a nil
+// cmd.Process means cmd.Start failed. Any other error means the process
+// started but could not be resumed: by the time startAndAssign returns,
+// the process has already been killed, reaped, and, when keepJobHandle,
+// had its job drained and its teardown record logged.
 //
 // startedAt is the moment cmd.Start returned, for a caller that later
 // drains the job and needs it for the root probe's PID-reuse guard;
 // it is the zero value when cmd.Start failed.
-func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (jobHandle uintptr, startedAt time.Time, err error) {
+func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *Group, jobHandle uintptr, startedAt time.Time, err error) {
 	SetProcessGroup(cmd)
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -97,17 +97,13 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 
 	// os/exec may run Cancel as soon as Start returns, and a cancellation
-	// that looked up the job before its registration would miss it.
-	registered := make(chan struct{})
-	if cancel := cmd.Cancel; cancel != nil {
-		cmd.Cancel = func() error {
-			<-registered
-			return cancel()
-		}
-	}
+	// that found no record would skip the group.
+	g = newGroup(cmd)
+	groups.Store(cmd, g)
 
 	if startErr := cmd.Start(); startErr != nil {
-		return 0, time.Time{}, startErr
+		groups.Delete(cmd)
+		return nil, 0, time.Time{}, startErr
 	}
 	startedAt = time.Now()
 
@@ -120,8 +116,7 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 			slog.String("dir", cmd.Dir),
 			slog.Any("error", assignErr))
 	}
-	registerJobAssignment(cmd.Process.Pid, cmd.Process, job)
-	close(registered)
+	g.finishAssignment(job)
 
 	resumeSeam()
 
@@ -140,10 +135,10 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 		if keepJobHandle {
 			drainCaptureJob(uintptr(dup), cmd, startedAt, waitMS, logger)
 		}
-		return 0, startedAt, resumeErr
+		return nil, 0, startedAt, resumeErr
 	}
 
-	return uintptr(dup), startedAt, nil
+	return g, uintptr(dup), startedAt, nil
 }
 
 // terminateJobObjectFunc is runJobDrain's termination call. Only a test

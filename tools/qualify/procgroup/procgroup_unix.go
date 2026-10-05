@@ -28,6 +28,22 @@ func Present(pgid int) (bool, error) {
 	}
 }
 
+// Signal sends sig to the process group led by pgid and reports nil when
+// the group is already gone. It addresses the group by number alone, so
+// it is for tooling that sweeps a recorded group after its launch ended.
+// pgid must exceed 1, since 0, 1, and negative values target other
+// processes.
+func Signal(pgid int, sig syscall.Signal) error {
+	if pgid <= 1 {
+		return fmt.Errorf("process group id must be greater than 1, got %d", pgid)
+	}
+	err := syscall.Kill(-pgid, sig)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
+}
+
 // AwaitAbsence polls the negative PGID until the group is absent or
 // ShutdownDeadline elapses. A survivor or a query error fails the test.
 func AwaitAbsence(t *testing.T, pgid int) {

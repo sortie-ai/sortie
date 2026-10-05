@@ -136,7 +136,7 @@ type ForkPerTurnSession struct {
 	turns int
 
 	mu           sync.Mutex
-	proc         *os.Process
+	group        *procutil.Group
 	waitCh       chan struct{}
 	stopSignaled bool // guarded by mu; whether Stop signaled the current turn's process
 
@@ -265,10 +265,10 @@ func (s *ForkPerTurnSession) RunTurn(
 	}
 
 	// Lock before starting the pipes and the process together, so a Stop
-	// arriving in a reopened window cannot read s.proc == nil and miss
+	// arriving in a reopened window cannot read s.group == nil and miss
 	// signaling a process that was about to be recorded.
 	s.mu.Lock()
-	pipes, err := procutil.StartWithOwnedPipes(cmd, s.logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, s.logger)
 	if err != nil {
 		s.mu.Unlock()
 
@@ -326,7 +326,7 @@ func (s *ForkPerTurnSession) RunTurn(
 	defer pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
 
 	s.turns = prospectiveTurn
-	s.proc = cmd.Process
+	s.group = group
 	s.stopSignaled = false
 	s.waitCh = make(chan struct{})
 	localWaitCh := s.waitCh
@@ -384,7 +384,7 @@ loop:
 		case <-reaperDone:
 			close(localWaitCh)
 			s.mu.Lock()
-			s.proc = nil
+			s.group = nil
 			s.waitCh = nil
 			s.mu.Unlock()
 			reaped = true
@@ -406,7 +406,7 @@ loop:
 		<-reaper.Done()
 		close(localWaitCh)
 		s.mu.Lock()
-		s.proc = nil
+		s.group = nil
 		s.waitCh = nil
 		s.mu.Unlock()
 	}
@@ -549,25 +549,25 @@ loop:
 // nil.
 //
 // Shutdown sequence:
-//  1. SIGTERM to process group ([procutil.SignalGraceful])
+//  1. SIGTERM to process group ([procutil.Group.SignalGraceful])
 //  2. Wait up to the session's configured stop grace for RunTurn to close waitCh
 //  3. If the grace elapses: SIGKILL to process group
 //  4. If ctx is cancelled before waitCh closes: SIGKILL and return ctx.Err()
 func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	proc := s.proc
+	group := s.group
 	waitCh := s.waitCh
-	s.proc = nil
-	if proc != nil {
+	s.group = nil
+	if group != nil {
 		s.stopSignaled = true
 	}
 	s.mu.Unlock()
 
-	if proc == nil {
+	if group == nil {
 		return nil
 	}
 
-	_ = procutil.SignalGraceful(proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
+	_ = group.SignalGraceful() //nolint:errcheck // best-effort signal; process may already be dead
 
 	started := time.Now()
 
@@ -579,13 +579,13 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
 			slog.String("outcome", "grace elapsed"), slog.Duration("grace", s.stopGrace),
 			slog.Duration("elapsed", time.Since(started)))
-		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
+		_ = group.Kill() //nolint:errcheck // best-effort kill
 		return nil
 	case <-ctx.Done():
 		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
 			slog.String("outcome", "caller deadline"), slog.Duration("grace", s.stopGrace),
 			slog.Duration("elapsed", time.Since(started)))
-		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
+		_ = group.Kill() //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}
 }

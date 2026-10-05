@@ -12,7 +12,7 @@ import (
 //
 // Returns true for STATUS_CONTROL_C_EXIT (0xC000013A), which indicates
 // the process was terminated by CTRL_BREAK_EVENT or by
-// [KillProcessGroup] via TerminateJobObject. Also returns true for
+// [Group.Kill] via TerminateJobObject. Also returns true for
 // exit code -1, which Go's os package returns when the process was
 // killed externally and the exit code cannot be determined. Returns
 // false for all other exit codes and when err is nil or not an

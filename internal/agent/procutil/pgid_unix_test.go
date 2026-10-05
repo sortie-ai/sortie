@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -61,43 +60,165 @@ func TestSetProcessGroup(t *testing.T) {
 	})
 }
 
-func TestSignalProcessGroup_ESRCH(t *testing.T) {
-	t.Parallel()
+func TestGroupSignalGraceful(t *testing.T) {
+	tests := []struct {
+		name    string
+		sendErr error
+		wantErr error
+	}{
+		{name: "delivered"},
+		{name: "group already gone", sendErr: syscall.ESRCH},
+		{name: "group not signalable", sendErr: syscall.EPERM},
+		{name: "other failure", sendErr: syscall.EINVAL, wantErr: syscall.EINVAL},
+	}
 
-	err := SignalProcessGroup(math.MaxInt32, syscall.SIGTERM)
-	if err != nil {
-		t.Errorf("SignalProcessGroup(MaxInt32, SIGTERM) = %v, want nil (ESRCH must be suppressed)", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := unreapedRecord(t)
+			var gotPIDs []int
+			var gotSigs []syscall.Signal
+			stubGroupKill(t, func(pid int, sig syscall.Signal) error {
+				gotPIDs, gotSigs = append(gotPIDs, pid), append(gotSigs, sig)
+				return tt.sendErr
+			})
+
+			err := g.SignalGraceful()
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("SignalGraceful() = %v, want %v", err, tt.wantErr)
+			}
+			if len(gotPIDs) != 1 || gotPIDs[0] != -g.cmd.Process.Pid || gotSigs[0] != syscall.SIGTERM {
+				t.Errorf("SignalGraceful() sent %v %v, want one SIGTERM to %d", gotSigs, gotPIDs, -g.cmd.Process.Pid)
+			}
+		})
 	}
 }
 
-func TestSignalGraceful_ESRCH(t *testing.T) {
-	t.Parallel()
+func TestGroupKill(t *testing.T) {
+	tests := []struct {
+		name      string
+		sends     []error
+		wantCalls int
+		wantErr   error
+	}{
+		{name: "group already gone", sends: []error{syscall.ESRCH}, wantCalls: 1},
+		{name: "send failure is returned", sends: []error{syscall.EINVAL}, wantCalls: 1, wantErr: syscall.EINVAL},
+		{name: "resends until the group is gone", sends: []error{nil, nil, syscall.ESRCH}, wantCalls: 3},
+		{name: "EPERM keeps resending", sends: []error{syscall.EPERM, syscall.ESRCH}, wantCalls: 2},
+	}
 
-	err := SignalGraceful(math.MaxInt32)
-	if err != nil {
-		t.Errorf("SignalGraceful(MaxInt32) = %v, want nil (ESRCH must be suppressed)", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := unreapedRecord(t)
+			next := sequence(tt.sends...)
+			var gotPIDs []int
+			var gotSigs []syscall.Signal
+			stubGroupKill(t, func(pid int, sig syscall.Signal) error {
+				gotPIDs, gotSigs = append(gotPIDs, pid), append(gotSigs, sig)
+				return next()
+			})
+
+			err := g.Kill()
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Kill() = %v, want %v", err, tt.wantErr)
+			}
+			if len(gotPIDs) != tt.wantCalls {
+				t.Fatalf("Kill() made %d sends, want %d", len(gotPIDs), tt.wantCalls)
+			}
+			for i := range gotPIDs {
+				if gotPIDs[i] != -g.cmd.Process.Pid || gotSigs[i] != syscall.SIGKILL {
+					t.Errorf("Kill() send %d = signal %v to %d, want SIGKILL to %d", i, gotSigs[i], gotPIDs[i], -g.cmd.Process.Pid)
+				}
+			}
+		})
 	}
 }
 
-func TestSignalProcessGroup_LiveProcess(t *testing.T) {
+func TestKillBoundWhileUnreaped(t *testing.T) {
+	g := unreapedRecord(t)
+	shortenDrainBound(t, 200*time.Millisecond)
+	var calls int
+	stubGroupKill(t, func(int, syscall.Signal) error {
+		calls++
+		return syscall.EPERM
+	})
+
+	start := time.Now()
+	err := g.Kill()
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Kill() = nil, want the bound error while the direct child still holds the group")
+	}
+	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ESRCH) {
+		t.Errorf("Kill() = %v, want the bound error, not the send's errno", err)
+	}
+	if calls <= 1 {
+		t.Errorf("Kill() made %d sends, want more than 1 (it must resend, not send once)", calls)
+	}
+	if overrun := elapsed - groupDrainBound; overrun > 10*groupDrainPollInterval {
+		t.Errorf("Kill() took %v, %v over the %v drain bound", elapsed, overrun, groupDrainBound)
+	}
+}
+
+func TestKillReturnsNilOnceReleased(t *testing.T) {
+	g := unreapedRecord(t)
+	var calls int
+	stubGroupKill(t, func(int, syscall.Signal) error {
+		calls++
+		g.released = true
+		return nil
+	})
+
+	if err := g.Kill(); err != nil {
+		t.Errorf("Kill() = %v, want nil once the reap has released the record", err)
+	}
+	if calls != 1 {
+		t.Errorf("Kill() made %d sends, want 1 (none after release)", calls)
+	}
+}
+
+func TestGroupSignalsRealProcess(t *testing.T) {
 	t.Parallel()
 
-	cmd := fakeRuntimeCmd(t, agenttest.Output{Hang: true})
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	t.Run("SignalGraceful terminates a live launch", func(t *testing.T) {
+		t.Parallel()
 
-	if err := SignalProcessGroup(cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("SignalProcessGroup(pid, SIGTERM) = %v, want nil", err)
-	}
+		cmd := fakeRuntimeCmd(t, agenttest.Output{Hang: true})
+		_, g := startOwned(t, cmd)
 
-	err := cmd.Wait()
-	if !WasSignaled(err) {
-		t.Errorf("WasSignaled(cmd.Wait()) = false, want true (process should have been terminated by SIGTERM)")
-	}
+		if err := g.SignalGraceful(); err != nil {
+			_ = g.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("SignalGraceful() = %v, want nil", err)
+		}
+
+		if err := cmd.Wait(); !WasSignaled(err) {
+			t.Errorf("WasSignaled(cmd.Wait()) = false for %v, want true (terminated by SIGTERM)", err)
+		}
+	})
+
+	t.Run("a group that is already gone is success", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := fakeRuntimeCmd(t, agenttest.Output{})
+		_, g := startOwned(t, cmd)
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("cmd.Wait() = %v, want nil", err)
+		}
+
+		if err := g.SignalGraceful(); err != nil {
+			t.Errorf("SignalGraceful() on an empty group = %v, want nil", err)
+		}
+		start := time.Now()
+		if err := g.Kill(); err != nil {
+			t.Errorf("Kill() on an empty group = %v, want nil", err)
+		}
+		if elapsed := time.Since(start); elapsed >= groupDrainBound/2 {
+			t.Errorf("Kill() on an empty group took %v, want well under the %v drain bound", elapsed, groupDrainBound)
+		}
+	})
 }
 
 func pollForPID(t *testing.T, path string, timeout time.Duration) int {
@@ -188,16 +309,14 @@ func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupCancel(cmd, DefaultStopGrace)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v, want nil", err)
-	}
-	leaderPID := cmd.Process.Pid
-	t.Cleanup(func() { _ = syscall.Kill(-leaderPID, syscall.SIGKILL) })
+	_, g := startOwned(t, cmd)
+	reaper := StartReaper(cmd, nil)
+	t.Cleanup(func() { terminateAndAwait(t, cmd, g, reaper) })
 
 	descendantPID := pollForPID(t, pidFile, 5*time.Second)
 
 	cancel()
-	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
+	awaitDone(t, reaper, 10*time.Second)
 
 	if !pollForFile(marker, 5*time.Second) {
 		t.Errorf("SetGroupCancel(): cancelling left %q absent, want the descendant to have caught a graceful signal", marker)
@@ -207,112 +326,19 @@ func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 	}
 }
 
-func TestKillProcessGroupReportingLeftover_ReturnsPromptlyOnceGone(t *testing.T) {
-	cmd := fakeRuntimeCmd(t, agenttest.Output{})
-	SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
-	pid := cmd.Process.Pid
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("cmd.Wait() = %v, want nil", err)
-	}
-
-	origBound := groupDrainBound
-	t.Cleanup(func() { groupDrainBound = origBound })
-	groupDrainBound = 500 * time.Millisecond
-
-	start := time.Now()
-	leftover, err := killProcessGroupReportingLeftover(pid)
-	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Errorf("killProcessGroupReportingLeftover(%d) error = %v, want nil (an empty group answers ESRCH)", pid, err)
-	}
-	if leftover {
-		t.Errorf("killProcessGroupReportingLeftover(%d) leftover = %t, want false", pid, leftover)
-	}
-	if elapsed >= groupDrainBound/2 {
-		t.Errorf("killProcessGroupReportingLeftover(%d) took %v, want well under the %v drain bound", pid, elapsed, groupDrainBound)
-	}
-}
-
-func TestKillProcessGroupReportingLeftover_ResendsUntilGone(t *testing.T) {
-	origBound, origKill := groupDrainBound, groupKillFunc
-	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
-
-	groupDrainBound = time.Second
-	const wantCalls = 4
-	var calls int
-	groupKillFunc = func(int, syscall.Signal) error {
-		calls++
-		if calls < wantCalls {
-			return nil
-		}
-		return syscall.ESRCH
-	}
-
-	leftover, err := killProcessGroupReportingLeftover(4242)
-
-	if err != nil {
-		t.Errorf("killProcessGroupReportingLeftover() error = %v, want nil once the group reports gone", err)
-	}
-	if !leftover {
-		t.Error("leftover = false, want true (a member answered before the group reported gone)")
-	}
-	if calls != wantCalls {
-		t.Errorf("groupKillFunc call count = %d, want %d (the wait must resend a member gained after the first signal, not signal once)", calls, wantCalls)
-	}
-}
-
-func TestKillProcessGroupReportingLeftover_BoundElapsed(t *testing.T) {
-	origBound, origKill := groupDrainBound, groupKillFunc
-	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
-
-	groupDrainBound = 200 * time.Millisecond
-	var calls int
-	groupKillFunc = func(int, syscall.Signal) error {
-		calls++
-		return nil
-	}
-
-	start := time.Now()
-	leftover, err := killProcessGroupReportingLeftover(4242)
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("killProcessGroupReportingLeftover() error = nil, want non-nil once the group keeps answering past the drain bound")
-	}
-	if !leftover {
-		t.Error("leftover = false, want true (a member answered at least once)")
-	}
-	if calls <= 1 {
-		t.Errorf("groupKillFunc call count = %d, want > 1 (the wait must resend, not signal once)", calls)
-	}
-	if overrun := elapsed - groupDrainBound; overrun > 10*groupDrainPollInterval {
-		t.Errorf("killProcessGroupReportingLeftover() took %v, %v over the %v drain bound, want at most about one poll interval (%v) over", elapsed, overrun, groupDrainBound, groupDrainPollInterval)
-	}
-}
-
 func TestStartReaper_DoneWaitsForGroupDrain(t *testing.T) {
-	cmd := fakeRuntimeCmd(t, agenttest.Output{})
-	SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
-
-	origKill := groupKillFunc
-	t.Cleanup(func() { groupKillFunc = origKill })
 	unlock := make(chan struct{})
-	var calls int
-	groupKillFunc = func(int, syscall.Signal) error {
-		calls++
-		if calls < 3 {
+	var calls atomic.Int32
+	stubGroupKill(t, func(int, syscall.Signal) error {
+		if calls.Add(1) < 3 {
 			return nil
 		}
 		<-unlock
 		return syscall.ESRCH
-	}
+	})
+	stubLiveMember(t, func(int, int) (bool, error) { return true, nil })
+	cmd := fakeRuntimeCmd(t, agenttest.Output{})
+	startOwned(t, cmd)
 
 	r := StartReaper(cmd, nil)
 
@@ -323,14 +349,10 @@ func TestStartReaper_DoneWaitsForGroupDrain(t *testing.T) {
 	}
 
 	close(unlock)
+	awaitDone(t, r, 3*time.Second)
 
-	select {
-	case <-r.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("Done() did not close after the process group drain was allowed to finish")
-	}
-	if calls < 3 {
-		t.Errorf("groupKillFunc call count = %d, want >= 3 (the drain must resend before Done closes)", calls)
+	if got := calls.Load(); got < 3 {
+		t.Errorf("group send count = %d, want >= 3 (the drain must resend before Done closes)", got)
 	}
 }
 
@@ -356,16 +378,12 @@ func (h *blockingWarnHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *blockingWarnHandler) WithGroup(string) slog.Handler      { return h }
 
 func TestStartReaper_CleanupFailureLogsOneRecordBeforeDoneCloses(t *testing.T) {
-	origBound, origKill := groupDrainBound, groupKillFunc
-	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
-	groupDrainBound = 100 * time.Millisecond
-	groupKillFunc = func(int, syscall.Signal) error { return nil }
+	shortenDrainBound(t, 100*time.Millisecond)
+	stubGroupKill(t, func(int, syscall.Signal) error { return nil })
+	stubLiveMember(t, func(int, int) (bool, error) { return true, nil })
 
 	cmd := fakeRuntimeCmd(t, agenttest.Output{})
-	SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	startOwned(t, cmd)
 
 	spy := &captureLogSpy{}
 	handler := &blockingWarnHandler{inner: spy, msg: CaptureCleanupWarning, hit: make(chan struct{}), release: make(chan struct{})}
@@ -415,10 +433,9 @@ func TestStartReaper_CleanupFailureLogsOneRecordBeforeDoneCloses(t *testing.T) {
 }
 
 func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
-	origBound, origKill := groupDrainBound, groupKillFunc
-	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
-	groupDrainBound = 100 * time.Millisecond
-	groupKillFunc = func(int, syscall.Signal) error { return nil }
+	shortenDrainBound(t, 100*time.Millisecond)
+	stubGroupKill(t, func(int, syscall.Signal) error { return nil })
+	stubLiveMember(t, func(int, int) (bool, error) { return true, nil })
 
 	spy := &captureLogSpy{}
 	origDefault := slog.Default()
@@ -426,18 +443,10 @@ func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(origDefault) })
 
 	cmd := fakeRuntimeCmd(t, agenttest.Output{})
-	SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	startOwned(t, cmd)
 
 	r := StartReaper(cmd, nil)
-
-	select {
-	case <-r.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("Done() did not close within 3s")
-	}
+	awaitDone(t, r, 3*time.Second)
 
 	record, ok := findCaptureLogRecord(spy, CaptureCleanupWarning)
 	if !ok {
@@ -445,52 +454,6 @@ func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
 	}
 	if got := len(record.Attrs); got != 2 {
 		t.Errorf("record carries %d attributes, want exactly 2 (command, error); got %v", got, record.Attrs)
-	}
-}
-
-func TestGroupHasMember(t *testing.T) {
-	origKill := groupKillFunc
-	t.Cleanup(func() { groupKillFunc = origKill })
-
-	tests := []struct {
-		name        string
-		killErr     error
-		wantPresent bool
-		wantErr     bool
-	}{
-		{name: "live group", killErr: nil, wantPresent: true, wantErr: false},
-		{name: "group already gone", killErr: syscall.ESRCH, wantPresent: false, wantErr: false},
-		{name: "arbitrary other error", killErr: syscall.EPERM, wantPresent: false, wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var gotPID int
-			var gotSig syscall.Signal
-			groupKillFunc = func(pid int, sig syscall.Signal) error {
-				gotPID, gotSig = pid, sig
-				return tt.killErr
-			}
-
-			present, err := groupHasMember(4242)
-
-			if present != tt.wantPresent {
-				t.Errorf("groupHasMember(4242) present = %t, want %t", present, tt.wantPresent)
-			}
-			if tt.wantErr {
-				if !errors.Is(err, tt.killErr) {
-					t.Errorf("groupHasMember(4242) error = %v, want %v", err, tt.killErr)
-				}
-			} else if err != nil {
-				t.Errorf("groupHasMember(4242) error = %v, want nil", err)
-			}
-			if gotPID != -4242 {
-				t.Errorf("groupKillFunc called with pid = %d, want %d (a negative pid signals the whole group)", gotPID, -4242)
-			}
-			if gotSig != 0 {
-				t.Errorf("groupKillFunc called with signal = %d, want 0 (signal 0 probes existence without delivering)", gotSig)
-			}
-		})
 	}
 }
 

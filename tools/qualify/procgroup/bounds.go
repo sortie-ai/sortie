@@ -1,6 +1,7 @@
-// Package procgroup provides the process-group liveness query and shutdown
-// bound the capture harness waits under, reusing internal/agent/procutil's
-// launch and signal primitives rather than reimplementing them.
+// Package procgroup provides the process-group liveness query, signal, and
+// shutdown bound the capture harness works under. The signal addresses a
+// recorded group by number after its launch ended, which the shipped
+// teardown in internal/agent/procutil never does.
 package procgroup
 
 import "time"
