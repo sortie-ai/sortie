@@ -81,6 +81,10 @@ lint-shell: ## Run shellcheck on every tracked shell script
 	printf '%s\n' "$$files"; \
 	git ls-files -z '*.sh' | xargs -0 $(SHELLCHECK) -x --
 
+.PHONY: lint-docs
+lint-docs: ## Check links and anchors in every tracked Markdown file (LYCHEE_FLAGS= adds external links)
+	git ls-files -z '*.md' | xargs -0 $(LYCHEE) --no-progress $(LYCHEE_FLAGS) --
+
 .PHONY: lint-gopls
 lint-gopls: ## Run gopls diagnostics, hints included, minus what .golangci.yml and //nolint suppress
 	@GOPLS='$(GOPLS)' scripts/lint-gopls.sh
@@ -101,7 +105,7 @@ generate-check: ## Verify wire_gen.go matches what the generator emits, without 
 	fi
 
 .PHONY: check
-check: lint lint-no-tests lint-gopls lint-shell test test-shell generate-check lint-tools lint-tools-no-tests test-tools ## Run the CI gates; shell lint covers all tracked scripts
+check: lint lint-no-tests lint-gopls lint-shell lint-docs test test-shell generate-check lint-tools lint-tools-no-tests test-tools ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod
