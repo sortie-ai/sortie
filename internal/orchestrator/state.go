@@ -852,6 +852,13 @@ type State struct {
 	// or RetryAttempts. Runtime-only.
 	ReactionAttempts map[string]int
 
+	// ReactionHandedOffComments maps composite key (issueID:kind) to the set
+	// of [domain.ReviewComment] IDs a continuation of that kind already
+	// carried. A spent continuation budget needs it to tell a comment that
+	// is new from one a turn already had its chance to fix. Only the review
+	// and bot-review kinds use it. Runtime-only.
+	ReactionHandedOffComments map[string]map[string]struct{}
+
 	// PendingReactions maps composite key (issueID:kind) to a
 	// [PendingReaction]. Populated by [HandleWorkerExit], consumed by
 	// per-kind reconcile functions. Runtime-only.
@@ -918,23 +925,24 @@ func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentB
 		maxConcurrentByState = make(map[string]int)
 	}
 	return &State{
-		PollIntervalMS:        pollIntervalMS,
-		MaxConcurrentAgents:   maxConcurrentAgents,
-		MaxTokens:             maxTokens,
-		MaxConcurrentByState:  maxConcurrentByState,
-		Running:               make(map[string]*RunningEntry),
-		Claimed:               make(map[string]struct{}),
-		RetryAttempts:         make(map[string]*RetryEntry),
-		Completed:             make(map[string]struct{}),
-		BudgetExhausted:       make(map[string]*BudgetExhaustedEntry),
-		BudgetAnnounced:       make(map[string]BudgetAnnouncement),
-		BudgetHoldNoticed:     make(map[string]string),
-		Parked:                make(map[string]*ParkedEntry),
-		AgentTotals:           totals,
-		ReactionAttempts:      make(map[string]int),
-		PendingReactions:      make(map[string]*PendingReaction),
-		AutoMergeAuthLogged:   make(map[string]struct{}),
-		TokenBudgetIncomplete: make(map[string]struct{}),
+		PollIntervalMS:            pollIntervalMS,
+		MaxConcurrentAgents:       maxConcurrentAgents,
+		MaxTokens:                 maxTokens,
+		MaxConcurrentByState:      maxConcurrentByState,
+		Running:                   make(map[string]*RunningEntry),
+		Claimed:                   make(map[string]struct{}),
+		RetryAttempts:             make(map[string]*RetryEntry),
+		Completed:                 make(map[string]struct{}),
+		BudgetExhausted:           make(map[string]*BudgetExhaustedEntry),
+		BudgetAnnounced:           make(map[string]BudgetAnnouncement),
+		BudgetHoldNoticed:         make(map[string]string),
+		Parked:                    make(map[string]*ParkedEntry),
+		AgentTotals:               totals,
+		ReactionAttempts:          make(map[string]int),
+		ReactionHandedOffComments: make(map[string]map[string]struct{}),
+		PendingReactions:          make(map[string]*PendingReaction),
+		AutoMergeAuthLogged:       make(map[string]struct{}),
+		TokenBudgetIncomplete:     make(map[string]struct{}),
 	}
 }
 

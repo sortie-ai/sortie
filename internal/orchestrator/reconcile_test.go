@@ -303,6 +303,10 @@ const terminalReleaseIssueID = "REL-1"
 // expiring (ci, review), so the release is proven to span both shapes.
 var terminalReleaseFixtureKinds = []string{ReactionKindCI, ReactionKindReview, ReactionKindLabelReview}
 
+const terminalReleaseOtherIssueID = "REL-10"
+
+var terminalReleaseHandedOffKinds = []string{ReactionKindReview, ReactionKindBotReview}
+
 // stateWithTerminalReleaseFixture builds a State with a running entry for
 // [terminalReleaseIssueID] backed by cc, a live retry, a claim, and a
 // pending entry plus a non-zero attempt counter for each kind in
@@ -333,6 +337,10 @@ func stateWithTerminalReleaseFixture(t *testing.T, cc *cancelCounter) *State {
 		}
 		state.ReactionAttempts[key] = 2
 	}
+	for _, kind := range terminalReleaseHandedOffKinds {
+		seedHandedOff(state, ReactionKey(terminalReleaseIssueID, kind), "c1", "c2")
+	}
+	seedHandedOff(state, ReactionKey(terminalReleaseOtherIssueID, ReactionKindReview), "c9")
 	return state
 }
 
@@ -951,6 +959,10 @@ func TestReconcileTrackerState_RunningIssueReleasesReactionState(t *testing.T) {
 			t.Errorf("ReactionAttempts[%q] present after terminal release; want removed", key)
 		}
 	}
+	for _, kind := range terminalReleaseHandedOffKinds {
+		assertHandedOff(t, state, ReactionKey(terminalReleaseIssueID, kind))
+	}
+	assertHandedOff(t, state, ReactionKey(terminalReleaseOtherIssueID, ReactionKindReview), "c9")
 	if _, ok := state.Claimed[terminalReleaseIssueID]; ok {
 		t.Error("Claimed entry present after terminal release; want removed")
 	}
@@ -988,12 +1000,16 @@ func TestReconcileTrackerState_PendingOnlyIssueReleasesReactionState(t *testing.
 	}
 	state.ReactionAttempts[key] = 1
 	state.Claimed[issueID] = struct{}{}
+	seedHandedOff(state, ReactionKey(issueID, ReactionKindReview), "c1")
+	seedHandedOff(state, ReactionKey(issueID, ReactionKindBotReview), "c2")
 
 	ReconcileRunningIssues(state, params)
 
 	if tracker.calls != 1 {
 		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", tracker.calls)
 	}
+	assertHandedOff(t, state, ReactionKey(issueID, ReactionKindReview))
+	assertHandedOff(t, state, ReactionKey(issueID, ReactionKindBotReview))
 	if !slices.Contains(tracker.calledWith, issueID) {
 		t.Errorf("FetchIssueStatesByIDs called with %v, want it to contain %q", tracker.calledWith, issueID)
 	}
@@ -1063,6 +1079,9 @@ func TestReconcileTrackerState_FetchFailureReleasesNothing(t *testing.T) {
 		if state.ReactionAttempts[key] != 2 {
 			t.Errorf("ReactionAttempts[%q] = %d, want 2 (unchanged)", key, state.ReactionAttempts[key])
 		}
+	}
+	for _, kind := range terminalReleaseHandedOffKinds {
+		assertHandedOff(t, state, ReactionKey(terminalReleaseIssueID, kind), "c1", "c2")
 	}
 	if _, ok := state.Claimed[terminalReleaseIssueID]; !ok {
 		t.Error("Claimed entry missing after fetch failure; want unchanged")
