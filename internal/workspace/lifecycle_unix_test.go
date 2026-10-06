@@ -16,7 +16,9 @@ import (
 // that exits on its own while leaving a background process in its tree
 // makes Prepare return no error and log exactly one
 // LeftoversTerminatedMessage record carrying hook and workspace; a
-// hook that leaves nothing behind logs no such record.
+// hook that leaves nothing behind logs no such record, and one that
+// kills itself with a signal while leaving a process behind is a run
+// failure that logs the record once.
 func TestPrepare_LeftoverProcessLogsOneRecord(t *testing.T) {
 	t.Run("leftover process logs one record", func(t *testing.T) {
 		t.Parallel()
@@ -44,6 +46,30 @@ func TestPrepare_LeftoverProcessLogsOneRecord(t *testing.T) {
 		}
 		if !strings.Contains(out, "workspace="+result.Path) {
 			t.Errorf("log missing workspace=%s attribute; log = %q", result.Path, out)
+		}
+	})
+
+	t.Run("self-signalled hook is a run failure and logs one record", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := captureLoggerAt(&buf, slog.LevelInfo)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          t.TempDir(),
+			Identifier:    "PROJ-selfsignal",
+			BeforeRun:     "sleep 30 >/dev/null 2>&1 &\nkill -TERM $$",
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+
+		he := requireHookError(t, err)
+		if he.Op != "run" || he.ExitCode != -1 || !he.TerminatedLeftovers {
+			t.Errorf("HookError{Op: %q, ExitCode: %d, TerminatedLeftovers: %t}, want {run, -1, true}", he.Op, he.ExitCode, he.TerminatedLeftovers)
+		}
+		out := buf.String()
+		if count := strings.Count(out, procutil.LeftoversTerminatedMessage); count != 1 {
+			t.Errorf("log contains %d occurrences of %q, want exactly 1; log = %q", count, procutil.LeftoversTerminatedMessage, out)
 		}
 	})
 

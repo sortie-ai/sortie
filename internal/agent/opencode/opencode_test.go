@@ -2832,6 +2832,77 @@ exit 0
 	}
 }
 
+func awaitReapedFromFile(pidFile string) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidFile)
+		if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && convErr == nil && pid > 0 {
+			if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				return true
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+func TestRunTurn_ZeroExitCompletesWhenTheDeadlineFallsAfterTheReap(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	holderPID := filepath.Join(tmpDir, "stderr-holder.pid")
+	runtimePID := filepath.Join(tmpDir, "runtime.pid")
+	killEscapedGroupOnCleanup(t, holderPID)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf '%%s\n' "$$" > %s
+%sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_deadline_after_reap","part":{"id":"p1","messageID":"m1","sessionID":"ses_deadline_after_reap","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"text","timestamp":1001,"sessionID":"ses_deadline_after_reap","part":{"id":"p2","messageID":"m1","sessionID":"ses_deadline_after_reap","type":"text","text":"done","time":{"start":1001,"end":1001}}}\n'
+exit 0
+`, shellQuote(runtimePID), writeEscapedHolderSpawn(holderPID, ">/dev/null")))
+
+	a, _ := NewOpenCodeAdapter()
+	session := mustStartSession(t, a, tmpDir, script)
+	session.Internal.(*sessionState).drainGrace = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var once sync.Once
+	var reaped bool
+	onEvent := func(domain.AgentEvent) {
+		once.Do(func() {
+			reaped = awaitReapedFromFile(runtimePID)
+			cancel()
+		})
+	}
+
+	done := make(chan struct{})
+	var result domain.TurnResult
+	var runErr error
+	go func() {
+		defer close(done)
+		result, runErr = a.RunTurn(ctx, session, domain.RunTurnParams{Prompt: "work", OnEvent: onEvent})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunTurn did not return within 10s")
+	}
+
+	if !reaped {
+		t.Fatal("the runtime was not reaped before the context was cancelled, want the cancellation to fall after the reap")
+	}
+	if runErr != nil {
+		t.Errorf("RunTurn() error = %v, want nil for a runtime that exited zero before the deadline", runErr)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+}
+
 // TestRunTurn_ContextCancellationArm_BoundedDrain exercises the bounded
 // drain on opencode's context-cancellation early-return arm: with a
 // descendant holding the standard-output handle, the turn still

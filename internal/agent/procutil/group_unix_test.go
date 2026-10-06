@@ -37,6 +37,22 @@ func stubLeaderExit(t *testing.T, fn func(pid int) error) {
 	leaderExitFunc = fn
 }
 
+func stubReleaseSeam(t *testing.T, fn func()) {
+	t.Helper()
+	orig := releaseSeam
+	t.Cleanup(func() { releaseSeam = orig })
+	releaseSeam = fn
+}
+
+func killedBySignal(err error) bool {
+	exitErr, ok := errors.AsType[*exec.ExitError](err)
+	if !ok {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled()
+}
+
 func shortenDrainBound(t *testing.T, bound time.Duration) {
 	t.Helper()
 	orig := groupDrainBound
@@ -162,6 +178,9 @@ func TestNilGroupIsNoOp(t *testing.T) {
 	}
 	if err := g.Kill(); err != nil {
 		t.Errorf("(*Group)(nil).Kill() = %v, want nil", err)
+	}
+	if g.Stopped() {
+		t.Error("(*Group)(nil).Stopped() = true, want false")
 	}
 }
 
@@ -536,5 +555,65 @@ func TestUnixEscalationStandsDownAtRelease(t *testing.T) {
 	}
 	if _, ok := g.captureEscalation(); ok {
 		t.Error("captureEscalation() after release ok = true, want false")
+	}
+}
+
+func TestCancellationAfterOwnExitIsNotAStop(t *testing.T) {
+	installs := []struct {
+		name    string
+		install func(*exec.Cmd)
+	}{
+		{name: "SetGroupCancel", install: func(cmd *exec.Cmd) { SetGroupCancel(cmd, 100*time.Millisecond) }},
+		{name: "SetGroupKill", install: SetGroupKill},
+	}
+	points := []struct {
+		name string
+		at   func(t *testing.T, fire func())
+	}{
+		{
+			name: "after the exit was observed",
+			at: func(t *testing.T, fire func()) {
+				t.Helper()
+				stubLeaderExit(t, func(pid int) error {
+					if err := observeLeaderExit(pid); err != nil {
+						return err
+					}
+					fire()
+					return nil
+				})
+			},
+		},
+		{
+			name: "after the release",
+			at: func(t *testing.T, fire func()) {
+				t.Helper()
+				stubReleaseSeam(t, fire)
+			},
+		},
+	}
+
+	for _, in := range installs {
+		for _, pt := range points {
+			t.Run(in.name+" "+pt.name, func(t *testing.T) {
+				shortenDrainBound(t, 200*time.Millisecond)
+				path := agenttest.FakeRuntime(t, t.TempDir(), "fake", agenttest.OutputScenario, agenttest.Output{})
+				cmd, p := newCancelProbe(t, in.install, path)
+				pt.at(t, p.fire)
+				startOwned(t, cmd)
+
+				r := StartReaper(cmd, slog.New(slog.DiscardHandler))
+				awaitDone(t, r, 10*time.Second)
+
+				if !p.observed.Load() {
+					t.Fatal("the cancellation did not run before the wait, want it to have run")
+				}
+				if err := r.Err(); err != nil {
+					t.Errorf("Err() = %v for a child that exited zero before the cancellation, want nil", err)
+				}
+				if r.Stopped() {
+					t.Error("Stopped() = true for a cancellation after the child's own exit, want false")
+				}
+			})
+		}
 	}
 }

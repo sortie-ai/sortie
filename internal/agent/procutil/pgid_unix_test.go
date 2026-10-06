@@ -194,8 +194,11 @@ func TestGroupSignalsRealProcess(t *testing.T) {
 			t.Fatalf("SignalGraceful() = %v, want nil", err)
 		}
 
-		if err := cmd.Wait(); !WasSignaled(err) {
-			t.Errorf("WasSignaled(cmd.Wait()) = false for %v, want true (terminated by SIGTERM)", err)
+		if err := cmd.Wait(); !killedBySignal(err) {
+			t.Errorf("cmd.Wait() = %v, want termination by SIGTERM", err)
+		}
+		if !g.Stopped() {
+			t.Error("Stopped() = false after SignalGraceful reached a running launch, want true")
 		}
 	})
 

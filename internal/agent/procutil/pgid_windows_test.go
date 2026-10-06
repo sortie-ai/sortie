@@ -162,20 +162,7 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	}
 }
 
-func TestWasSignaled_NormalExit1_NotSignaled(t *testing.T) {
-	t.Parallel()
-
-	cmd := exec.Command("cmd.exe", "/C", "exit 1")
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("cmd.Run() = nil, want exit error")
-	}
-	if WasSignaled(err) {
-		t.Errorf("WasSignaled(exit 1) = true, want false")
-	}
-}
-
-func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
+func TestKill_JobTerminationRecordsStopWithControlCExit(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.Command("cmd.exe", "/C", "ping -n 31 127.0.0.1 >nul")
@@ -188,17 +175,15 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 	}
 
 	awaitDone(t, r, 5*time.Second)
-	waitErr := r.Err()
-	if waitErr == nil {
-		t.Fatal("Err() = nil, want exit error after Job Object termination")
+	exitErr, ok := errors.AsType[*exec.ExitError](r.Err())
+	if !ok {
+		t.Fatalf("Err() = %v (%T), want *exec.ExitError after Job Object termination", r.Err(), r.Err())
 	}
-	if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
-		t.Logf("ExitCode() = %d (0x%X), ExitError = %v", exitErr.ExitCode(), uint32(exitErr.ExitCode()), exitErr)
-	} else {
-		t.Logf("waitErr type = %T, value = %v", waitErr, waitErr)
+	if code := uint32(exitErr.ExitCode()); code != jobTerminateExitCode { //nolint:gosec // G115: a Windows exit status is a 32-bit value
+		t.Errorf("exit code = %#x, want %#x", code, jobTerminateExitCode)
 	}
-	if !WasSignaled(waitErr) {
-		t.Errorf("WasSignaled(job-terminated) = false, want true")
+	if !r.Stopped() {
+		t.Error("Stopped() = false after Kill terminated the Job Object while the child ran, want true")
 	}
 }
 

@@ -21,6 +21,7 @@ const groupDrainPollInterval = 5 * time.Millisecond
 
 // Reaper reaps one started subprocess and terminates its process group.
 type Reaper struct {
+	group      *Group
 	done       chan struct{}
 	err        error
 	leftover   bool
@@ -54,7 +55,7 @@ func StartReaper(cmd *exec.Cmd, logger *slog.Logger) *Reaper {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &Reaper{done: make(chan struct{})}
+	r := &Reaper{group: g, done: make(chan struct{})}
 	go func() {
 		r.err, r.leftover, r.cleanupErr = g.reap()
 		groups.Delete(cmd)
@@ -82,6 +83,13 @@ func (r *Reaper) Done() <-chan struct{} {
 // Err returns the error cmd.Wait reported. Call only after Done closed.
 func (r *Reaper) Err() error {
 	return r.err
+}
+
+// Stopped reports whether a stop began while the direct child was still
+// running, as [Group.Stopped] does for the same launch. It is final once
+// Done closed.
+func (r *Reaper) Stopped() bool {
+	return r.group.Stopped()
 }
 
 // Leftover reports whether the reap found a live process of cmd's

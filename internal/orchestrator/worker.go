@@ -495,9 +495,10 @@ func effectiveTurnTimeoutMS(turnTimeoutMS int) int {
 // runBoundedTurn calls adapter.RunTurn under a deadline derived from
 // turnTimeoutMS. A parent ctx already done takes priority over the deadline,
 // so stall detection, reconciliation, and shutdown keep reporting their own
-// cancellation; only a turn context that expired while ctx stayed live is
-// reported as [domain.ErrTurnTimeout]. Every other outcome is returned
-// unchanged. ctx is never replaced for the caller; identity carries the
+// cancellation; only an outcome the adapter reports as cancelled, from a
+// turn context that expired while ctx stayed live, is reported as
+// [domain.ErrTurnTimeout]. Every other outcome, a turn that completed or
+// failed after the deadline among them, is returned unchanged. ctx is never replaced for the caller; identity carries the
 // caller's attributes naming the turn in any log record produced.
 func runBoundedTurn(
 	ctx context.Context,
@@ -522,7 +523,7 @@ func runBoundedTurn(
 	if ctx.Err() != nil {
 		return result, err
 	}
-	if errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
+	if agentcore.CancelledOutcome(result, err) && errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
 		attrs := append([]slog.Attr{slog.Int("turn_timeout_ms", effectiveMS)}, identity...)
 		logger.LogAttrs(ctx, slog.LevelWarn, "turn timeout exceeded", attrs...)
 		cause := err

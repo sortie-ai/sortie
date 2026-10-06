@@ -212,6 +212,32 @@ func TestQueryModelNotFound_HeldDescendantHoldingOutput(t *testing.T) {
 	pollOpencodePIDAndAssertGone(t, pidPath)
 }
 
+func TestQueryModelNotFound_EndedContextStillListsTheModels(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := agenttest.WriteScript(t, tmpDir, "fake-models", "printf 'openai/gpt-5\\n'\n")
+	state := &sessionState{
+		target: agentcore.LaunchTarget{
+			Command:       script,
+			WorkspacePath: tmpDir,
+		},
+		baseLogger: slog.Default(),
+	}
+	state.passthrough.Model = "anthropic/claude-sonnet-4-5"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	message, ok := queryModelNotFound(ctx, state)
+
+	if !ok {
+		t.Fatal("queryModelNotFound() ok = false after the context ended, want true: the listing keeps its own bound")
+	}
+	if !strings.HasPrefix(message, "Model not found: anthropic/claude-sonnet-4-5") {
+		t.Errorf("queryModelNotFound() message = %q, want it to name the missing model", message)
+	}
+}
+
 func writeExportScript(t *testing.T, dir, fixtureName string, exitCode int) (string, string) {
 	t.Helper()
 

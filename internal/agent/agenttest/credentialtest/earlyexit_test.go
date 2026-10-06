@@ -142,7 +142,7 @@ func (a *forkPerTurnFixtureAdapter) StartSession(_ context.Context, params domai
 		ParseLine:    parseLine,
 		GetUsage:     func() (domain.TokenUsage, bool) { return domain.TokenUsage{}, false },
 		GetSessionID: func() string { return "" },
-		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, _ []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, _ error, _ []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			return agentcore.FinalizeTurn(emit, slog.Default(), agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,

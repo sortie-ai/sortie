@@ -81,7 +81,7 @@ func TestObserveLeaderExitDoesNotReturnWhileRunning(t *testing.T) {
 		t.Fatalf("cmd.Process.Kill() = %v", err)
 	}
 	awaitObservation(t, done, pid, 10*time.Second)
-	if err := cmd.Wait(); !WasSignaled(err) {
+	if err := cmd.Wait(); !killedBySignal(err) {
 		t.Errorf("cmd.Wait() = %v, want the signal status of a child that stayed unreaped", err)
 	}
 }
@@ -116,7 +116,7 @@ func TestObserveLeaderExitReturnsForExitAfterAndBeforeCall(t *testing.T) {
 
 			awaitObservation(t, done, pid, 10*time.Second)
 
-			if err := cmd.Wait(); !WasSignaled(err) {
+			if err := cmd.Wait(); !killedBySignal(err) {
 				t.Errorf("cmd.Wait() = %v, want the signal status of a child that stayed unreaped", err)
 			}
 		})

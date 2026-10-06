@@ -390,8 +390,9 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       on_message=(msg) -> send(orchestrator_channel, {agent_update, issue.id, msg})
     )
     cancelled_at_ending = worker_ctx is done  // one read serves both exits below
-    // An expiry of the derived context, observed once run_turn returns and
-    // with worker_ctx still live, is reclassified as a turn_timeout error.
+    // An outcome the adapter reports cancelled, after the derived context
+    // expired and with worker_ctx still live, is reclassified as a
+    // turn_timeout error; any other report stands.
     // A worker_ctx that is already done (stall detection, terminal-state
     // reconciliation, shutdown) keeps its own cancellation disposition
     // instead, whatever the derived context is doing.

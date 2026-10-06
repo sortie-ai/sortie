@@ -963,3 +963,58 @@ func TestProcessIsRunning(t *testing.T) {
 		t.Error("processIsRunning(exited process whose handle is still held) = true, want false")
 	}
 }
+
+func TestResumeFailureReportsWhetherCancellationBegan(t *testing.T) {
+	tests := []struct {
+		name string
+		stub func(cmd *exec.Cmd, p *cancelProbe) (seam func(), resume func(int) error)
+		want bool
+	}{
+		{
+			name: "the deadline passed during the resume call",
+			stub: func(_ *exec.Cmd, p *cancelProbe) (func(), func(int) error) {
+				return func() {}, func(int) error {
+					p.cancel()
+					return errors.New("injected resume failure")
+				}
+			},
+			want: false,
+		},
+		{
+			name: "the launch's cancellation was recorded before the resume",
+			stub: func(cmd *exec.Cmd, p *cancelProbe) (func(), func(int) error) {
+				seam := func() {
+					p.cancel()
+					deadline := time.Now().Add(5 * time.Second)
+					for time.Now().Before(deadline) && !lookupGroup(cmd).Stopped() {
+						time.Sleep(5 * time.Millisecond)
+					}
+				}
+				return seam, func(int) error { return errors.New("injected resume failure") }
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		for _, st := range startEntries {
+			t.Run(tt.name+" through "+st.name, func(t *testing.T) {
+				cmd, p := newCancelProbe(t, SetGroupKill, "cmd.exe", "/C", "exit 0")
+				seam, resume := tt.stub(cmd, p)
+				origSeam, origResume := resumeSeam, resumeProcess
+				t.Cleanup(func() { resumeSeam, resumeProcess = origSeam, origResume })
+				resumeSeam, resumeProcess = seam, resume
+
+				err := st.start(cmd)
+
+				var startErr *StartError
+				if !errors.As(err, &startErr) || startErr.Stage != StageProcessResume {
+					t.Fatalf("%s error = %v, want *StartError{Stage: StageProcessResume}", st.name, err)
+				}
+				if startErr.Cancelled != tt.want {
+					t.Errorf("StartError.Cancelled = %t when %s, want %t", startErr.Cancelled, tt.name, tt.want)
+				}
+			})
+		}
+	}
+}

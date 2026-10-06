@@ -280,6 +280,8 @@ type runHookHelperParams struct {
 // process's own startup.
 type runHookHelperResult struct {
 	Err                 string
+	Op                  string
+	ExitCode            int
 	TerminatedLeftovers bool
 	RunHookMS           int64
 }
@@ -295,6 +297,9 @@ func runHookHelperScenario(_ []string, p runHookHelperParams) int {
 	out := runHookHelperResult{TerminatedLeftovers: result.TerminatedLeftovers, RunHookMS: time.Since(start).Milliseconds()}
 	if err != nil {
 		out.Err = err.Error()
+	}
+	if he, ok := errors.AsType[*HookError](err); ok {
+		out.Op, out.ExitCode, out.TerminatedLeftovers = he.Op, he.ExitCode, he.TerminatedLeftovers
 	}
 	data, marshalErr := json.Marshal(out)
 	if marshalErr != nil {
@@ -327,10 +332,19 @@ func TestRunHook_DetachedHelperReportsTerminatedLeftovers(t *testing.T) {
 	tests := []struct {
 		name         string
 		script       string
+		wantOp       string
+		wantExitCode int
 		wantLeftover bool
 	}{
-		{"background process left running", "start /b ping -n 30 127.0.0.1 >NUL", true},
-		{"clean exit", "exit 0", false},
+		{name: "background process left running", script: "start /b ping -n 30 127.0.0.1 >NUL", wantLeftover: true},
+		{name: "clean exit", script: "exit 0"},
+		{
+			name:         "exit by STATUS_CONTROL_C_EXIT with a background process left running",
+			script:       "start /b ping -n 30 127.0.0.1 >NUL & exit /b -1073741510",
+			wantOp:       "run",
+			wantExitCode: int(uint32(0xC000013A)),
+			wantLeftover: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -371,8 +385,11 @@ func TestRunHook_DetachedHelperReportsTerminatedLeftovers(t *testing.T) {
 			if err := json.Unmarshal(data, &out); err != nil {
 				t.Fatalf("unmarshal helper result: %v", err)
 			}
-			if out.Err != "" {
-				t.Fatalf("helper's RunHook() error = %s, want nil", out.Err)
+			if (out.Err != "") != (tt.wantOp != "") {
+				t.Fatalf("helper's RunHook() error = %q, want an error only for Op %q", out.Err, tt.wantOp)
+			}
+			if out.Op != tt.wantOp || out.ExitCode != tt.wantExitCode {
+				t.Errorf("helper's HookError{Op: %q, ExitCode: %d}, want {%q, %d}", out.Op, out.ExitCode, tt.wantOp, tt.wantExitCode)
 			}
 			if out.TerminatedLeftovers != tt.wantLeftover {
 				t.Errorf("TerminatedLeftovers = %v, want %v", out.TerminatedLeftovers, tt.wantLeftover)

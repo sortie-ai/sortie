@@ -484,7 +484,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		},
 		GetUsage:     func() (domain.TokenUsage, bool) { return state.usage.Snapshot(), state.usage.Measured() },
 		GetSessionID: func() string { return state.copilotSessionID },
-		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, waitErr error, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			lastResult, _ := lastParsed.(*rawEvent)
 
 			// Capture session ID from result event for subsequent turns.
@@ -498,6 +498,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			ev := agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,
+				WaitErr:      waitErr,
 				EarlyExit:    earlyExit,
 			}
 			ev.Work, ev.WorkDetail = state.work.Report()

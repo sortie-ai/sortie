@@ -78,8 +78,8 @@ type ForkPerTurnHooks struct {
 	// subprocess exit state. The skeleton calls OnFinalize after the
 	// subprocess has exited following the scan loop, for every ending it
 	// has not already classified as a stdout scan error, a cancellation,
-	// an ssh connection failure, exit code 127, or a signal, so a
-	// non-zero exit code reaches it.
+	// an ssh connection failure, or exit code 127, so a non-zero exit
+	// code, including one from a signal Sortie did not send, reaches it.
 	//
 	// emit is the per-turn event callback passed to RunTurn. OnFinalize
 	// MUST use this to emit the terminal event (EventTurnCompleted or
@@ -88,19 +88,20 @@ type ForkPerTurnHooks struct {
 	// lastParsed is the last non-nil value returned by ParseLine during
 	// the scan loop, or nil if no terminal event was observed.
 	// exitCode is the process exit code extracted by
-	// [procutil.ExtractExitCode]. stderrLines contains the lines
+	// [procutil.ExtractExitCode]. waitErr is the wait error the exit code
+	// came from, nil for exit 0; the adapter MUST copy it onto
+	// [TurnEvidence.WaitErr]. stderrLines contains the lines
 	// collected from the stderr pipe by the time the skeleton's bounded
 	// drain ended, which runs after the reap rather than before it; a
 	// drain that hit its bound reports the abandonment marker instead.
 	// earlyExit is non-nil exactly when the turn's process exited on its
-	// own, Stop did not signal it, and no readable line reached standard
-	// output; the adapter MUST copy it onto [TurnEvidence.EarlyExit] in
+	// own and no readable line reached standard output; the adapter MUST copy it onto [TurnEvidence.EarlyExit] in
 	// the evidence it finalizes.
 	//
 	// The skeleton calls [procutil.EmitWarnLines] automatically when
 	// OnFinalize returns a non-nil *[domain.AgentError]. The adapter MUST
 	// NOT call [procutil.EmitWarnLines] inside OnFinalize.
-	OnFinalize func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError)
+	OnFinalize func(emit func(domain.AgentEvent), lastParsed any, exitCode int, waitErr error, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError)
 
 	// EmitSessionStartID, when non-nil, causes the skeleton to call
 	// [EmitSessionStarted] immediately after cmd.Start() succeeds and
@@ -135,10 +136,9 @@ type ForkPerTurnSession struct {
 	// only from RunTurn's goroutine; not protected by mu.
 	turns int
 
-	mu           sync.Mutex
-	group        *procutil.Group
-	waitCh       chan struct{}
-	stopSignaled bool // guarded by mu; whether Stop signaled the current turn's process
+	mu     sync.Mutex
+	group  *procutil.Group
+	waitCh chan struct{}
 
 	// drainGrace bounds the wait for the stderr drain before each
 	// cmd.Wait call. Set by NewForkPerTurnSession; overridden only by
@@ -152,6 +152,11 @@ type ForkPerTurnSession struct {
 	// configured stop grace.
 	stopGrace time.Duration
 }
+
+// startWithOwnedPipes is the turn's process start. Only a test replaces
+// it, to return a start failure no real launch can be made to produce at
+// a chosen moment.
+var startWithOwnedPipes = procutil.StartWithOwnedPipes
 
 // NewForkPerTurnSession constructs a ForkPerTurnSession. target must be a
 // pointer to a [LaunchTarget] obtained from [ResolveLaunchTarget] during
@@ -231,6 +236,25 @@ func (s *ForkPerTurnSession) RunTurn(
 		panic("agentcore: ForkPerTurnSession.RunTurn: emit must be non-nil")
 	}
 
+	// ctx is read only to pick the message: whether the turn was
+	// cancelled is the launch record's verdict, not the context's.
+	cancelledTurn := func() (domain.TurnResult, error) {
+		usage, measured := s.hooks.GetUsage()
+		agentErr := &domain.AgentError{Kind: domain.ErrTurnCancelled, Message: "turn cancelled"}
+		if ctx.Err() != nil {
+			EmitTurnCancelled(emit, "context cancelled", usage)
+			agentErr.Err = ctx.Err()
+		} else {
+			EmitTurnCancelled(emit, "turn cancelled", usage)
+		}
+		return domain.TurnResult{
+			SessionID:     s.hooks.GetSessionID(),
+			ExitReason:    domain.EventTurnCancelled,
+			Usage:         usage,
+			UsageMeasured: measured,
+		}, agentErr
+	}
+
 	cmdCtx, cancelCmd := context.WithCancel(ctx)
 	defer cancelCmd()
 
@@ -264,13 +288,26 @@ func (s *ForkPerTurnSession) RunTurn(
 		}, bindErr
 	}
 
+	// On Windows os/exec resolves the executable before it checks the
+	// context, so a turn already cancelled with a missing binary would
+	// otherwise surface as a failed start rather than a cancellation.
+	if ctx.Err() != nil {
+		return cancelledTurn()
+	}
+
 	// Lock before starting the pipes and the process together, so a Stop
 	// arriving in a reopened window cannot read s.group == nil and miss
 	// signaling a process that was about to be recorded.
 	s.mu.Lock()
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, s.logger)
+	pipes, group, err := startWithOwnedPipes(cmd, s.logger)
 	if err != nil {
 		s.mu.Unlock()
+
+		var startErr *procutil.StartError
+		isStartErr := errors.As(err, &startErr)
+		if isStartErr && startErr.Cancelled {
+			return cancelledTurn()
+		}
 
 		usage, measured := s.hooks.GetUsage()
 		startFailed := domain.TurnResult{
@@ -279,8 +316,7 @@ func (s *ForkPerTurnSession) RunTurn(
 			UsageMeasured: measured,
 		}
 
-		var startErr *procutil.StartError
-		if !errors.As(err, &startErr) {
+		if !isStartErr {
 			return startFailed, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "failed to start subprocess",
@@ -302,15 +338,6 @@ func (s *ForkPerTurnSession) RunTurn(
 				Err:     startErr.Err,
 			}
 		default: // procutil.StageProcessStart, procutil.StageProcessResume
-			if ctx.Err() != nil {
-				EmitTurnCancelled(emit, "context cancelled", usage)
-				startFailed.ExitReason = domain.EventTurnCancelled
-				return startFailed, &domain.AgentError{
-					Kind:    domain.ErrTurnCancelled,
-					Message: "turn cancelled",
-					Err:     ctx.Err(),
-				}
-			}
 			return startFailed, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "failed to start subprocess",
@@ -327,7 +354,6 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	s.turns = prospectiveTurn
 	s.group = group
-	s.stopSignaled = false
 	s.waitCh = make(chan struct{})
 	localWaitCh := s.waitCh
 	pidStr := strconv.Itoa(cmd.Process.Pid)
@@ -356,6 +382,8 @@ func (s *ForkPerTurnSession) RunTurn(
 	}
 
 	reaped := false
+	killedForReadFailure := false
+	stoppedBeforeReadFailureKill := false
 	reaperDone := reaper.Done()
 	var deadline <-chan time.Time
 	var deadlineAt time.Time
@@ -375,6 +403,8 @@ loop:
 		case line, ok := <-reader.Stream():
 			if !ok {
 				if reader.Err() != nil && !reaped {
+					stoppedBeforeReadFailureKill = reaper.Stopped()
+					killedForReadFailure = true
 					cancelCmd()
 				}
 				break loop
@@ -412,6 +442,7 @@ loop:
 	}
 
 	waitErr := reaper.Err()
+	stopped := reaper.Stopped()
 	scanErr := reader.Err()
 
 	stderrLines := stderrCollector.FinishAndCollect(s.drainGrace)
@@ -421,22 +452,14 @@ loop:
 	// can lose, so it falls through to the exit-based arms below rather
 	// than reporting a scanner error.
 	if scanErr != nil && !errors.Is(scanErr, procutil.ErrStdoutAbandoned) {
-		// Context cancellation propagates through exec.CommandContext
-		// and can surface as a pipe read error. Treat as cancellation.
-		if ctx.Err() != nil {
-			usage, measured := s.hooks.GetUsage()
-			EmitTurnCancelled(emit, "context cancelled", usage)
-			result := domain.TurnResult{
-				SessionID:     s.hooks.GetSessionID(),
-				ExitReason:    domain.EventTurnCancelled,
-				Usage:         usage,
-				UsageMeasured: measured,
-			}
-			return result, &domain.AgentError{
-				Kind:    domain.ErrTurnCancelled,
-				Message: "turn cancelled",
-				Err:     ctx.Err(),
-			}
+		// The turn's own kill after a read failure stops the process
+		// too, so only a stop that began before it is a cancellation.
+		cancelled := stopped
+		if killedForReadFailure {
+			cancelled = stoppedBeforeReadFailureKill
+		}
+		if cancelled {
+			return cancelledTurn()
 		}
 
 		procutil.EmitWarnLines(stderrLines, s.logger)
@@ -455,20 +478,8 @@ loop:
 		}
 	}
 
-	if ctx.Err() != nil {
-		usage, measured := s.hooks.GetUsage()
-		EmitTurnCancelled(emit, "context cancelled", usage)
-		result := domain.TurnResult{
-			SessionID:     s.hooks.GetSessionID(),
-			ExitReason:    domain.EventTurnCancelled,
-			Usage:         usage,
-			UsageMeasured: measured,
-		}
-		return result, &domain.AgentError{
-			Kind:    domain.ErrTurnCancelled,
-			Message: "turn cancelled",
-			Err:     ctx.Err(),
-		}
+	if stopped {
+		return cancelledTurn()
 	}
 
 	exitCode := procutil.ExtractExitCode(waitErr)
@@ -486,16 +497,7 @@ loop:
 		return result, ConnectionFailedError()
 	}
 
-	s.mu.Lock()
-	stopSignaled := s.stopSignaled
-	s.mu.Unlock()
-
-	// An exit Sortie itself caused by signaling the process through Stop
-	// is never reported as the runtime's own early exit.
-	var earlyExit *domain.AgentError
-	if !stopSignaled {
-		earlyExit = output.ExitedBeforeOutput(*s.target, waitErr).Report(stderrCollector)
-	}
+	earlyExit := output.ExitedBeforeOutput(*s.target, waitErr).Report(stderrCollector)
 
 	if earlyExit == nil {
 		if exitCode == 127 {
@@ -513,28 +515,13 @@ loop:
 				Message: "exit code 127",
 			}
 		}
-
-		if procutil.WasSignaled(waitErr) {
-			usage, measured := s.hooks.GetUsage()
-			EmitTurnCancelled(emit, "killed by signal", usage)
-			result := domain.TurnResult{
-				SessionID:     s.hooks.GetSessionID(),
-				ExitReason:    domain.EventTurnCancelled,
-				Usage:         usage,
-				UsageMeasured: measured,
-			}
-			return result, &domain.AgentError{
-				Kind:    domain.ErrTurnCancelled,
-				Message: "killed by signal",
-			}
-		}
 	}
 
 	// The explicit nil check prevents a typed-nil *domain.AgentError from
 	// becoming a non-nil error interface on the success path. The
 	// skeleton calls EmitWarnLines when agentErr is non-nil, so
 	// OnFinalize must not call it.
-	result, agentErr := s.hooks.OnFinalize(emit, lastParsed, exitCode, stderrLines, earlyExit)
+	result, agentErr := s.hooks.OnFinalize(emit, lastParsed, exitCode, waitErr, stderrLines, earlyExit)
 	if agentErr != nil {
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		return result, agentErr
@@ -558,9 +545,6 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 	group := s.group
 	waitCh := s.waitCh
 	s.group = nil
-	if group != nil {
-		s.stopSignaled = true
-	}
 	s.mu.Unlock()
 
 	if group == nil {

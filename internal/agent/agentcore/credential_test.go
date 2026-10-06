@@ -114,6 +114,15 @@ func TestVerifyCredential_Verdict(t *testing.T) {
 			wantMessage: boundMessage,
 		},
 		{
+			name: "turn completed after the bound elapsed passes",
+			run: func(ctx context.Context, _ context.CancelFunc) (domain.TurnResult, error) {
+				<-ctx.Done()
+				return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+			},
+			turnBound: 20 * time.Millisecond,
+			wantNil:   true,
+		},
+		{
 			name: "ssh connection failure returned unchanged",
 			run: func(context.Context, context.CancelFunc) (domain.TurnResult, error) {
 				return domain.TurnResult{}, connFailed

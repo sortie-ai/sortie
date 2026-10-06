@@ -402,7 +402,10 @@ func queryModelNotFound(ctx context.Context, state *sessionState) (message strin
 		return "", false
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
+	// WithoutCancel: a turn finalized after its context ended still needs
+	// the listing, and a bound derived from the ended context would make
+	// cmd.Start refuse it.
+	queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
 	modelsArgs := []string{"models"}
