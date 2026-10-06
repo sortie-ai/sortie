@@ -31,6 +31,9 @@ func init() {
 			}
 			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"args\":%s}}\n", req.ID, encodedArgs)
 		}
+		if in.Err() != nil {
+			return 2
+		}
 		return 0
 	})
 }
