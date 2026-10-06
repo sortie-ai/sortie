@@ -635,9 +635,9 @@ The `reactions` section configures feedback loops that respond to external event
 
 To get a comment on the issue and no label, write `escalation: none` and list the event in a `tracker_comment` entry. A reaction block that omits `escalation` resolves to `label`, `auto_merge` included, and draws no warning.
 
-**Escalation recurrence:** `escalation: label` is idempotent (re-applying a present label is a no-op); a comment on the issue, whether it comes from `escalation: comment` or from a `tracker_comment` subscription to the escalation event, posts a new comment each time the escalation fires. Two conditions fire it: the kind's own budget is exhausted, or a `triage` command answers `escalate`. For `review_comments` and `bot_review`, an exhausted budget fires the escalation only together with a new comment that no continuation turn was given (for `bot_review`, a comment on the code). Recurrence depends on the kind rather than on which condition fired. For kinds whose escalation releases the issue claim (`ci_failure`, `review_comments`), escalation fires once and the reaction stops. For kinds whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the reaction re-arms if its condition recurs and escalates again, so on a long-lived PR a comment can accumulate repeated entries while `escalation: label` stays a single mark. Prefer `label` for kinds that may escalate repeatedly, and list the event in a `tracker_comment` entry only when you want each recurrence on the issue. A triage escalation is not re-posted for a subject already escalated: the answer is retained for as long as the subject's fingerprint stands, and a retained `escalate` re-applies without invoking the escalation a second time.
+**Escalation recurrence:** `escalation: label` is idempotent (re-applying a present label is a no-op); a comment on the issue, whether it comes from `escalation: comment` or from a `tracker_comment` subscription to the escalation event, posts a new comment each time the escalation fires. Two conditions fire it: the kind's own budget is exhausted, or a `triage` command answers `escalate`. For `review_comments` and `bot_review`, an exhausted budget fires the escalation only together with a new comment that no earlier run of the issue was given (for `bot_review`, a comment on the code). Recurrence depends on the kind rather than on which condition fired. For kinds whose escalation releases the issue claim (`ci_failure`, `review_comments`), escalation fires once and the reaction stops. For kinds whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the reaction re-arms if its condition recurs and escalates again, so on a long-lived PR a comment can accumulate repeated entries while `escalation: label` stays a single mark. Prefer `label` for kinds that may escalate repeatedly, and list the event in a `tracker_comment` entry only when you want each recurrence on the issue. A triage escalation is not re-posted for a subject already escalated: the answer is retained for as long as the subject's fingerprint stands, and a retained `escalate` re-applies without invoking the escalation a second time.
 
-**Release on terminal state:** each reconcile pass reads tracker state for every running issue and for every issue holding a pending reaction entry, whether or not a worker is still running for it. When the tracker reports an issue in a state from `tracker.terminal_states`, the pass releases that issue's pending reaction entries, its reaction attempt counters, its pending retry, and its dispatch claim. Polling for that issue stops on the same pass. The release is scoped to in-memory state and leaves the `reaction_fingerprints` rows untouched.
+**Release on terminal state:** each reconcile pass reads tracker state for every running issue and for every issue holding a pending reaction entry, whether or not a worker is still running for it. When the tracker reports an issue in a state from `tracker.terminal_states`, the pass releases that issue's pending reaction entries, its reaction attempt counters, its pending retry, and its dispatch claim. Polling for that issue stops on the same pass. The release is scoped to in-memory state and leaves the `reaction_fingerprints` rows and the stored record of the review comments each run was given untouched.
 
 Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
 
@@ -766,9 +766,11 @@ Additional fields (via Extra):
 
 **Fingerprint dedup:** The orchestrator computes a SHA-256 fingerprint from sorted non-outdated comment IDs. If the fingerprint has not changed since the last dispatch, no new continuation is triggered. Fingerprints are persisted across restarts in the `reaction_fingerprints` SQLite table.
 
+**Comments already given:** A continuation turn starts only when the pull request holds a comment that no earlier run of the issue was given, and it carries every remaining comment, the ones the agent already has included. A set that only lost members, because a fix made some comments outdated or a review was dismissed, starts no turn, spends none of `max_continuation_turns`, and escalates nothing, and neither does a set that comes back after a larger one. The record of what each run was given is stored in the database, so a restart does not start a turn that only repeats it. A comment the agent received but left unaddressed is not sent again when its siblings go away; it comes back with the next new comment, which for this kind is a comment in a new review that requests changes. A run is given the comments its first prompt shows: a template that never prints `review_comments` hands none over. A new run of an issue, such as after a reopen, is given the comments no run was given when the pull request already exists in its workspace, this kind has no `triage` block, and the template shows them as an added section, for example an `{{ if .review_comments }}` block, with the rest of the prompt unchanged. A template that switches to different text when `review_comments` is set keeps its normal prompt for a new run.
+
 **Bot exclusion:** Human-loop selection drops a comment whose author the platform reports as an automated bot account, and separately drops a comment whose author matches `reactions.bot_review.bot_usernames`. The allowlist half takes effect only while `reactions.bot_review` is configured with a provider, because that is the only condition under which the allowlist is built; a deployment running `review_comments` alone sees no allowlist exclusion.
 
-**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator escalates when a review comment arrives that no continuation turn was given. It applies the configured escalation (`label`, `comment`, or `none`) and releases the claim. Comments that a turn already carried, including ones the last turn left in place, do not escalate, and neither does a poll that finds the review resolved. A review summary that no turn was given counts as a new comment.
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator escalates when a review comment arrives that no earlier run was given. It applies the configured escalation (`label`, `comment`, or `none`) and releases the claim. Comments that a run already received, including ones the last turn left in place, do not escalate, and neither does a poll that finds the review resolved. A review summary that no run was given counts as a new comment. An escalation records nothing in the stored set, so comments an earlier run was given stay given.
 
 Example:
 
@@ -851,11 +853,13 @@ Additional fields (via Extra):
 
 **No debounce:** Bot comments are dispatched immediately. There is no `debounce_ms` field; the debounce window that `review_comments` applies does not apply to `bot_review`, because bot comments arrive in bulk on push rather than at reviewer pace.
 
-**Fingerprint dedup:** The orchestrator computes a SHA-256 fingerprint from sorted non-outdated comment IDs and persists it in the `reaction_fingerprints` SQLite table under a kind distinct from `review_comments`. A new push that changes the bot comment-ID set changes the fingerprint and re-triggers dispatch; an unchanged dispatched fingerprint suppresses re-dispatch within the poll interval.
+**Fingerprint dedup:** The orchestrator computes a SHA-256 fingerprint from sorted non-outdated comment IDs and persists it in the `reaction_fingerprints` SQLite table under a kind distinct from `review_comments`. A new push that changes the bot comment-ID set changes the fingerprint, and a turn starts when the set holds a comment that no earlier run of the issue was given; an unchanged dispatched fingerprint suppresses re-dispatch within the poll interval.
+
+**Comments already given:** The rules of `review_comments` apply: a turn starts only for a comment no earlier run was given, also after a restart, and carries every remaining one. A set that only lost members starts no turn and spends none of `max_continuation_turns`, and an unaddressed comment comes back with the next new comment. While turns remain, a new review summary counts as a new comment and still starts a turn. A new run of an issue whose workspace already holds a pull request is given the bot comments no run was given, when this kind has no `triage` block and the template shows `bot_review_comments` as an added section.
 
 **Cross-kind isolation:** `bot_review` and `review_comments` never interfere on the same PR; each owns its own pending entry, fingerprint row, and attempt counter. Escalation cleanup is scoped to the `bot_review` kind only and does not release the issue claim or clear sibling reaction kinds.
 
-**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator escalates only when the bot adds a comment on the code (a file or a line of the diff) that no continuation turn was given. It then applies the configured escalation (`label`, `comment`, or `none`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending bot-review entry. Other reaction kinds on the same issue are preserved. After the last continuation turn, findings a bot posts only in its review summary (for example CodeRabbit nitpick or outside-diff sections, or Copilot "previously missed" or "suppressed" comments) start no escalation and stay visible on the pull request. While turns remain, a summary-only re-review still starts a continuation turn; a `triage` command that answers `handled` keeps re-reviews the operator knows are clean from spending one.
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator escalates only when the bot adds a comment on the code (a file or a line of the diff) that no earlier run was given. It then applies the configured escalation (`label`, `comment`, or `none`, default `label`, with `escalation_label` defaulting to `needs-human`) and removes the pending bot-review entry. Other reaction kinds on the same issue are preserved. After the last continuation turn, findings a bot posts only in its review summary (for example CodeRabbit nitpick or outside-diff sections, or Copilot "previously missed" or "suppressed" comments) start no escalation and stay visible on the pull request. While turns remain, a summary-only re-review still starts a continuation turn; a `triage` command that answers `handled` keeps re-reviews the operator knows are clean from spending one.
 
 Example:
 
@@ -2411,7 +2415,7 @@ template.New("prompt").
 
 ### 5.2 Template Input Variables
 
-The data map passed to `Execute` contains **three core top-level keys** (`issue`, `attempt`, `run`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches:
+The data map passed to `Execute` contains **three core top-level keys** (`issue`, `attempt`, `run`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches. `review_comments` and `bot_review_comments` are also populated on turn 1 of a new run of an issue whose pull request holds comments no earlier run was given (see `reactions.review_comments` and `reactions.bot_review` in Section 2.9):
 
 #### `issue` — Normalized Issue Object
 
@@ -2469,7 +2473,7 @@ When `nil` (default on non-CI dispatches), `{{ if .ci_failure }}` evaluates to `
 
 #### `review_comments` — Review Comment Context (continuation key)
 
-Non-nil only on turn 1 of a review-fix continuation dispatch. Contains a list of human review comments from `CHANGES_REQUESTED` PR reviews:
+Non-nil only on turn 1 of a review-fix continuation dispatch, and on turn 1 of a new run of an issue whose pull request holds review comments no earlier run was given, when `reactions.review_comments` has no `triage` block and the template keeps all of its own text with the variable set. Contains a list of human review comments from `CHANGES_REQUESTED` PR reviews:
 
 | Field (per element)           | Type    | Description                                              |
 | ----------------------------- | ------- | -------------------------------------------------------- |
@@ -2480,7 +2484,7 @@ Non-nil only on turn 1 of a review-fix continuation dispatch. Contains a list of
 | `.review_comments[].reviewer` | string  | Username of the comment author.                          |
 | `.review_comments[].body`     | string  | Comment text.                                            |
 
-When `nil` (default on non-review dispatches), `{{ if .review_comments }}` evaluates to `false`.
+When `nil` (default on other dispatches), `{{ if .review_comments }}` evaluates to `false`. Write the comments as an added block, as the pattern below does, so a new run keeps the rest of the prompt. A template whose other text changes when `review_comments` is set renders without the comments on a new run.
 
 **Template pattern for review comments:**
 
@@ -2501,7 +2505,7 @@ The following review comments were left on the PR. Address each one:
 
 #### `bot_review_comments` — Bot Review Comment Context (continuation key)
 
-Non-nil only on turn 1 of a bot-review-fix continuation dispatch. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.9). The per-element shape is identical to `review_comments`:
+Non-nil only on turn 1 of a bot-review-fix continuation dispatch, and on turn 1 of a new run of an issue whose pull request holds bot comments no earlier run was given, under the same conditions as `review_comments`. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.9). The per-element shape is identical to `review_comments`:
 
 | Field (per element)               | Type    | Description                                              |
 | --------------------------------- | ------- | -------------------------------------------------------- |
@@ -2512,7 +2516,7 @@ Non-nil only on turn 1 of a bot-review-fix continuation dispatch. Contains a lis
 | `.bot_review_comments[].reviewer` | string  | Login of the bot that authored the comment.             |
 | `.bot_review_comments[].body`     | string  | Comment text.                                            |
 
-When `nil` (default on non-bot-review dispatches), `{{ if .bot_review_comments }}` evaluates to `false`.
+When `nil` (default on other dispatches), `{{ if .bot_review_comments }}` evaluates to `false`.
 
 **Template pattern for bot review comments:**
 

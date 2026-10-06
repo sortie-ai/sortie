@@ -10498,3 +10498,81 @@ func TestRun_RetryAppliesTheSettingsInForceAtItsStart(t *testing.T) {
 		}
 	}
 }
+
+func (s *stubStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *stubStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func TestHandleTick_FreshDispatchIsGivenPullRequestComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		configured bool
+		noIdentity bool
+		wantIDs    []string
+	}{
+		{"a configured kind with a new comment", true, false, []string{"a", "b"}},
+		{"an unconfigured kind", false, false, nil},
+		{"a workspace without a pull request identity", true, true, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issue := domain.Issue{ID: "iss-fresh-seed", Identifier: "TEST-SEED", Title: "title", State: "To Do"}
+			root := t.TempDir()
+			if !tt.noIdentity {
+				writeRecoverySCM(t, root, issue.Identifier, domain.SCMMetadata{Branch: "feature/fix", PRNumber: 10, Owner: "owner", Repo: "repo"})
+			}
+			wm := budgetTickConfig(0)
+			wm.config.Workspace.Root = root
+			wm.template = mustParseTemplate(t, commentsPromptTemplate)
+			state := NewState(60000, 10, 0, nil, AgentTotals{})
+			tracker := &candidateTrackerAdapter{
+				mockTrackerAdapter: &mockTrackerAdapter{},
+				fetchCandidatesFn:  func(context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+			}
+			regs := passingPreflightRegistries()
+			regs.ReloadWorkflow = func() error { return nil }
+			regs.ConfigFunc = wm.Config
+			orch := NewOrchestrator(OrchestratorParams{
+				State:            state,
+				Logger:           discardLogger(),
+				TrackerAdapter:   tracker,
+				Router:           route.NewRouter(tracker, nil),
+				AgentAdapter:     &mockAgentAdapter{},
+				WorkflowManager:  wm,
+				Store:            &stubStore{},
+				PreflightParams:  regs,
+				SCMAdapter:       &mockSCMAdapter{comments: []domain.ReviewComment{summaryComment("a"), inlineComment("b")}},
+				ReviewConfig:     defaultReviewConfig(),
+				ReviewConfigured: tt.configured,
+			})
+
+			orch.handleTick(context.Background())
+			t.Cleanup(state.WorkerWg.Wait)
+
+			running, ok := state.Running[issue.ID]
+			if !ok {
+				t.Fatalf("Running[%s] missing after the tick, want a dispatched run", issue.ID)
+			}
+			t.Cleanup(running.CancelFunc)
+			if running.ReactionKind != "" {
+				t.Errorf("Running[%s].ReactionKind = %q, want empty for a fresh run", issue.ID, running.ReactionKind)
+			}
+			got := slices.Sorted(slices.Values(continuationCommentIDs(ReactionKindReview, running.ContinuationContext)))
+			if !slices.Equal(got, tt.wantIDs) {
+				t.Errorf("Running[%s] carries review comments %v, want %v", issue.ID, got, tt.wantIDs)
+			}
+			if tt.wantIDs == nil && running.ContinuationContext != nil {
+				t.Errorf("Running[%s].ContinuationContext = %v, want nil", issue.ID, running.ContinuationContext)
+			}
+		})
+	}
+}

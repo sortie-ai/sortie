@@ -835,6 +835,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		CIProvider:                        ciProvider,
 		SCMAdapter:                        scmAdapter,
 		ReviewConfig:                      reviewConfig,
+		ReviewConfigured:                  reviewActive,
 		AutoMergeConfig:                   autoMergeConfig,
 		AutoMergeReactionConfigured:       autoMergeConfigured,
 		BotReviewConfig:                   botReviewConfig,

@@ -16,6 +16,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // mockSCMAdapter is a controllable SCMAdapter for review reconcile tests.
@@ -132,6 +133,14 @@ func (s *reviewReconcileStore) MarkReactionDispatched(_ context.Context, _, _ st
 func (s *reviewReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
 	s.deleteFingerprintCalls++
 	return s.deleteFingerprintErr
+}
+
+func (s *reviewReconcileStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *reviewReconcileStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
 }
 
 // reviewTrackerStub satisfies domain.TrackerAdapter for escalation tests.
@@ -293,7 +302,19 @@ func reviewParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker do
 type fingerprintModelStore struct {
 	reviewReconcileStore
 	fingerprints map[string]*modelFingerprint
+	rows         map[string]map[string]struct{}
+
+	addCalls  [][]string
+	listCalls int
+	addErr    error
+	listErr   error
 }
+
+var (
+	_ ReconcileStore  = (*fingerprintModelStore)(nil)
+	_ RetryTimerStore = (*fingerprintModelStore)(nil)
+	_ WorkerExitStore = (*fingerprintModelStore)(nil)
+)
 
 type modelFingerprint struct {
 	value      string
@@ -301,7 +322,75 @@ type modelFingerprint struct {
 }
 
 func newFingerprintModelStore() *fingerprintModelStore {
-	return &fingerprintModelStore{fingerprints: make(map[string]*modelFingerprint)}
+	return &fingerprintModelStore{
+		fingerprints: make(map[string]*modelFingerprint),
+		rows:         make(map[string]map[string]struct{}),
+	}
+}
+
+func (s *fingerprintModelStore) AddReactionHandedOffComments(_ context.Context, issueID, kind string, commentIDs []string) error {
+	if s.addErr != nil {
+		return s.addErr
+	}
+	s.addCalls = append(s.addCalls, slices.Clone(commentIDs))
+	s.seedRows(issueID, kind, commentIDs...)
+	return nil
+}
+
+func (s *fingerprintModelStore) ListReactionHandedOffComments(_ context.Context, issueID, kind string) ([]string, error) {
+	s.listCalls++
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.storedIDs(issueID, kind), nil
+}
+
+func (s *fingerprintModelStore) seedRows(issueID, kind string, commentIDs ...string) {
+	key := ReactionKey(issueID, kind)
+	if s.rows[key] == nil {
+		s.rows[key] = make(map[string]struct{})
+	}
+	for _, id := range commentIDs {
+		s.rows[key][id] = struct{}{}
+	}
+}
+
+func (s *fingerprintModelStore) storedIDs(issueID, kind string) []string {
+	return slices.Sorted(maps.Keys(s.rows[ReactionKey(issueID, kind)]))
+}
+
+func (s *fingerprintModelStore) CountRunHistoryByIssue(context.Context, string) (int, error) {
+	return 0, nil
+}
+
+func (s *fingerprintModelStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, issueIDs []string) (map[string]int, error) {
+	return make(map[string]int, len(issueIDs)), nil
+}
+
+func (s *fingerprintModelStore) TokenUsageByIssue(context.Context, string) (persistence.IssueTokenUsage, error) {
+	return persistence.IssueTokenUsage{}, nil
+}
+
+func (s *fingerprintModelStore) UpsertParkedIssue(context.Context, persistence.ParkedIssue) error {
+	return nil
+}
+
+func (s *fingerprintModelStore) DeleteParkedIssue(context.Context, string) error { return nil }
+
+func (s *fingerprintModelStore) ResetHandoffAbsenceSequence(context.Context, string) error {
+	return nil
+}
+
+func (s *fingerprintModelStore) UpsertBudgetHoldNotice(context.Context, persistence.BudgetHoldNotice) error {
+	return nil
+}
+
+func (s *fingerprintModelStore) UpsertAggregateMetrics(context.Context, persistence.AggregateMetrics) error {
+	return nil
+}
+
+func (s *fingerprintModelStore) UpsertSessionMetadata(context.Context, persistence.SessionMetadata) error {
+	return nil
 }
 
 func (s *fingerprintModelStore) UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error {
@@ -391,6 +480,53 @@ func assertHandedOff(t *testing.T, state *State, rkey string, want ...string) {
 	}
 }
 
+func assertHandedOffCached(t *testing.T, state *State, rkey string, want ...string) {
+	t.Helper()
+	set, present := state.ReactionHandedOffComments[rkey]
+	if !present {
+		t.Errorf("ReactionHandedOffComments[%q] absent, want a loaded set %v", rkey, want)
+		return
+	}
+	got := slices.Sorted(maps.Keys(set))
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("ReactionHandedOffComments[%q] = %v, want %v", rkey, got, slices.Sorted(slices.Values(want)))
+	}
+}
+
+func assertStoredHandedOff(t *testing.T, store *fingerprintModelStore, issueID, kind string, want ...string) {
+	t.Helper()
+	got := store.storedIDs(issueID, kind)
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("stored handed-off comments for %s = %v, want %v", ReactionKey(issueID, kind), got, slices.Sorted(slices.Values(want)))
+	}
+}
+
+func assertFingerprintMarked(t *testing.T, store *fingerprintModelStore, issueID, kind string, comments []domain.ReviewComment, wantDispatched bool) {
+	t.Helper()
+	fp, dispatched, err := store.GetReactionFingerprint(context.Background(), issueID, kind)
+	if err != nil {
+		t.Fatalf("GetReactionFingerprint: %v", err)
+	}
+	if want := buildReviewFingerprint(comments); fp != want {
+		t.Errorf("stored fingerprint for %s = %q, want the fingerprint of %d comments %q", ReactionKey(issueID, kind), fp, len(comments), want)
+	}
+	if dispatched != wantDispatched {
+		t.Errorf("fingerprint dispatched for %s = %v, want %v", ReactionKey(issueID, kind), dispatched, wantDispatched)
+	}
+}
+
+func continuationIDs(t *testing.T, state *State, issueID, kind string) []string {
+	t.Helper()
+	retry, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatalf("RetryAttempts[%q] missing, want a scheduled continuation", issueID)
+	}
+	if retry.ReactionKind != kind {
+		t.Errorf("RetryAttempts[%q].ReactionKind = %q, want %q", issueID, retry.ReactionKind, kind)
+	}
+	return slices.Sorted(slices.Values(continuationCommentIDs(kind, retry.ContinuationContext)))
+}
+
 func assertEscalations(t *testing.T, tracker *reviewTrackerStub, want int) {
 	t.Helper()
 	if tracker.addLabelCalled != want {
@@ -411,15 +547,74 @@ func makeDue(t *testing.T, state *State, rkey string) *PendingReaction {
 	return entry
 }
 
-func completeContinuation(t *testing.T, state *State, store *fingerprintModelStore, issueID, kind string, reseeded *PendingReaction) {
+const commentsPromptTemplate = `Resolve {{ .issue.identifier }}.
+{{ if .review_comments }}
+Review comments:
+{{ range .review_comments }}
+- {{ .id }}
+{{ end }}
+{{ end }}
+{{ if .bot_review_comments }}
+Bot comments:
+{{ range .bot_review_comments }}
+- {{ .id }}
+{{ end }}
+{{ end }}`
+
+func presentedByTemplate(t *testing.T, body string, issue domain.Issue, continuation map[string]any, freshRun bool) map[string][]string {
 	t.Helper()
-	if _, ok := state.RetryAttempts[issueID]; !ok {
+	_, presented, err := renderFirstTurnPrompt(mustParseTemplate(t, body), issue.ToTemplateMap(), 0, 3, continuation, freshRun)
+	if err != nil {
+		t.Fatalf("renderFirstTurnPrompt: %v", err)
+	}
+	return presented
+}
+
+func workerExitParams(store WorkerExitStore) HandleWorkerExitParams {
+	return HandleWorkerExitParams{
+		Store:             store,
+		MaxRetryBackoffMS: 300_000,
+		ActiveStates:      []string{"To Do", "In Progress"},
+		OnRetryFire:       noopRetryFire,
+		NowFunc:           func() time.Time { return reviewBaseTime },
+		Logger:            discardLogger(),
+	}
+}
+
+func dispatchRetry(t *testing.T, state *State, store RetryTimerStore, issueID string) *RunningEntry {
+	t.Helper()
+	retry, ok := state.RetryAttempts[issueID]
+	if !ok {
 		t.Fatalf("RetryAttempts[%q] missing, want a scheduled continuation", issueID)
 	}
-	CancelRetry(state, issueID)
-	if err := store.MarkReactionDispatched(context.Background(), issueID, kind); err != nil {
-		t.Fatalf("MarkReactionDispatched: %v", err)
+	retry.scheduledAt = time.Time{}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, retry.Identifier, "In Progress")}
+	params := defaultRetryParams(t, &mockRetryStore{}, tracker)
+	params.Store = store
+
+	HandleRetryTimer(state, issueID, params)
+	t.Cleanup(state.WorkerWg.Wait)
+
+	running, ok := state.Running[issueID]
+	if !ok {
+		t.Fatalf("Running[%q] missing after the retry timer fired, want a dispatched run", issueID)
 	}
+	return running
+}
+
+func completeContinuation(t *testing.T, state *State, store *fingerprintModelStore, issueID, kind string, reseeded *PendingReaction) {
+	t.Helper()
+	running := dispatchRetry(t, state, store, issueID)
+	presented := presentedByTemplate(t, commentsPromptTemplate, running.Issue, running.ContinuationContext, running.ReactionKind == "")
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:           issueID,
+		Identifier:        running.Identifier,
+		ExitKind:          WorkerExitNormal,
+		HandedOffComments: presented,
+	}, workerExitParams(store))
+
+	CancelRetry(state, issueID)
 	state.PendingReactions[ReactionKey(issueID, kind)] = reseeded
 }
 
@@ -943,7 +1138,7 @@ func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 	if _, ok := state.ReactionAttempts[rkey]; ok {
 		t.Errorf("ReactionAttempts[%s] present after escalation; want deleted", rkey)
 	}
-	assertHandedOff(t, state, rkey)
+	assertHandedOffCached(t, state, rkey, "rc-old")
 	if scm.calls != 1 {
 		t.Errorf("FetchPendingReviews calls = %d, want 1 (the budget is decided after the fetch)", scm.calls)
 	}
@@ -2031,35 +2226,50 @@ func TestRecordHandedOffComments(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		seed     []string
-		input    []domain.ReviewComment
-		nilOuter bool
-		want     []string
+		name       string
+		cached     []string
+		keyCached  bool
+		ids        []string
+		addErr     error
+		wantCache  []string
+		wantStored [][]string
 	}{
-		{"empty slice creates no set", nil, nil, false, nil},
-		{"empty slice keeps an existing set", []string{"a"}, nil, false, []string{"a"}},
-		{"first use creates the set", nil, []domain.ReviewComment{summaryComment("a"), inlineComment("b")}, false, []string{"a", "b"}},
-		{"repeated ID is a no-op", []string{"a"}, []domain.ReviewComment{summaryComment("a"), summaryComment("c")}, false, []string{"a", "c"}},
-		{"nil outer map is created", nil, []domain.ReviewComment{summaryComment("a")}, true, []string{"a"}},
+		{name: "empty slice on an absent key", ids: nil},
+		{name: "empty slice on a cached key", keyCached: true, cached: []string{"a"}, wantCache: []string{"a"}},
+		{name: "absent key stores every ID and stays absent", ids: []string{"a", "b"}, wantStored: [][]string{{"a", "b"}}},
+		{name: "cached key stores only the absent IDs", keyCached: true, cached: []string{"a"}, ids: []string{"a", "c"}, wantCache: []string{"a", "c"}, wantStored: [][]string{{"c"}}},
+		{name: "cached key with every ID known writes nothing", keyCached: true, cached: []string{"a", "b"}, ids: []string{"b", "a"}, wantCache: []string{"a", "b"}},
+		{name: "repeated ID is stored once", keyCached: true, ids: []string{"a", "a"}, wantCache: []string{"a"}, wantStored: [][]string{{"a"}}},
+		{name: "store error keeps the cache", keyCached: true, ids: []string{"a"}, addErr: errors.New("disk full"), wantCache: []string{"a"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			const issueID = "ISS-H-1"
 			state := NewState(5000, 4, 0, nil, AgentTotals{})
-			rkey := ReactionKey("ISS-H-1", ReactionKindReview)
-			if len(tt.seed) > 0 {
-				seedHandedOff(state, rkey, tt.seed...)
+			rkey := ReactionKey(issueID, ReactionKindReview)
+			store := newFingerprintModelStore()
+			store.addErr = tt.addErr
+			if tt.keyCached {
+				seedHandedOff(state, rkey, tt.cached...)
 			}
-			if tt.nilOuter {
-				state.ReactionHandedOffComments = nil
+			log, buf := logCapture()
+
+			recordHandedOffComments(context.Background(), state, store, issueID, ReactionKindReview, tt.ids, log)
+
+			if !slices.EqualFunc(store.addCalls, tt.wantStored, slices.Equal) {
+				t.Errorf("AddReactionHandedOffComments batches = %v, want %v", store.addCalls, tt.wantStored)
 			}
-
-			recordHandedOffComments(state, rkey, tt.input)
-
-			assertHandedOff(t, state, rkey, tt.want...)
+			if tt.keyCached {
+				assertHandedOffCached(t, state, rkey, tt.wantCache...)
+			} else {
+				assertHandedOff(t, state, rkey)
+			}
+			if tt.addErr != nil && findLogLine(buf.String(), "failed to persist handed-off comments") == "" {
+				t.Errorf("log output missing the persist warning; log=%s", buf.String())
+			}
 		})
 	}
 }
@@ -2067,50 +2277,85 @@ func TestRecordHandedOffComments(t *testing.T) {
 func TestRecordHandedOffComments_KeysAreIndependent(t *testing.T) {
 	t.Parallel()
 
+	const issueID = "ISS-H-2"
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	reviewKey := ReactionKey("ISS-H-2", ReactionKindReview)
-	botKey := ReactionKey("ISS-H-2", ReactionKindBotReview)
+	reviewKey := ReactionKey(issueID, ReactionKindReview)
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	seedHandedOff(state, reviewKey)
+	seedHandedOff(state, botKey)
+	store := newFingerprintModelStore()
 
-	recordHandedOffComments(state, reviewKey, []domain.ReviewComment{summaryComment("a")})
-	recordHandedOffComments(state, botKey, []domain.ReviewComment{inlineComment("b")})
+	recordHandedOffComments(context.Background(), state, store, issueID, ReactionKindReview, []string{"a"}, discardLogger())
+	recordHandedOffComments(context.Background(), state, store, issueID, ReactionKindBotReview, []string{"b"}, discardLogger())
 
-	assertHandedOff(t, state, reviewKey, "a")
-	assertHandedOff(t, state, botKey, "b")
+	assertHandedOffCached(t, state, reviewKey, "a")
+	assertHandedOffCached(t, state, botKey, "b")
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview, "a")
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "b")
 }
 
 func TestCarriesNewComment(t *testing.T) {
 	t.Parallel()
 
+	runningWith := func(kind string, ids ...string) *RunningEntry {
+		comments := make([]domain.ReviewComment, len(ids))
+		for i, id := range ids {
+			comments[i] = summaryComment(id)
+		}
+		return &RunningEntry{ContinuationContext: map[string]any{commentTemplateKey(kind): buildReviewTemplateMap(comments)}}
+	}
+
 	tests := []struct {
-		name  string
-		seed  []string
-		input []domain.ReviewComment
-		want  bool
+		name     string
+		kind     string
+		seed     []string
+		reported []string
+		running  *RunningEntry
+		input    []domain.ReviewComment
+		want     bool
 	}{
-		{"absent set with comments", nil, []domain.ReviewComment{summaryComment("a")}, true},
-		{"absent set with no comments", nil, nil, false},
-		{"present set with no comments", []string{"a"}, nil, false},
-		{"every ID present", []string{"a", "b", "c"}, []domain.ReviewComment{summaryComment("a"), inlineComment("b")}, false},
-		{"one ID absent", []string{"a", "b"}, []domain.ReviewComment{summaryComment("a"), inlineComment("c")}, true},
-		{"only ID absent", []string{"a"}, []domain.ReviewComment{summaryComment("z")}, true},
+		{name: "absent set with comments", kind: ReactionKindReview, input: []domain.ReviewComment{summaryComment("a")}, want: true},
+		{name: "absent set with no comments", kind: ReactionKindReview},
+		{name: "present set with no comments", kind: ReactionKindReview, seed: []string{"a"}},
+		{name: "every ID present", kind: ReactionKindReview, seed: []string{"a", "b", "c"}, input: []domain.ReviewComment{summaryComment("a"), inlineComment("b")}},
+		{name: "one ID absent", kind: ReactionKindReview, seed: []string{"a", "b"}, input: []domain.ReviewComment{summaryComment("a"), inlineComment("c")}, want: true},
+		{name: "reported ID is not new", kind: ReactionKindBotReview, seed: []string{"a"}, reported: []string{"r"}, input: []domain.ReviewComment{summaryComment("a"), summaryComment("r")}},
+		{name: "running ID is not new", kind: ReactionKindReview, seed: []string{"a"}, running: runningWith(ReactionKindReview, "b"), input: []domain.ReviewComment{summaryComment("a"), summaryComment("b")}},
+		{name: "running IDs count whatever the entry reaction kind", kind: ReactionKindBotReview, running: &RunningEntry{ReactionKind: ReactionKindReview, ContinuationContext: runningWith(ReactionKindBotReview, "b").ContinuationContext}, input: []domain.ReviewComment{summaryComment("b")}},
+		{name: "running IDs under the other kind's key do not count", kind: ReactionKindReview, running: runningWith(ReactionKindBotReview, "b"), input: []domain.ReviewComment{summaryComment("b")}, want: true},
+		{name: "running entry without a continuation counts nothing", kind: ReactionKindReview, running: &RunningEntry{}, input: []domain.ReviewComment{summaryComment("b")}, want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			const issueID = "ISS-H-3"
 			state := NewState(5000, 4, 0, nil, AgentTotals{})
-			rkey := ReactionKey("ISS-H-3", ReactionKindReview)
+			rkey := ReactionKey(issueID, tt.kind)
 			if len(tt.seed) > 0 {
 				seedHandedOff(state, rkey, tt.seed...)
 			}
+			if len(tt.reported) > 0 {
+				state.ReactionReportedComments[rkey] = map[string]struct{}{}
+				for _, id := range tt.reported {
+					state.ReactionReportedComments[rkey][id] = struct{}{}
+				}
+			}
+			if tt.running != nil {
+				state.Running[issueID] = tt.running
+			}
 
-			got := carriesNewComment(state, rkey, tt.input)
+			got := carriesNewComment(state, issueID, tt.kind, tt.input)
 
 			if got != tt.want {
-				t.Errorf("carriesNewComment(%v) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("carriesNewComment(%s, %v) = %v, want %v", tt.kind, tt.input, got, tt.want)
 			}
-			assertHandedOff(t, state, rkey, tt.seed...)
+			if len(tt.seed) > 0 {
+				assertHandedOffCached(t, state, rkey, tt.seed...)
+			} else {
+				assertHandedOff(t, state, rkey)
+			}
 		})
 	}
 }
@@ -2206,14 +2451,18 @@ func TestReconcileReviewComments_SpentBudget_NoNewComment(t *testing.T) {
 			if len(metrics.reviewChecks) != 0 || len(metrics.reviewEscalations) != 0 {
 				t.Errorf("review metrics = checks:%v escalations:%v, want none", metrics.reviewChecks, metrics.reviewEscalations)
 			}
-			debugMsg := "review continuation turns exhausted, no new comment, not escalating"
+			debugMsg := "comment set already handed off, not dispatching"
 			if !tt.wantDebug {
 				assertLogLacksLine(t, buf.String(), debugMsg)
+				if store.markDispatchedCalls != 0 {
+					t.Errorf("MarkReactionDispatched calls = %d, want 0 with no actionable comment", store.markDispatchedCalls)
+				}
 				return
 			}
-			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "turn_count", 3)
-			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "max_continuation_turns", 3)
 			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "comment_count", tt.wantCount)
+			if store.markDispatchedCalls != 1 {
+				t.Errorf("MarkReactionDispatched calls = %d, want 1 (a settled set is marked dispatched)", store.markDispatchedCalls)
+			}
 		})
 	}
 }
@@ -2383,7 +2632,7 @@ func TestReconcileReviewComments_SpentBudget_NewCommentEscalatesOnce(t *testing.
 			if _, ok := state.ReactionAttempts[rkey]; ok {
 				t.Error("counter kept after escalation; want deleted")
 			}
-			assertHandedOff(t, state, rkey)
+			assertHandedOffCached(t, state, rkey, tt.handedOff...)
 			if store.deleteFingerprintCalls != 1 {
 				t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
 			}
@@ -2437,37 +2686,64 @@ func TestReconcileReviewComments_SpentBudget_TriageGateNotReached(t *testing.T) 
 	}
 }
 
-func TestReconcileReviewComments_BelowBudget_SubsetStillDispatches(t *testing.T) {
+func TestReconcileReviewComments_BelowBudget_OnlyANewCommentDispatches(t *testing.T) {
 	t.Parallel()
 
-	const issueID = "ISS-R-SUBSET"
-	state := stateWithReviewReaction(t, issueID, 10)
-	rkey := ReactionKey(issueID, ReactionKindReview)
-	state.ReactionAttempts[rkey] = 1
-	seedHandedOff(state, rkey, "c1", "c2")
-
-	store := newFingerprintModelStore()
-	store.seedDispatched(issueID, ReactionKindReview, []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")})
-	tracker := &reviewTrackerStub{}
-	scm := &mockSCMAdapter{comments: []domain.ReviewComment{inlineComment("c1")}}
-	params := reviewEscalationParams(t, store, scm, tracker)
-	metrics := newReviewMetricsSpy()
-
-	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
-
-	if _, ok := state.RetryAttempts[issueID]; !ok {
-		t.Fatal("retry not scheduled for a changed set below the budget; want a dispatch")
+	tests := []struct {
+		name        string
+		comments    []domain.ReviewComment
+		wantCarried []string
+	}{
+		{"a shrunk set settles", []domain.ReviewComment{inlineComment("c1")}, nil},
+		{"a new comment dispatches with the remaining one", []domain.ReviewComment{inlineComment("c1"), inlineComment("c3")}, []string{"c1", "c3"}},
 	}
-	if state.ReactionAttempts[rkey] != 2 {
-		t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "ISS-R-SUBSET"
+			state := stateWithReviewReaction(t, issueID, 10)
+			rkey := ReactionKey(issueID, ReactionKindReview)
+			state.ReactionAttempts[rkey] = 1
+			store := newFingerprintModelStore()
+			store.seedRows(issueID, ReactionKindReview, "c1", "c2")
+			store.seedDispatched(issueID, ReactionKindReview, []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")})
+			tracker := &reviewTrackerStub{}
+			scm := &mockSCMAdapter{comments: tt.comments}
+			params := reviewEscalationParams(t, store, scm, tracker)
+			metrics := newReviewMetricsSpy()
+
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+			assertEscalations(t, tracker, 0)
+			if tt.wantCarried == nil {
+				if _, ok := state.RetryAttempts[issueID]; ok {
+					t.Error("retry scheduled for a set that only lost members; want none")
+				}
+				if state.ReactionAttempts[rkey] != 1 {
+					t.Errorf("ReactionAttempts[%s] = %d, want 1 (unchanged)", rkey, state.ReactionAttempts[rkey])
+				}
+				if metrics.reviewChecks["dispatched"] != 0 {
+					t.Errorf(`IncReviewChecks("dispatched") = %d, want 0`, metrics.reviewChecks["dispatched"])
+				}
+				assertFingerprintMarked(t, store, issueID, ReactionKindReview, tt.comments, true)
+				return
+			}
+			if got := continuationIDs(t, state, issueID, ReactionKindReview); !slices.Equal(got, tt.wantCarried) {
+				t.Errorf("continuation carries %v, want %v", got, tt.wantCarried)
+			}
+			if state.ReactionAttempts[rkey] != 2 {
+				t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
+			}
+			if metrics.reviewChecks["dispatched"] != 1 {
+				t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, metrics.reviewChecks["dispatched"])
+			}
+		})
 	}
-	if metrics.reviewChecks["dispatched"] != 1 {
-		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, metrics.reviewChecks["dispatched"])
-	}
-	assertEscalations(t, tracker, 0)
 }
 
-func TestReconcileReviewComments_HandedOff_DispatchRecordsActionableIDs(t *testing.T) {
+func TestReconcileReviewComments_HandedOff_NormalExitRecordsPresentedIDs(t *testing.T) {
 	t.Parallel()
 
 	const issueID = "ISS-R-REC"
@@ -2488,28 +2764,42 @@ func TestReconcileReviewComments_HandedOff_DispatchRecordsActionableIDs(t *testi
 	}
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	assertHandedOff(t, state, rkey, "c1", "review-1")
+	if got := continuationIDs(t, state, issueID, ReactionKindReview); !slices.Equal(got, []string{"c1", "review-1"}) {
+		t.Errorf("continuation carries %v, want [c1 review-1]", got)
+	}
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview)
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
 	}
 
 	completeContinuation(t, state, store, issueID, ReactionKindReview, newReviewPendingEntry(issueID, 10))
+
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview, "c1", "review-1")
+
 	scm.comments = []domain.ReviewComment{summaryComment("review-1"), inlineComment("c2")}
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	assertHandedOff(t, state, rkey, "c1", "review-1", "c2")
+	if got := continuationIDs(t, state, issueID, ReactionKindReview); !slices.Equal(got, []string{"c2", "review-1"}) {
+		t.Errorf("continuation carries %v, want [c2 review-1]", got)
+	}
 	if state.ReactionAttempts[rkey] != 2 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
 	}
+
+	completeContinuation(t, state, store, issueID, ReactionKindReview, newReviewPendingEntry(issueID, 10))
+
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview, "c1", "c2", "review-1")
+	assertHandedOffCached(t, state, rkey, "c1", "c2", "review-1")
 }
 
-func TestReconcileReviewComments_HandedOff_SpentCounterSurvivesWatchWindowDrop(t *testing.T) {
+func TestReconcileReviewComments_HandedOff_WatchWindowDropKeepsRowsAndSpentCounter(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		attempts int
 	}{
+		{"counter below the budget", 2},
 		{"counter at the budget", 3},
 		{"counter above the budget", 4},
 	}
@@ -2526,8 +2816,12 @@ func TestReconcileReviewComments_HandedOff_SpentCounterSurvivesWatchWindowDrop(t
 			state.ReactionAttempts[rkey] = tt.attempts
 			seedHandedOff(state, rkey, "c1", "c2")
 			seedHandedOff(state, botKey, "b1")
+			store := newFingerprintModelStore()
+			store.seedRows(issueID, ReactionKindReview, "c1", "c2")
+			store.seedRows(issueID, ReactionKindBotReview, "b1")
 			scm := &mockSCMAdapter{}
 			params := reviewParams(&reviewReconcileStore{}, scm, nil)
+			params.Store = store
 			params.ReviewPendingTTL = 30 * time.Minute
 
 			reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
@@ -2535,11 +2829,17 @@ func TestReconcileReviewComments_HandedOff_SpentCounterSurvivesWatchWindowDrop(t
 			if _, ok := state.PendingReactions[rkey]; ok {
 				t.Error("PendingReactions entry present after the drop; want removed")
 			}
-			if state.ReactionAttempts[rkey] != tt.attempts {
-				t.Errorf("ReactionAttempts[%s] = %d, want %d (a spent counter survives the drop)", rkey, state.ReactionAttempts[rkey], tt.attempts)
+			wantAttempts := tt.attempts
+			if tt.attempts < defaultReviewConfig().MaxContinuationTurns {
+				wantAttempts = 0
 			}
-			assertHandedOff(t, state, rkey, "c1", "c2")
-			assertHandedOff(t, state, botKey, "b1")
+			if state.ReactionAttempts[rkey] != wantAttempts {
+				t.Errorf("ReactionAttempts[%s] = %d, want %d", rkey, state.ReactionAttempts[rkey], wantAttempts)
+			}
+			assertHandedOff(t, state, rkey)
+			assertHandedOffCached(t, state, botKey, "b1")
+			assertStoredHandedOff(t, store, issueID, ReactionKindReview, "c1", "c2")
+			assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "b1")
 			if scm.calls != 0 {
 				t.Errorf("FetchPendingReviews calls = %d, want 0", scm.calls)
 			}
@@ -2547,7 +2847,7 @@ func TestReconcileReviewComments_HandedOff_SpentCounterSurvivesWatchWindowDrop(t
 	}
 }
 
-func TestReconcileReviewComments_HandedOff_TriageEscalationClearsCounterAndSet(t *testing.T) {
+func TestReconcileReviewComments_HandedOff_TriageEscalationKeepsSet(t *testing.T) {
 	t.Parallel()
 
 	const issueID = "ISS-R-TRIAGE-CLEAR"
@@ -2555,7 +2855,7 @@ func TestReconcileReviewComments_HandedOff_TriageEscalationClearsCounterAndSet(t
 	state := stateWithReviewReaction(t, issueID, 10)
 	rkey := ReactionKey(issueID, ReactionKindReview)
 	state.ReactionAttempts[rkey] = 1
-	seedHandedOff(state, rkey, "rc-1")
+	seedHandedOff(state, rkey, "rc-earlier")
 	tracker := &reviewTrackerStub{}
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
 	params := reviewTriageParams(t, &reviewReconcileStore{}, scm, tracker, root, escalateTriageScript)
@@ -2571,7 +2871,7 @@ func TestReconcileReviewComments_HandedOff_TriageEscalationClearsCounterAndSet(t
 	if _, ok := state.ReactionAttempts[rkey]; ok {
 		t.Error("ReactionAttempts present after a triage escalation; want deleted")
 	}
-	assertHandedOff(t, state, rkey)
+	assertHandedOffCached(t, state, rkey, "rc-earlier")
 }
 
 func TestReconcileReviewComments_HandedOff_ReseededEntryAfterSpentDrop(t *testing.T) {
@@ -2582,9 +2882,9 @@ func TestReconcileReviewComments_HandedOff_ReseededEntryAfterSpentDrop(t *testin
 	rkey := ReactionKey(issueID, ReactionKindReview)
 	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
 	state.ReactionAttempts[rkey] = 3
-	seedHandedOff(state, rkey, "c1", "c2")
 
 	store := newFingerprintModelStore()
+	store.seedRows(issueID, ReactionKindReview, "c1", "c2")
 	store.seedDispatched(issueID, ReactionKindReview, []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")})
 	tracker := &reviewTrackerStub{}
 	scm := &mockSCMAdapter{}
@@ -2628,6 +2928,7 @@ func TestReconcileReviewComments_HandedOff_ReseededEntryAfterSpentDrop(t *testin
 	pass()
 
 	assertEscalations(t, tracker, 1)
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview, "c1", "c2")
 }
 
 func TestReconcileReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testing.T) {
@@ -2694,5 +2995,828 @@ func TestReconcileReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testing.
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry present after the escalation; want consumed")
 	}
-	assertHandedOff(t, state, rkey)
+	assertHandedOffCached(t, state, rkey, "c1", "c2", "c3", "review-1", "review-2", "review-3")
+	assertStoredHandedOff(t, store, issueID, ReactionKindReview, "c1", "c2", "c3", "review-1", "review-2", "review-3")
+}
+
+var reviewFamilyKinds = []string{ReactionKindReview, ReactionKindBotReview}
+
+type reactionCycle struct {
+	t       *testing.T
+	kind    string
+	issueID string
+	budget  int
+	base    time.Time
+	state   *State
+	store   *fingerprintModelStore
+	scm     *mockSCMAdapter
+	tracker *reviewTrackerStub
+	params  ReconcileParams
+	log     *slog.Logger
+	logBuf  *bytes.Buffer
+
+	reviewMetrics *reviewMetricsSpy
+	botMetrics    *botReviewMetricsSpy
+}
+
+func newReactionCycle(t *testing.T, kind string) *reactionCycle {
+	t.Helper()
+	c := &reactionCycle{
+		t:       t,
+		kind:    kind,
+		store:   newFingerprintModelStore(),
+		scm:     &mockSCMAdapter{},
+		tracker: &reviewTrackerStub{},
+	}
+	c.log, c.logBuf = logCapture()
+	switch kind {
+	case ReactionKindReview:
+		c.issueID = "ISS-R-CYCLE"
+		c.budget = defaultReviewConfig().MaxContinuationTurns
+		c.base = reviewBaseTime
+		c.reviewMetrics = newReviewMetricsSpy()
+		c.params = reviewEscalationParams(t, c.store, c.scm, c.tracker)
+	case ReactionKindBotReview:
+		c.issueID = "BOT-CYCLE"
+		c.budget = defaultBotReviewConfig().MaxContinuationTurns
+		c.base = botReviewBaseTime
+		c.botMetrics = newBotReviewMetricsSpy()
+		c.params = botReviewEscalationParams(t, c.store, c.scm, c.tracker)
+	default:
+		t.Fatalf("newReactionCycle: unsupported kind %q", kind)
+	}
+	c.restart()
+	return c
+}
+
+func (c *reactionCycle) rkey() string { return ReactionKey(c.issueID, c.kind) }
+
+func (c *reactionCycle) newPending() *PendingReaction {
+	if c.kind == ReactionKindReview {
+		return newReviewPendingEntry(c.issueID, 10)
+	}
+	return makeBotReviewPendingEntry(c.t, c.issueID, 10)
+}
+
+func (c *reactionCycle) restart() {
+	c.state = NewState(5000, 4, 0, nil, AgentTotals{})
+	c.state.Claimed[c.issueID] = struct{}{}
+	c.state.PendingReactions[c.rkey()] = c.newPending()
+}
+
+func (c *reactionCycle) pass() {
+	c.t.Helper()
+	if c.kind == ReactionKindReview {
+		reconcileReviewComments(c.state, c.params, c.log, context.Background(), c.reviewMetrics)
+	} else {
+		reconcileBotReviewComments(c.state, c.params, c.log, context.Background(), c.botMetrics)
+	}
+	c.state.TrackerOpsWg.Wait()
+}
+
+func (c *reactionCycle) setComments(comments []domain.ReviewComment) {
+	if c.kind == ReactionKindReview {
+		c.scm.comments = comments
+	} else {
+		c.scm.botComments = comments
+	}
+}
+
+func (c *reactionCycle) poll(comments ...domain.ReviewComment) {
+	c.t.Helper()
+	c.setComments(comments)
+	makeDue(c.t, c.state, c.rkey())
+	c.pass()
+}
+
+func (c *reactionCycle) freshRun(comments ...domain.ReviewComment) map[string]any {
+	c.t.Helper()
+	identifier := c.issueID + "-ident"
+	root := c.t.TempDir()
+	writeRecoverySCM(c.t, root, identifier, domain.SCMMetadata{Branch: "feature/fix", PRNumber: 10, Owner: "owner", Repo: "repo"})
+	ws, err := workspace.ComputePath(root, identifier)
+	if err != nil {
+		c.t.Fatalf("workspace.ComputePath: %v", err)
+	}
+	delete(c.state.PendingReactions, c.rkey())
+	c.setComments(comments)
+	issue := domain.Issue{ID: c.issueID, Identifier: identifier, State: "In Progress"}
+
+	seed := freshRunSeed(context.Background(), c.state, freshRunSeedParams{
+		SCMAdapter:          c.scm,
+		Store:               c.store,
+		WorkspaceRoot:       root,
+		ReviewConfigured:    true,
+		BotReviewConfigured: true,
+	}, issue, c.log)
+
+	DispatchIssue(WithContinuationContext(context.Background(), seed), c.state, issue, nil, "", func(context.Context, domain.Issue, *int) {})
+	c.t.Cleanup(c.state.WorkerWg.Wait)
+	c.state.Running[c.issueID].ContinuationContext = seed
+	exitParams := workerExitParams(c.store)
+	exitParams.SCMAdapter = c.scm
+	exitParams.BotReviewReactionConfigured = true
+
+	HandleWorkerExit(c.state, WorkerResult{
+		IssueID:           c.issueID,
+		Identifier:        identifier,
+		ExitKind:          WorkerExitNormal,
+		WorkspacePath:     ws.Path,
+		HandedOffComments: presentedByTemplate(c.t, commentsPromptTemplate, issue, seed, true),
+	}, exitParams)
+
+	CancelRetry(c.state, c.issueID)
+	return seed
+}
+
+func (c *reactionCycle) complete() {
+	c.t.Helper()
+	completeContinuation(c.t, c.state, c.store, c.issueID, c.kind, c.newPending())
+}
+
+func (c *reactionCycle) dispatchedChecks() int {
+	if c.kind == ReactionKindReview {
+		return c.reviewMetrics.reviewChecks["dispatched"]
+	}
+	return c.botMetrics.botReviewChecks["dispatched"]
+}
+
+func (c *reactionCycle) attempts() int { return c.state.ReactionAttempts[c.rkey()] }
+
+func (c *reactionCycle) assertNoTurn(wantAttempts int) {
+	c.t.Helper()
+	if _, ok := c.state.RetryAttempts[c.issueID]; ok {
+		c.t.Error("continuation scheduled; want none")
+	}
+	if got := c.attempts(); got != wantAttempts {
+		c.t.Errorf("ReactionAttempts[%s] = %d, want %d", c.rkey(), got, wantAttempts)
+	}
+	assertEscalations(c.t, c.tracker, 0)
+	if _, ok := c.state.PendingReactions[c.rkey()]; !ok {
+		c.t.Error("PendingReactions entry consumed; want re-enqueued")
+	}
+}
+
+func (c *reactionCycle) ageEntry() time.Time {
+	created := c.base.Add(-5 * time.Minute)
+	c.state.PendingReactions[c.rkey()].CreatedAt = created
+	return created
+}
+
+func (c *reactionCycle) assertEntryWaitsOnePoll(wantCreatedAt time.Time) {
+	c.t.Helper()
+	entry, ok := c.state.PendingReactions[c.rkey()]
+	if !ok {
+		c.t.Fatal("PendingReactions entry consumed; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(wantCreatedAt) {
+		c.t.Errorf("PendingReactions[%s].CreatedAt = %v, want %v (a settled pass must not extend the watch)", c.rkey(), entry.CreatedAt, wantCreatedAt)
+	}
+	if want := c.base.Add(time.Minute); !entry.PendingRetryAt.Equal(want) {
+		c.t.Errorf("PendingReactions[%s].PendingRetryAt = %v, want %v", c.rkey(), entry.PendingRetryAt, want)
+	}
+	if entry.PendingAttempts != 0 {
+		c.t.Errorf("PendingReactions[%s].PendingAttempts = %d, want 0", c.rkey(), entry.PendingAttempts)
+	}
+}
+
+func (c *reactionCycle) assertDispatches(wantAttempts int, wantCarried ...string) {
+	c.t.Helper()
+	if got := continuationIDs(c.t, c.state, c.issueID, c.kind); !slices.Equal(got, slices.Sorted(slices.Values(wantCarried))) {
+		c.t.Errorf("continuation carries %v, want %v", got, slices.Sorted(slices.Values(wantCarried)))
+	}
+	if got := c.attempts(); got != wantAttempts {
+		c.t.Errorf("ReactionAttempts[%s] = %d, want %d", c.rkey(), got, wantAttempts)
+	}
+}
+
+func TestReactionPass_ShrunkSetAfterNormalExitStartsNoTurn(t *testing.T) {
+	t.Parallel()
+
+	earlier := []domain.ReviewComment{inlineComment("a"), inlineComment("b"), inlineComment("c"), summaryComment("r")}
+	shrunk := []domain.ReviewComment{outdatedComment(inlineComment("a")), outdatedComment(inlineComment("b")), inlineComment("c"), summaryComment("r")}
+	remaining := []domain.ReviewComment{inlineComment("c"), summaryComment("r")}
+
+	tests := []struct {
+		name        string
+		next        []domain.ReviewComment
+		wantCarried []string
+	}{
+		{"a new comment dispatches with the remaining ones", append(slices.Clone(remaining), inlineComment("d")), []string{"c", "d", "r"}},
+		{"a fresh PR-level item dispatches below the budget", append(slices.Clone(remaining), summaryComment("r2")), []string{"c", "r", "r2"}},
+	}
+
+	for _, kind := range reviewFamilyKinds {
+		for _, tt := range tests {
+			t.Run(kind+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				c := newReactionCycle(t, kind)
+				c.poll(earlier...)
+				c.assertDispatches(1, "a", "b", "c", "r")
+				c.complete()
+
+				c.poll(shrunk...)
+
+				c.assertNoTurn(1)
+				if got := c.dispatchedChecks(); got != 1 {
+					t.Errorf("dispatched checks = %d, want 1", got)
+				}
+				assertFingerprintMarked(t, c.store, c.issueID, kind, remaining, true)
+
+				c.poll(tt.next...)
+
+				c.assertDispatches(2, tt.wantCarried...)
+				if got := c.dispatchedChecks(); got != 2 {
+					t.Errorf("dispatched checks = %d, want 2", got)
+				}
+			})
+		}
+	}
+}
+
+func TestReactionPass_SetWithNoNewCommentSettles(t *testing.T) {
+	t.Parallel()
+
+	earlierSet := []domain.ReviewComment{inlineComment("a"), inlineComment("b"), inlineComment("c"), summaryComment("r")}
+	tests := []struct {
+		name     string
+		stored   []domain.ReviewComment
+		fpErr    error
+		comments []domain.ReviewComment
+	}{
+		{
+			name:     "a recurring earlier set",
+			stored:   []domain.ReviewComment{inlineComment("c")},
+			comments: earlierSet,
+		},
+		{
+			name:     "a failing fingerprint read",
+			fpErr:    errors.New("fingerprint store unavailable"),
+			comments: []domain.ReviewComment{inlineComment("c"), summaryComment("r")},
+		},
+	}
+
+	for _, kind := range reviewFamilyKinds {
+		for _, tt := range tests {
+			for _, atBudget := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/at budget %v", kind, tt.name, atBudget), func(t *testing.T) {
+					t.Parallel()
+
+					c := newReactionCycle(t, kind)
+					c.store.seedRows(c.issueID, kind, "a", "b", "c", "r")
+					attempts := 1
+					if atBudget {
+						attempts = c.budget
+					}
+					c.state.ReactionAttempts[c.rkey()] = attempts
+					if tt.stored != nil {
+						c.store.seedDispatched(c.issueID, kind, tt.stored)
+					}
+					c.store.getFingerprintErr = tt.fpErr
+					created := c.ageEntry()
+
+					c.poll(tt.comments...)
+
+					c.assertNoTurn(attempts)
+					c.assertEntryWaitsOnePoll(created)
+					if got := c.dispatchedChecks(); got != 0 {
+						t.Errorf("dispatched checks = %d, want 0", got)
+					}
+					if c.store.markDispatchedCalls != 1 {
+						t.Errorf("MarkReactionDispatched calls = %d, want 1", c.store.markDispatchedCalls)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestReactionPass_SpentBudgetEscalation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		kind            string
+		comments        []domain.ReviewComment
+		wantEscalations int
+		wantReported    []string
+	}{
+		{"review: a new inline comment escalates once", ReactionKindReview, []domain.ReviewComment{inlineComment("a"), inlineComment("n")}, 1, nil},
+		{"review: a new PR-level item escalates once", ReactionKindReview, []domain.ReviewComment{inlineComment("a"), summaryComment("r2")}, 1, nil},
+		{"bot-review: a new inline comment escalates once", ReactionKindBotReview, []domain.ReviewComment{inlineComment("a"), inlineComment("n")}, 1, []string{"a", "n"}},
+		{"bot-review: a new PR-level item is reported without escalating", ReactionKindBotReview, []domain.ReviewComment{inlineComment("a"), summaryComment("r2")}, 0, []string{"a", "r2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newReactionCycle(t, tt.kind)
+			c.store.seedRows(c.issueID, tt.kind, "a")
+			c.state.ReactionAttempts[c.rkey()] = c.budget
+
+			c.poll(tt.comments...)
+
+			assertEscalations(t, c.tracker, tt.wantEscalations)
+			if tt.kind == ReactionKindBotReview {
+				assertReportedComments(t, c.state, c.rkey(), tt.wantReported...)
+			}
+			assertStoredHandedOff(t, c.store, c.issueID, tt.kind, "a")
+			if tt.wantEscalations == 1 {
+				return
+			}
+
+			if _, ok := c.state.PendingReactions[c.rkey()]; !ok {
+				t.Fatal("PendingReactions entry consumed; want re-enqueued")
+			}
+			c.poll(tt.comments...)
+
+			c.assertNoTurn(c.budget)
+			assertFingerprintMarked(t, c.store, c.issueID, tt.kind, tt.comments, true)
+		})
+	}
+}
+
+func TestReactionPass_LoadFailureDefersTheDecision(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range reviewFamilyKinds {
+		for _, atBudget := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/at budget %v", kind, atBudget), func(t *testing.T) {
+				t.Parallel()
+
+				c := newReactionCycle(t, kind)
+				c.store.listErr = errors.New("handed-off store unavailable")
+				attempts := 1
+				if atBudget {
+					attempts = c.budget
+				}
+				c.state.ReactionAttempts[c.rkey()] = attempts
+
+				c.poll(inlineComment("a"), summaryComment("r"))
+
+				c.assertNoTurn(attempts)
+				if c.store.markDispatchedCalls != 0 {
+					t.Errorf("MarkReactionDispatched calls = %d, want 0", c.store.markDispatchedCalls)
+				}
+				if want := c.base.Add(time.Minute); !c.state.PendingReactions[c.rkey()].PendingRetryAt.Equal(want) {
+					t.Errorf("PendingRetryAt = %v, want %v", c.state.PendingReactions[c.rkey()].PendingRetryAt, want)
+				}
+				if findLogLine(c.logBuf.String(), "failed to load handed-off comments, deferring") == "" {
+					t.Errorf("log output missing the load warning; log=%s", c.logBuf.String())
+				}
+			})
+		}
+	}
+}
+
+func TestReactionPass_RunningIDsHoldASubsetUntilTheRunEnds(t *testing.T) {
+	t.Parallel()
+
+	const (
+		heldMsg    = "comment set held by a running turn, not dispatching"
+		settledMsg = "comment set already handed off, not dispatching"
+	)
+	for _, kind := range reviewFamilyKinds {
+		for _, atBudget := range []bool{false, true} {
+			for _, restart := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/at budget %v/restart %v", kind, atBudget, restart), func(t *testing.T) {
+					t.Parallel()
+
+					c := newReactionCycle(t, kind)
+					subset := []domain.ReviewComment{inlineComment("b"), inlineComment("c")}
+					c.poll(inlineComment("a"), inlineComment("b"), inlineComment("c"))
+					c.assertDispatches(1, "a", "b", "c")
+					running := dispatchRetry(t, c.state, c.store, c.issueID)
+					assertStoredHandedOff(t, c.store, c.issueID, kind)
+					attempts := 1
+					if atBudget {
+						attempts = c.budget
+						c.state.ReactionAttempts[c.rkey()] = attempts
+					}
+					c.state.PendingReactions[c.rkey()] = c.newPending()
+					created := c.ageEntry()
+
+					c.poll(subset...)
+
+					c.assertNoTurn(attempts)
+					c.assertEntryWaitsOnePoll(created)
+					assertFingerprintMarked(t, c.store, c.issueID, kind, subset, false)
+					if findLogLine(c.logBuf.String(), heldMsg) == "" {
+						t.Errorf("log output missing %q; log=%s", heldMsg, c.logBuf.String())
+					}
+					assertLogLacksLine(t, c.logBuf.String(), settledMsg)
+
+					HandleWorkerExit(c.state, WorkerResult{
+						IssueID:    c.issueID,
+						Identifier: running.Identifier,
+						ExitKind:   WorkerExitCancelled,
+					}, workerExitParams(c.store))
+					assertStoredHandedOff(t, c.store, c.issueID, kind)
+					if restart {
+						c.restart()
+						c.state.ReactionAttempts[c.rkey()] = attempts
+					}
+
+					c.poll(subset...)
+
+					if atBudget {
+						assertEscalations(t, c.tracker, 1)
+						return
+					}
+					c.assertDispatches(attempts+1, "b", "c")
+				})
+			}
+		}
+	}
+}
+
+func TestReactionPass_RowsSettleARecoveredEntry(t *testing.T) {
+	t.Parallel()
+
+	disruptions := []struct {
+		name string
+		run  func(c *reactionCycle)
+	}{
+		{"fresh state over the same store", func(c *reactionCycle) { c.restart() }},
+		{"watch window drop", func(c *reactionCycle) {
+			c.state.PendingReactions[c.rkey()].CreatedAt = c.base.Add(-31 * time.Minute)
+			c.params.ReviewPendingTTL = 30 * time.Minute
+			c.params.BotReviewPendingTTL = 30 * time.Minute
+			c.pass()
+			c.params.ReviewPendingTTL = 0
+			c.params.BotReviewPendingTTL = 0
+			if _, ok := c.state.PendingReactions[c.rkey()]; ok {
+				c.t.Fatal("aged entry present after the drop; want removed")
+			}
+			c.state.PendingReactions[c.rkey()] = c.newPending()
+		}},
+		{"terminal release", func(c *reactionCycle) {
+			releaseTerminalIssueState(context.Background(), c.state, c.store, c.issueID, c.log)
+			c.state.Claimed[c.issueID] = struct{}{}
+			c.state.PendingReactions[c.rkey()] = c.newPending()
+		}},
+	}
+
+	for _, kind := range reviewFamilyKinds {
+		for _, d := range disruptions {
+			t.Run(kind+"/"+d.name, func(t *testing.T) {
+				t.Parallel()
+
+				c := newReactionCycle(t, kind)
+				c.poll(inlineComment("a"), inlineComment("b"), inlineComment("c"))
+				c.complete()
+				d.run(c)
+				assertHandedOff(t, c.state, c.rkey())
+				attempts := c.attempts()
+
+				c.poll(inlineComment("b"), inlineComment("c"))
+
+				c.assertNoTurn(attempts)
+				assertHandedOffCached(t, c.state, c.rkey(), "a", "b", "c")
+				assertStoredHandedOff(t, c.store, c.issueID, kind, "a", "b", "c")
+
+				c.poll(inlineComment("b"), inlineComment("d"))
+
+				c.assertDispatches(attempts+1, "b", "d")
+			})
+		}
+	}
+}
+
+func hasLogLine(logOutput string, fragments ...string) bool {
+	for line := range strings.SplitSeq(logOutput, "\n") {
+		if !slices.ContainsFunc(fragments, func(f string) bool { return !strings.Contains(line, f) }) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFreshRunSeed(t *testing.T) {
+	t.Parallel()
+
+	triage := config.ReactionTriageConfig{Script: "triage.sh", TimeoutMS: 1000}
+	reviewComments := []domain.ReviewComment{inlineComment("b"), summaryComment("a"), outdatedComment(inlineComment("old"))}
+	botComments := []domain.ReviewComment{inlineComment("x")}
+
+	tests := []struct {
+		name         string
+		noIdentity   bool
+		reviewOff    bool
+		reviewTriage bool
+		comments     []domain.ReviewComment
+		botFound     []domain.ReviewComment
+		rows         map[string][]string
+		fetchErr     error
+		listErr      error
+		want         map[string][]string
+		wantWarnings []string
+	}{
+		{
+			name:     "a new review comment seeds the whole actionable set",
+			comments: reviewComments,
+			want:     map[string][]string{ReactionKindReview: {"a", "b"}},
+		},
+		{
+			name:     "both kinds are seeded",
+			comments: reviewComments,
+			botFound: botComments,
+			want:     map[string][]string{ReactionKindReview: {"a", "b"}, ReactionKindBotReview: {"x"}},
+		},
+		{
+			name:     "a new comment next to a given one seeds both",
+			comments: reviewComments,
+			rows:     map[string][]string{ReactionKindReview: {"a"}},
+			want:     map[string][]string{ReactionKindReview: {"a", "b"}},
+		},
+		{
+			name:     "every comment already given seeds nothing",
+			comments: reviewComments,
+			rows:     map[string][]string{ReactionKindReview: {"a", "b"}},
+		},
+		{
+			name:     "only outdated comments seed nothing",
+			comments: []domain.ReviewComment{outdatedComment(inlineComment("old"))},
+		},
+		{
+			name:       "a workspace without a pull request identity seeds nothing",
+			noIdentity: true,
+			comments:   reviewComments,
+			botFound:   botComments,
+		},
+		{
+			name:         "a triage block keeps its kind out of the seed",
+			reviewTriage: true,
+			comments:     reviewComments,
+			botFound:     botComments,
+			want:         map[string][]string{ReactionKindBotReview: {"x"}},
+		},
+		{
+			name:      "an unconfigured kind is not seeded",
+			reviewOff: true,
+			comments:  reviewComments,
+			botFound:  botComments,
+			want:      map[string][]string{ReactionKindBotReview: {"x"}},
+		},
+		{
+			name:         "a fetch error skips only its kind",
+			fetchErr:     errors.New("provider unavailable"),
+			comments:     reviewComments,
+			botFound:     botComments,
+			want:         map[string][]string{ReactionKindBotReview: {"x"}},
+			wantWarnings: []string{ReactionKindReview},
+		},
+		{
+			name:         "a load error skips every kind that needs the set",
+			listErr:      errors.New("handed-off store unavailable"),
+			comments:     reviewComments,
+			botFound:     botComments,
+			wantWarnings: []string{ReactionKindReview, ReactionKindBotReview},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const identifier = "ISS-FRESH"
+			root := t.TempDir()
+			if !tt.noIdentity {
+				writeRecoverySCM(t, root, identifier, domain.SCMMetadata{Branch: "feature/fix", PRNumber: 10, Owner: "owner", Repo: "repo"})
+			}
+			store := newFingerprintModelStore()
+			store.listErr = tt.listErr
+			for kind, ids := range tt.rows {
+				store.seedRows("1", kind, ids...)
+			}
+			scm := &mockSCMAdapter{comments: tt.comments, err: tt.fetchErr, botComments: tt.botFound}
+			params := freshRunSeedParams{
+				SCMAdapter:          scm,
+				Store:               store,
+				WorkspaceRoot:       root,
+				ReviewConfigured:    !tt.reviewOff,
+				BotReviewConfigured: true,
+			}
+			if tt.reviewTriage {
+				params.ReviewConfig.Triage = triage
+			}
+			log, buf := logCapture()
+
+			got := freshRunSeed(context.Background(), NewState(5000, 4, 0, nil, AgentTotals{}), params, domain.Issue{ID: "1", Identifier: identifier}, log)
+
+			if tt.want == nil && got != nil {
+				t.Fatalf("freshRunSeed() = %v, want nil", got)
+			}
+			if len(got) != len(tt.want) {
+				t.Errorf("freshRunSeed() holds %d keys, want %d", len(got), len(tt.want))
+			}
+			for _, kind := range reviewFamilyKinds {
+				want, seeded := tt.want[kind]
+				ids := slices.Sorted(slices.Values(continuationCommentIDs(kind, got)))
+				if _, present := got[commentTemplateKey(kind)]; present != seeded || !slices.Equal(ids, want) {
+					t.Errorf("freshRunSeed() %s comments = %v (present %v), want %v (present %v)", kind, ids, present, want, seeded)
+				}
+			}
+			if tt.noIdentity && (scm.calls != 0 || scm.botCalls != 0) {
+				t.Errorf("provider fetches = %d review, %d bot-review, want none without an identity", scm.calls, scm.botCalls)
+			}
+			const warning = "fresh run not given review comments"
+			if got, want := strings.Count(buf.String(), `msg="`+warning+`"`), len(tt.wantWarnings); got != want {
+				t.Errorf("%q logged %d times, want %d; log=%s", warning, got, want, buf.String())
+			}
+			for _, kind := range tt.wantWarnings {
+				if !hasLogLine(buf.String(), `msg="`+warning+`"`, "reaction_kind="+kind) {
+					t.Errorf("warning for %s missing; log=%s", kind, buf.String())
+				}
+			}
+		})
+	}
+}
+
+func TestFreshRun_PresentedCommentsSettleAtTheExitEntry(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range reviewFamilyKinds {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+
+			c := newReactionCycle(t, kind)
+
+			seed := c.freshRun(summaryComment("a"), inlineComment("b"))
+
+			if got := slices.Sorted(slices.Values(continuationCommentIDs(kind, seed))); !slices.Equal(got, []string{"a", "b"}) {
+				t.Fatalf("freshRunSeed() %s comments = %v, want [a b]", kind, got)
+			}
+			assertStoredHandedOff(t, c.store, c.issueID, kind, "a", "b")
+			if _, ok := c.state.PendingReactions[c.rkey()]; !ok {
+				t.Fatalf("PendingReactions[%s] missing, want the exit to seed the entry", c.rkey())
+			}
+
+			c.poll(inlineComment("b"))
+
+			c.assertNoTurn(0)
+
+			c.poll(inlineComment("b"), inlineComment("n"))
+
+			c.assertDispatches(1, "b", "n")
+			c.complete()
+			c.state.ReactionAttempts[c.rkey()] = c.budget
+
+			c.poll(inlineComment("b"), inlineComment("n"), inlineComment("z"))
+
+			assertEscalations(t, c.tracker, 1)
+			assertStoredHandedOff(t, c.store, c.issueID, kind, "a", "b", "n")
+		})
+	}
+}
+
+func TestReactionPass_ReplayOfTheReportedLog(t *testing.T) {
+	t.Parallel()
+
+	line := func(prefix string, n int) []domain.ReviewComment {
+		comments := make([]domain.ReviewComment, n)
+		for i := range comments {
+			comments[i] = inlineComment(fmt.Sprintf("%s%d", prefix, i+1))
+		}
+		return comments
+	}
+	ids := func(comments []domain.ReviewComment) []string {
+		out := make([]string, len(comments))
+		for i, c := range comments {
+			out[i] = c.ID
+		}
+		return out
+	}
+	join := func(groups ...[]domain.ReviewComment) []domain.ReviewComment {
+		var all []domain.ReviewComment
+		for _, g := range groups {
+			all = append(all, g...)
+		}
+		return all
+	}
+
+	c := newReactionCycle(t, ReactionKindReview)
+	turns := 1
+	firstReview := join(line("first-", 3), []domain.ReviewComment{summaryComment("review-1")})
+	remaining := line("first-", 3)[2:]
+	secondLines := line("second-", 7)
+	secondReview := join(remaining, secondLines, []domain.ReviewComment{summaryComment("review-2")})
+	carried := join(remaining, []domain.ReviewComment{summaryComment("review-2")})
+	thirdLines := line("third-", 4)
+
+	c.freshRun(firstReview...)
+	assertStoredHandedOff(t, c.store, c.issueID, ReactionKindReview, ids(firstReview)...)
+
+	c.poll(remaining...)
+	c.assertNoTurn(0)
+
+	c.poll(secondReview...)
+	c.assertDispatches(1, ids(secondReview)...)
+	turns++
+	c.complete()
+
+	c.poll(carried...)
+	c.assertNoTurn(1)
+
+	c.poll(join(carried, thirdLines)...)
+	c.assertDispatches(2, ids(join(carried, thirdLines))...)
+	turns++
+	c.complete()
+
+	c.poll(carried...)
+	c.assertNoTurn(2)
+
+	if turns != 3 {
+		t.Errorf("turns started = %d, want 3", turns)
+	}
+	if got := c.dispatchedChecks(); got != 2 {
+		t.Errorf("turns counted against max_continuation_turns = %d, want 2", got)
+	}
+	assertEscalations(t, c.tracker, 0)
+}
+
+func TestSettleHandedOffCommentSet(t *testing.T) {
+	t.Parallel()
+
+	const (
+		issueID    = "ISS-SETTLE"
+		settledMsg = "comment set already handed off, not dispatching"
+		heldMsg    = "comment set held by a running turn, not dispatching"
+		loadMsg    = "failed to load handed-off comments, deferring"
+		markMsg    = "failed to mark handed-off comment set dispatched"
+	)
+	tests := []struct {
+		name          string
+		kind          string
+		rows          []string
+		cached        []string
+		reported      []string
+		running       []string
+		listErr       error
+		markErr       error
+		comments      []domain.ReviewComment
+		want          bool
+		wantMarks     int
+		wantListCalls int
+		wantMsg       string
+	}{
+		{name: "a load failure defers without marking", kind: ReactionKindReview, listErr: errors.New("unavailable"), comments: []domain.ReviewComment{summaryComment("a")}, want: true, wantListCalls: 1, wantMsg: loadMsg},
+		{name: "rows covering the set settle and mark", kind: ReactionKindReview, rows: []string{"a", "b"}, comments: []domain.ReviewComment{summaryComment("a")}, want: true, wantMarks: 1, wantListCalls: 1, wantMsg: settledMsg},
+		{name: "a cached key is not reloaded", kind: ReactionKindReview, cached: []string{"a"}, comments: []domain.ReviewComment{summaryComment("a")}, want: true, wantMarks: 1, wantMsg: settledMsg},
+		{name: "reported IDs settle and mark", kind: ReactionKindBotReview, rows: []string{"a"}, reported: []string{"r"}, comments: []domain.ReviewComment{summaryComment("a"), summaryComment("r")}, want: true, wantMarks: 1, wantListCalls: 1, wantMsg: settledMsg},
+		{name: "running IDs hold the set unmarked", kind: ReactionKindReview, running: []string{"a"}, comments: []domain.ReviewComment{summaryComment("a")}, want: true, wantListCalls: 1, wantMsg: heldMsg},
+		{name: "a set covered partly by rows and partly by running IDs is held", kind: ReactionKindReview, rows: []string{"a"}, running: []string{"b"}, comments: []domain.ReviewComment{summaryComment("a"), summaryComment("b")}, want: true, wantListCalls: 1, wantMsg: heldMsg},
+		{name: "a new comment does not settle", kind: ReactionKindReview, rows: []string{"a"}, comments: []domain.ReviewComment{summaryComment("a"), summaryComment("n")}, wantListCalls: 1},
+		{name: "a failed mark still settles", kind: ReactionKindReview, rows: []string{"a"}, markErr: errors.New("write failed"), comments: []domain.ReviewComment{summaryComment("a")}, want: true, wantMarks: 1, wantListCalls: 1, wantMsg: markMsg},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
+			rkey := ReactionKey(issueID, tt.kind)
+			store := newFingerprintModelStore()
+			store.seedRows(issueID, tt.kind, tt.rows...)
+			store.listErr = tt.listErr
+			store.markDispatchedErr = tt.markErr
+			if tt.cached != nil {
+				seedHandedOff(state, rkey, tt.cached...)
+			}
+			if tt.reported != nil {
+				state.ReactionReportedComments[rkey] = map[string]struct{}{}
+				for _, id := range tt.reported {
+					state.ReactionReportedComments[rkey][id] = struct{}{}
+				}
+			}
+			if tt.running != nil {
+				running := make([]domain.ReviewComment, len(tt.running))
+				for i, id := range tt.running {
+					running[i] = summaryComment(id)
+				}
+				state.Running[issueID] = &RunningEntry{ContinuationContext: map[string]any{commentTemplateKey(tt.kind): buildReviewTemplateMap(running)}}
+			}
+			log, buf := logCapture()
+
+			got := settleHandedOffCommentSet(context.Background(), state, store, issueID, tt.kind, tt.comments, log)
+
+			if got != tt.want {
+				t.Errorf("settleHandedOffCommentSet(%v) = %v, want %v", tt.comments, got, tt.want)
+			}
+			if store.markDispatchedCalls != tt.wantMarks {
+				t.Errorf("MarkReactionDispatched calls = %d, want %d", store.markDispatchedCalls, tt.wantMarks)
+			}
+			if store.listCalls != tt.wantListCalls {
+				t.Errorf("ListReactionHandedOffComments calls = %d, want %d", store.listCalls, tt.wantListCalls)
+			}
+			if tt.wantMsg != "" && findLogLine(buf.String(), tt.wantMsg) == "" {
+				t.Errorf("log output missing %q; log=%s", tt.wantMsg, buf.String())
+			}
+			if tt.listErr != nil {
+				assertHandedOff(t, state, rkey)
+			}
+		})
+	}
 }

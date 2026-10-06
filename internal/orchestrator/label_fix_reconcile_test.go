@@ -963,3 +963,11 @@ func TestReconcileLabelFixCommands_SameKindCollapseAdvancesMarkAndReenqueues(t *
 		t.Errorf("HighWaterMark = %q, want %q", data.HighWaterMark, labelReviewMark(event))
 	}
 }
+
+func (s *labelFixDispatchedFlagStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *labelFixDispatchedFlagStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

@@ -200,6 +200,11 @@ type WorkerResult struct {
 	// APIRequestCount is the number of admitted token_usage events the worker
 	// relayed this run. Zero before the first turn began.
 	APIRequestCount int
+
+	// HandedOffComments maps a reaction kind to the IDs of the comments the
+	// run's first prompt presented under that kind's template variable.
+	// Set only on [WorkerExitNormal].
+	HandedOffComments map[string][]string
 }
 
 // SessionToolRegistryFunc builds the first-turn tool advertisement.
@@ -372,6 +377,11 @@ type WorkerDeps struct {
 	// ContinuationContext carries reaction continuation data to inject into
 	// the first-turn prompt. Non-nil only for reaction continuations.
 	ContinuationContext map[string]any
+
+	// ReactionKind is the reaction kind that caused this dispatch, empty for
+	// a fresh run. A fresh run accepts a seeded continuation only when it
+	// leaves the template's own text intact.
+	ReactionKind string
 
 	// Posture selects the worker behavior for this dispatch. The predicate
 	// methods [DispatchPosture.RunsSetupHooks] and
@@ -1183,6 +1193,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		logger.Warn("failed to write status state file at session start", slog.Any("error", err))
 	}
 
+	var presentedComments map[string][]string
+
 	for {
 		if ctx.Err() != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
@@ -1208,17 +1220,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		issueMap := issue.ToTemplateMap()
-		var renderOpts []prompt.RenderOption
+		var rendered string
+		var err error
 		if turnNumber == 1 {
 			contCtx := deps.ContinuationContext
 			if contCtx == nil {
 				contCtx = ContinuationFromContext(ctx)
 			}
-			if contCtx != nil {
-				renderOpts = append(renderOpts, prompt.WithContinuationContext(contCtx))
-			}
+			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, contCtx, deps.ReactionKind == "")
+		} else {
+			rendered, err = prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns)
 		}
-		rendered, err := prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, renderOpts...)
 		cancelledAtEnding = ctx.Err() != nil
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
@@ -1614,7 +1626,94 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		APIRequestCount:              localRequestCount,
 		UsageMeasured:                localMeasured,
 		UnaccountedTurns:             localUnaccounted,
+		HandedOffComments:            presentedComments,
 	})
+}
+
+// renderFirstTurnPrompt renders the first turn's template output and
+// reports, per reaction kind, the comment IDs that output presented to the
+// agent. A kind's IDs count as presented when rendering without that
+// kind's variable changes the output or fails, because the template then
+// showed the list to the agent. A fresh run's seeded continuation is kept
+// only when its render still contains every line of the unseeded render in
+// order; otherwise the unseeded render is returned and nothing is presented,
+// since a template that switches modes on the seed would lose its task text.
+func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attempt, maxTurns int, continuation map[string]any, freshRun bool) (string, map[string][]string, error) {
+	render := func(seed map[string]any) (string, error) {
+		var opts []prompt.RenderOption
+		if seed != nil {
+			opts = append(opts, prompt.WithContinuationContext(seed))
+		}
+		return prompt.BuildTurnPrompt(tmpl, issueMap, attempt, 1, maxTurns, opts...)
+	}
+
+	if continuation == nil {
+		rendered, err := render(nil)
+		return rendered, nil, err
+	}
+
+	if freshRun {
+		unseeded, err := render(nil)
+		if err != nil {
+			return "", nil, err
+		}
+		seeded, seededErr := render(continuation)
+		if seededErr != nil || !keepsEveryLine(seeded, unseeded) {
+			return unseeded, nil, nil
+		}
+		return seeded, presentedComments(render, seeded, continuation), nil
+	}
+
+	rendered, err := render(continuation)
+	if err != nil {
+		return "", nil, err
+	}
+	return rendered, presentedComments(render, rendered, continuation), nil
+}
+
+// presentedComments returns the IDs of the review-family kinds whose
+// variable in continuation affects the rendered output. It returns nil when
+// no kind qualifies.
+func presentedComments(render func(map[string]any) (string, error), rendered string, continuation map[string]any) map[string][]string {
+	var presented map[string][]string
+	for _, kind := range []string{ReactionKindReview, ReactionKindBotReview} {
+		ids := continuationCommentIDs(kind, continuation)
+		if len(ids) == 0 {
+			continue
+		}
+		withoutKind := maps.Clone(continuation)
+		withoutKind[commentTemplateKey(kind)] = nil
+		alternative, err := render(withoutKind)
+		if err == nil && alternative == rendered {
+			continue
+		}
+		if presented == nil {
+			presented = make(map[string][]string)
+		}
+		presented[kind] = ids
+	}
+	return presented
+}
+
+// keepsEveryLine reports whether every line of base appears in rendered, in
+// the same order, with other lines allowed between them.
+func keepsEveryLine(rendered, base string) bool {
+	renderedLines := strings.Split(rendered, "\n")
+	next := 0
+	for line := range strings.SplitSeq(base, "\n") {
+		found := false
+		for ; next < len(renderedLines); next++ {
+			if renderedLines[next] == line {
+				found = true
+				next++
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // retractUnconfirmedNoChangeDeclaration clears pendingSoftStopReason when it

@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Stopping or finishing an agent session, a hook, or a command Sortie runs can no longer terminate unrelated processes that received the same process ID after the command exited, and on Windows the finished command's own leftover processes no longer survive in that case. ([#1095](https://github.com/sortie-ai/sortie/issues/1095))
 - Review comment and bot review reactions no longer escalate right after the last allowed continuation turn when that turn resolved the comments; they escalate only when a new comment arrives that no turn was given, and for bot reviews only a comment on the code counts, so findings a bot posts only in its review summary after the last turn stay on the pull request. ([#1238](https://github.com/sortie-ai/sortie/issues/1238))
 - Hooks, the reaction triage command, self-review verification commands, and agent runtimes that exit on their own, including by a crash or by a signal they send themselves, are now reported by their own exit status instead of as cancelled or timed out; on Windows, a hook or agent turn whose process cannot be resumed is now reported as a failed start. ([#1097](https://github.com/sortie-ai/sortie/issues/1097))
+- Review comment and bot review reactions no longer start a turn that only repeats comments an earlier run was given, such as after a fix outdates some of them, also across restarts; a comment left unaddressed comes back with the next new comment. A new run of an issue that already has a pull request, such as after a reopen, now receives the review comments no run was given through the same template variables continuation turns use, so no later turn repeats them. ([#1249](https://github.com/sortie-ai/sortie/issues/1249))
+
+### Migrations
+
+- Add the `reaction_handoffs` table, recording the review comments each issue's runs were given. An upgrade starts with it empty, so a comment given before the upgrade can be given once more.
 
 ## [1.26.0] - 2026-10-01
 

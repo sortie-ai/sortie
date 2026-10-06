@@ -3156,3 +3156,11 @@ func TestReconcileOverdueRetries_LargeStartupBatchFiresNothing(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+func (m *mockReconcileStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (m *mockReconcileStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

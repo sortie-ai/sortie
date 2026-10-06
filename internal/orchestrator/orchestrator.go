@@ -47,6 +47,8 @@ type OrchestratorStore interface {
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
+	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
+	ListReactionHandedOffComments(ctx context.Context, issueID, kind string) ([]string, error)
 	UpsertReactionObservation(
 		ctx context.Context,
 		issueID, kind, fingerprint string,
@@ -145,6 +147,9 @@ type OrchestratorParams struct {
 	// ReviewConfig holds validated review reaction configuration. Zero when
 	// SCMAdapter is nil.
 	ReviewConfig ReviewReactionConfig
+
+	// ReviewConfigured is true when reactions.review_comments is active.
+	ReviewConfigured bool
 
 	// AutoMergeConfig holds validated auto-merge configuration. Zero when
 	// AutoMergeReactionConfigured is false.
@@ -247,6 +252,7 @@ type Orchestrator struct {
 	ciProvider                        domain.CIStatusProvider
 	scmAdapter                        domain.SCMAdapter
 	reviewConfig                      ReviewReactionConfig
+	reviewReactionConfigured          bool
 	autoMergeConfig                   AutoMergeReactionConfig
 	autoMergeReactionConfigured       bool
 	botReviewConfig                   BotReviewReactionConfig
@@ -392,6 +398,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		ciProvider:                        params.CIProvider,
 		scmAdapter:                        params.SCMAdapter,
 		reviewConfig:                      params.ReviewConfig,
+		reviewReactionConfigured:          params.ReviewConfigured,
 		autoMergeConfig:                   params.AutoMergeConfig,
 		autoMergeReactionConfigured:       params.AutoMergeReactionConfigured,
 		botReviewConfig:                   params.BotReviewConfig,
@@ -863,8 +870,22 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
 			continue
 		}
-		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, attemptSettings))
+		dispatchCtx := ctx
+		seed := freshRunSeed(ctx, o.state, freshRunSeedParams{
+			SCMAdapter:          o.scmAdapter,
+			Store:               o.store,
+			WorkspaceRoot:       cfg.Workspace.Root,
+			ReviewConfigured:    o.reviewReactionConfigured,
+			ReviewConfig:        o.reviewConfig,
+			BotReviewConfigured: o.botReviewReactionConfigured,
+			BotReviewConfig:     o.botReviewConfig,
+		}, issue, o.logger)
+		if seed != nil {
+			dispatchCtx = WithContinuationContext(ctx, seed)
+		}
+		DispatchIssue(dispatchCtx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, attemptSettings))
 		if entry := o.state.Running[issue.ID]; entry != nil {
+			entry.ContinuationContext = seed
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
@@ -1049,6 +1070,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			WorkflowPath:    o.workflowManager.WorkflowAbsPath(),
 			DBPath:          o.dbPath,
 			MCPServerBinary: o.mcpServerBinary,
+			ReactionKind:    reactionKind,
 			Posture:         posture,
 		}
 

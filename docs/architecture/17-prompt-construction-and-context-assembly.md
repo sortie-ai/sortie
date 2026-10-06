@@ -17,7 +17,7 @@ Inputs to prompt rendering:
 
 CI failure context is injected only on turn 1 of a CI-fix dispatch. The worker reads the context from the dispatch site (carried via `context.WithValue` or the retry entry's `ContinuationContext` field) and passes it to `prompt.WithContinuationContext`. Templates SHOULD use a conditional guard: `{{ if .ci_failure }}...{{ end }}`. When `ci_failure` is nil, the template variable is still present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject templates that reference the field.
 
-- `review_comments` (list of maps or nil): review comment context injected into review-fix continuation prompts. Nil on initial dispatch and non-review retries. When non-nil, each element contains:
+- `review_comments` and `bot_review_comments` (list of maps or nil): review comment context injected into review-fix and bot-review-fix continuation prompts, one variable per kind. Nil on every other dispatch, except that turn 1 of a fresh dispatch carries them when the pull request holds comments no earlier run of the issue was given (below). When non-nil, each element of either list contains:
   - `id`: SCM-platform comment identifier
   - `file`: file path the comment is attached to (empty for PR-level comments)
   - `start_line`: first line of commented range (0 for non-inline)
@@ -25,7 +25,9 @@ CI failure context is injected only on turn 1 of a CI-fix dispatch. The worker r
   - `reviewer`: username of the comment author
   - `body`: comment text
 
-Review comment context is injected only on turn 1 of a review-fix dispatch, following the same `ContinuationContext` pathway as CI failure context. Templates SHOULD use a conditional guard: `{{ if .review_comments }}...{{ end }}`. When `review_comments` is nil, the template variable is still present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject templates that reference the field.
+Review comment context is injected only on turn 1, following the same `ContinuationContext` pathway as CI failure context: of a review-fix or bot-review-fix dispatch, and of a fresh dispatch whose seed carries it. Templates SHOULD use a conditional guard: `{{ if .review_comments }}...{{ end }}`. When `review_comments` or `bot_review_comments` is nil, the template variable is still present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject templates that reference the field.
+
+A fresh dispatch is seeded when the issue's workspace names a pull request, the kind is configured without a `triage` block, and the pull request holds an actionable comment that no earlier run of the issue was given. The worker keeps the seed only when the turn-1 render with it still contains every line of the render without it, in order; a template that switches to different text on the seed fails that test and renders as it does without the seed, so no run loses its task text. Each kind's variable counts as presented when the turn-1 render differs from a render with that variable set to nil, or that render fails. A template that never references the variable, or reaches it only on a branch the render does not take, presents nothing. A run that exits with `WorkerExitNormal` records the IDs it presented as given to the issue, so a later poll does not dispatch a turn that only repeats them (Sections 11B.4 and 11D.3).
 
 ### 12.2 Rendering Rules
 

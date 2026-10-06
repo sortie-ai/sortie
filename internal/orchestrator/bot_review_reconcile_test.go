@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +108,14 @@ func spentBotReviewState(t *testing.T, issueID string, handedOff ...string) (*St
 		seedHandedOff(state, rkey, handedOff...)
 	}
 	return state, rkey
+}
+
+func assertReportedComments(t *testing.T, state *State, rkey string, want ...string) {
+	t.Helper()
+	got := slices.Sorted(maps.Keys(state.ReactionReportedComments[rkey]))
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("ReactionReportedComments[%q] = %v, want %v", rkey, got, slices.Sorted(slices.Values(want)))
+	}
 }
 
 func TestBuildBotReviewReactionConfig(t *testing.T) {
@@ -1034,7 +1044,8 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	if state.ReactionAttempts[botKey] != 5 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 5 (residual counter preserved)", botKey, state.ReactionAttempts[botKey])
 	}
-	assertHandedOff(t, state, botKey, "bc-1", "review-1")
+	assertHandedOffCached(t, state, botKey)
+	assertReportedComments(t, state, botKey, "bc-1", "review-1")
 	assertEscalations(t, tracker, 1)
 	assertLogLineHasIntAttr(t, buf.String(), "bot review continuation turns exhausted, escalating", "turn_count", 5)
 	assertLogLacksLine(t, buf.String(), "bot review triage requested escalation")
@@ -1987,49 +1998,50 @@ func TestReconcileBotReviewComments_Triage_EpisodeCloseClearsHandledForNextEpiso
 func TestReconcileBotReviewComments_SpentBudget_NoNewInlineComment(t *testing.T) {
 	t.Parallel()
 
+	const (
+		settledMsg  = "comment set already handed off, not dispatching"
+		reportedMsg = "bot review continuation turns exhausted, no new inline comment, not escalating"
+	)
 	tests := []struct {
-		name      string
-		handedOff []string
-		comments  []domain.ReviewComment
-		wantSet   []string
-		wantDebug bool
-		wantCount int
+		name         string
+		handedOff    []string
+		comments     []domain.ReviewComment
+		wantReported []string
+		wantMsg      string
+		wantCount    int
 	}{
 		{
-			name:      "a summary item outside the set",
-			handedOff: []string{"c1"},
-			comments:  []domain.ReviewComment{inlineComment("c1"), summaryComment("review-2")},
-			wantSet:   []string{"c1", "review-2"},
-			wantDebug: true,
-			wantCount: 2,
+			name:         "a summary item outside the set",
+			handedOff:    []string{"c1"},
+			comments:     []domain.ReviewComment{inlineComment("c1"), summaryComment("review-2")},
+			wantReported: []string{"c1", "review-2"},
+			wantMsg:      reportedMsg,
+			wantCount:    2,
 		},
 		{
-			name:      "a summary item with nothing handed off",
-			comments:  []domain.ReviewComment{summaryComment("review-1")},
-			wantSet:   []string{"review-1"},
-			wantDebug: true,
-			wantCount: 1,
+			name:         "a summary item with nothing handed off",
+			comments:     []domain.ReviewComment{summaryComment("review-1")},
+			wantReported: []string{"review-1"},
+			wantMsg:      reportedMsg,
+			wantCount:    1,
 		},
 		{
 			name:      "an inline comment already handed off",
 			handedOff: []string{"c1", "review-1"},
 			comments:  []domain.ReviewComment{inlineComment("c1")},
-			wantSet:   []string{"c1", "review-1"},
-			wantDebug: true,
+			wantMsg:   settledMsg,
 			wantCount: 1,
 		},
 		{
 			name:      "the new inline comment is outdated",
 			handedOff: []string{"c1"},
 			comments:  []domain.ReviewComment{inlineComment("c1"), outdatedComment(inlineComment("c2"))},
-			wantSet:   []string{"c1"},
-			wantDebug: true,
+			wantMsg:   settledMsg,
 			wantCount: 1,
 		},
 		{
 			name:      "the provider returns nothing",
 			handedOff: []string{"c1"},
-			wantSet:   []string{"c1"},
 		},
 	}
 
@@ -2062,7 +2074,10 @@ func TestReconcileBotReviewComments_SpentBudget_NoNewInlineComment(t *testing.T)
 			if state.ReactionAttempts[rkey] != 5 {
 				t.Errorf("ReactionAttempts[%s] = %d, want 5 (unchanged)", rkey, state.ReactionAttempts[rkey])
 			}
-			assertHandedOff(t, state, rkey, tt.wantSet...)
+			if len(tt.handedOff) > 0 {
+				assertHandedOffCached(t, state, rkey, tt.handedOff...)
+			}
+			assertReportedComments(t, state, rkey, tt.wantReported...)
 			if _, ok := state.Claimed["BOT-SPENT"]; !ok {
 				t.Error("claim released, want kept")
 			}
@@ -2076,14 +2091,22 @@ func TestReconcileBotReviewComments_SpentBudget_NoNewInlineComment(t *testing.T)
 			if len(metrics.botReviewChecks) != 0 || len(metrics.botReviewEscalations) != 0 {
 				t.Errorf("bot review metrics = checks:%v escalations:%v, want none", metrics.botReviewChecks, metrics.botReviewEscalations)
 			}
-			debugMsg := "bot review continuation turns exhausted, no new inline comment, not escalating"
-			if !tt.wantDebug {
-				assertLogLacksLine(t, buf.String(), debugMsg)
+			wantMarks := 0
+			if tt.wantMsg == settledMsg {
+				wantMarks = 1
+			}
+			if store.markDispatchedCalls != wantMarks {
+				t.Errorf("MarkReactionDispatched calls = %d, want %d", store.markDispatchedCalls, wantMarks)
+			}
+			for _, msg := range []string{settledMsg, reportedMsg} {
+				if msg != tt.wantMsg {
+					assertLogLacksLine(t, buf.String(), msg)
+				}
+			}
+			if tt.wantMsg == "" {
 				return
 			}
-			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "turn_count", 5)
-			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "max_continuation_turns", 5)
-			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "comment_count", tt.wantCount)
+			assertLogLineHasIntAttr(t, buf.String(), tt.wantMsg, "comment_count", tt.wantCount)
 		})
 	}
 }
@@ -2184,21 +2207,21 @@ func TestReconcileBotReviewComments_SpentBudget_NewInlineCommentEscalatesOnce(t 
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		handedOff []string
-		comments  []domain.ReviewComment
-		wantSet   []string
+		name         string
+		handedOff    []string
+		comments     []domain.ReviewComment
+		wantReported []string
 	}{
 		{
-			name:      "an inline comment beside a summary item",
-			handedOff: []string{"c1"},
-			comments:  []domain.ReviewComment{inlineComment("c1"), summaryComment("review-2"), inlineComment("c2")},
-			wantSet:   []string{"c1", "review-2", "c2"},
+			name:         "an inline comment beside a summary item",
+			handedOff:    []string{"c1"},
+			comments:     []domain.ReviewComment{inlineComment("c1"), summaryComment("review-2"), inlineComment("c2")},
+			wantReported: []string{"c1", "review-2", "c2"},
 		},
 		{
-			name:     "nothing was handed off",
-			comments: []domain.ReviewComment{inlineComment("c1")},
-			wantSet:  []string{"c1"},
+			name:         "nothing was handed off",
+			comments:     []domain.ReviewComment{inlineComment("c1")},
+			wantReported: []string{"c1"},
 		},
 	}
 
@@ -2233,7 +2256,8 @@ func TestReconcileBotReviewComments_SpentBudget_NewInlineCommentEscalatesOnce(t 
 			if state.ReactionAttempts[rkey] != 5 {
 				t.Errorf("ReactionAttempts[%s] = %d, want 5 (kept)", rkey, state.ReactionAttempts[rkey])
 			}
-			assertHandedOff(t, state, rkey, tt.wantSet...)
+			assertHandedOffCached(t, state, rkey, tt.handedOff...)
+			assertReportedComments(t, state, rkey, tt.wantReported...)
 			if store.deleteFingerprintCalls != 1 {
 				t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
 			}
@@ -2314,11 +2338,14 @@ func TestReconcileBotReviewComments_BelowBudget_SummaryItemStillDispatches(t *te
 	if metrics.botReviewChecks["dispatched"] != 1 {
 		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, metrics.botReviewChecks["dispatched"])
 	}
-	assertHandedOff(t, state, rkey, "c1", "review-2")
+	if got := continuationIDs(t, state, issueID, ReactionKindBotReview); !slices.Equal(got, []string{"c1", "review-2"}) {
+		t.Errorf("continuation carries %v, want [c1 review-2]", got)
+	}
+	assertHandedOffCached(t, state, rkey, "c1")
 	assertEscalations(t, tracker, 0)
 }
 
-func TestReconcileBotReviewComments_HandedOff_DispatchRecordsActionableIDs(t *testing.T) {
+func TestReconcileBotReviewComments_HandedOff_NormalExitRecordsPresentedIDs(t *testing.T) {
 	t.Parallel()
 
 	const issueID = "BOT-REC"
@@ -2336,19 +2363,32 @@ func TestReconcileBotReviewComments_HandedOff_DispatchRecordsActionableIDs(t *te
 	}
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	assertHandedOff(t, state, rkey, "c1", "review-1")
+	if got := continuationIDs(t, state, issueID, ReactionKindBotReview); !slices.Equal(got, []string{"c1", "review-1"}) {
+		t.Errorf("continuation carries %v, want [c1 review-1]", got)
+	}
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview)
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
 	}
 
 	completeContinuation(t, state, store, issueID, ReactionKindBotReview, makeBotReviewPendingEntry(t, issueID, 10))
+
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "c1", "review-1")
+
 	scm.botComments = []domain.ReviewComment{summaryComment("review-1"), inlineComment("c2")}
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	assertHandedOff(t, state, rkey, "c1", "review-1", "c2")
+	if got := continuationIDs(t, state, issueID, ReactionKindBotReview); !slices.Equal(got, []string{"c2", "review-1"}) {
+		t.Errorf("continuation carries %v, want [c2 review-1]", got)
+	}
 	if state.ReactionAttempts[rkey] != 2 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
 	}
+
+	completeContinuation(t, state, store, issueID, ReactionKindBotReview, makeBotReviewPendingEntry(t, issueID, 10))
+
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "c1", "c2", "review-1")
+	assertHandedOffCached(t, state, rkey, "c1", "c2", "review-1")
 }
 
 func TestReconcileBotReviewComments_HandedOff_TriageEscalationRecordsReportedIDs(t *testing.T) {
@@ -2378,16 +2418,17 @@ func TestReconcileBotReviewComments_HandedOff_TriageEscalationRecordsReportedIDs
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1 (kept)", rkey, state.ReactionAttempts[rkey])
 	}
-	assertHandedOff(t, state, rkey, "c-earlier", "c1", "review-1")
+	assertHandedOffCached(t, state, rkey, "c-earlier")
+	assertReportedComments(t, state, rkey, "c1", "review-1")
 }
 
 func TestReconcileBotReviewComments_HandedOff_WatchWindowDrop(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		attempts int
-		wantKept bool
+		name         string
+		attempts     int
+		wantReported bool
 	}{
 		{"counter below the budget", 4, false},
 		{"counter at the budget", 5, true},
@@ -2405,8 +2446,13 @@ func TestReconcileBotReviewComments_HandedOff_WatchWindowDrop(t *testing.T) {
 			state.ReactionAttempts[rkey] = tt.attempts
 			seedHandedOff(state, rkey, "c1", "c2")
 			seedHandedOff(state, reviewKey, "r1")
+			state.ReactionReportedComments[rkey] = map[string]struct{}{"rep-1": {}}
+			store := newFingerprintModelStore()
+			store.seedRows(issueID, ReactionKindBotReview, "c1", "c2")
+			store.seedRows(issueID, ReactionKindReview, "r1")
 			scm := &mockSCMAdapter{}
 			params := botReviewParams(&reviewReconcileStore{}, scm, nil)
+			params.Store = store
 			params.BotReviewPendingTTL = time.Minute
 			params.NowFunc = func() time.Time { return botReviewBaseTime.Add(2 * time.Minute) }
 
@@ -2418,18 +2464,21 @@ func TestReconcileBotReviewComments_HandedOff_WatchWindowDrop(t *testing.T) {
 			if scm.botCalls != 0 {
 				t.Errorf("FetchBotReviewComments calls = %d, want 0", scm.botCalls)
 			}
-			assertHandedOff(t, state, reviewKey, "r1")
-			if !tt.wantKept {
+			assertHandedOffCached(t, state, reviewKey, "r1")
+			assertHandedOff(t, state, rkey)
+			assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "c1", "c2")
+			assertStoredHandedOff(t, store, issueID, ReactionKindReview, "r1")
+			if !tt.wantReported {
 				if _, ok := state.ReactionAttempts[rkey]; ok {
 					t.Errorf("ReactionAttempts[%s] present after the drop below the budget; want deleted", rkey)
 				}
-				assertHandedOff(t, state, rkey)
+				assertReportedComments(t, state, rkey)
 				return
 			}
 			if state.ReactionAttempts[rkey] != tt.attempts {
 				t.Errorf("ReactionAttempts[%s] = %d, want %d (a spent counter survives the drop)", rkey, state.ReactionAttempts[rkey], tt.attempts)
 			}
-			assertHandedOff(t, state, rkey, "c1", "c2")
+			assertReportedComments(t, state, rkey, "rep-1")
 		})
 	}
 }
@@ -2470,7 +2519,8 @@ func TestReconcileBotReviewComments_HandedOff_ReseededEntryAfterEscalation(t *te
 	pass()
 
 	assertEscalations(t, tracker, 2)
-	assertHandedOff(t, state, rkey, "c1", "c2", "review-1")
+	assertReportedComments(t, state, rkey, "c1", "c2", "review-1")
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview)
 }
 
 func TestReconcileBotReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testing.T) {
@@ -2491,7 +2541,7 @@ func TestReconcileBotReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testi
 		reconcileBotReviewComments(state, params, log, context.Background(), metrics)
 		state.TrackerOpsWg.Wait()
 	}
-	assertWaiting := func(t *testing.T, wantSet ...string) {
+	assertWaiting := func(t *testing.T, wantReported ...string) {
 		t.Helper()
 		entry, ok := state.PendingReactions[rkey]
 		if !ok {
@@ -2505,7 +2555,8 @@ func TestReconcileBotReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testi
 		if state.ReactionAttempts[rkey] != 3 {
 			t.Errorf("ReactionAttempts[%s] = %d, want 3", rkey, state.ReactionAttempts[rkey])
 		}
-		assertHandedOff(t, state, rkey, wantSet...)
+		assertHandedOffCached(t, state, rkey, "review-1", "review-2", "review-3", "c1", "c2", "c3")
+		assertReportedComments(t, state, rkey, wantReported...)
 		makeDue(t, state, rkey)
 	}
 
@@ -2527,13 +2578,13 @@ func TestReconcileBotReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testi
 		summaryComment("review-1"), summaryComment("review-2"), summaryComment("review-3"), outdatedComment(inlineComment("c3")),
 	}
 	pass()
-	assertWaiting(t, "review-1", "review-2", "review-3", "c1", "c2", "c3")
+	assertWaiting(t)
 
 	scm.botComments = []domain.ReviewComment{
 		summaryComment("review-1"), summaryComment("review-2"), summaryComment("review-3"), summaryComment("review-4"), outdatedComment(inlineComment("c3")),
 	}
 	pass()
-	assertWaiting(t, "review-1", "review-2", "review-3", "review-4", "c1", "c2", "c3")
+	assertWaiting(t, "review-1", "review-2", "review-3", "review-4")
 
 	scm.botComments = []domain.ReviewComment{
 		summaryComment("review-1"), summaryComment("review-2"), summaryComment("review-3"), summaryComment("review-4"),
@@ -2549,7 +2600,9 @@ func TestReconcileBotReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testi
 	if state.ReactionAttempts[rkey] != 3 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 3 (kept)", rkey, state.ReactionAttempts[rkey])
 	}
-	assertHandedOff(t, state, rkey, "review-1", "review-2", "review-3", "review-4", "review-5", "c1", "c2", "c3", "c5")
+	assertHandedOffCached(t, state, rkey, "review-1", "review-2", "review-3", "c1", "c2", "c3")
+	assertReportedComments(t, state, rkey, "review-1", "review-2", "review-3", "review-4", "review-5", "c5")
+	assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, "review-1", "review-2", "review-3", "c1", "c2", "c3")
 
 	state.PendingReactions[rkey] = makeBotReviewPendingEntry(t, issueID, 10)
 	pass()

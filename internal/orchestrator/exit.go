@@ -45,6 +45,7 @@ type WorkerExitStore interface {
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
+	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -576,6 +577,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
 		state.Completed[workerResult.IssueID] = struct{}{}
+
+		for kind, commentIDs := range workerResult.HandedOffComments {
+			recordHandedOffComments(ctx, state, params.Store, workerResult.IssueID, kind, commentIDs, log)
+		}
 
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
 		terminalSuppressed := false

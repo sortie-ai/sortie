@@ -9955,3 +9955,51 @@ func TestHandleWorkerExit_CarriesTheRuleSettingsFlagThroughRetries(t *testing.T)
 		})
 	}
 }
+
+func (m *mockExitStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func TestHandleWorkerExit_RecordsPresentedCommentsOnlyOnNormalExit(t *testing.T) {
+	t.Parallel()
+
+	presented := map[string][]string{
+		ReactionKindReview:    {"a", "b"},
+		ReactionKindBotReview: {"x"},
+	}
+	tests := []struct {
+		name          string
+		exitKind      WorkerExitKind
+		err           error
+		presented     map[string][]string
+		wantReview    []string
+		wantBotReview []string
+	}{
+		{"normal exit records exactly what the run presented", WorkerExitNormal, nil, presented, []string{"a", "b"}, []string{"x"}},
+		{"normal exit records only the presented kind", WorkerExitNormal, nil, map[string][]string{ReactionKindBotReview: {"x"}}, nil, []string{"x"}},
+		{"normal exit presenting nothing records nothing", WorkerExitNormal, nil, nil, nil, nil},
+		{"error exit records nothing", WorkerExitError, errors.New("agent crashed"), presented, nil, nil},
+		{"cancelled exit records nothing", WorkerExitCancelled, nil, presented, nil, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "ISS-RECORD"
+			state := exitState(t, issueID, nil)
+			store := newFingerprintModelStore()
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:           issueID,
+				Identifier:        issueID + "-ident",
+				ExitKind:          tt.exitKind,
+				Error:             tt.err,
+				HandedOffComments: tt.presented,
+			}, workerExitParams(store))
+
+			assertStoredHandedOff(t, store, issueID, ReactionKindReview, tt.wantReview...)
+			assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, tt.wantBotReview...)
+		})
+	}
+}

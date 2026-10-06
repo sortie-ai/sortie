@@ -1856,3 +1856,11 @@ func TestReconcileMergeCompletion_MissingSHAMarkerDoesNotWaitForOtherDestination
 		t.Errorf("Slack sends = %d, want 1", got)
 	}
 }
+
+func (s *mgcStoreFake) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *mgcStoreFake) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
