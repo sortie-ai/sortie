@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Stopping or finishing an agent session, a hook, or a command Sortie runs can no longer terminate unrelated processes that received the same process ID after the command exited, and on Windows the finished command's own leftover processes no longer survive in that case. ([#1095](https://github.com/sortie-ai/sortie/issues/1095))
+- Review comment and bot review reactions no longer escalate right after the last allowed continuation turn when that turn resolved the comments; they escalate only when a new comment arrives that no turn was given, and for bot reviews only a comment on the code counts, so findings a bot posts only in its review summary after the last turn stay on the pull request. ([#1238](https://github.com/sortie-ai/sortie/issues/1238))
 
 ## [1.26.0] - 2026-10-01
 

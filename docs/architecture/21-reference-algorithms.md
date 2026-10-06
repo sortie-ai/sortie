@@ -155,17 +155,26 @@ function reconcile_review_comments(state):
   for key, pending in state.pending_reactions where pending.kind == "review":
     delete(state.pending_reactions, key)
     data = pending.kind_data  # ReviewReactionData
+    rkey = reaction_key(pending.issue_id, "review")
+
+    # Watch window; a spent counter and its handed-off set survive the drop
+    if review_config.watch_window_ms > 0 and now - pending.created_at > review_config.watch_window_ms:
+      cancel_triage(pending)
+      if state.reaction_attempts[rkey] < review_config.max_continuation_turns:
+        delete(state.reaction_attempts, rkey)
+        delete(state.handed_off_comments, rkey)
+      log_warn("review watch window elapsed, dropping")
+      continue
 
     # Poll throttle
     if now < pending.pending_retry_at:
       state.pending_reactions[key] = pending
       continue
 
-    # Continuation turn cap
-    rkey = reaction_key(pending.issue_id, "review")
-    turn_count = state.reaction_attempts[rkey]
-    if turn_count >= review_config.max_continuation_turns:
-      escalate_review_failure(state, pending, turn_count)
+    # An unfinished triage run makes this pass's fetch redundant
+    if pending.triage is set and not triage_finished(pending.triage):
+      pending.pending_retry_at = now
+      state.pending_reactions[key] = pending
       continue
 
     # Fetch reviews from SCM adapter
@@ -177,11 +186,12 @@ function reconcile_review_comments(state):
       log_warn("review fetch failed, retrying with backoff")
       continue
 
-    # Filter outdated, compute debounce timestamp
-    actionable = filter(comments, c -> not c.outdated)
+    # Filter outdated and allowlisted authors, compute debounce timestamp
+    actionable = filter(comments, c -> not c.outdated and not is_allowlisted_bot(c.reviewer))
     max_time = max(c.submitted_at for c in actionable)
 
     if len(actionable) == 0:
+      cancel_triage(pending)
       pending.pending_retry_at = now + poll_interval
       state.pending_reactions[key] = pending
       continue
@@ -203,11 +213,36 @@ function reconcile_review_comments(state):
       state.pending_reactions[key] = pending
       continue
 
-    # Mark dispatched synchronously before scheduling retry
-    store.mark_reaction_dispatched(pending.issue_id, "review")
+    # Retry slot arbitration
+    if retry_slot_incumbent(state, pending.issue_id) is not nil:
+      pending.created_at = now
+      state.pending_reactions[key] = pending
+      continue
+
+    # Continuation budget, decided on the observed set
+    turn_count = state.reaction_attempts[rkey]
+    if turn_count >= review_config.max_continuation_turns:
+      if any(c.id not in state.handed_off_comments[rkey] for c in actionable):
+        escalate_review_failure(state, pending, turn_count)
+      else:
+        pending.pending_retry_at = now + poll_interval
+        state.pending_reactions[key] = pending
+      continue
 
     review_context = build_review_template_map(actionable)
-    cancel_retry(state, pending.issue_id)
+
+    # Triage gate, above the dispatch counter
+    verdict = triage_gate(state, pending, review_config.triage, review_context)
+    if verdict in ("wait", "handled"):
+      pending.pending_retry_at = now + poll_interval
+      state.pending_reactions[key] = pending
+      continue
+    if verdict == "escalate":
+      escalate_review_failure(state, pending, turn_count)
+      continue
+
+    # The fingerprint is marked dispatched by the retry handler, after the
+    # scheduled retry fires and dispatch succeeds
     schedule_retry(state, pending.issue_id, pending.attempt, {
       identifier: pending.identifier,
       delay_type: continuation,
@@ -215,6 +250,7 @@ function reconcile_review_comments(state):
       reaction_kind: "review"
     })
     state.reaction_attempts[rkey]++
+    add_all(state.handed_off_comments[rkey], [c.id for c in actionable])
 
   return state
 ```

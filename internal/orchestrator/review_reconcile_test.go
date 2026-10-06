@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -289,6 +290,159 @@ func reviewParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker do
 	}
 }
 
+type fingerprintModelStore struct {
+	reviewReconcileStore
+	fingerprints map[string]*modelFingerprint
+}
+
+type modelFingerprint struct {
+	value      string
+	dispatched bool
+}
+
+func newFingerprintModelStore() *fingerprintModelStore {
+	return &fingerprintModelStore{fingerprints: make(map[string]*modelFingerprint)}
+}
+
+func (s *fingerprintModelStore) UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error {
+	if err := s.reviewReconcileStore.UpsertReactionFingerprint(ctx, issueID, kind, fingerprint); err != nil {
+		return err
+	}
+	key := ReactionKey(issueID, kind)
+	if current := s.fingerprints[key]; current == nil || current.value != fingerprint {
+		s.fingerprints[key] = &modelFingerprint{value: fingerprint}
+	}
+	return nil
+}
+
+func (s *fingerprintModelStore) GetReactionFingerprint(ctx context.Context, issueID, kind string) (string, bool, error) {
+	if _, _, err := s.reviewReconcileStore.GetReactionFingerprint(ctx, issueID, kind); err != nil {
+		return "", false, err
+	}
+	current := s.fingerprints[ReactionKey(issueID, kind)]
+	if current == nil {
+		return "", false, nil
+	}
+	return current.value, current.dispatched, nil
+}
+
+func (s *fingerprintModelStore) MarkReactionDispatched(ctx context.Context, issueID, kind string) error {
+	if err := s.reviewReconcileStore.MarkReactionDispatched(ctx, issueID, kind); err != nil {
+		return err
+	}
+	if current := s.fingerprints[ReactionKey(issueID, kind)]; current != nil {
+		current.dispatched = true
+	}
+	return nil
+}
+
+func (s *fingerprintModelStore) DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error {
+	if err := s.reviewReconcileStore.DeleteReactionFingerprint(ctx, issueID, kind); err != nil {
+		return err
+	}
+	delete(s.fingerprints, ReactionKey(issueID, kind))
+	return nil
+}
+
+func (s *fingerprintModelStore) seedDispatched(issueID, kind string, comments []domain.ReviewComment) {
+	s.fingerprints[ReactionKey(issueID, kind)] = &modelFingerprint{value: buildReviewFingerprint(comments), dispatched: true}
+}
+
+func summaryComment(id string) domain.ReviewComment {
+	return domain.ReviewComment{ID: id, Body: "summary " + id, SubmittedAt: reviewBaseTime.Add(-time.Hour)}
+}
+
+func inlineComment(id string) domain.ReviewComment {
+	return domain.ReviewComment{
+		ID:          id,
+		FilePath:    "internal/app/main.go",
+		StartLine:   12,
+		Body:        "fix " + id,
+		SubmittedAt: reviewBaseTime.Add(-time.Hour),
+	}
+}
+
+func outdatedComment(c domain.ReviewComment) domain.ReviewComment {
+	c.Outdated = true
+	return c
+}
+
+func seedHandedOff(state *State, rkey string, ids ...string) {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	state.ReactionHandedOffComments[rkey] = set
+}
+
+func assertHandedOff(t *testing.T, state *State, rkey string, want ...string) {
+	t.Helper()
+	set, present := state.ReactionHandedOffComments[rkey]
+	got := slices.Sorted(maps.Keys(set))
+	if len(want) == 0 {
+		if present {
+			t.Errorf("ReactionHandedOffComments[%q] = %v, want absent", rkey, got)
+		}
+		return
+	}
+	wantSorted := slices.Sorted(slices.Values(want))
+	if !slices.Equal(got, wantSorted) {
+		t.Errorf("ReactionHandedOffComments[%q] = %v, want %v", rkey, got, wantSorted)
+	}
+}
+
+func assertEscalations(t *testing.T, tracker *reviewTrackerStub, want int) {
+	t.Helper()
+	if tracker.addLabelCalled != want {
+		t.Errorf("AddLabel calls = %d, want %d", tracker.addLabelCalled, want)
+	}
+	if tracker.commentIssueCalls != want {
+		t.Errorf("routed escalation events = %d, want %d", tracker.commentIssueCalls, want)
+	}
+}
+
+func makeDue(t *testing.T, state *State, rkey string) *PendingReaction {
+	t.Helper()
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want a re-enqueued entry", rkey)
+	}
+	entry.PendingRetryAt = time.Time{}
+	return entry
+}
+
+func completeContinuation(t *testing.T, state *State, store *fingerprintModelStore, issueID, kind string, reseeded *PendingReaction) {
+	t.Helper()
+	if _, ok := state.RetryAttempts[issueID]; !ok {
+		t.Fatalf("RetryAttempts[%q] missing, want a scheduled continuation", issueID)
+	}
+	CancelRetry(state, issueID)
+	if err := store.MarkReactionDispatched(context.Background(), issueID, kind); err != nil {
+		t.Fatalf("MarkReactionDispatched: %v", err)
+	}
+	state.PendingReactions[ReactionKey(issueID, kind)] = reseeded
+}
+
+func reviewEscalationParams(t *testing.T, store ReconcileStore, scm domain.SCMAdapter, tracker *reviewTrackerStub) ReconcileParams {
+	t.Helper()
+	params := reviewParams(&reviewReconcileStore{}, scm, tracker)
+	params.Store = store
+	params.Router = commentRouter(t, tracker, domain.EventEscalationReviewComments)
+	params.BotReviewConfig.BotUsernames = []string{"review-bot"}
+	return params
+}
+
+func spentReviewState(t *testing.T, issueID string, handedOff ...string) (*State, string) {
+	t.Helper()
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[rkey] = defaultReviewConfig().MaxContinuationTurns
+	if len(handedOff) > 0 {
+		seedHandedOff(state, rkey, handedOff...)
+	}
+	return state, rkey
+}
+
 func TestReconcileReviewComments_NilAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -383,17 +537,14 @@ func TestReconcileReviewComments_TTLExpired(t *testing.T) {
 	}
 }
 
-// TestReconcileReviewComments_DropOnAgeReleasesCounter verifies that the
-// drop-on-age branch also deletes the review reaction attempt counter,
-// leaves a sibling kind's counter and the claim untouched, and performs
-// no retry or fingerprint store call.
 func TestReconcileReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
 	t.Parallel()
 
 	issueID := "REV-AGE-1"
 	state := stateWithReviewReaction(t, issueID, 10)
 	reviewKey := ReactionKey(issueID, ReactionKindReview)
-	state.ReactionAttempts[reviewKey] = 3
+	state.ReactionAttempts[reviewKey] = defaultReviewConfig().MaxContinuationTurns - 1
+	seedHandedOff(state, reviewKey, "rc-1", "rc-2")
 	state.PendingReactions[reviewKey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
 	ciKey := ReactionKey(issueID, ReactionKindCI)
 	state.ReactionAttempts[ciKey] = 7
@@ -411,8 +562,9 @@ func TestReconcileReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
 		t.Error("PendingReactions[review] present after drop-on-age; want removed")
 	}
 	if _, ok := state.ReactionAttempts[reviewKey]; ok {
-		t.Error("ReactionAttempts[review] present after drop-on-age; want removed")
+		t.Error("ReactionAttempts[review] present after drop-on-age below the budget; want removed")
 	}
+	assertHandedOff(t, state, reviewKey)
 	if state.ReactionAttempts[ciKey] != 7 {
 		t.Errorf("ReactionAttempts[ci] = %d, want 7 (untouched)", state.ReactionAttempts[ciKey])
 	}
@@ -764,22 +916,18 @@ func TestReconcileReviewComments_DebounceElapsed_Dispatches(t *testing.T) {
 func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithReviewReaction(t, "ISS-R-11", 10)
-	rkey := ReactionKey("ISS-R-11", ReactionKindReview)
-	// Set ReactionAttempts to MaxContinuationTurns (3).
-	state.ReactionAttempts[rkey] = 3
+	state, rkey := spentReviewState(t, "ISS-R-11", "rc-old")
 
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	tracker := &reviewTrackerStub{}
-	// SCMAdapter is set but we should not reach the fetch call.
-	scm := &mockSCMAdapter{}
-	params := reviewParams(store, scm, tracker)
+	scm := &mockSCMAdapter{comments: []domain.ReviewComment{summaryComment("rc-old"), summaryComment("rc-new")}}
+	params := reviewEscalationParams(t, store, scm, tracker)
+	log, buf := logCapture()
 
-	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	reconcileReviewComments(state, params, log, context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	// Entry consumed (not re-enqueued).
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry still present after turn cap; want consumed")
 	}
@@ -792,25 +940,23 @@ func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 	if _, ok := state.RetryAttempts["ISS-R-11"]; ok {
 		t.Error("retry still scheduled after escalation; want none")
 	}
-	// SCM fetch must not have been called.
-	if scm.calls != 0 {
-		t.Errorf("FetchPendingReviews called %d times; want 0 (cap check before fetch)", scm.calls)
+	if _, ok := state.ReactionAttempts[rkey]; ok {
+		t.Errorf("ReactionAttempts[%s] present after escalation; want deleted", rkey)
 	}
+	assertHandedOff(t, state, rkey)
+	if scm.calls != 1 {
+		t.Errorf("FetchPendingReviews calls = %d, want 1 (the budget is decided after the fetch)", scm.calls)
+	}
+	assertEscalations(t, tracker, 1)
+	assertLogLineHasIntAttr(t, buf.String(), "review fix continuation turns exhausted, escalating", "turn_count", 3)
+	assertLogLacksLine(t, buf.String(), "review triage requested escalation")
 }
 
-// TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation verifies
-// that review escalation clears only the review reaction's own pending
-// entry, counter, and fingerprint. A sibling merge-completion entry parked
-// on the same issue (seeded from the same worker exit as the review
-// reaction) must survive: the escalation must not clear it.
 func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ISS-R-ISO"
-	state := stateWithReviewReaction(t, issueID, 10)
-	rkey := ReactionKey(issueID, ReactionKindReview)
-	state.ReactionAttempts[rkey] = 3
-
+	state, rkey := spentReviewState(t, issueID)
 	mcKey := ReactionKey(issueID, ReactionKindMergeCompletion)
 	state.PendingReactions[mcKey] = &PendingReaction{
 		IssueID:    issueID,
@@ -819,26 +965,35 @@ func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T
 		CreatedAt:  reviewBaseTime,
 		KindData:   &MergeCompletionReactionData{PRNumber: 42, Owner: "owner", Repo: "repo"},
 	}
-	state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] = 1
+	state.ReactionAttempts[mcKey] = 1
+	seedHandedOff(state, ReactionKey(issueID, ReactionKindBotReview), "bc-1")
 
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	tracker := &reviewTrackerStub{}
-	scm := &mockSCMAdapter{}
-	params := reviewParams(store, scm, tracker)
+	scm := &mockSCMAdapter{comments: []domain.ReviewComment{summaryComment("rc-new")}}
+	params := reviewEscalationParams(t, store, scm, tracker)
 
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("review PendingReactions entry present after escalation; want consumed")
+	}
 	if _, ok := state.PendingReactions[mcKey]; !ok {
 		t.Error("sibling merge-completion PendingReactions entry removed by review escalation; want untouched")
 	}
-	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
+	if state.ReactionAttempts[mcKey] != 1 {
 		t.Error("sibling merge-completion ReactionAttempts counter altered by review escalation; want untouched")
 	}
+	assertHandedOff(t, state, ReactionKey(issueID, ReactionKindBotReview), "bc-1")
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the review kind's own fingerprint)", store.deleteFingerprintCalls)
 	}
+	if scm.calls != 1 {
+		t.Errorf("FetchPendingReviews calls = %d, want 1", scm.calls)
+	}
+	assertEscalations(t, tracker, 1)
 }
 
 // TestReconcileReviewComments_BotAllowlistExclusion verifies that
@@ -1870,4 +2025,674 @@ func TestReconcileReviewComments_Triage_EpisodeCloseClearsHandledForNextEpisode(
 	if store.markDispatchedCalls != 2 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 2 (one real verdict per episode: handled, then escalate)", store.markDispatchedCalls)
 	}
+}
+
+func TestRecordHandedOffComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		seed     []string
+		input    []domain.ReviewComment
+		nilOuter bool
+		want     []string
+	}{
+		{"empty slice creates no set", nil, nil, false, nil},
+		{"empty slice keeps an existing set", []string{"a"}, nil, false, []string{"a"}},
+		{"first use creates the set", nil, []domain.ReviewComment{summaryComment("a"), inlineComment("b")}, false, []string{"a", "b"}},
+		{"repeated ID is a no-op", []string{"a"}, []domain.ReviewComment{summaryComment("a"), summaryComment("c")}, false, []string{"a", "c"}},
+		{"nil outer map is created", nil, []domain.ReviewComment{summaryComment("a")}, true, []string{"a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
+			rkey := ReactionKey("ISS-H-1", ReactionKindReview)
+			if len(tt.seed) > 0 {
+				seedHandedOff(state, rkey, tt.seed...)
+			}
+			if tt.nilOuter {
+				state.ReactionHandedOffComments = nil
+			}
+
+			recordHandedOffComments(state, rkey, tt.input)
+
+			assertHandedOff(t, state, rkey, tt.want...)
+		})
+	}
+}
+
+func TestRecordHandedOffComments_KeysAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
+	reviewKey := ReactionKey("ISS-H-2", ReactionKindReview)
+	botKey := ReactionKey("ISS-H-2", ReactionKindBotReview)
+
+	recordHandedOffComments(state, reviewKey, []domain.ReviewComment{summaryComment("a")})
+	recordHandedOffComments(state, botKey, []domain.ReviewComment{inlineComment("b")})
+
+	assertHandedOff(t, state, reviewKey, "a")
+	assertHandedOff(t, state, botKey, "b")
+}
+
+func TestCarriesNewComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		seed  []string
+		input []domain.ReviewComment
+		want  bool
+	}{
+		{"absent set with comments", nil, []domain.ReviewComment{summaryComment("a")}, true},
+		{"absent set with no comments", nil, nil, false},
+		{"present set with no comments", []string{"a"}, nil, false},
+		{"every ID present", []string{"a", "b", "c"}, []domain.ReviewComment{summaryComment("a"), inlineComment("b")}, false},
+		{"one ID absent", []string{"a", "b"}, []domain.ReviewComment{summaryComment("a"), inlineComment("c")}, true},
+		{"only ID absent", []string{"a"}, []domain.ReviewComment{summaryComment("z")}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
+			rkey := ReactionKey("ISS-H-3", ReactionKindReview)
+			if len(tt.seed) > 0 {
+				seedHandedOff(state, rkey, tt.seed...)
+			}
+
+			got := carriesNewComment(state, rkey, tt.input)
+
+			if got != tt.want {
+				t.Errorf("carriesNewComment(%v) = %v, want %v", tt.input, got, tt.want)
+			}
+			assertHandedOff(t, state, rkey, tt.seed...)
+		})
+	}
+}
+
+func TestReconcileReviewComments_SpentBudget_NoNewComment(t *testing.T) {
+	t.Parallel()
+
+	allowlisted := summaryComment("c2")
+	allowlisted.Reviewer = "review-bot"
+
+	tests := []struct {
+		name      string
+		handedOff []string
+		comments  []domain.ReviewComment
+		wantDebug bool
+		wantCount int
+	}{
+		{
+			name:      "strict subset of the handed-off set",
+			handedOff: []string{"c1", "c2", "review-1"},
+			comments:  []domain.ReviewComment{summaryComment("review-1"), inlineComment("c1")},
+			wantDebug: true,
+			wantCount: 2,
+		},
+		{
+			name:      "identical to the handed-off set",
+			handedOff: []string{"c1", "c2"},
+			comments:  []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")},
+			wantDebug: true,
+			wantCount: 2,
+		},
+		{
+			name:      "the new comment is outdated",
+			handedOff: []string{"c1"},
+			comments:  []domain.ReviewComment{inlineComment("c1"), outdatedComment(inlineComment("c2"))},
+			wantDebug: true,
+			wantCount: 1,
+		},
+		{
+			name:      "the new comment comes from an allowlisted bot",
+			handedOff: []string{"c1"},
+			comments:  []domain.ReviewComment{inlineComment("c1"), allowlisted},
+			wantDebug: true,
+			wantCount: 1,
+		},
+		{
+			name:      "the provider returns nothing",
+			handedOff: []string{"c1"},
+			comments:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, rkey := spentReviewState(t, "ISS-R-SPENT", tt.handedOff...)
+			store := &reviewReconcileStore{}
+			metrics := newReviewMetricsSpy()
+			tracker := &reviewTrackerStub{}
+			scm := &mockSCMAdapter{comments: tt.comments}
+			params := reviewEscalationParams(t, store, scm, tracker)
+			log, buf := logCapture()
+
+			reconcileReviewComments(state, params, log, context.Background(), metrics)
+			state.TrackerOpsWg.Wait()
+
+			entry, ok := state.PendingReactions[rkey]
+			if !ok {
+				t.Fatal("PendingReactions entry missing, want re-enqueued")
+			}
+			if want := reviewBaseTime.Add(time.Minute); !entry.PendingRetryAt.Equal(want) {
+				t.Errorf("PendingRetryAt = %v, want %v", entry.PendingRetryAt, want)
+			}
+			if scm.calls != 1 {
+				t.Errorf("FetchPendingReviews calls = %d, want 1", scm.calls)
+			}
+			assertEscalations(t, tracker, 0)
+			if state.ReactionAttempts[rkey] != 3 {
+				t.Errorf("ReactionAttempts[%s] = %d, want 3 (unchanged)", rkey, state.ReactionAttempts[rkey])
+			}
+			assertHandedOff(t, state, rkey, tt.handedOff...)
+			if _, ok := state.Claimed["ISS-R-SPENT"]; !ok {
+				t.Error("claim released, want kept")
+			}
+			if _, ok := state.RetryAttempts["ISS-R-SPENT"]; ok {
+				t.Error("retry scheduled, want none")
+			}
+			if len(store.deletedIssueIDs) != 0 || store.deleteFingerprintCalls != 0 {
+				t.Errorf("DeleteRetryEntry calls = %d, DeleteReactionFingerprint calls = %d, want both 0",
+					len(store.deletedIssueIDs), store.deleteFingerprintCalls)
+			}
+			if len(metrics.reviewChecks) != 0 || len(metrics.reviewEscalations) != 0 {
+				t.Errorf("review metrics = checks:%v escalations:%v, want none", metrics.reviewChecks, metrics.reviewEscalations)
+			}
+			debugMsg := "review continuation turns exhausted, no new comment, not escalating"
+			if !tt.wantDebug {
+				assertLogLacksLine(t, buf.String(), debugMsg)
+				return
+			}
+			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "turn_count", 3)
+			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "max_continuation_turns", 3)
+			assertLogLineHasIntAttr(t, buf.String(), debugMsg, "comment_count", tt.wantCount)
+		})
+	}
+}
+
+func TestReconcileReviewComments_SpentBudget_NoDecisionBeforeObservation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		dispatchedStore bool
+		setup           func(state *State, scm *mockSCMAdapter)
+		check           func(t *testing.T, entry *PendingReaction, metrics *reviewMetricsSpy)
+	}{
+		{
+			name: "fetch error backs off",
+			setup: func(_ *State, scm *mockSCMAdapter) {
+				scm.err = errors.New("provider unavailable")
+			},
+			check: func(t *testing.T, entry *PendingReaction, metrics *reviewMetricsSpy) {
+				t.Helper()
+				if entry.PendingAttempts != 1 {
+					t.Errorf("PendingAttempts = %d, want 1", entry.PendingAttempts)
+				}
+				if metrics.reviewChecks["error"] != 1 {
+					t.Errorf(`IncReviewChecks("error") = %d, want 1`, metrics.reviewChecks["error"])
+				}
+			},
+		},
+		{
+			name: "debounce window defers",
+			setup: func(_ *State, scm *mockSCMAdapter) {
+				fresh := inlineComment("c-new")
+				fresh.SubmittedAt = reviewBaseTime.Add(-10 * time.Second)
+				scm.comments = []domain.ReviewComment{inlineComment("c1"), fresh}
+			},
+			check: func(t *testing.T, entry *PendingReaction, _ *reviewMetricsSpy) {
+				t.Helper()
+				want := reviewBaseTime.Add(-10 * time.Second).Add(time.Duration(defaultReviewConfig().DebounceMS) * time.Millisecond)
+				if !entry.PendingRetryAt.Equal(want) {
+					t.Errorf("PendingRetryAt = %v, want %v", entry.PendingRetryAt, want)
+				}
+			},
+		},
+		{
+			name: "occupied retry slot defers",
+			setup: func(state *State, scm *mockSCMAdapter) {
+				scm.comments = []domain.ReviewComment{inlineComment("c1"), inlineComment("c-new")}
+				state.RetryAttempts["ISS-R-NODECIDE"] = &RetryEntry{
+					IssueID:      "ISS-R-NODECIDE",
+					Attempt:      1,
+					ReactionKind: ReactionKindLabelReview,
+				}
+				state.PendingReactions[ReactionKey("ISS-R-NODECIDE", ReactionKindReview)].CreatedAt = reviewBaseTime.Add(-5 * time.Minute)
+			},
+			check: func(t *testing.T, entry *PendingReaction, _ *reviewMetricsSpy) {
+				t.Helper()
+				if !entry.CreatedAt.Equal(reviewBaseTime) {
+					t.Errorf("CreatedAt = %v, want refreshed to %v", entry.CreatedAt, reviewBaseTime)
+				}
+			},
+		},
+		{
+			name:            "dispatched fingerprint deduplicates",
+			dispatchedStore: true,
+			setup: func(_ *State, scm *mockSCMAdapter) {
+				scm.comments = []domain.ReviewComment{inlineComment("c-new")}
+			},
+			check: func(t *testing.T, entry *PendingReaction, _ *reviewMetricsSpy) {
+				t.Helper()
+				if want := reviewBaseTime.Add(time.Minute); !entry.PendingRetryAt.Equal(want) {
+					t.Errorf("PendingRetryAt = %v, want %v", entry.PendingRetryAt, want)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, rkey := spentReviewState(t, "ISS-R-NODECIDE", "c1")
+			store := newFingerprintModelStore()
+			metrics := newReviewMetricsSpy()
+			tracker := &reviewTrackerStub{}
+			scm := &mockSCMAdapter{}
+			tt.setup(state, scm)
+			if tt.dispatchedStore {
+				store.seedDispatched("ISS-R-NODECIDE", ReactionKindReview, scm.comments)
+			}
+			params := reviewEscalationParams(t, store, scm, tracker)
+
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+			state.TrackerOpsWg.Wait()
+
+			entry, ok := state.PendingReactions[rkey]
+			if !ok {
+				t.Fatal("PendingReactions entry missing, want re-enqueued")
+			}
+			tt.check(t, entry, metrics)
+			if scm.calls != 1 {
+				t.Errorf("FetchPendingReviews calls = %d, want 1", scm.calls)
+			}
+			assertEscalations(t, tracker, 0)
+			if state.ReactionAttempts[rkey] != 3 {
+				t.Errorf("ReactionAttempts[%s] = %d, want 3 (unchanged)", rkey, state.ReactionAttempts[rkey])
+			}
+			assertHandedOff(t, state, rkey, "c1")
+			if _, ok := state.Claimed["ISS-R-NODECIDE"]; !ok {
+				t.Error("claim released, want kept")
+			}
+		})
+	}
+}
+
+func TestReconcileReviewComments_SpentBudget_NewCommentEscalatesOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		handedOff []string
+		comments  []domain.ReviewComment
+	}{
+		{
+			name:      "a summary item is the only new ID",
+			handedOff: []string{"c1"},
+			comments:  []domain.ReviewComment{inlineComment("c1"), summaryComment("review-9")},
+		},
+		{
+			name:     "nothing was handed off",
+			comments: []domain.ReviewComment{inlineComment("c1")},
+		},
+		{
+			name:      "an inline comment next to handed-off ones",
+			handedOff: []string{"c1"},
+			comments:  []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, rkey := spentReviewState(t, "ISS-R-ONCE", tt.handedOff...)
+			store := &reviewReconcileStore{}
+			metrics := newReviewMetricsSpy()
+			tracker := &reviewTrackerStub{}
+			scm := &mockSCMAdapter{comments: tt.comments}
+			params := reviewEscalationParams(t, store, scm, tracker)
+			log, buf := logCapture()
+
+			reconcileReviewComments(state, params, log, context.Background(), metrics)
+			state.TrackerOpsWg.Wait()
+
+			if scm.calls != 1 {
+				t.Errorf("FetchPendingReviews calls = %d, want 1", scm.calls)
+			}
+			assertEscalations(t, tracker, 1)
+			if metrics.reviewEscalations["label"] != 1 {
+				t.Errorf(`IncReviewEscalations("label") = %d, want 1`, metrics.reviewEscalations["label"])
+			}
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Error("PendingReactions entry present after escalation; want consumed")
+			}
+			if _, ok := state.Claimed["ISS-R-ONCE"]; ok {
+				t.Error("claim kept after escalation; want released")
+			}
+			if _, ok := state.ReactionAttempts[rkey]; ok {
+				t.Error("counter kept after escalation; want deleted")
+			}
+			assertHandedOff(t, state, rkey)
+			if store.deleteFingerprintCalls != 1 {
+				t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
+			}
+			if len(metrics.reviewChecks) != 0 {
+				t.Errorf("review check metrics = %v, want none", metrics.reviewChecks)
+			}
+			assertLogLineHasIntAttr(t, buf.String(), "review fix continuation turns exhausted, escalating", "turn_count", 3)
+			assertLogLineHasIntAttr(t, buf.String(), "review fix continuation turns exhausted, escalating", "max_continuation_turns", 3)
+			assertLogLacksLine(t, buf.String(), "review triage requested escalation")
+		})
+	}
+}
+
+func TestReconcileReviewComments_SpentBudget_TriageGateNotReached(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		comments       []domain.ReviewComment
+		wantEscalation int
+	}{
+		{"no new comment starts no run", []domain.ReviewComment{inlineComment("c1")}, 0},
+		{"a new comment escalates without a run", []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "ISS-R-NOGATE"
+			root := mustTriageWorkspace(t, issueID+"-ident")
+			state, rkey := spentReviewState(t, issueID, "c1")
+			tracker := &reviewTrackerStub{}
+			scm := &mockSCMAdapter{comments: tt.comments}
+			params := reviewTriageParams(t, &reviewReconcileStore{}, scm, tracker, root, escalateTriageScript)
+			params.Router = commentRouter(t, tracker, domain.EventEscalationReviewComments)
+
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
+			state.TrackerOpsWg.Wait()
+
+			assertEscalations(t, tracker, tt.wantEscalation)
+			if entry, ok := state.PendingReactions[rkey]; ok && entry.Triage != nil {
+				t.Errorf("PendingReactions[%s].Triage = %+v, want no run started on a spent budget", rkey, entry.Triage)
+			}
+			if tt.wantEscalation == 0 {
+				if _, ok := state.PendingReactions[rkey]; !ok {
+					t.Error("PendingReactions entry missing, want re-enqueued")
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileReviewComments_BelowBudget_SubsetStillDispatches(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-SUBSET"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[rkey] = 1
+	seedHandedOff(state, rkey, "c1", "c2")
+
+	store := newFingerprintModelStore()
+	store.seedDispatched(issueID, ReactionKindReview, []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")})
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{comments: []domain.ReviewComment{inlineComment("c1")}}
+	params := reviewEscalationParams(t, store, scm, tracker)
+	metrics := newReviewMetricsSpy()
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.RetryAttempts[issueID]; !ok {
+		t.Fatal("retry not scheduled for a changed set below the budget; want a dispatch")
+	}
+	if state.ReactionAttempts[rkey] != 2 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
+	}
+	if metrics.reviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, metrics.reviewChecks["dispatched"])
+	}
+	assertEscalations(t, tracker, 0)
+}
+
+func TestReconcileReviewComments_HandedOff_DispatchRecordsActionableIDs(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-REC"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	store := newFingerprintModelStore()
+	scm := &mockSCMAdapter{}
+	allowlisted := summaryComment("bot-note")
+	allowlisted.Reviewer = "review-bot"
+	params := reviewEscalationParams(t, store, scm, &reviewTrackerStub{})
+	metrics := newReviewMetricsSpy()
+
+	scm.comments = []domain.ReviewComment{
+		inlineComment("c1"),
+		summaryComment("review-1"),
+		outdatedComment(inlineComment("c-old")),
+		allowlisted,
+	}
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	assertHandedOff(t, state, rkey, "c1", "review-1")
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+
+	completeContinuation(t, state, store, issueID, ReactionKindReview, newReviewPendingEntry(issueID, 10))
+	scm.comments = []domain.ReviewComment{summaryComment("review-1"), inlineComment("c2")}
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	assertHandedOff(t, state, rkey, "c1", "review-1", "c2")
+	if state.ReactionAttempts[rkey] != 2 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 2", rkey, state.ReactionAttempts[rkey])
+	}
+}
+
+func TestReconcileReviewComments_HandedOff_SpentCounterSurvivesWatchWindowDrop(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		attempts int
+	}{
+		{"counter at the budget", 3},
+		{"counter above the budget", 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "ISS-R-WWSPENT"
+			state := stateWithReviewReaction(t, issueID, 10)
+			rkey := ReactionKey(issueID, ReactionKindReview)
+			botKey := ReactionKey(issueID, ReactionKindBotReview)
+			state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+			state.ReactionAttempts[rkey] = tt.attempts
+			seedHandedOff(state, rkey, "c1", "c2")
+			seedHandedOff(state, botKey, "b1")
+			scm := &mockSCMAdapter{}
+			params := reviewParams(&reviewReconcileStore{}, scm, nil)
+			params.ReviewPendingTTL = 30 * time.Minute
+
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
+
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Error("PendingReactions entry present after the drop; want removed")
+			}
+			if state.ReactionAttempts[rkey] != tt.attempts {
+				t.Errorf("ReactionAttempts[%s] = %d, want %d (a spent counter survives the drop)", rkey, state.ReactionAttempts[rkey], tt.attempts)
+			}
+			assertHandedOff(t, state, rkey, "c1", "c2")
+			assertHandedOff(t, state, botKey, "b1")
+			if scm.calls != 0 {
+				t.Errorf("FetchPendingReviews calls = %d, want 0", scm.calls)
+			}
+		})
+	}
+}
+
+func TestReconcileReviewComments_HandedOff_TriageEscalationClearsCounterAndSet(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-CLEAR"
+	root := mustTriageWorkspace(t, issueID+"-ident")
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[rkey] = 1
+	seedHandedOff(state, rkey, "rc-1")
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(t, &reviewReconcileStore{}, scm, tracker, root, escalateTriageScript)
+	metrics := newReviewMetricsSpy()
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Fatalf("AddLabel calls = %d, want 1", tracker.addLabelCalled)
+	}
+	if _, ok := state.ReactionAttempts[rkey]; ok {
+		t.Error("ReactionAttempts present after a triage escalation; want deleted")
+	}
+	assertHandedOff(t, state, rkey)
+}
+
+func TestReconcileReviewComments_HandedOff_ReseededEntryAfterSpentDrop(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-RESEED"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+	state.ReactionAttempts[rkey] = 3
+	seedHandedOff(state, rkey, "c1", "c2")
+
+	store := newFingerprintModelStore()
+	store.seedDispatched(issueID, ReactionKindReview, []domain.ReviewComment{inlineComment("c1"), inlineComment("c2")})
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{}
+	params := reviewEscalationParams(t, store, scm, tracker)
+	params.ReviewPendingTTL = 30 * time.Minute
+	metrics := newReviewMetricsSpy()
+	pass := func() {
+		reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+		state.TrackerOpsWg.Wait()
+	}
+
+	pass()
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Fatal("aged entry present after the drop; want removed")
+	}
+	state.PendingReactions[rkey] = newReviewPendingEntry(issueID, 10)
+
+	for _, comments := range [][]domain.ReviewComment{
+		{inlineComment("c1")},
+		{inlineComment("c1"), inlineComment("c2")},
+		{inlineComment("c2")},
+	} {
+		scm.comments = comments
+		makeDue(t, state, rkey)
+
+		pass()
+
+		if _, ok := state.RetryAttempts[issueID]; ok {
+			t.Fatalf("a continuation was scheduled for %d handed-off comments; want none", len(comments))
+		}
+		if state.ReactionAttempts[rkey] != 3 {
+			t.Fatalf("ReactionAttempts[%s] = %d, want 3", rkey, state.ReactionAttempts[rkey])
+		}
+		assertEscalations(t, tracker, 0)
+	}
+
+	scm.comments = []domain.ReviewComment{inlineComment("c1"), inlineComment("c3")}
+	makeDue(t, state, rkey)
+
+	pass()
+
+	assertEscalations(t, tracker, 1)
+}
+
+func TestReconcileReviewComments_NoEscalationAfterSuccessfulLastTurn(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-LAST"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	store := newFingerprintModelStore()
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{}
+	params := reviewEscalationParams(t, store, scm, tracker)
+	metrics := newReviewMetricsSpy()
+	log, buf := logCapture()
+	const escalatingMsg = "review fix continuation turns exhausted, escalating"
+	pass := func() {
+		reconcileReviewComments(state, params, log, context.Background(), metrics)
+		state.TrackerOpsWg.Wait()
+	}
+
+	turns := [][]domain.ReviewComment{
+		{summaryComment("review-1"), inlineComment("c1")},
+		{summaryComment("review-1"), outdatedComment(inlineComment("c1")), summaryComment("review-2"), inlineComment("c2")},
+		{summaryComment("review-1"), summaryComment("review-2"), outdatedComment(inlineComment("c2")), summaryComment("review-3"), inlineComment("c3")},
+	}
+	for i, comments := range turns {
+		scm.comments = comments
+		pass()
+		if state.ReactionAttempts[rkey] != i+1 {
+			t.Fatalf("ReactionAttempts[%s] after turn %d = %d, want %d", rkey, i+1, state.ReactionAttempts[rkey], i+1)
+		}
+		completeContinuation(t, state, store, issueID, ReactionKindReview, newReviewPendingEntry(issueID, 10))
+	}
+
+	scm.comments = []domain.ReviewComment{
+		summaryComment("review-1"), summaryComment("review-2"), summaryComment("review-3"), outdatedComment(inlineComment("c3")),
+	}
+	for poll := 1; poll <= 2; poll++ {
+		pass()
+
+		entry, ok := state.PendingReactions[rkey]
+		if !ok {
+			t.Fatalf("poll %d after the last turn consumed the entry; want it re-enqueued", poll)
+		}
+		if want := reviewBaseTime.Add(time.Minute); !entry.PendingRetryAt.Equal(want) {
+			t.Errorf("PendingRetryAt = %v, want %v", entry.PendingRetryAt, want)
+		}
+		assertEscalations(t, tracker, 0)
+		assertLogLacksLine(t, buf.String(), escalatingMsg)
+		if state.ReactionAttempts[rkey] != 3 {
+			t.Errorf("ReactionAttempts[%s] = %d, want 3", rkey, state.ReactionAttempts[rkey])
+		}
+		makeDue(t, state, rkey)
+	}
+	if want := 3 + 2; scm.calls != want {
+		t.Errorf("FetchPendingReviews calls = %d, want %d", scm.calls, want)
+	}
+
+	scm.comments = append(scm.comments, inlineComment("c4"))
+	pass()
+
+	assertEscalations(t, tracker, 1)
+	assertLogLineHasIntAttr(t, buf.String(), escalatingMsg, "turn_count", 3)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry present after the escalation; want consumed")
+	}
+	assertHandedOff(t, state, rkey)
 }

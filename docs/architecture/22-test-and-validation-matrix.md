@@ -166,34 +166,42 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue
 - `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
 - Review comment reconciliation is skipped when `reactions.review_comments` is not configured
-- A review pending entry younger than the configured `watch_window_ms` survives and re-enqueues; one whose age exactly equals the window still survives; one older than the window is dropped and its own `reaction_attempts` counter is deleted, leaving the claim, the retry, the fingerprint row, and every sibling kind's entry untouched; a configured `0` leaves an entry far older than thirty minutes in place
+- A review pending entry younger than the configured `watch_window_ms` survives and re-enqueues; one whose age exactly equals the window still survives; one older than the window is dropped, leaving the claim, the retry, the fingerprint row, and every sibling kind's entry untouched; a configured `0` leaves an entry far older than thirty minutes in place
 - Review comment poll throttle respected (PendingRetryAt in future → skip)
 - Review comment fetch error increments backoff and re-enqueues
 - No actionable review comments re-enqueues with poll interval delay
 - Review comment fingerprint unchanged and dispatched → skip
 - Review comment fingerprint changed, debounce not elapsed → defer
 - Review comment fingerprint changed, debounce elapsed → dispatch with review context
-- Review comment continuation turn cap exceeded → escalate and release claim
+- A review watch-window drop deletes the entry's `reaction_attempts` counter and its handed-off set while the counter is below `max_continuation_turns`, and keeps both at or above it
+- On a spent review budget, every pass that reaches the fetch calls the provider exactly once, and a pass whose actionable set is empty, deduplicated, or holds no comment outside the handed-off set re-enqueues the entry at the poll interval without a label, an escalation event, a store write beyond the fingerprint upsert, or a change to the claim, the retry, or the counter
+- On a spent review budget, a set holding one comment outside the handed-off set, a review body included, escalates exactly once with the budget trigger and a turn count equal to `max_continuation_turns`, only after the debounce and on a free slot, and starts no triage run
+- Each review dispatch adds exactly its actionable comment IDs to the handed-off set, and a review escalation, a below-budget watch-window drop, and the terminal release each delete the set together with the counter
+- After three review continuations for three new comments, a poll that returns the third set without its outdated comment while a review-body item stays produces no escalation, and a following set with one new comment produces exactly one
+- A review entry dropped by the watch window at a spent counter and seeded again by another kind's worker exit neither dispatches nor escalates while its actionable set stays inside the handed-off set
 - Review comment outdated comments filtered before fingerprint computation
 - Review comment context injected into turn 1 prompt via `prompt.WithContinuationContext`
 - Review escalation failure is logged but does not block claim release
 - Worker exit with `scm.json` containing `pr_number > 0`, `owner`, and `repo` creates review pending reaction; missing fields degrade to no-review behavior
 - Worker exit does not overwrite existing pending review entry (preserves debounce state)
 - Bot-review reconciliation is skipped when no SCM adapter is constructed or when bot-review is not configured
-- A bot-review pending entry ages the same way the review kind does, against its own configured `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped with only its own attempt counter deleted, and a configured `0` leaves an old entry in place
+- A bot-review pending entry ages against its own configured `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped, and a configured `0` leaves an old entry in place. The drop deletes only its own attempt counter and handed-off set while the counter is below `max_continuation_turns` and keeps both at or above it
 - Bot classification is the union of the platform bot marker and the `bot_usernames` allowlist, so on a provider that reports no bot marker an empty allowlist selects nothing and the kind never dispatches
 - Bot-review selection requires no `CHANGES_REQUESTED` review state, and outdated comments are filtered before the fingerprint is computed
 - New actionable bot comments dispatch on the tick they are detected, with no debounce window and no `debounce_ms` field
 - The bot-review budget is `max_continuation_turns` with a per-kind default of `5` and a poll interval defaulting to `60000`, both independent of the `review` kind's values
 - The bot-review fingerprint is the sorted non-outdated comment-ID hash under its own kind row; a changed comment set resets the dispatched flag and re-arms a dispatch, leaving the `review` fingerprint untouched
 - A non-nil retry-slot incumbent defers the bot-review pass without dispatching
-- Bot-review escalation at the cap clears only the `bot-review` pending entry and fingerprint row, leaving the residual attempt counter, the pending retry, and the claim for the terminal-state path
+- On a spent bot-review budget, a set whose only comments outside the handed-off set are PR-level items escalates nothing, re-enqueues at the poll interval, and records those IDs; the same set plus one inline comment outside it escalates exactly once and records every actionable ID. Below the budget, a set whose only new ID is a PR-level item still reaches the triage gate and dispatches
+- Bot-review escalation, on a spent budget or by triage, clears only the `bot-review` pending entry and fingerprint row, recording the reported IDs first and leaving the residual attempt counter, the handed-off set, the pending retry, and the claim for the terminal-state path
+- A bot-review entry seeded after an escalation does not escalate for the comments that escalation reported, and escalates when an inline comment outside them arrives
+- After three bot-review continuations for three new comments, a poll that returns the third inline comment as outdated with review-body items retained, and a following poll that adds a review-body item with no inline comment, produce no escalation, and a following inline comment produces exactly one
 - Bot-review escalation tracker-call failures are logged and counted but do not block the slot-scoped cleanup
 - Worker-exit seeding and startup recovery create a bot-review entry only when SCM metadata reports `pr_number > 0` and non-empty `owner`, `repo`, and `branch`, and recovery is gated on the configured flag so a configured-but-providerless setup recovers none
 - Merge-conflict reconciliation is skipped when no SCM adapter is constructed or when merge-conflict is not configured, and the pass runs after bot-review and before auto-merge
 - Only the normalized `dirty` state arms the reaction; `unknown` defers at the poll interval without touching the fingerprint or the attempt counter
 - A provider whose mergeability mapping never yields `dirty` leaves the kind inert: every due tick defers and the configured watch window drops the entry without escalating
-- A merge-conflict pending entry ages the same way the review kind does, against its own configured `watch_window_ms`, and an entry with a non-zero `HeadRecordedAt` still ages from `CreatedAt` rather than from `HeadRecordedAt`
+- A merge-conflict pending entry ages against its own configured `watch_window_ms`, the drop deletes only its own attempt counter, and an entry with a non-zero `HeadRecordedAt` still ages from `CreatedAt` rather than from `HeadRecordedAt`
 - The mergeability read runs on every due tick with no retry-budget check ahead of it, so the not-dirty branch that closes the episode stays reachable
 - The retry-slot guard, the empty head-SHA guard, and the empty base-branch guard all run before the attempt increment, so a deferral never burns an attempt
 - The merge-conflict fingerprint is the SHA-256 of the head SHA under its own kind row; a same-head dispatched observation re-enqueues without incrementing or dispatching, a new head re-arms a fresh attempt, and the not-dirty branch deletes the row so the next dirty observation dispatches
@@ -204,7 +212,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Auto-merge reconciliation is skipped when `reactions.auto_merge.provider` is empty or no SCM adapter is present
 - The auto-merge pass runs after the CI, review-comment, bot-review, and merge-conflict passes and before the two label-command passes
 - A sticky auth-class preflight failure drops every `merge`-kind pending entry on each later tick, a transport-class preflight failure schedules exactly one retry before the flag sticks, and absent scope information fails open with auto-merge enabled
-- An auto-merge pending entry ages the same way the review kind does, against its own configured `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped with only its own attempt counter deleted, and a configured `0` leaves an old entry in place
+- An auto-merge pending entry ages against its own configured `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped with only its own attempt counter deleted, and a configured `0` leaves an old entry in place
 - A draft PR, a mergeability outside `clean` and `unstable`, a review decision other than `APPROVED` or `NOT_REQUIRED`, and a CI conclusion other than success while `require_ci` holds each re-enqueue at the poll interval instead of merging
 - Count-based auto-merge escalation applies only when `max_retries > 0`, whose default is `2`, so a configured `0` disables it rather than escalating on the first attempt
 - An auth-class or payload-class `MergePR` failure escalates immediately, bypassing the `max_retries` check, including when it is `0`; any other conflict re-enqueues at the poll interval

@@ -490,9 +490,9 @@ type terminalReleaseCounts struct {
 
 // releaseTerminalIssueState drops one issue's runtime reaction bookkeeping
 // and its dispatch claim: every pending reaction entry, every reaction
-// attempt counter, the pending retry, and the claim. It performs no
-// tracker call, no source-control call, no reaction-fingerprint read or
-// write, and no workspace removal.
+// attempt counter, every handed-off comment set, the pending retry, and
+// the claim. It performs no tracker call, no source-control call, no
+// reaction-fingerprint read or write, and no workspace removal.
 //
 // entryLog must already carry issue_id and issue_identifier, derived by
 // the caller before this function deletes the entries that hold the
@@ -516,6 +516,11 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 		if strings.HasPrefix(key, prefix) {
 			delete(state.ReactionAttempts, key)
 			counts.AttemptsReleased++
+		}
+	}
+	for key := range state.ReactionHandedOffComments {
+		if strings.HasPrefix(key, prefix) {
+			delete(state.ReactionHandedOffComments, key)
 		}
 	}
 

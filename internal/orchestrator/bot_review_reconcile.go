@@ -55,11 +55,18 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 		}
 
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
+		rkey := ReactionKey(pending.IssueID, ReactionKindBotReview)
 
 		// TTL enforcement.
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			cancelReactionTriage(pending)
-			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindBotReview))
+			// A spent counter outlives the drop, as it outlives a budget
+			// escalation, so the next seeded entry cannot reopen the
+			// budget or re-report comments already handed off.
+			if state.ReactionAttempts[rkey] < params.BotReviewConfig.MaxContinuationTurns {
+				delete(state.ReactionAttempts, rkey)
+				delete(state.ReactionHandedOffComments, rkey)
+			}
 			entryLog.Warn("bot review watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
@@ -79,14 +86,6 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 		if pending.Triage != nil && !triageRunFinished(pending.Triage) {
 			pending.PendingRetryAt = now
 			state.PendingReactions[key] = pending
-			continue
-		}
-
-		// Continuation turn cap check.
-		rkey := ReactionKey(pending.IssueID, ReactionKindBotReview)
-		turnCount := state.ReactionAttempts[rkey]
-		if turnCount >= params.BotReviewConfig.MaxContinuationTurns {
-			escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, botReviewData, entryLog, ctx, metrics)
 			continue
 		}
 
@@ -156,6 +155,35 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
+		// Judged after the fetch: only the observed set says whether a
+		// comment arrived that no continuation carried. A summary-only
+		// item never counts, because a bot re-review of the last turn's
+		// push adds one every time and its body cannot be read for
+		// findings.
+		turnCount := state.ReactionAttempts[rkey]
+		if turnCount >= params.BotReviewConfig.MaxContinuationTurns {
+			var inline []domain.ReviewComment
+			for _, c := range actionable {
+				if c.FilePath != "" {
+					inline = append(inline, c)
+				}
+			}
+			escalating := carriesNewComment(state, rkey, inline)
+			recordHandedOffComments(state, rkey, actionable)
+			if escalating {
+				escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, botReviewData, entryLog, ctx, metrics)
+				continue
+			}
+			pending.PendingRetryAt = now.Add(pollInterval)
+			state.PendingReactions[key] = pending
+			entryLog.Debug("bot review continuation turns exhausted, no new inline comment, not escalating",
+				slog.Int("turn_count", turnCount),
+				slog.Int("max_continuation_turns", params.BotReviewConfig.MaxContinuationTurns),
+				slog.Int("comment_count", len(actionable)),
+			)
+			continue
+		}
+
 		botContext := buildReviewTemplateMap(actionable)
 
 		// The gate sits above the dispatch counter so no pass that
@@ -180,6 +208,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			state.PendingReactions[key] = pending
 			continue
 		case triageEscalate:
+			recordHandedOffComments(state, rkey, actionable)
 			escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerTriage, botReviewData, entryLog, ctx, metrics)
 			continue
 		}
@@ -206,6 +235,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++
+		recordHandedOffComments(state, rkey, actionable)
 
 		entryLog.Info("bot review comments detected, scheduling bot-review-fix dispatch",
 			slog.Int("comment_count", len(actionable)),

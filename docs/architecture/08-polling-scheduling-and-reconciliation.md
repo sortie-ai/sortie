@@ -185,10 +185,9 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
 - Skip entirely when no SCM adapter is configured (no `reactions.review_comments.provider`).
 - For each entry in `pending_reactions` with kind `review`:
   - Remove entry from the map (prevents reprocessing within the same tick).
-  - Check the configured watch window: if `reactions.review_comments.watch_window_ms` is positive and the entry's age, measured from its creation, exceeds it, delete the entry's `reaction_attempts` counter, log a WARN record, and drop the entry (no re-enqueue). Default `1800000` (thirty minutes); `0` removes the bound.
+  - Check the configured watch window: if `reactions.review_comments.watch_window_ms` is positive and the entry's age, measured from its creation, exceeds it, log a WARN record and drop the entry (no re-enqueue). The drop deletes the entry's `reaction_attempts` counter and its handed-off comment set only while the counter is below `max_continuation_turns`; at or above it, both are kept. Default `1800000` (thirty minutes); `0` removes the bound.
   - Respect `PendingRetryAt` poll throttle: if not yet due, re-enqueue and continue.
   - If the entry holds a triage run that has not finished, re-enqueue it ready for the next tick and continue to the next entry, making no provider call and leaving the pending attempt count untouched.
-  - Check continuation turn cap (`reactions.review_comments.max_continuation_turns`): if exceeded, escalate (Section 11B.4) and continue.
   - Call `SCMAdapter.FetchPendingReviews` with the PR number, owner, and repo from `ReviewReactionData`.
   - If the call fails: increment backoff counter, set `PendingRetryAt` with exponential backoff, re-enqueue, and continue.
   - Filter out outdated comments, then drop any surviving comment whose author matches `reactions.bot_review.bot_usernames` (Section 11D.2's allowlist arm, applied here rather than inside the adapter). Compute max timestamp over the surviving set for debounce gating; an excluded comment does not raise `LastEventAt`.
@@ -196,16 +195,18 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Build fingerprint from the sorted IDs of the surviving comment set (SHA-256 hash).
   - Check `reaction_fingerprints` table: if the fingerprint matches and is marked dispatched, re-enqueue with the poll interval delay and continue.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
-  - Otherwise: consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers, re-enqueuing the entry unchanged rather than dispatching. A free slot schedules a review-fix dispatch with review comment context and increments `reaction_attempts`. The fingerprint is marked dispatched later, when the scheduled retry fires and dispatch succeeds, not during this pass.
-  - With the slot free, the triage gate runs before the dispatch counter is incremented, so no pass that dispatches nothing is counted as one. `dispatch-agent` proceeds to the dispatch above; `handled` marks the fingerprint dispatched and re-enqueues on the poll interval without touching `reaction_attempts` or the dispatch counter; `escalate` marks the fingerprint dispatched and escalates (Section 11B.4) with the un-incremented turn count. The gate is inert when `reactions.review_comments.triage` is absent.
+  - Otherwise: consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers, re-enqueuing the entry with its creation time set to now rather than dispatching. On a free slot, check the continuation turn budget (`reactions.review_comments.max_continuation_turns`): when `reaction_attempts` has reached it, escalate (Section 11B.4) only if a surviving comment ID is absent from the handed-off set, and otherwise re-enqueue at the poll interval with no dispatch, no escalation, and no counter change. Below the budget, a free slot schedules a review-fix dispatch with review comment context, increments `reaction_attempts`, and adds the dispatched comment IDs to the handed-off set. The fingerprint is marked dispatched later, when the scheduled retry fires and dispatch succeeds, not during this pass.
+  - With the slot free and the budget not spent, the triage gate runs before the dispatch counter is incremented, so no pass that dispatches nothing is counted as one. `dispatch-agent` proceeds to the dispatch above; `handled` marks the fingerprint dispatched and re-enqueues on the poll interval without touching `reaction_attempts` or the dispatch counter; `escalate` marks the fingerprint dispatched and escalates (Section 11B.4) with the un-incremented turn count. The gate is inert when `reactions.review_comments.triage` is absent.
 
 Part E: Bot review comment reconciliation (when `reactions.bot_review` is configured)
 
 - Skip entirely when no SCM adapter is configured.
 - Mirrors Part D's reconcile loop for the `bot-review` kind, but with no debounce gate and no `LastEventAt` tracking, and it calls `SCMAdapter.FetchBotReviewComments` (allowlisted bot authors) instead of `FetchPendingReviews`.
 - Dispatches immediately on a confirmed comment set, with no debounce window, because bot comments arrive in bulk on push rather than trickling in from a human reviewer.
+- Drops an entry past its watch window with Part D's rule: the `reaction_attempts` counter and the handed-off set are deleted only while the counter is below `max_continuation_turns`.
 - Consults the retry slot before dispatching, exactly as Part D: a non-nil incumbent defers instead (Section 7.5).
-- Waits and skips exactly as Part D when the entry holds an unfinished triage run, and runs the triage gate after slot arbitration and before the dispatch counter is incremented, with the same three dispositions. The gate is inert when `reactions.bot_review.triage` is absent.
+- On a free slot, checks the continuation turn budget (`reactions.bot_review.max_continuation_turns`) as Part D does, with one difference: when the budget is spent, only a new inline comment (one with a non-empty file path) outside the handed-off set escalates. A PR-level item never escalates alone. Every surviving comment ID is added to the handed-off set whether the pass escalates or re-enqueues. Below the budget, a PR-level item still dispatches.
+- Waits and skips exactly as Part D when the entry holds an unfinished triage run, and runs the triage gate after slot arbitration and the budget check and before the dispatch counter is incremented, with the same three dispositions. The gate is inert when `reactions.bot_review.triage` is absent.
 - See Section 11D for the full contract.
 
 Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured)

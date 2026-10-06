@@ -60,11 +60,18 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		}
 
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
+		rkey := ReactionKey(pending.IssueID, ReactionKindReview)
 
 		// TTL enforcement.
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			cancelReactionTriage(pending)
-			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindReview))
+			// A spent counter outlives the drop: an entry re-seeded by
+			// another kind's worker exit would otherwise open a fresh
+			// budget over comments every turn already carried.
+			if state.ReactionAttempts[rkey] < params.ReviewConfig.MaxContinuationTurns {
+				delete(state.ReactionAttempts, rkey)
+				delete(state.ReactionHandedOffComments, rkey)
+			}
 			entryLog.Warn("review watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
@@ -84,14 +91,6 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		if pending.Triage != nil && !triageRunFinished(pending.Triage) {
 			pending.PendingRetryAt = now
 			state.PendingReactions[key] = pending
-			continue
-		}
-
-		// Continuation turn cap check.
-		rkey := ReactionKey(pending.IssueID, ReactionKindReview)
-		turnCount := state.ReactionAttempts[rkey]
-		if turnCount >= params.ReviewConfig.MaxContinuationTurns {
-			escalateReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, reviewData, entryLog, ctx, metrics)
 			continue
 		}
 
@@ -195,6 +194,25 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			continue
 		}
 
+		// Judged after the fetch: only the observed set says whether a
+		// comment arrived that no continuation carried, and the last
+		// turn's own fix usually leaves the set smaller, not larger.
+		turnCount := state.ReactionAttempts[rkey]
+		if turnCount >= params.ReviewConfig.MaxContinuationTurns {
+			if carriesNewComment(state, rkey, actionable) {
+				escalateReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, reviewData, entryLog, ctx, metrics)
+				continue
+			}
+			pending.PendingRetryAt = now.Add(pollInterval)
+			state.PendingReactions[key] = pending
+			entryLog.Debug("review continuation turns exhausted, no new comment, not escalating",
+				slog.Int("turn_count", turnCount),
+				slog.Int("max_continuation_turns", params.ReviewConfig.MaxContinuationTurns),
+				slog.Int("comment_count", len(actionable)),
+			)
+			continue
+		}
+
 		reviewContext := buildReviewTemplateMap(actionable)
 
 		// The gate sits above the dispatch counter so no pass that
@@ -245,6 +263,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++
+		recordHandedOffComments(state, rkey, actionable)
 
 		entryLog.Info("review comments detected, scheduling review-fix dispatch",
 			slog.Int("comment_count", len(actionable)),
@@ -279,7 +298,7 @@ func computeReactionPendingDelay(attempts int) time.Duration {
 // escalateReviewFailure handles the case where review fix continuation
 // turns are exhausted. It applies the configured escalation action,
 // cancels the retry, releases the claim, and clears the review reaction's
-// own pending entry, counter, and fingerprint. Sibling reaction kinds for
+// own pending entry, counter, handed-off comment set, and fingerprint. Sibling reaction kinds for
 // the same issue are left untouched.
 func escalateReviewFailure(
 	state *State,
@@ -365,6 +384,7 @@ func escalateReviewFailure(
 	// review-only escalation.
 	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindReview))
 	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindReview))
+	delete(state.ReactionHandedOffComments, ReactionKey(pending.IssueID, ReactionKindReview))
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindReview); err != nil {
 		log.Warn("failed to delete reaction fingerprint during review escalation",
 			slog.Any("error", err),
@@ -398,6 +418,38 @@ func buildReviewFingerprint(comments []domain.ReviewComment) string {
 
 	h := sha256.Sum256([]byte(strings.Join(ids, "\n")))
 	return fmt.Sprintf("%x", h)
+}
+
+// recordHandedOffComments adds the ID of every comment to the handed-off
+// set stored under rkey, creating the set on first use. An empty slice
+// creates nothing.
+func recordHandedOffComments(state *State, rkey string, comments []domain.ReviewComment) {
+	if len(comments) == 0 {
+		return
+	}
+	if state.ReactionHandedOffComments == nil {
+		state.ReactionHandedOffComments = make(map[string]map[string]struct{})
+	}
+	handedOff := state.ReactionHandedOffComments[rkey]
+	if handedOff == nil {
+		handedOff = make(map[string]struct{}, len(comments))
+		state.ReactionHandedOffComments[rkey] = handedOff
+	}
+	for _, c := range comments {
+		handedOff[c.ID] = struct{}{}
+	}
+}
+
+// carriesNewComment reports whether any comment's ID is missing from the
+// handed-off set stored under rkey. It never modifies state.
+func carriesNewComment(state *State, rkey string, comments []domain.ReviewComment) bool {
+	handedOff := state.ReactionHandedOffComments[rkey]
+	for _, c := range comments {
+		if _, ok := handedOff[c.ID]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // buildReviewTemplateMap converts review comments to the map format
