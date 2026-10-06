@@ -46,7 +46,32 @@ curl -sSL https://get.sortie-ai.com/install.sh | sh
 
 ## 运行原理
 
-1. 在一个 `WORKFLOW.md` 文件中指定要处理的工单、要运行的智能体，以及给它的指令。
+1. 在一个 `WORKFLOW.md` 文件中指定要处理的工单、要运行的智能体，以及给它的指令：
+
+  ```markdown
+  ---
+  tracker:
+    kind: github
+    api_key: $GITHUB_TOKEN
+    project: acme/billing-api
+    query_filter: "label:agent-ready"
+    active_states: [todo, in-progress]
+    handoff_state: review
+    terminal_states: [done]
+  
+  agent:
+    kind: claude-code
+    max_concurrent_agents: 4
+  ---
+  
+  You are a senior engineer.
+  
+  ## {{ .issue.identifier }}: {{ .issue.title }}
+  
+  {{ .issue.description }}
+  ```
+
+
 2. Sortie 获取符合条件的工单，并行运行智能体，每个智能体都在独立的工作区中工作。
 3. 运行失败时自动重试。启用 CI 和评审反馈后，检查失败信息和评审意见会传回智能体。
 

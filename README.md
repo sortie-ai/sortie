@@ -46,7 +46,31 @@ Try the [local demo](https://docs.sortie-ai.com/getting-started/quick-start/) wi
 
 ## How It Works
 
-1. Choose which issues to work on, which agent to run, and what instructions to give it in one `WORKFLOW.md` file.
+1. Choose which issues to work on, which agent to run, and what instructions to give it in one `WORKFLOW.md` file:
+
+  ```markdown
+  ---
+  tracker:
+    kind: github
+    api_key: $GITHUB_TOKEN
+    project: acme/billing-api
+    query_filter: "label:agent-ready"
+    active_states: [todo, in-progress]
+    handoff_state: review
+    terminal_states: [done]
+  
+  agent:
+    kind: claude-code
+    max_concurrent_agents: 4
+  ---
+  
+  You are a senior engineer.
+  
+  ## {{ .issue.identifier }}: {{ .issue.title }}
+  
+  {{ .issue.description }}
+  ```
+
 2. Sortie picks up matching issues and runs agents in parallel, each in its own workspace.
 3. Failed runs are retried automatically. Enable CI and review feedback to send failures and comments back to the agent.
 
