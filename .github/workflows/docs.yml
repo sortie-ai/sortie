@@ -31,10 +31,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
-env:
-  LYCHEE_VERSION: 0.24.2
-  LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
-
 jobs:
   links:
     name: Links
@@ -48,13 +44,7 @@ jobs:
           persist-credentials: false
 
       - name: Install lychee
-        working-directory: ${{ runner.temp }}
-        run: |
-          archive=lychee-x86_64-unknown-linux-gnu.tar.gz
-          curl -fsSLO "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/${archive}"
-          echo "${LYCHEE_SHA256}  ${archive}" | sha256sum -c -
-          tar -xzf "$archive" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
-          echo "$PWD" >> "$GITHUB_PATH"
+        uses: sortie-ai/shared-workflows/.github/actions/setup-lychee@12099056fde09c3b1ef701128316e9fb883eba90 # v1.1.0
 
       # Pushes and pull requests keep the Makefile's offline default, so a
       # third-party outage cannot block a merge.
