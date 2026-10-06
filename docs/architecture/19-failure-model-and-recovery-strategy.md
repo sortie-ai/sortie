@@ -108,6 +108,7 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 - Retry entries with future `due_at` timestamps are restored from SQLite and rescheduled on startup.
 - Parked issues are reloaded from SQLite before the event loop starts, so an issue parked before a restart stays out of dispatch across it without depending on any tracker read to rediscover the park.
 - Budget-hold notice records are reloaded from SQLite before the event loop starts, so a hold announced to its destinations before a restart is not announced again after it. A record means the `budget.held` notice had at least one destination; a hold with none records nothing, so a destination subscribed after a restart still receives its notice.
+- The review comments each issue's runs were given are reloaded from SQLite on first use, so a restart does not dispatch a turn that only repeats comments an earlier run already received. A set that cannot be loaded defers the review pass for one poll interval and dispatches nothing. The record starts empty on upgrade, so a comment given before the upgrade counts as new once.
 - Session metadata from the previous run is available for observability and debugging.
 - Run history is preserved in SQLite for operational review.
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the orchestrator knows which issues were in-flight at shutdown and re-dispatches them immediately rather than waiting for the next polling cycle to discover them.

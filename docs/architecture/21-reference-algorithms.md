@@ -79,7 +79,11 @@ on_tick(state):
       break
 
     if should_dispatch(issue, state):
-      state = dispatch_issue(issue, state, attempt=null)
+      # The seed holds the pull request's review comments no run of the
+      # issue was given, per configured kind without a triage block; nil
+      # dispatches as before.
+      seed = fresh_run_seed(issue, state)
+      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed)
 
   notify_observers()
   schedule_tick(state.poll_interval_ms)
@@ -157,12 +161,13 @@ function reconcile_review_comments(state):
     data = pending.kind_data  # ReviewReactionData
     rkey = reaction_key(pending.issue_id, "review")
 
-    # Watch window; a spent counter and its handed-off set survive the drop
+    # Watch window; a spent counter survives the drop. The cached
+    # handed-off set is dropped at any counter value, its rows are kept
     if review_config.watch_window_ms > 0 and now - pending.created_at > review_config.watch_window_ms:
       cancel_triage(pending)
       if state.reaction_attempts[rkey] < review_config.max_continuation_turns:
         delete(state.reaction_attempts, rkey)
-        delete(state.handed_off_comments, rkey)
+      delete(state.handed_off_comments, rkey)
       log_warn("review watch window elapsed, dropping")
       continue
 
@@ -207,6 +212,24 @@ function reconcile_review_comments(state):
       state.pending_reactions[key] = pending
       continue
 
+    # Handed-off check, also when the fingerprint read failed. A comment is
+    # new when it is outside the handed-off set and the running turn's IDs;
+    # created_at stays untouched
+    if not loaded(state.handed_off_comments[rkey]):
+      ids, err = store.list_reaction_handoffs(pending.issue_id, "review")
+      if err:
+        log_warn("failed to load handed-off comments, deferring")
+        pending.pending_retry_at = now + poll_interval
+        state.pending_reactions[key] = pending
+        continue
+      state.handed_off_comments[rkey] = set(ids)
+    if not any(is_new_comment(state, pending.issue_id, "review", c) for c in actionable):
+      if all(c.id in state.handed_off_comments[rkey] for c in actionable):
+        store.mark_reaction_dispatched(pending.issue_id, "review")
+      pending.pending_retry_at = now + poll_interval
+      state.pending_reactions[key] = pending
+      continue
+
     # Debounce
     if max_time is set and now - max_time < debounce_ms:
       pending.pending_retry_at = max_time + debounce_ms
@@ -219,14 +242,10 @@ function reconcile_review_comments(state):
       state.pending_reactions[key] = pending
       continue
 
-    # Continuation budget, decided on the observed set
+    # Continuation budget; a set reaching this point holds a new comment
     turn_count = state.reaction_attempts[rkey]
     if turn_count >= review_config.max_continuation_turns:
-      if any(c.id not in state.handed_off_comments[rkey] for c in actionable):
-        escalate_review_failure(state, pending, turn_count)
-      else:
-        pending.pending_retry_at = now + poll_interval
-        state.pending_reactions[key] = pending
+      escalate_review_failure(state, pending, turn_count)
       continue
 
     review_context = build_review_template_map(actionable)
@@ -250,7 +269,8 @@ function reconcile_review_comments(state):
       reaction_kind: "review"
     })
     state.reaction_attempts[rkey]++
-    add_all(state.handed_off_comments[rkey], [c.id for c in actionable])
+    # The comments join the handed-off set when the run exits normally,
+    # not here (Section 16.6)
 
   return state
 ```
@@ -373,7 +393,13 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       exit_cancelled()
 
-    prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
+    if turn_number == 1:
+      # presented holds, per review kind, the comment IDs this render showed
+      # the agent; a fresh run keeps a seeded render only when it contains
+      # every line of the unseeded one, in order
+      prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context, fresh_run)
+    else:
+      prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
     cancelled_at_ending = worker_ctx is done  // read immediately after the call, before any teardown below
     if prompt failed:
       agent_adapter.stop_session(session)
@@ -514,7 +540,7 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
     SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
   })
 
-  exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason, soft_stop_statement=pending_statement)
+  exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason, soft_stop_statement=pending_statement, handed_off_comments=presented)
 ```
 
 ### 16.6 Worker Exit and Retry Handling
@@ -628,6 +654,10 @@ on_worker_exit(issue_id, reason, worker_result, state):
 
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
+    # The comments the first prompt presented join the handed-off set, in
+    # the cache and as rows, ahead of the reaction seeding below
+    for kind, ids in worker_result.handed_off_comments:
+      record_handed_off_comments(state, issue_id, kind, ids)
     was_claimed = issue_id in state.claimed
     claim_protected_for_incumbent = false
 

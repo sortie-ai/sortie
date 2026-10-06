@@ -127,6 +127,16 @@ The internal `merge-completion-missing-sha` observation kind reuses this table w
 
 Cleanup is owned by an active merge-completion pass. Such a pass deletes the observation when it sees a different pull request identity, a missing pull request, an issue missing from the tracker response, an issue outside the handoff state, or a real commit identifier whose normal merge latch has completed. Generic terminal-state release deliberately leaves every `reaction_fingerprints` row intact. Consequently, after the bounded stop has removed the last pending entry, a later human transition by itself is not observed and this internal row may remain indefinitely. The residue is inert: the same delivered identity stops, a different identity resets it, and a later fresh entry with a real identifier clears it after the normal latch completes. Because `updated_at` is frozen at first observation, any future retention job MUST handle this kind explicitly; it MUST NOT infer safe expiry from `updated_at` alone or it would re-arm a one-shot escalation.
 
+**`reaction_handoffs`**: review comments each issue's runs were given (migration 022)
+
+| Column       | Type | Notes                                                                |
+| ------------ | ---- | -------------------------------------------------------------------- |
+| `issue_id`   | TEXT | Tracker-internal issue ID (composite PK with `kind` and `comment_id`) |
+| `kind`       | TEXT | `review` or `bot-review`                                             |
+| `comment_id` | TEXT | SCM-platform review comment ID                                       |
+
+Primary key: `(issue_id, kind, comment_id)`. One row per comment a run's first prompt presented under the kind's prompt variable (`review_comments` or `bot_review_comments`) when the run exited normally. The orchestrator's worker-exit handler is the only writer: it inserts the absent IDs in one transaction and ignores stored ones. Nothing deletes a row: the set outlives watch windows, escalations, the terminal release, and restarts, so a comment an agent already received is never handed over as new a second time. The orchestrator loads a key's rows on first use and keeps them as a cache, so a failed load defers the review pass instead of dispatching an empty turn. The table starts empty on upgrade, so a comment given before the upgrade counts as new once. The runtime-only reported set of `bot-review` never reaches this table.
+
 **`handoff_absence_resets`**: end of a consecutive handoff-absence sequence (migration 013)
 
 | Column         | Type    | Notes                                                              |

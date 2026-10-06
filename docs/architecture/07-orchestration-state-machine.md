@@ -112,10 +112,11 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 - `Review Comments Detected`
   - Compute fingerprint from non-outdated review comment IDs.
   - If fingerprint is unchanged and already dispatched: skip.
+  - If no surviving comment is new, that is, every one was given to an earlier run of the issue (the persisted handed-off set) or is carried by the issue's running turn: take no action, keep watching, and mark the fingerprint dispatched when the handed-off set alone covers the set. A set that only lost members, or one that recurs after a larger set, settles here. For `reactions.bot_review`, the reported set counts with the handed-off set.
   - If within debounce window: defer to next tick.
   - If the retry slot is occupied by an incumbent, defer instead (Section 7.5).
   - On a free slot, decide the continuation budget after the slot arbitration. Below `reactions.review_comments.max_continuation_turns`, schedule a review-fix dispatch with review comment context injected into the prompt.
-  - If continuation turns are exhausted and a surviving comment arrived that no continuation carried: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim. With no such comment, take no action and keep watching. For `reactions.bot_review`, only an inline comment counts as new, and its escalation leaves the claim and the retry in place (Section 11D.5).
+  - If continuation turns are exhausted: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim, recording nothing in the handed-off set. The set holds a new comment, because the check above settles every other set. For `reactions.bot_review`, only a new inline comment escalates, and its escalation leaves the claim and the retry in place (Section 11D.5).
 
 - `Merge Completion Observed`
   - Observed on the reconcile tick for an issue still parked in `tracker.handoff_state` and not currently claimed by the orchestrator.
