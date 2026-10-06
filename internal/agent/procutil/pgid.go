@@ -1,6 +1,7 @@
 package procutil
 
 import (
+	"os"
 	"os/exec"
 	"time"
 )
@@ -17,8 +18,12 @@ func SetGroupCancel(cmd *exec.Cmd, grace time.Duration) {
 	}
 	SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		err := SignalGraceful(cmd.Process.Pid)
-		armGroupEscalation(cmd.Process.Pid, grace)
+		g := lookupGroup(cmd)
+		if g == nil {
+			return cmd.Process.Kill()
+		}
+		err := g.SignalGraceful()
+		armGroupEscalation(g, grace)
 		return err
 	}
 	cmd.WaitDelay = grace
@@ -31,11 +36,31 @@ func SetGroupCancel(cmd *exec.Cmd, grace time.Duration) {
 func SetGroupKill(cmd *exec.Cmd) {
 	SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		killErr := KillProcessGroup(cmd.Process.Pid)
-		procErr := cmd.Process.Kill()
+		g := lookupGroup(cmd)
+		if g == nil {
+			return cmd.Process.Kill()
+		}
+		killErr := g.Kill()
+		procErr := killDirectChild(g)
 		if killErr != nil {
 			return killErr
 		}
 		return procErr
 	}
+}
+
+// killDirectChild kills g's direct child and reports [os.ErrProcessDone]
+// when the launch is already released or the child already gone. It
+// holds the record's mutex so that on Unix the kill precedes the reap.
+func killDirectChild(g *Group) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.released {
+		return os.ErrProcessDone
+	}
+	err := g.cmd.Process.Kill()
+	if directChildGone(err) {
+		return os.ErrProcessDone
+	}
+	return err
 }

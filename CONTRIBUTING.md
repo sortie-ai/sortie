@@ -29,6 +29,7 @@ make build   # compiles to ./sortie
 make lint    # golangci-lint and comment style of changed files
 make fmt     # gofmt + goimports
 make lint-docs  # links and anchors in tracked Markdown files
+make test-darwin  # darwin-only tests; macOS only, fails on any other host
 ```
 
 All commands go through the Makefile. If `make test` passes, the change is safe to submit.
@@ -81,6 +82,7 @@ The linter config in [.golangci.yml](.golangci.yml) catches most issues. Beyond 
 - Failure format: `FuncName(input) = got, want expected`.
 - Standard library only - no third-party assertion frameworks.
 - Fixtures live in `testdata/` within each package.
+- A test that only a macOS host can run lives in a `_darwin_test.go` file and never skips: the macOS CI job selects tests by that suffix and fails on a skip. An env-gated integration test skips by design, so none lives in such a file.
 
 ## Commits and PRs
 
@@ -92,7 +94,7 @@ fix(workspace): reject symlinks escaping workspace root
 test(tracker): cover pagination edge cases in Jira adapter
 ```
 
-PRs use the [template](.github/pull_request_template.md). One logical change per PR. CI lints, tests (including on Windows), and builds the binary - all must pass.
+PRs use the [template](.github/pull_request_template.md). One logical change per PR. CI lints, tests (including on Windows, and the darwin-only tests on macOS), and builds the binary - all must pass.
 
 ## What will not be merged
 

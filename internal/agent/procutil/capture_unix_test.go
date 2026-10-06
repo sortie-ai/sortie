@@ -23,18 +23,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
-// captureLogRecord is one record a captureLogSpy captured.
 type captureLogRecord struct {
 	Level slog.Level
 	Msg   string
 	Attrs map[string]slog.Value
 }
 
-// captureLogSpy is a slog.Handler recording every record's level,
-// message, and attribute set, so a test can assert the attribute set a
-// record carries is closed rather than merely containing an expected
-// substring, which would stay green if a later change added an
-// attribute the record must not carry.
 type captureLogSpy struct {
 	mu      sync.Mutex
 	records []captureLogRecord
@@ -65,8 +59,6 @@ func (s *captureLogSpy) snapshot() []captureLogRecord {
 	return out
 }
 
-// findCaptureLogRecord returns the first captured record with message
-// msg.
 func findCaptureLogRecord(spy *captureLogSpy, msg string) (captureLogRecord, bool) {
 	for _, r := range spy.snapshot() {
 		if r.Msg == msg {
@@ -82,11 +74,6 @@ func init() {
 	fakeScenarios["procutil.capture-signal-child"] = agenttest.Typed(runCaptureSignalChild)
 }
 
-// captureLeaderParams configures the procutil.capture-leader scenario:
-// a direct child that optionally starts an already-built descendant
-// holding this process's own standard output and standard error
-// handles, optionally detached into its own session, records the
-// descendant's pid, then writes Stdout/Stderr and exits ExitCode.
 type captureLeaderParams struct {
 	ChildPath    string
 	ChildPIDPath string
@@ -120,9 +107,6 @@ func runCaptureLeader(_ []string, p captureLeaderParams) int {
 	return p.ExitCode
 }
 
-// capturePeriodicWriterParams configures the
-// procutil.capture-periodic-writer scenario: it writes Line to
-// standard output every Interval until killed.
 type capturePeriodicWriterParams struct {
 	Line     string
 	Interval time.Duration
@@ -137,28 +121,15 @@ func runCapturePeriodicWriter(_ []string, p capturePeriodicWriterParams) int {
 	}
 }
 
-// captureSignalChildParams configures the procutil.capture-signal-child
-// scenario used by the SIGTERM trap and group-kill tests: a direct
-// child that either traps or ignores SIGTERM, optionally starts a held
-// descendant sharing its output, and signals readiness once its setup
-// is complete.
 type captureSignalChildParams struct {
-	// TrapSIGTERM arms a handler that prints Marker and exits 0 on the
-	// first SIGTERM it receives.
 	TrapSIGTERM bool
 	Marker      string
 
-	// IgnoreSIGTERM makes the process immune to SIGTERM entirely.
 	IgnoreSIGTERM bool
 
-	// ChildPath, when set, is an already-built fake runtime started as
-	// a held descendant (same process group, standard output and
-	// standard error inherited).
 	ChildPath    string
 	ChildPIDPath string
 
-	// ReadyPath is touched once setup completes, before the process
-	// idles.
 	ReadyPath string
 }
 
@@ -203,7 +174,6 @@ func runCaptureSignalChild(_ []string, p captureSignalChildParams) int {
 	return 0
 }
 
-// pollCaptureFileExists blocks until path exists or timeout passes.
 func pollCaptureFileExists(t *testing.T, path string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -216,10 +186,8 @@ func pollCaptureFileExists(t *testing.T, path string, timeout time.Duration) {
 	t.Fatalf("pollCaptureFileExists(%q): not present after %v", path, timeout)
 }
 
-// pollCapturePIDFileTimeout bounds pollCapturePIDFile's wait.
 const pollCapturePIDFileTimeout = 5 * time.Second
 
-// pollCapturePIDFile polls path until it holds a positive integer PID.
 func pollCapturePIDFile(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(pollCapturePIDFileTimeout)
@@ -235,8 +203,6 @@ func pollCapturePIDFile(t *testing.T, path string) int {
 	return 0
 }
 
-// assertCaptureProcessGone polls until kill(pid, 0) reports ESRCH, or
-// fails t after timeout.
 func assertCaptureProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -249,9 +215,6 @@ func assertCaptureProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Errorf("process %d still answers signal 0 after %v, want it gone", pid, timeout)
 }
 
-// waitCaptureResult calls c.Wait on its own goroutine and fails t if
-// it does not return within timeout, so a hang under mutation fails
-// the test rather than the test binary.
 func waitCaptureResult(t *testing.T, c *Capture, timeout time.Duration) CaptureResult {
 	t.Helper()
 	done := make(chan CaptureResult, 1)
@@ -265,11 +228,6 @@ func waitCaptureResult(t *testing.T, c *Capture, timeout time.Duration) CaptureR
 	}
 }
 
-// TestCapture_EscapedDescendantHoldingBothStreams pins that an escaped
-// descendant holding both streams makes Wait return within its timer
-// with WaitErr nil, OutputComplete false, the direct child's own bytes
-// collected, and one WARN record carrying exactly command and
-// drain_bound.
 func TestCapture_EscapedDescendantHoldingBothStreams(t *testing.T) {
 	dir := t.TempDir()
 	childPath := agenttest.FakeRuntime(t, dir, "descendant", agenttest.OutputScenario, agenttest.Output{Hang: true})
@@ -326,10 +284,6 @@ func TestCapture_EscapedDescendantHoldingBothStreams(t *testing.T) {
 	}
 }
 
-// TestCapture_HeldDescendantHoldingBothStreams pins that a held
-// descendant is reached by the reap's group termination, so Wait
-// returns quickly with OutputComplete true, no WARN, and the
-// descendant gone.
 func TestCapture_HeldDescendantHoldingBothStreams(t *testing.T) {
 	dir := t.TempDir()
 	childPath := agenttest.FakeRuntime(t, dir, "descendant", agenttest.OutputScenario, agenttest.Output{Hang: true})
@@ -375,11 +329,6 @@ func TestCapture_HeldDescendantHoldingBothStreams(t *testing.T) {
 	assertCaptureProcessGone(t, childPID, 3*time.Second)
 }
 
-// TestCapture_SealedSinkDiscardsChunksAfterWaitReturns pins that once
-// Wait has returned, a caller's writer receives no further chunk, even
-// though the reader goroutine for an abandoned stream is still running
-// (its close, through the test-replaced seam, never actually
-// completes) and a descendant keeps writing to the same pipe.
 func TestCapture_SealedSinkDiscardsChunksAfterWaitReturns(t *testing.T) {
 	origClose := closeWithoutWaiting
 	closeWithoutWaiting = func(io.Closer) {
@@ -425,10 +374,6 @@ func TestCapture_SealedSinkDiscardsChunksAfterWaitReturns(t *testing.T) {
 	}
 }
 
-// TestRunCapture_SIGTERMTrapMarkerCollected pins that RunCapture on a
-// direct child that traps SIGTERM, with its handler armed before it
-// reports readiness, collects the marker the handler prints under an
-// expiring context.
 func TestRunCapture_SIGTERMTrapMarkerCollected(t *testing.T) {
 	t.Parallel()
 
@@ -471,23 +416,12 @@ func TestRunCapture_SIGTERMTrapMarkerCollected(t *testing.T) {
 	}
 }
 
-// TestStartCapture_CleanupFailureLogsExactlyOneRecord pins the other
-// half of the fix: a captured launch whose group termination cannot
-// prove the process tree gone logs exactly one CaptureCleanupWarning
-// record, not two. Before the fix, both StartReaper's caller-agnostic
-// logging and Capture.Wait's own copy fired for the same failure; this
-// pins that the duplicate is gone.
-//
-// groupKillFunc and groupDrainBound are mutated, so this test does not
-// run in parallel with the package's other parallel tests.
 func TestStartCapture_CleanupFailureLogsExactlyOneRecord(t *testing.T) {
-	origBound, origKill := groupDrainBound, groupKillFunc
-	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
-	groupDrainBound = 100 * time.Millisecond
-	groupKillFunc = func(int, syscall.Signal) error { return nil }
+	shortenDrainBound(t, 100*time.Millisecond)
+	stubGroupKill(t, func(int, syscall.Signal) error { return nil })
+	stubLiveMember(t, func(int, int) (bool, error) { return true, nil })
 
 	cmd := fakeRuntimeCmd(t, agenttest.Output{})
-	SetProcessGroup(cmd)
 	spy := &captureLogSpy{}
 	logger := slog.New(spy)
 
@@ -509,12 +443,6 @@ func TestStartCapture_CleanupFailureLogsExactlyOneRecord(t *testing.T) {
 	}
 }
 
-// TestSetGroupKill_CancellationSendsSIGKILLNotGraceful pins that
-// SetGroupKill's cancellation terminates the group with SIGKILL at
-// once, with no catchable signal first, so a direct child that ignores
-// SIGTERM (and a held descendant that holds nothing back) still dies
-// within a bound tighter than any graceful grace period, and the
-// descendant is gone.
 func TestSetGroupKill_CancellationSendsSIGKILLNotGraceful(t *testing.T) {
 	dir := t.TempDir()
 	readyPath := filepath.Join(dir, "ready")

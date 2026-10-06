@@ -20,25 +20,16 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// trapParams parameterizes the "trap" scenario: it marks itself ready by
-// creating Marker, then either exits on the first graceful shutdown signal
-// it receives (ExitOnSignal) or ignores that signal and hangs until it is
-// force-killed.
 type trapParams struct {
 	Marker       string
 	ExitOnSignal bool
 }
 
-// trapScenario mirrors a shell "trap TERM" fixture: it lets a caller
-// distinguish a subprocess that exits promptly on the graceful shutdown
-// signal from one that ignores it and must be force-killed, without
-// depending on a POSIX shell. syscall.SIGTERM and os/signal both work on
-// Windows, where the runtime maps CTRL_BREAK_EVENT (what
-// [procutil.SignalGraceful] sends there) onto it.
 func trapScenario(_ []string, p trapParams) int {
 	ch := make(chan os.Signal, 1)
-	// Windows carries the graceful stop as a console control event, which
-	// the runtime delivers as an interrupt rather than as SIGTERM.
+	// On Windows the graceful stop of [procutil.Group.SignalGraceful] arrives
+	// as a console control event that the runtime delivers as an interrupt
+	// rather than as SIGTERM.
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 
 	if err := os.WriteFile(p.Marker, []byte("ready"), 0o600); err != nil {
@@ -58,14 +49,9 @@ func init() {
 	scenarios["trap"] = agenttest.Typed(trapScenario)
 }
 
-// buildTrapAgent creates a fake runtime that installs a graceful-shutdown
-// trap and returns its path and the readiness marker path. exitOnSignal
-// selects whether the runtime exits on the signal or ignores it and hangs.
-//
-// The marker exists because a fixed sleep cannot prove the trap is
-// installed. If the signal wins that race the process exits on the
-// platform's default disposition, and the test then passes without
-// exercising the escalation it is named for.
+// The marker exists because a fixed sleep cannot prove the trap is installed:
+// if the signal wins that race the process exits on the platform's default
+// disposition and the test passes without exercising the escalation it names.
 func buildTrapAgent(t *testing.T, dir string, exitOnSignal bool) (path, marker string) {
 	t.Helper()
 	marker = filepath.Join(dir, "trap-ready")
@@ -73,8 +59,6 @@ func buildTrapAgent(t *testing.T, dir string, exitOnSignal bool) (path, marker s
 	return path, marker
 }
 
-// waitForTrap blocks until the marker [buildTrapAgent] returns appears,
-// so a caller signals the subprocess only once its trap is in place.
 func waitForTrap(t *testing.T, marker string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -87,11 +71,6 @@ func waitForTrap(t *testing.T, marker string) {
 	t.Fatalf("subprocess did not install its TERM trap within 5s (marker %q absent)", marker)
 }
 
-// TestForkPerTurnSession_GracefulSignal covers the stop paths whose
-// subject is the graceful termination signal itself. A headless Windows
-// runner does not deliver the console control event the graceful stop
-// sends there, which this project's own process-group coverage records,
-// so these arms stay beside the platform they can prove.
 func TestForkPerTurnSession_GracefulSignal(t *testing.T) {
 	t.Parallel()
 

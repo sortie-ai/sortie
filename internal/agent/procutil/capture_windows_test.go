@@ -24,10 +24,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
-// uintptrOf and uint32Sizeof adapt a typed struct pointer to the
-// uintptr/uint32 pair QueryInformationJobObject and
-// SetInformationJobObject take, mirroring the pattern capture_windows.go
-// itself uses.
 func uintptrOf(v any) uintptr {
 	switch p := v.(type) {
 	case *windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION:
@@ -50,9 +46,6 @@ func uint32Sizeof(v any) uint32 {
 	}
 }
 
-// suspendedSysProcAttr returns the creation flags the suspended start
-// sets, for a test that assigns a process to a Job Object itself
-// before resuming it.
 func suspendedSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP}
 }
@@ -61,11 +54,6 @@ func init() {
 	fakeScenarios["procutil.capture-win-leader"] = agenttest.Typed(runCaptureWinLeader)
 }
 
-// captureWinLeaderParams configures the procutil.capture-win-leader
-// scenario: a direct child that optionally starts an already-built
-// descendant inheriting this process's own standard output and
-// standard error handles, records the descendant's pid, then writes
-// Stdout and exits ExitCode.
 type captureWinLeaderParams struct {
 	ChildPath    string
 	ChildPIDPath string
@@ -93,7 +81,21 @@ func runCaptureWinLeader(_ []string, p captureWinLeaderParams) int {
 	return p.ExitCode
 }
 
-// pollCaptureWinPIDFile polls path until it holds a positive integer.
+func jobHandleOf(g *Group) windows.Handle {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.job
+}
+
+func closeJobHandle(g *Group) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.job != 0 {
+		_ = windows.CloseHandle(g.job)
+		g.job = 0
+	}
+}
+
 func pollCaptureWinPIDFile(t *testing.T, path string, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -109,8 +111,6 @@ func pollCaptureWinPIDFile(t *testing.T, path string, timeout time.Duration) int
 	return 0
 }
 
-// assertCaptureWinProcessGone polls until pid can no longer be opened,
-// or reports as already exited, or fails t after timeout.
 func assertCaptureWinProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	processID, convErr := dwordPID(pid)
@@ -133,8 +133,6 @@ func assertCaptureWinProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Errorf("process %d still running after %v, want gone", pid, timeout)
 }
 
-// waitCaptureWinResult calls c.Wait on its own goroutine and fails t if
-// it does not return within timeout.
 func waitCaptureWinResult(t *testing.T, c *Capture, timeout time.Duration) CaptureResult {
 	t.Helper()
 	done := make(chan CaptureResult, 1)
@@ -148,17 +146,12 @@ func waitCaptureWinResult(t *testing.T, c *Capture, timeout time.Duration) Captu
 	}
 }
 
-// captureWinLogRecord is one record a captureWinLogSpy captured.
 type captureWinLogRecord struct {
 	Level slog.Level
 	Msg   string
 	Attrs map[string]slog.Value
 }
 
-// captureWinLogSpy is a slog.Handler recording every record's level,
-// message, and attribute set, so a test can assert on a record
-// production code emits through a caller-supplied logger rather than
-// slog.Default.
 type captureWinLogSpy struct {
 	mu      sync.Mutex
 	records []captureWinLogRecord
@@ -189,9 +182,6 @@ func (s *captureWinLogSpy) snapshot() []captureWinLogRecord {
 	return out
 }
 
-// latestCaptureTeardownRecord returns the most recent teardown record
-// (either message logJobTeardown emits) captured at index from or
-// later.
 func latestCaptureTeardownRecord(spy *captureWinLogSpy, from int) (captureWinLogRecord, bool) {
 	records := spy.snapshot()
 	for i := len(records) - 1; i >= from; i-- {
@@ -202,12 +192,6 @@ func latestCaptureTeardownRecord(spy *captureWinLogSpy, from int) (captureWinLog
 	return captureWinLogRecord{}, false
 }
 
-// TestCapture_HeldDescendantInheritedJobMembership pins that a child a
-// captured leader starts, inheriting the leader's standard output and
-// hanging, is a Job Object member because assigning the leader to its
-// Job Object happens before it resumes and Windows extends membership
-// to every process a member creates by default. RunCapture returns
-// within 3s with WaitErr nil, OutputComplete true, and the child gone.
 func TestCapture_HeldDescendantInheritedJobMembership(t *testing.T) {
 	dir := t.TempDir()
 	childPath := agenttest.FakeRuntime(t, dir, "descendant", agenttest.OutputScenario, agenttest.Output{Hang: true})
@@ -246,16 +230,6 @@ func TestCapture_HeldDescendantInheritedJobMembership(t *testing.T) {
 	assertCaptureWinProcessGone(t, childPID, 3*time.Second)
 }
 
-// TestCapture_AssignSeamDelayDoesNotLowerJobMembership pins the
-// StartCapture half of this seam-delay pair, moved from the workspace
-// package's former TestRunHook_EscapeWithSeamDelay now that the
-// suspended-start-and-resume routine, and its assign seam, live in
-// this package. With the assign seam delaying the Job Object
-// assignment by 50ms and a script starting a background child at
-// once, the job's total_processes (read from the teardown record) is
-// no lower than the highest of three runs without the delay:
-// CREATE_SUSPENDED keeps the child from running before the Job Object
-// assignment completes, whatever the delay.
 func TestCapture_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -302,21 +276,13 @@ func TestCapture_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership
-// pins the StartWithOwnedPipes half of this seam-delay pair: the
-// registered job's accounting counters, read after the script exits
-// and before KillProcessGroup, are no lower than the highest of three
-// runs without the delay.
 func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 	runOnce := func(t *testing.T) int64 {
 		t.Helper()
 		dir := t.TempDir()
 		cmd := exec.Command("cmd.exe", "/C", "start /b cmd.exe /C \"ping -n 30 127.0.0.1 >NUL\" & exit 0") //nolint:gosec // fixed literal script
 		cmd.Dir = dir
-		pipes, err := StartWithOwnedPipes(cmd, slog.New(slog.DiscardHandler))
-		if err != nil {
-			t.Fatalf("StartWithOwnedPipes() error = %v", err)
-		}
+		pipes, g := startOwned(t, cmd)
 		defer pipes.Close() //nolint:errcheck // best-effort
 
 		done := make(chan error, 1)
@@ -327,18 +293,15 @@ func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing
 			t.Fatal("cmd.Wait() did not return within 10s")
 		}
 
-		v, ok := jobs.Load(cmd.Process.Pid)
 		var total int64
-		if ok {
-			entry := v.(*jobEntry) //nolint:errcheck // test-only assertion on the internal registration
-			if entry.job != 0 {
-				var info jobObjectBasicAccountingInformation
-				_ = windows.QueryInformationJobObject(entry.job, windows.JobObjectBasicAccountingInformation,
-					uintptrOf(&info), uint32Sizeof(info), nil)
-				total = int64(info.TotalProcesses)
-			}
+		if job := jobHandleOf(g); job != 0 {
+			var info jobObjectBasicAccountingInformation
+			_ = windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation,
+				uintptrOf(&info), uint32Sizeof(info), nil)
+			total = int64(info.TotalProcesses)
 		}
-		_ = KillProcessGroup(cmd.Process.Pid)
+		_ = g.Kill()
+		closeJobHandle(g)
 		return total
 	}
 
@@ -378,10 +341,12 @@ func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testin
 
 	origAssignSeam, origResumeSeam := assignSeam, resumeSeam
 	t.Cleanup(func() { assignSeam, resumeSeam = origAssignSeam, origResumeSeam })
+	var cancelReturnedBeforeAssignment bool
 	assignSeam = func() {
 		cancel()
 		select {
 		case <-cancelReturned:
+			cancelReturnedBeforeAssignment = true
 		case <-time.After(time.Second):
 		}
 	}
@@ -392,22 +357,24 @@ func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testin
 	// while the leader is still suspended.
 	var member *exec.Cmd
 	resumeSeam = func() {
-		v, ok := jobs.Load(cmd.Process.Pid)
-		if !ok {
-			t.Fatal("no job registered before the resume, want the launch's job")
+		g := lookupGroup(cmd)
+		if g == nil {
+			t.Fatal("no record registered before the resume, want the launch's record")
 		}
-		entry := v.(*jobEntry) //nolint:errcheck // test-only assertion on the internal registration
-		member = newCaptureTestHeldMember(t, entry.job)
+		job := jobHandleOf(g)
+		if job == 0 {
+			t.Fatal("record holds no job before the resume, want the launch's job")
+		}
+		member = newCaptureTestHeldMember(t, job)
 	}
 
-	pipes, err := StartWithOwnedPipes(cmd, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
-	}
+	pipes, group := startOwned(t, cmd)
 	defer func() { _ = pipes.Close() }()
+	t.Cleanup(func() { _ = group.Kill() })
 
-	leaderPID := cmd.Process.Pid
-	t.Cleanup(func() { _ = KillProcessGroup(leaderPID) })
+	if cancelReturnedBeforeAssignment {
+		t.Error("the Cancel closure returned before the Job Object assignment finished, want it held at the assignment gate")
+	}
 
 	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
 
@@ -425,10 +392,6 @@ func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testin
 	}
 }
 
-// TestRunJobDrain pins that the job drain terminates repeatedly until
-// the job reports no active process or its bound passes, records a
-// failed termination without stopping, and stops polling on a failed
-// accounting query.
 func TestRunJobDrain(t *testing.T) {
 	t.Run("live process needs multiple polls", func(t *testing.T) {
 		job, cleanup := newCaptureTestJob(t)
@@ -497,12 +460,6 @@ func TestRunJobDrain(t *testing.T) {
 	})
 }
 
-// TestStartCapture_ResumeSeamFailure pins the StartCapture half of
-// this resume-failure pair: with the test-replaced resume returning
-// an error, the call returns within 3s a *StartError with
-// StageProcessResume, the process is gone, and it logged one process
-// resume failed record carrying an error attribute and one teardown
-// record.
 func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -574,9 +531,6 @@ func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_ResumeSeamFailure pins the
-// StartWithOwnedPipes half of the resume-failure pair with
-// TestStartCapture_ResumeSeamFailure above.
 func TestStartWithOwnedPipes_ResumeSeamFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -594,7 +548,7 @@ func TestStartWithOwnedPipes_ResumeSeamFailure(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		_, err := StartWithOwnedPipes(cmd, logger)
+		_, _, err := StartWithOwnedPipes(cmd, logger)
 		done <- outcome{err}
 	}()
 
@@ -634,12 +588,6 @@ func TestStartWithOwnedPipes_ResumeSeamFailure(t *testing.T) {
 	}
 }
 
-// TestStartCapture_AssignJobObjectFailure pins the StartCapture half of
-// the fail-open Job Object assignment: with the test-replaced
-// assignment returning an error, the call returns within 3s with no
-// error, the pid is registered with a zero job handle, the process is
-// still resumed, and it logged exactly one process group assignment
-// failed record carrying command, dir, and error.
 func TestStartCapture_AssignJobObjectFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -651,9 +599,20 @@ func TestStartCapture_AssignJobObjectFailure(t *testing.T) {
 		return 0, 0, wantErr
 	}
 
+	var recordedJob windows.Handle
+	origResumeSeam := resumeSeam
+	t.Cleanup(func() { resumeSeam = origResumeSeam })
+
 	dir := t.TempDir()
 	markerPath := filepath.Join(dir, "marker")
 	cmd := exec.Command("cmd.exe", "/C", "echo x> "+markerPath) //nolint:gosec // fixed literal script
+	resumeSeam = func() {
+		if g := lookupGroup(cmd); g != nil {
+			recordedJob = jobHandleOf(g)
+		} else {
+			recordedJob = windows.InvalidHandle
+		}
+	}
 
 	type outcome struct {
 		c   *Capture
@@ -682,13 +641,8 @@ func TestStartCapture_AssignJobObjectFailure(t *testing.T) {
 		t.Fatal("cmd.Process = nil, want it set once cmd.Start succeeded")
 	}
 
-	v, ok := jobs.Load(cmd.Process.Pid)
-	if !ok {
-		t.Fatal("jobs.Load(pid) missing entry, want the process registered despite the failed assignment")
-	}
-	entry := v.(*jobEntry) //nolint:errcheck // test-only assertion on the internal registration
-	if entry.job != 0 {
-		t.Errorf("registered job handle = %v, want 0 (zero job handle on a failed assignment)", entry.job)
+	if recordedJob != 0 {
+		t.Errorf("registered job handle = %v, want 0 (zero job handle on a failed assignment)", recordedJob)
 	}
 
 	result := waitCaptureWinResult(t, oc.c, 10*time.Second)
@@ -725,8 +679,6 @@ func TestStartCapture_AssignJobObjectFailure(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_AssignJobObjectFailure pins the
-// StartWithOwnedPipes half of the fail-open Job Object assignment.
 func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -744,13 +696,14 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 
 	type outcome struct {
 		pipes *OwnedPipes
+		group *Group
 		err   error
 	}
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		pipes, err := StartWithOwnedPipes(cmd, logger)
-		done <- outcome{pipes, err}
+		pipes, group, err := StartWithOwnedPipes(cmd, logger)
+		done <- outcome{pipes, group, err}
 	}()
 
 	var oc outcome
@@ -772,13 +725,8 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 		t.Fatal("cmd.Process = nil, want it set once cmd.Start succeeded")
 	}
 
-	v, ok := jobs.Load(cmd.Process.Pid)
-	if !ok {
-		t.Fatal("jobs.Load(pid) missing entry, want the process registered despite the failed assignment")
-	}
-	entry := v.(*jobEntry) //nolint:errcheck // test-only assertion on the internal registration
-	if entry.job != 0 {
-		t.Errorf("registered job handle = %v, want 0 (zero job handle on a failed assignment)", entry.job)
+	if got := jobHandleOf(oc.group); got != 0 {
+		t.Errorf("registered job handle = %v, want 0 (zero job handle on a failed assignment)", got)
 	}
 
 	waitDone := make(chan error, 1)
@@ -791,7 +739,7 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cmd.Wait() did not return within 5s")
 	}
-	_ = KillProcessGroup(cmd.Process.Pid)
+	_ = oc.group.Kill()
 
 	if _, statErr := os.Stat(markerPath); statErr != nil {
 		t.Errorf("marker file stat error = %v, want the process still resumed", statErr)
@@ -817,11 +765,6 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	}
 }
 
-// TestStartCapture_ResumeSeamCancelsRegisteredCapture pins that, with
-// the resume seam cancelling the command's context and waiting until
-// jobs no longer holds the pid, whether StartCapture then fails with
-// StageProcessResume or succeeds and Wait returns, the one teardown
-// record takes the Debug arm.
 func TestStartCapture_ResumeSeamCancelsRegisteredCapture(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -834,10 +777,12 @@ func TestStartCapture_ResumeSeamCancelsRegisteredCapture(t *testing.T) {
 	origResumeSeam := resumeSeam
 	t.Cleanup(func() { resumeSeam = origResumeSeam })
 	resumeSeam = func() {
+		g := lookupGroup(cmd)
+		job := jobHandleOf(g)
 		cancel()
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
-			if _, ok := jobs.Load(cmd.Process.Pid); !ok {
+			if running, err := jobHasRunningMember(job); err == nil && !running {
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -870,9 +815,6 @@ func TestStartCapture_ResumeSeamCancelsRegisteredCapture(t *testing.T) {
 	}
 }
 
-// newCaptureTestJob creates a fresh Job Object with
-// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and returns it with a cleanup
-// closing its handle.
 func newCaptureTestJob(t *testing.T) (windows.Handle, func()) {
 	t.Helper()
 	job, err := windows.CreateJobObject(nil, nil)
@@ -889,18 +831,11 @@ func newCaptureTestJob(t *testing.T) (windows.Handle, func()) {
 	return job, func() { _ = windows.CloseHandle(job) }
 }
 
-// startCaptureTestHeldMember starts a hanging fake runtime, assigns it
-// to job, and registers a cleanup that force-kills it if the test
-// itself never drains the job.
 func startCaptureTestHeldMember(t *testing.T, job windows.Handle) {
 	t.Helper()
 	newCaptureTestHeldMember(t, job)
 }
 
-// newCaptureTestHeldMember starts a hanging fake runtime, assigns it to
-// job, resumes it, and returns the *exec.Cmd so a caller can hand a
-// real direct child to drainCaptureJob. Registers a cleanup that
-// force-kills it if the test itself never drains the job.
 func newCaptureTestHeldMember(t *testing.T, job windows.Handle) *exec.Cmd {
 	t.Helper()
 	path := agenttest.FakeRuntime(t, t.TempDir(), "member", agenttest.OutputScenario, agenttest.Output{Hang: true})
@@ -934,10 +869,6 @@ func newCaptureTestHeldMember(t *testing.T, job windows.Handle) *exec.Cmd {
 	return cmd
 }
 
-// TestDrainCaptureJob_TeardownRecordAndSurvivorScan pins drainCaptureJob's
-// survivor scan: it scans the process list only when the drain leaves the job
-// unsettled, which TestRunJobDrain cannot exercise because runJobDrain
-// itself never calls scanSurvivorsFunc.
 func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
 	t.Run("unsettled job: the scan runs once and the record takes the Warn arm", func(t *testing.T) {
 		job, _ := newCaptureTestJob(t)
@@ -1003,11 +934,6 @@ func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
 	})
 }
 
-// TestProcessIsRunning pins that a survivor candidate is confirmed by
-// its run state and not merely by its identifier still opening. A
-// process object outlives the process for as long as anything holds a
-// handle to it, so an exited descendant stays openable and would
-// otherwise be reported as a survivor and raise the teardown warning.
 func TestProcessIsRunning(t *testing.T) {
 	t.Parallel()
 

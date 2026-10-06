@@ -34,7 +34,7 @@ import (
 // reports nil when the group no longer exists, since expiry is expected
 // during best-effort cleanup.
 func signalProcessGroup(pid int, sig syscall.Signal) error {
-	return procutil.SignalProcessGroup(pid, sig)
+	return procgroup.Signal(pid, sig)
 }
 
 // assertSessionGroupAbsent confirms the process group session's launch

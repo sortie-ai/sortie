@@ -32,9 +32,6 @@ func init() {
 	fakeScenarios[scenarioSignalTrapName] = agenttest.Typed(scenarioSignalTrap)
 }
 
-// signalTrapParams parameterizes scenarioSignalTrap: OnTerm selects the
-// runtime's disposition toward SIGTERM ("ignore" or "exit"), and
-// ReadyFile is where it signals that disposition is installed.
 type signalTrapParams struct {
 	ReadyFile string `json:"readyFile"`
 	OnTerm    string `json:"onTerm"`
@@ -80,26 +77,23 @@ func startFakeCodexProcess(t *testing.T, onTerm string, stopGraceMS int) *sessio
 	path := agenttest.FakeRuntime(t, dir, "codex-trap", scenarioSignalTrapName, signalTrapParams{ReadyFile: readyPath, OnTerm: onTerm})
 
 	cmd := exec.Command(path) //nolint:gosec // fixed path under t.TempDir()
-	procutil.SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, nil)
+	if err != nil {
+		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
 	}
-	t.Cleanup(func() { procutil.KillProcessGroup(cmd.Process.Pid) }) //nolint:errcheck // best-effort cleanup
+	t.Cleanup(func() { _ = pipes.Close() })
+	t.Cleanup(func() { _ = group.Kill() })
+	reaper := procutil.StartReaper(cmd, nil)
 
 	readerDone := make(chan struct{})
 	close(readerDone)
 
-	waitCh := make(chan struct{})
 	state := &sessionState{
 		agentConfig: domain.AgentConfig{StopGraceMS: stopGraceMS},
-		proc:        cmd.Process,
-		waitCh:      waitCh,
+		group:       group,
+		waitCh:      reaper.Done(),
 		readerDone:  readerDone,
 	}
-	go func() {
-		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit state is irrelevant here
-		close(waitCh)
-	}()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -112,9 +106,6 @@ func startFakeCodexProcess(t *testing.T, onTerm string, stopGraceMS int) *sessio
 	return nil
 }
 
-// TestStopSession_ConfiguredGraceBoundsTheWait asserts that a
-// configured agent.stop_grace_ms bounds StopSession's graceful wait,
-// not the built-in five-second default.
 func TestStopSession_ConfiguredGraceBoundsTheWait(t *testing.T) {
 	t.Parallel()
 

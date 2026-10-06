@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -97,7 +96,7 @@ type sessionState struct {
 
 type turnRuntime struct {
 	pid             string
-	proc            *os.Process
+	group           *procutil.Group
 	waitCh          chan waitResult
 	reapedCh        chan struct{}
 	reader          *procutil.StdoutReader
@@ -281,7 +280,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	}
 	cmd.Stdin = buildTurnStdin(state.major, params.Prompt, launch.StdinReader())
 
-	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
 		state.mu.Unlock()
 
@@ -320,7 +319,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 
 	runtime := &turnRuntime{
 		pid:             strconv.Itoa(cmd.Process.Pid),
-		proc:            cmd.Process,
+		group:           group,
 		waitCh:          make(chan waitResult, 1),
 		reapedCh:        make(chan struct{}),
 		drainGrace:      state.drainGrace,
@@ -864,11 +863,11 @@ func stopActiveTurn(ctx context.Context, runtime *turnRuntime, grace time.Durati
 		return nil
 	}
 
-	if runtime.proc == nil {
+	if runtime.group == nil {
 		return nil
 	}
 
-	_ = procutil.SignalGraceful(runtime.proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
+	_ = runtime.group.SignalGraceful() //nolint:errcheck // best-effort signal; process may already be dead
 
 	started := time.Now()
 	graceTimer := time.NewTimer(grace)
@@ -894,10 +893,10 @@ func stopActiveTurn(ctx context.Context, runtime *turnRuntime, grace time.Durati
 }
 
 func killTurnProcess(runtime *turnRuntime) {
-	if runtime == nil || runtime.proc == nil {
+	if runtime == nil || runtime.group == nil {
 		return
 	}
-	procutil.KillProcessGroup(runtime.proc.Pid) //nolint:errcheck,gosec // best-effort cleanup
+	runtime.group.Kill() //nolint:errcheck,gosec // best-effort cleanup
 }
 
 func stopTimer(timer *time.Timer) {

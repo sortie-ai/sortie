@@ -28,9 +28,7 @@ func TestReaperConnectionFailed(t *testing.T) {
 	exitedReaper := func(t *testing.T, code int) *procutil.Reaper {
 		t.Helper()
 		cmd := exec.Command(agenttest.FakeRuntime(t, t.TempDir(), "agent", agenttest.OutputScenario, agenttest.Output{ExitCode: code}))
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("cmd.Start() = %v", err)
-		}
+		startOwned(t, cmd)
 		r := procutil.StartReaper(cmd, nil)
 		<-r.Done()
 		return r

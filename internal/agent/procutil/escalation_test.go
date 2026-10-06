@@ -137,14 +137,13 @@ func TestArmGroupEscalation_ForceTerminatesStubbornGroupMember(t *testing.T) {
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupCancel(cmd, escalationGrace)
 
-	pipes, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(cmd, nil)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
 	}
 	defer func() { _ = pipes.Close() }()
 
-	leaderPID := cmd.Process.Pid
-	t.Cleanup(func() { _ = KillProcessGroup(leaderPID) })
+	t.Cleanup(func() { _ = group.Kill() })
 
 	descendantPID := pollEscalationPID(t, pidFile, 5*time.Second)
 
@@ -177,22 +176,23 @@ func TestArmGroupEscalation_GroupDrainedInsideGraceSendsNoForceSignal(t *testing
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupCancel(cmd, escalationGrace)
 
-	pipes, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(cmd, nil)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
 	}
 	defer func() { _ = pipes.Close() }()
 
-	leaderPID := cmd.Process.Pid
-	t.Cleanup(func() { _ = KillProcessGroup(leaderPID) })
+	t.Cleanup(func() { _ = group.Kill() })
 
 	descendantPID := pollEscalationPID(t, pidFile, 5*time.Second)
 
-	forceSends, waitForQuiet := armEscalationForceSendProbe(t, leaderPID)
+	forceSends, waitForQuiet := armEscalationForceSendProbe(t, cmd.Process.Pid)
+	reaper := StartReaper(cmd, nil)
 
 	cancelledAt := time.Now()
 	cancel()
-	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
+	awaitDone(t, reaper, escalationGrace+groupDrainBound+10*time.Second)
+	sendsAtRelease := forceSends.Load()
 
 	if !pollEscalationFile(marker, 5*time.Second) {
 		t.Fatalf("descendant did not write %q, want it to have caught and exited on the graceful signal well inside the %v grace", marker, escalationGrace)
@@ -203,7 +203,7 @@ func TestArmGroupEscalation_GroupDrainedInsideGraceSendsNoForceSignal(t *testing
 
 	floor := cancelledAt.Add(escalationGrace + groupDrainBound)
 	waitForQuiet(500*time.Millisecond, floor, escalationGrace+groupDrainBound+10*time.Second)
-	if calls := forceSends.Load(); calls != 0 {
-		t.Errorf("force-termination seam called %d times after a group that drained inside the grace, want 0", calls)
+	if calls := forceSends.Load() - sendsAtRelease; calls != 0 {
+		t.Errorf("force-termination seam called %d times after the reap released a group that drained inside the grace, want 0", calls)
 	}
 }

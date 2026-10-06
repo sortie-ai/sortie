@@ -39,8 +39,6 @@ func writeOpenCodeScript(t *testing.T, dir, body string) string {
 	return agenttest.WriteScript(t, dir, "fake-opencode", versionAnsweringScript(body))
 }
 
-// versionAnsweringScript prepends a branch answering a leading --version
-// argument to body, unconditionally.
 func versionAnsweringScript(body string) string {
 	return "case \"$1\" in\n  --version) echo '1.18.32'; exit 0;;\nesac\n" + body
 }
@@ -151,10 +149,6 @@ cat '` + runPath + `'`
 	return writeOpenCodeScript(t, dir, body)
 }
 
-// splitPermissionWarningFixture returns the two lines of
-// testdata/permission_warning_then_error.txt: the plain-text permission
-// warning the opencode runtime writes to stderr, and the tool_use JSON
-// envelope it writes to stdout.
 func splitPermissionWarningFixture(t *testing.T) (warningLine, stdoutLine string) {
 	t.Helper()
 	lines := bytes.Split(bytes.TrimRight(loadFixture(t, "permission_warning_then_error.txt"), "\n"), []byte("\n"))
@@ -164,7 +158,6 @@ func splitPermissionWarningFixture(t *testing.T) (warningLine, stdoutLine string
 	return string(lines[0]), string(lines[1])
 }
 
-// writeFixtureFile writes content to name inside dir, fataling on error.
 func writeFixtureFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -174,8 +167,6 @@ func writeFixtureFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-// hasNotification reports whether events contains an EventNotification
-// with exactly message.
 func hasNotification(events []domain.AgentEvent, message string) bool {
 	for _, e := range events {
 		if e.Type == domain.EventNotification && e.Message == message {
@@ -185,7 +176,6 @@ func hasNotification(events []domain.AgentEvent, message string) bool {
 	return false
 }
 
-// collectEvents runs a turn and collects all emitted events.
 func collectEvents(t *testing.T, a domain.AgentAdapter, session domain.Session, prompt string) ([]domain.AgentEvent, domain.TurnResult, error) {
 	t.Helper()
 	var events []domain.AgentEvent
@@ -688,15 +678,9 @@ while :; do sleep 1; done`)
 	}
 }
 
-// startTurnRuntimeProcess starts script as a real subprocess in its own
-// process group and wires a minimal turnRuntime around it, wiring
-// waitCh to close once the process is reaped. Used to exercise
-// stopActiveTurn directly, without the rest of RunTurn's JSONL parsing.
-// startTurnRuntimeProcess writes scriptBody with a leading trap
-// statement, starts it, and waits for it to touch a readiness marker
-// before returning, so the caller's subsequent SignalGraceful cannot
-// race the shell installing its trap. scriptBody's first line MUST be
-// a "trap ..." statement; the marker touch is inserted right after it.
+// The readiness marker keeps the caller's SignalGraceful from racing the
+// shell installing its trap. scriptBody's first line MUST be a "trap ..."
+// statement; the marker touch is inserted right after it.
 func startTurnRuntimeProcess(t *testing.T, scriptBody string) *turnRuntime {
 	t.Helper()
 
@@ -710,18 +694,21 @@ func startTurnRuntimeProcess(t *testing.T, scriptBody string) *turnRuntime {
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
 
 	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
-	procutil.SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, nil)
+	if err != nil {
+		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
 	}
-	t.Cleanup(func() { procutil.KillProcessGroup(cmd.Process.Pid) }) //nolint:errcheck // best-effort cleanup
+	t.Cleanup(func() { _ = pipes.Close() })
+	t.Cleanup(func() { _ = group.Kill() })
+	reaper := procutil.StartReaper(cmd, nil)
 
 	runtime := &turnRuntime{
-		proc:   cmd.Process,
+		group:  group,
 		waitCh: make(chan waitResult),
 	}
 	go func() {
-		waitErr := cmd.Wait()
+		<-reaper.Done()
+		waitErr := reaper.Err()
 		runtime.waitMu.Lock()
 		runtime.waitRes = waitResult{exitCode: procutil.ExtractExitCode(waitErr), err: waitErr}
 		runtime.waitMu.Unlock()
@@ -1330,7 +1317,6 @@ func collectTurnFailedMessages(events []domain.AgentEvent) []string {
 	return messages
 }
 
-// turnFailedEvents returns every turn_failed event in events, in order.
 func turnFailedEvents(events []domain.AgentEvent) []domain.AgentEvent {
 	var out []domain.AgentEvent
 	for _, e := range events {
@@ -1495,9 +1481,6 @@ func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_FreeTierRefusalNamesDeniedTools pins that a 1.x free-tier
-// refusal against a policy denying bash names the denied tool in the
-// turn_failed message, appended to the vendor text.
 func TestRunTurn_FreeTierRefusalNamesDeniedTools(t *testing.T) {
 	t.Parallel()
 
@@ -1526,10 +1509,6 @@ func TestRunTurn_FreeTierRefusalNamesDeniedTools(t *testing.T) {
 	}
 }
 
-// TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2 is the 2.x
-// counterpart of TestRunTurn_FreeTierRefusalNamesDeniedTools: the same
-// policy and the same denied-tool clause hold against the 2.x error
-// envelope shape.
 func TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2(t *testing.T) {
 	t.Parallel()
 
@@ -1716,9 +1695,6 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 	})
 }
 
-// TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage verifies that a
-// turn whose session export carries no usage figure (an empty messages
-// list) reports the run unmeasured.
 func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
 	t.Parallel()
 
@@ -1742,9 +1718,6 @@ func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage verifies that a
-// turn whose session export carries a usage figure reports the run
-// measured.
 func TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage(t *testing.T) {
 	t.Parallel()
 
@@ -2369,9 +2342,6 @@ exit 0`)
 	}
 }
 
-// TestRunTurn_NonZeroExitNoTerminalReport pins the non-zero-exit
-// transport-class abort: the disposition, kind, and message pair are the
-// same ones every adapter produces for this row.
 func TestRunTurn_NonZeroExitNoTerminalReport(t *testing.T) {
 	t.Parallel()
 
@@ -2412,9 +2382,6 @@ exit 7`)
 	}, result, err)
 }
 
-// TestRunTurn_ReadTimeoutBeforeFirstJSONEvent pins the read-timeout
-// transport-class abort: the disposition, kind, and message pair are the
-// same ones today's arm already produces.
 func TestRunTurn_ReadTimeoutBeforeFirstJSONEvent(t *testing.T) {
 	t.Parallel()
 
@@ -2458,9 +2425,6 @@ sleep 5`)
 	}, result, err)
 }
 
-// TestRunTurn_CompletedTurnReturnsUntypedNilError pins that a completed
-// turn's returned error interface is genuinely nil, not a typed-nil
-// *domain.AgentError promoted to a non-nil error interface.
 func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	t.Parallel()
 
@@ -2507,10 +2471,6 @@ func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
 	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
-// session's second turn, whose stream carries neither declared signal,
-// reports turn_failed even though the first turn on the same session
-// carried both a text part and a completed tool_use part.
 func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 	t.Parallel()
 
@@ -2589,8 +2549,6 @@ fi`, counterFile, counterFile))
 	}
 }
 
-// shellQuote wraps s in single quotes for embedding in a generated shell
-// script, escaping any embedded single quote.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -2613,8 +2571,6 @@ func writeEscapedHolderSpawn(pidFile, redirect string) string {
 	)
 }
 
-// abandonmentWarnCount counts spy entries matching StdoutReader.Abandon's
-// fixed WARN record.
 func abandonmentWarnCount(spy *agenttest.LogSpy) int {
 	var n int
 	for _, e := range spy.Entries() {
@@ -2674,8 +2630,6 @@ func killEscapedGroupOnCleanup(t *testing.T, pidFile string) {
 	})
 }
 
-// readPIDFile reads a PID a script already wrote to path, fataling t if
-// the file is missing or does not hold a valid positive PID.
 func readPIDFile(t *testing.T, path string) int {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -2999,11 +2953,6 @@ sleep 3600
 	}
 }
 
-// TestRunTurn_SessionMismatchArm_BoundedDrain exercises the bounded
-// drain on opencode's session-mismatch early-return arm: with an escaped
-// descendant holding the standard-output handle, the mismatch turn still
-// publishes within sessionState.drainGrace and emits exactly one
-// abandonment record.
 func TestRunTurn_SessionMismatchArm_BoundedDrain(t *testing.T) {
 	agenttest.RequireSetsid(t)
 	t.Parallel()

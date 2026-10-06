@@ -66,6 +66,7 @@ type sessionState struct {
 	conn *jsonrpc.Conn
 
 	pid             int
+	group           *procutil.Group
 	stdinCloser     io.Closer
 	pipes           *procutil.OwnedPipes
 	stderrCollector *procutil.StderrCollector
@@ -328,7 +329,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		}
 		prefixedStdin := launch.PrefixStdin(stdinPipe)
 
-		pipes, err := procutil.StartWithOwnedPipes(cmd, state.logger)
+		pipes, group, err := procutil.StartWithOwnedPipes(cmd, state.logger)
 		if err != nil {
 			var startErr *procutil.StartError
 			if !errors.As(err, &startErr) {
@@ -349,6 +350,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		}
 
 		state.pid = cmd.Process.Pid
+		state.group = group
 		state.stdinCloser = prefixedStdin
 		state.pipes = pipes
 		state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
@@ -903,18 +905,14 @@ func awaitAnswerOpen(graceCtx context.Context, grace time.Duration) func(state *
 }
 
 func killProcessGroup(state *sessionState) {
-	if state.pid > 0 {
-		procutil.KillProcessGroup(state.pid) //nolint:errcheck,gosec // best-effort
-	}
+	state.group.Kill() //nolint:errcheck,gosec // best-effort
 }
 
 // signalGraceful sends the catchable graceful-termination signal to the
 // subprocess's process group. It never waits and never changes teardown's path
 // when the signal cannot be delivered: kill_process_group covers that case.
 func signalGraceful(state *sessionState) {
-	if state.pid > 0 {
-		procutil.SignalGraceful(state.pid) //nolint:errcheck,gosec // best-effort
-	}
+	state.group.SignalGraceful() //nolint:errcheck,gosec // best-effort
 }
 
 // awaitExit returns a teardown step that waits for the subprocess to exit and be

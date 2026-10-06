@@ -93,13 +93,14 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 		t.Fatalf("StdinPipe: %v", err)
 	}
 
-	pipes, err := procutil.StartWithOwnedPipes(cmd, discardLogger())
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, discardLogger())
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
 
 	state := &sessionState{
 		pid:         cmd.Process.Pid,
+		group:       group,
 		stdinCloser: stdinCloser,
 		pipes:       pipes,
 		stopCh:      make(chan struct{}),
@@ -138,7 +139,6 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	return &parkedTeardownFixture{state: state, release: release}
 }
 
-// waitForFile polls for path to exist, failing t if awaitTimeout elapses first.
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(awaitTimeout)
@@ -151,7 +151,6 @@ func waitForFile(t *testing.T, path string) {
 	t.Fatalf("timed out waiting for %s to appear", path)
 }
 
-// killHelperGroup reads a pid from pidFile and signals its whole process group.
 func killHelperGroup(pidFile string) {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -465,7 +464,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 		t.Fatalf("StdinPipe: %v", err)
 	}
 
-	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
@@ -475,6 +474,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	}
 	state := &sessionState{
 		pid:         cmd.Process.Pid,
+		group:       group,
 		stdinCloser: stdinPipe,
 		pipes:       pipes,
 		stopCh:      make(chan struct{}),
@@ -494,7 +494,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	go runPump(state)
 
 	t.Cleanup(func() {
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort; the process is expected to already be gone
+		_ = group.Kill()
 	})
 
 	if readyPath != "" {
@@ -724,6 +724,34 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 			t.Errorf("teardown logged a Warn record for an agent that had already exited, want none (the re-read on the graceCtx arm must classify this as exited): %s", buf.String())
 		}
 	})
+}
+
+func TestTeardownKillProcessGroupAfterExitSendsNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	state := newGracefulTeardownSession(t, teardownExitsOnItsOwnScript(), "", logger)
+	select {
+	case <-state.waitCh:
+	case <-time.After(awaitTimeout):
+		t.Fatal("agent was not reaped before the test needed it exited")
+	}
+
+	if err := stopSession(context.Background(), fakeSession(state)); err != nil {
+		t.Fatalf("stopSession() error = %v", err)
+	}
+
+	if err := state.group.Kill(); err != nil {
+		t.Errorf("Kill() on the released record = %v, want nil", err)
+	}
+	if err := state.group.SignalGraceful(); err != nil {
+		t.Errorf("SignalGraceful() on the released record = %v, want nil", err)
+	}
+	if strings.Contains(buf.String(), "level=WARN") {
+		t.Errorf("teardown logged a Warn record for a runtime that had exited inside the grace, want none: %s", buf.String())
+	}
+	assertSessionGoroutinesExited(t, state)
 }
 
 func TestStopSessionTeardownParkedWriteBoundsCloseSession(t *testing.T) {

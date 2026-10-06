@@ -22,12 +22,19 @@ func earlyExitCmd(t *testing.T, out agenttest.Output) *exec.Cmd {
 	return exec.Command(path) //nolint:gosec // fake runtime path under t.TempDir()
 }
 
+func startOwned(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	pipes, _, err := procutil.StartWithOwnedPipes(cmd, nil)
+	if err != nil {
+		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
+	}
+	t.Cleanup(func() { _ = pipes.Close() })
+}
+
 func reapedReaper(t *testing.T, out agenttest.Output) *procutil.Reaper {
 	t.Helper()
 	cmd := earlyExitCmd(t, out)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	startOwned(t, cmd)
 	r := procutil.StartReaper(cmd, nil)
 	<-r.Done()
 	return r
@@ -103,9 +110,7 @@ func TestObserveEarlyExit_ReturnsZeroWhenRuntimeStaysAlivePastGrace(t *testing.T
 	t.Parallel()
 
 	cmd := earlyExitCmd(t, agenttest.Output{Hang: true})
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	startOwned(t, cmd)
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	r := procutil.StartReaper(cmd, nil)
 
@@ -301,11 +306,6 @@ func TestEarlyExit_Report_IncompleteAppendsAbandonedMarker(t *testing.T) {
 	}
 }
 
-// TestEarlyExit_Report_SecondFinishAndCollectDoesNotWait pins that once
-// a collector's own FinishAndCollect call has already resolved, a
-// second call inside Report, such as the early-exit computation's own,
-// returns immediately rather than paying a further grace, per
-// [procutil.StderrCollector.FinishAndCollect]'s sync.Once guard.
 func TestEarlyExit_Report_SecondFinishAndCollectDoesNotWait(t *testing.T) {
 	t.Parallel()
 
@@ -442,9 +442,6 @@ func TestOutputWatch_ExitedBeforeOutput(t *testing.T) {
 	}
 }
 
-// exitErrorWithCode runs a fake runtime exiting with code and returns
-// the resulting *exec.ExitError, so a table case can exercise a real
-// wait error rather than a hand-built stand-in.
 func exitErrorWithCode(t *testing.T, code int) error {
 	t.Helper()
 	if code < 0 {
