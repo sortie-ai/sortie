@@ -442,6 +442,44 @@ func TestMigrate_Migration021_ConfiguredSettingsDefaultToEmpty(t *testing.T) {
 	}
 }
 
+func TestMigrate_Migration022_HandedOffCommentsStartEmpty(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 21)
+	if err := s.UpsertReactionFingerprint(context.Background(), "ISS-PRE022", "review", "fp"); err != nil {
+		t.Fatalf("UpsertReactionFingerprint on a pre-migration-022 store: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var rows int
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM reaction_handoffs`).Scan(&rows); err != nil {
+		t.Fatalf("count reaction_handoffs: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("reaction_handoffs row count after upgrade = %d, want 0", rows)
+	}
+}
+
+func TestMigrate_Migration022_PrimaryKeyRejectsDuplicateComment(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	const insert = `INSERT INTO reaction_handoffs (issue_id, kind, comment_id) VALUES ('ISS-1', 'review', 'c1')`
+	if _, err := s.db.ExecContext(context.Background(), insert); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err := s.db.ExecContext(context.Background(), insert)
+
+	if err == nil {
+		t.Error("duplicate (issue_id, kind, comment_id) insert = nil error, want a primary key violation")
+	}
+}
+
 func TestMigrate_NullConstraints(t *testing.T) {
 	t.Parallel()
 

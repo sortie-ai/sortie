@@ -760,3 +760,11 @@ func TestRetrySlot_TTLRefreshOnArbitrationDeferral(t *testing.T) {
 		}
 	})
 }
+
+func (s *retrySlotStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *retrySlotStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

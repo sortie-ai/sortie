@@ -62,11 +62,14 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			cancelReactionTriage(pending)
 			// A spent counter outlives the drop, as it outlives a budget
 			// escalation, so the next seeded entry cannot reopen the
-			// budget or re-report comments already handed off.
+			// budget or re-report comments already reported. The
+			// handed-off cache key goes at any counter value because the
+			// stored rows are the record and the next check reloads them.
 			if state.ReactionAttempts[rkey] < params.BotReviewConfig.MaxContinuationTurns {
 				delete(state.ReactionAttempts, rkey)
-				delete(state.ReactionHandedOffComments, rkey)
+				delete(state.ReactionReportedComments, rkey)
 			}
+			delete(state.ReactionHandedOffComments, rkey)
 			entryLog.Warn("bot review watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
@@ -105,13 +108,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
-		// Filter outdated comments.
-		var actionable []domain.ReviewComment
-		for _, c := range comments {
-			if !c.Outdated {
-				actionable = append(actionable, c)
-			}
-		}
+		actionable := actionableComments(ReactionKindBotReview, comments, nil)
 
 		// No actionable comments; re-enqueue with poll interval delay.
 		if len(actionable) == 0 {
@@ -147,6 +144,12 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
+		if settleHandedOffCommentSet(ctx, state, params.Store, pending.IssueID, ReactionKindBotReview, actionable, entryLog) {
+			pending.PendingRetryAt = now.Add(pollInterval)
+			state.PendingReactions[key] = pending
+			continue
+		}
+
 		// Arbitrate the retry slot before dispatching.
 		if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
 			logRetrySlotDeferral(entryLog, ReactionKindBotReview, incumbent)
@@ -155,11 +158,9 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
-		// Judged after the fetch: only the observed set says whether a
-		// comment arrived that no continuation carried. A summary-only
-		// item never counts, because a bot re-review of the last turn's
-		// push adds one every time and its body cannot be read for
-		// findings.
+		// A summary-only item never escalates, because a bot re-review of
+		// the last turn's push adds one every time and its body cannot be
+		// read for findings.
 		turnCount := state.ReactionAttempts[rkey]
 		if turnCount >= params.BotReviewConfig.MaxContinuationTurns {
 			var inline []domain.ReviewComment
@@ -168,8 +169,8 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 					inline = append(inline, c)
 				}
 			}
-			escalating := carriesNewComment(state, rkey, inline)
-			recordHandedOffComments(state, rkey, actionable)
+			escalating := carriesNewComment(state, pending.IssueID, ReactionKindBotReview, inline)
+			recordReportedComments(state, pending.IssueID, ReactionKindBotReview, actionable)
 			if escalating {
 				escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, botReviewData, entryLog, ctx, metrics)
 				continue
@@ -208,7 +209,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			state.PendingReactions[key] = pending
 			continue
 		case triageEscalate:
-			recordHandedOffComments(state, rkey, actionable)
+			recordReportedComments(state, pending.IssueID, ReactionKindBotReview, actionable)
 			escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerTriage, botReviewData, entryLog, ctx, metrics)
 			continue
 		}
@@ -224,7 +225,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			DelayMS:     continuationDelayMS,
 			LastSSHHost: pending.LastSSHHost,
 			ContinuationContext: map[string]any{
-				"bot_review_comments": botContext,
+				botReviewCommentsKey: botContext,
 			},
 			ReactionKind:        ReactionKindBotReview,
 			AgentKind:           pending.AgentKind,
@@ -235,7 +236,6 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++
-		recordHandedOffComments(state, rkey, actionable)
 
 		entryLog.Info("bot review comments detected, scheduling bot-review-fix dispatch",
 			slog.Int("comment_count", len(actionable)),

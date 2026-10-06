@@ -3010,3 +3010,11 @@ func TestReconcileCIStatus_Triage_EpisodeCloseClearsHandledForNextEpisode(t *tes
 		t.Errorf("MarkReactionDispatched calls = %d, want 2 (one real verdict per episode: handled, then escalate)", store.markDispatchedCalls)
 	}
 }
+
+func (s *ciReconcileStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *ciReconcileStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

@@ -552,3 +552,7 @@ func TestGoldenNotify(t *testing.T) {
 		})
 	}
 }
+
+func (r *goldenRecorder) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}

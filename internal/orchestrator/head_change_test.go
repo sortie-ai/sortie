@@ -190,3 +190,11 @@ func TestClassifyHeadChange(t *testing.T) {
 		}
 	})
 }
+
+func (s *headChangeStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *headChangeStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

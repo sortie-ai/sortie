@@ -1222,3 +1222,11 @@ func TestReactionTriageSupportedKinds(t *testing.T) {
 			got, config.TriageSupportedReactionKeys)
 	}
 }
+
+func (s *triageGateStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *triageGateStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

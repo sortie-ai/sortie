@@ -4112,3 +4112,52 @@ func TestHandleRetryTimer_RecordsTheResolvedSettingsAndLogsAVanishedRuleBlockOnc
 		})
 	}
 }
+
+func (m *mockRetryStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (m *mockRetryStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func TestHandleRetryTimer_ReactionRetryRecordsNoHandedOffComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		issueState  string
+		wantRunning bool
+	}{
+		{"a dispatched retry", "In Progress", true},
+		{"a retry that releases the claim for a terminal issue", "Done", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "ISS-RETRY-REC"
+			state := frozenRetryState(id, RetryEntry{
+				Attempt:      1,
+				ReactionKind: ReactionKindReview,
+				ContinuationContext: map[string]any{
+					reviewCommentsKey: buildReviewTemplateMap([]domain.ReviewComment{summaryComment("a"), inlineComment("b")}),
+				},
+			})
+			store := newFingerprintModelStore()
+			tracker := &mockRetryTracker{fetchedIssue: candidateIssue(id, id, tt.issueState)}
+			params := defaultRetryParams(t, &mockRetryStore{}, tracker)
+			params.Store = store
+
+			HandleRetryTimer(state, id, params)
+			t.Cleanup(state.WorkerWg.Wait)
+
+			if _, running := state.Running[id]; running != tt.wantRunning {
+				t.Errorf("Running[%s] present = %v, want %v", id, running, tt.wantRunning)
+			}
+			assertStoredHandedOff(t, store, id, ReactionKindReview)
+			assertStoredHandedOff(t, store, id, ReactionKindBotReview)
+		})
+	}
+}

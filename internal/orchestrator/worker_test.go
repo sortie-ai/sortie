@@ -9812,3 +9812,166 @@ func TestRunWorkerAttempt_SelfReviewTurnResultsCountUnaccountedSpend(t *testing.
 		}
 	})
 }
+
+func TestRenderFirstTurnPrompt(t *testing.T) {
+	t.Parallel()
+
+	reviewSeed := map[string]any{reviewCommentsKey: buildReviewTemplateMap([]domain.ReviewComment{summaryComment("a"), inlineComment("b")})}
+	botSeed := map[string]any{botReviewCommentsKey: buildReviewTemplateMap([]domain.ReviewComment{summaryComment("x")})}
+	bothSeed := map[string]any{
+		reviewCommentsKey:    reviewSeed[reviewCommentsKey],
+		botReviewCommentsKey: botSeed[botReviewCommentsKey],
+	}
+	const (
+		elseIfTemplate    = "task\n{{ if .review_comments }}R\n{{ else if .bot_review_comments }}B\n{{ end }}"
+		modeSwitch        = "{{ if .review_comments }}Fix the comments{{ else }}Do the task{{ end }}\n"
+		failsWhenSeeded   = "task\n{{ if .review_comments }}{{ index .review_comments 99 }}{{ end }}\n"
+		attemptOnlyBlock  = "task\n{{ if .attempt }}{{ range .review_comments }}{{ .id }}{{ end }}{{ end }}\n"
+		unreferenced      = "Resolve {{ .issue.identifier }}.\n"
+		failsAlways       = "{{ .issue.no_such_field }}\n"
+		referenceTemplate = commentsPromptTemplate
+	)
+
+	tests := []struct {
+		name          string
+		body          string
+		attempt       int
+		continuation  map[string]any
+		freshRun      bool
+		wantPresented map[string][]string
+		wantRender    string
+		wantContains  string
+		wantErr       bool
+	}{
+		{
+			name:          "the added block presents review IDs on a continuation",
+			body:          referenceTemplate,
+			continuation:  reviewSeed,
+			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
+			wantContains:  "- a",
+		},
+		{
+			name:          "the added block presents bot-review IDs on a continuation",
+			body:          referenceTemplate,
+			continuation:  botSeed,
+			wantPresented: map[string][]string{ReactionKindBotReview: {"x"}},
+			wantContains:  "- x",
+		},
+		{
+			name:          "the added block presents both kinds on a fresh run",
+			body:          referenceTemplate,
+			continuation:  bothSeed,
+			freshRun:      true,
+			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}, ReactionKindBotReview: {"x"}},
+			wantContains:  "- x",
+		},
+		{
+			name:         "a template that never references the key presents nothing on a continuation",
+			body:         unreferenced,
+			continuation: reviewSeed,
+			wantRender:   "Resolve ISS-1.\n",
+		},
+		{
+			name:         "a template that never references the key presents nothing on a fresh run",
+			body:         unreferenced,
+			continuation: reviewSeed,
+			freshRun:     true,
+			wantRender:   "Resolve ISS-1.\n",
+		},
+		{
+			name:         "a reference only inside an attempt block presents nothing on a first attempt",
+			body:         attemptOnlyBlock,
+			continuation: reviewSeed,
+			freshRun:     true,
+			wantRender:   "task\n\n",
+		},
+		{
+			name:          "a reference behind the other kind's else-if presents only the shadowing kind",
+			body:          elseIfTemplate,
+			continuation:  bothSeed,
+			freshRun:      true,
+			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
+			wantRender:    "task\nR\n",
+		},
+		{
+			name:         "a fresh run whose seeded render drops a line gets the unseeded render",
+			body:         modeSwitch,
+			continuation: reviewSeed,
+			freshRun:     true,
+			wantRender:   "Do the task\n",
+		},
+		{
+			name:         "a fresh run whose seeded render fails gets the unseeded render",
+			body:         failsWhenSeeded,
+			continuation: reviewSeed,
+			freshRun:     true,
+			wantRender:   "task\n\n",
+		},
+		{
+			name:          "a continuation keeps a render that drops a line",
+			body:          modeSwitch,
+			continuation:  reviewSeed,
+			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
+			wantRender:    "Fix the comments\n",
+		},
+		{
+			name:         "a continuation whose render fails returns the error",
+			body:         failsWhenSeeded,
+			continuation: reviewSeed,
+			wantErr:      true,
+		},
+		{
+			name:         "a fresh run whose unseeded render fails returns the error",
+			body:         failsAlways,
+			continuation: reviewSeed,
+			freshRun:     true,
+			wantErr:      true,
+		},
+		{
+			name:         "no continuation renders the template alone",
+			body:         referenceTemplate,
+			freshRun:     true,
+			wantContains: "Resolve ISS-1.",
+		},
+		{
+			name:     "no continuation returns the render error",
+			body:     failsAlways,
+			freshRun: true,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpl := mustParseTemplate(t, tt.body)
+			issue := domain.Issue{ID: "1", Identifier: "ISS-1"}
+
+			rendered, presented, err := renderFirstTurnPrompt(tmpl, issue.ToTemplateMap(), tt.attempt, 3, tt.continuation, tt.freshRun)
+
+			if tt.wantErr {
+				var templateErr *prompt.TemplateError
+				if !errors.As(err, &templateErr) || templateErr.Kind != prompt.ErrTemplateRender {
+					t.Fatalf("renderFirstTurnPrompt() error = %v, want a render *prompt.TemplateError", err)
+				}
+				if rendered != "" || presented != nil {
+					t.Errorf("renderFirstTurnPrompt() = %q, %v on error, want empty", rendered, presented)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("renderFirstTurnPrompt() error = %v, want nil", err)
+			}
+			if !maps.EqualFunc(presented, tt.wantPresented, slices.Equal) {
+				t.Errorf("renderFirstTurnPrompt() presented = %v, want %v", presented, tt.wantPresented)
+			}
+			if tt.wantRender != "" && rendered != tt.wantRender {
+				t.Errorf("renderFirstTurnPrompt() rendered = %q, want %q", rendered, tt.wantRender)
+			}
+			if tt.wantContains != "" && !strings.Contains(rendered, tt.wantContains) {
+				t.Errorf("renderFirstTurnPrompt() rendered = %q, want it to contain %q", rendered, tt.wantContains)
+			}
+		})
+	}
+}

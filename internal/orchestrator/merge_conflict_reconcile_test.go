@@ -1817,3 +1817,11 @@ func TestReconcileMergeConflicts_Triage_CancelOnTTLDrop(t *testing.T) {
 		t.Error("PendingReactions entry survived past the watch window, want dropped")
 	}
 }
+
+func (s *statefulFingerprintStore) AddReactionHandedOffComments(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
+func (s *statefulFingerprintStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}

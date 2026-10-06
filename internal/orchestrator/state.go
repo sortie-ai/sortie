@@ -853,11 +853,19 @@ type State struct {
 	ReactionAttempts map[string]int
 
 	// ReactionHandedOffComments maps composite key (issueID:kind) to the set
-	// of [domain.ReviewComment] IDs a continuation of that kind already
-	// carried. A spent continuation budget needs it to tell a comment that
-	// is new from one a turn already had its chance to fix. Only the review
-	// and bot-review kinds use it. Runtime-only.
+	// of [domain.ReviewComment] IDs the issue's runs were given for that
+	// kind, a cache over the reaction_handoffs rows. A present
+	// key is authoritative for this process; an absent key means the rows
+	// were not loaded, never that the set is empty. Only the review and
+	// bot-review kinds use it.
 	ReactionHandedOffComments map[string]map[string]struct{}
+
+	// ReactionReportedComments maps composite key (issueID:kind) to the IDs
+	// of bot-review comments a spent budget or a triage escalation already
+	// reported to a person. It is deleted wherever the kind's
+	// [State.ReactionAttempts] entry is and never reaches the store.
+	// Runtime-only.
+	ReactionReportedComments map[string]map[string]struct{}
 
 	// PendingReactions maps composite key (issueID:kind) to a
 	// [PendingReaction]. Populated by [HandleWorkerExit], consumed by
@@ -940,6 +948,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentB
 		AgentTotals:               totals,
 		ReactionAttempts:          make(map[string]int),
 		ReactionHandedOffComments: make(map[string]map[string]struct{}),
+		ReactionReportedComments:  make(map[string]map[string]struct{}),
 		PendingReactions:          make(map[string]*PendingReaction),
 		AutoMergeAuthLogged:       make(map[string]struct{}),
 		TokenBudgetIncomplete:     make(map[string]struct{}),
