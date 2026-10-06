@@ -1,6 +1,8 @@
 package procutil
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -40,6 +42,19 @@ const (
 type StartError struct {
 	Stage StartStage
 	Err   error
+	// Cancelled is true when the launch's cancellation was in effect
+	// when the failing stage was tried. It is false for the pipe stages.
+	Cancelled bool
+}
+
+// processStartError is the *StartError of a failed cmd.Start. A start
+// that a cancellation already in effect refused is Cancelled.
+func processStartError(err error) *StartError {
+	return &StartError{
+		Stage:     StageProcessStart,
+		Err:       err,
+		Cancelled: errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
+	}
 }
 
 func (e *StartError) Error() string {
@@ -58,7 +73,9 @@ func (e *StartError) Unwrap() error {
 // cmd.Stderr MUST be nil on entry. It closes every descriptor it
 // created before returning an error, and every error it returns is a
 // *StartError; on Windows a *StartError with StageProcessResume means
-// the process has already been terminated and reaped. logger receives
+// the process has already been terminated and reaped, and
+// [StartError.Cancelled] reports whether a stop began before the resume
+// was tried. logger receives
 // a failed Job Object assignment's or a failed resume's WARN record; a
 // nil logger resolves to slog.Default. A caller whose subprocess state
 // is guarded by a mutex MUST hold that mutex across this call, because
@@ -91,10 +108,7 @@ func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, *Grou
 		closeFiles(stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 		cmd.Stdout = nil
 		cmd.Stderr = nil
-		if cmd.Process == nil {
-			return nil, nil, &StartError{Stage: StageProcessStart, Err: startErr}
-		}
-		return nil, nil, &StartError{Stage: StageProcessResume, Err: startErr}
+		return nil, nil, startErr
 	}
 
 	// A write end passed to exec.Cmd as an *os.File is never closed by

@@ -4,8 +4,6 @@ package workspace
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os/exec"
 	"time"
 
@@ -55,86 +53,11 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	procutil.SetGroupKill(cmd)
 
 	buf := procutil.NewTailBuffer(MaxHookOutputBytes)
-	capture, startErr := procutil.StartCapture(cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
+	capture, startErr := startHookCapture(cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
 
-	var (
-		waitErr       error
-		leftover      bool
-		endedOnItsOwn bool
-	)
+	var result procutil.CaptureResult
 	if startErr == nil {
-		result := capture.Wait()
-		waitErr = result.WaitErr
-		// The capture drains output after the direct child is reaped, so
-		// a descendant that outlives the script can carry the context
-		// past its deadline once the script itself has already
-		// finished. The wait records which of the two happened; the
-		// context read below no longer can. Leftovers a script that
-		// ended on its own left behind are the ones worth reporting.
-		endedOnItsOwn = !procutil.StoppedByCancellation(waitErr)
-		leftover = result.TerminatedLeftovers && endedOnItsOwn
+		result = capture.Wait()
 	}
-	output := formatHookOutput(buf)
-
-	if startErr == nil && waitErr == nil {
-		return HookResult{Output: output, TerminatedLeftovers: leftover}, nil
-	}
-
-	// Check context error BEFORE *exec.ExitError. A process killed by
-	// SIGKILL (timeout) also produces an ExitError with signal status,
-	// and a context already done when StartCapture ran keeps cmd from
-	// starting at all, reporting the same context error a Wait
-	// failure would. Checking context first ensures correct
-	// classification in both cases. A script that reached its own exit
-	// is excluded: its status is the answer, whatever the context says
-	// once the drain that followed it has returned.
-	if !endedOnItsOwn && hookCtx.Err() == context.DeadlineExceeded {
-		return HookResult{}, &HookError{
-			Op:       "timeout",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Output:   output,
-			Err:      fmt.Errorf("hook timed out after %dms: %w", params.TimeoutMS, context.DeadlineExceeded),
-		}
-	}
-
-	if !endedOnItsOwn && hookCtx.Err() == context.Canceled {
-		return HookResult{}, &HookError{
-			Op:       "timeout",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Output:   output,
-			Err:      fmt.Errorf("hook cancelled: %w", context.Canceled),
-		}
-	}
-
-	if startErr != nil {
-		return HookResult{}, &HookError{
-			Op:       "start",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Output:   output,
-			Err:      startErr,
-		}
-	}
-
-	if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
-		return HookResult{}, &HookError{
-			Op:                  "run",
-			Script:              truncateScript(params.Script),
-			ExitCode:            exitErr.ExitCode(),
-			Output:              output,
-			TerminatedLeftovers: leftover,
-			Err:                 waitErr,
-		}
-	}
-
-	return HookResult{}, &HookError{
-		Op:                  "start",
-		Script:              truncateScript(params.Script),
-		ExitCode:            -1,
-		Output:              output,
-		TerminatedLeftovers: leftover,
-		Err:                 waitErr,
-	}
+	return classifyHook(hookCtx, params, formatHookOutput(buf), result, startErr)
 }

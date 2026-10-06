@@ -1,9 +1,11 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -57,6 +59,84 @@ type HookResult struct {
 	// its termination reached a process of its tree other than the
 	// hook script itself.
 	TerminatedLeftovers bool
+}
+
+// startHookCapture is the hook's process start. Only a test replaces it,
+// to return a start failure at a chosen moment.
+var startHookCapture = procutil.StartCapture
+
+// classifyHook turns the outcome of one hook launch into RunHook's
+// return. Whether the hook was cancelled is the launch record's verdict,
+// a cancelled start or a stop that began while the script ran; hookCtx is
+// read only to choose between the timeout and the cancellation message,
+// because only hookCtx stops a hook. A script that reached its own exit
+// is reported by its status however long the drain after it ran, and
+// only such a script's leftovers are reported.
+func classifyHook(hookCtx context.Context, params HookParams, output string, result procutil.CaptureResult, startErr error) (HookResult, error) {
+	if startErr != nil {
+		stageErr, isStageErr := errors.AsType[*procutil.StartError](startErr)
+		switch {
+		case isStageErr && stageErr.Cancelled:
+			return HookResult{}, hookTimeoutError(hookCtx, params, output)
+		case isStageErr && stageErr.Stage == procutil.StageProcessResume:
+			return HookResult{}, &HookError{
+				Op:       "start",
+				Script:   truncateScript(params.Script),
+				ExitCode: -1,
+				Output:   output,
+				Err:      fmt.Errorf("resume hook process: %w", stageErr.Unwrap()),
+			}
+		}
+		return HookResult{}, &HookError{
+			Op:       "start",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Output:   output,
+			Err:      startErr,
+		}
+	}
+
+	if result.Stopped {
+		return HookResult{}, hookTimeoutError(hookCtx, params, output)
+	}
+
+	if result.WaitErr == nil {
+		return HookResult{Output: output, TerminatedLeftovers: result.TerminatedLeftovers}, nil
+	}
+
+	if exitErr, ok := errors.AsType[*exec.ExitError](result.WaitErr); ok {
+		return HookResult{}, &HookError{
+			Op:                  "run",
+			Script:              truncateScript(params.Script),
+			ExitCode:            exitErr.ExitCode(),
+			Output:              output,
+			TerminatedLeftovers: result.TerminatedLeftovers,
+			Err:                 result.WaitErr,
+		}
+	}
+
+	return HookResult{}, &HookError{
+		Op:                  "start",
+		Script:              truncateScript(params.Script),
+		ExitCode:            -1,
+		Output:              output,
+		TerminatedLeftovers: result.TerminatedLeftovers,
+		Err:                 result.WaitErr,
+	}
+}
+
+func hookTimeoutError(hookCtx context.Context, params HookParams, output string) *HookError {
+	cause := fmt.Errorf("hook cancelled: %w", context.Canceled)
+	if errors.Is(hookCtx.Err(), context.DeadlineExceeded) {
+		cause = fmt.Errorf("hook timed out after %dms: %w", params.TimeoutMS, context.DeadlineExceeded)
+	}
+	return &HookError{
+		Op:       "timeout",
+		Script:   truncateScript(params.Script),
+		ExitCode: -1,
+		Output:   output,
+		Err:      cause,
+	}
 }
 
 // truncateScript returns s unchanged if it fits within

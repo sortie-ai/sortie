@@ -190,7 +190,7 @@ func TestForkPerTurnSession_SSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T)
 	}
 
 	hooks := noopHooks()
-	hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+	hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ error, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 		return FinalizeTurn(emit, slog.Default(), TurnEvidence{ExitObserved: true, ExitCode: exitCode}, TurnMeta{})
 	}
 	spy := &agenttest.LogSpy{}
@@ -277,7 +277,7 @@ func TestForkPerTurnSession_SSH_Exit255(t *testing.T) {
 			hooks.ParseLine = func(line []byte, _ func(domain.AgentEvent), _ string) (any, error) {
 				return string(line), nil
 			}
-			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, _ int, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, _ int, _ error, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 				EmitTurnFailed(emit, "exit code 255", 0, domain.TokenUsage{})
 				return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "exit code 255"}
 			}

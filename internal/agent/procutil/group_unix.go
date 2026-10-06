@@ -25,6 +25,9 @@ type Group struct {
 	mu            sync.Mutex
 	released      bool
 	reaperStarted bool
+	// stopped is set by the first stop that finds the direct child
+	// running before the release, and never cleared.
+	stopped bool
 }
 
 // leaderExitFunc blocks until the direct child has exited and never
@@ -34,6 +37,12 @@ var leaderExitFunc = observeLeaderExit
 // liveMemberFunc reports whether a live process other than leader
 // belongs to process group pgid. Only a test replaces it.
 var liveMemberFunc = hasLiveMember
+
+// releaseSeam runs between the release of a launch's record and its
+// cmd.Wait, the window in which a cancellation finds the direct child
+// exited and the record released. Its zero value is a no-op; only a
+// test replaces it.
+var releaseSeam = func() {}
 
 func newGroup(cmd *exec.Cmd) *Group {
 	return &Group{cmd: cmd}
@@ -52,6 +61,7 @@ func (g *Group) SignalGraceful() error {
 	if g.released {
 		return nil
 	}
+	g.markStopLocked()
 	err := groupKillFunc(-g.cmd.Process.Pid, syscall.SIGTERM)
 	if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.EPERM) {
 		return nil
@@ -76,6 +86,7 @@ func (g *Group) Kill() error {
 			g.mu.Unlock()
 			return nil
 		}
+		g.markStopLocked()
 		err := groupKillFunc(-pid, syscall.SIGKILL)
 		g.mu.Unlock()
 
@@ -136,6 +147,8 @@ func (g *Group) reap() (waitErr error, leftover bool, cleanupErr error) {
 	g.mu.Lock()
 	g.released = true
 	g.mu.Unlock()
+
+	releaseSeam()
 
 	waitErr = g.cmd.Wait()
 	return waitErr, leftover, cleanupErr

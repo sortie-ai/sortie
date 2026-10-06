@@ -214,6 +214,26 @@ func TestRunSingleVerification_HeldDescendantSucceedsAndLogsLeftoverRecord(t *te
 	t.Errorf("descendant %d still answers signal 0, want it gone", pid)
 }
 
+func TestRunSingleVerification_SelfSignalledCommandReportsItsExitAndLeftovers(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	result := runSingleVerification(context.Background(), "sleep 30 & kill -TERM $$", t.TempDir(), 5000, logger, &domain.NoopMetrics{})
+
+	if result.ExitCode != -1 {
+		t.Errorf("ExitCode = %d, want -1", result.ExitCode)
+	}
+	if result.TimedOut {
+		t.Error("TimedOut = true, want false for a command that signalled itself")
+	}
+	out := logBuf.String()
+	if count := strings.Count(out, procutil.LeftoversTerminatedMessage); count != 1 {
+		t.Errorf("log contains %d occurrences of %q, want exactly 1; log = %q", count, procutil.LeftoversTerminatedMessage, out)
+	}
+}
+
 // TestRunVerification_TimeoutSignalsDescendantGroup verifies that a
 // verification command that overruns its timeout is torn down through
 // its process group.

@@ -351,7 +351,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		},
 		GetUsage:     func() (domain.TokenUsage, bool) { return state.acc.Snapshot(), state.usageMeasured },
 		GetSessionID: func() string { return state.claudeSessionID },
-		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, waitErr error, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			usage := state.acc.Snapshot()
 
 			finalize := func(ev agentcore.TurnEvidence, meta agentcore.TurnMeta) (domain.TurnResult, *domain.AgentError) {
@@ -380,6 +380,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			ev := agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,
+				WaitErr:      waitErr,
 				EarlyExit:    earlyExit,
 			}
 			ev.Work, ev.WorkDetail = state.work.Report()

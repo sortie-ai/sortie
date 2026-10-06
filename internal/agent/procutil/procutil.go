@@ -7,7 +7,6 @@ package procutil
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -113,32 +112,6 @@ func StopGrace(ms int) time.Duration {
 		return DefaultStopGrace
 	}
 	return time.Duration(ms) * time.Millisecond
-}
-
-// StoppedByCancellation reports whether err, as [exec.Cmd.Wait]
-// returned it for a captured launch, means the launch was stopped by
-// its context rather than reaching an exit of its own.
-//
-// The two outcomes look different at the wait. os/exec reports the
-// context's own error, or [exec.ErrWaitDelay], when a command completes
-// with a success status after its cancellation has already run, and the
-// terminating signal's exit status when the cancellation is what ended
-// it, so both forms count.
-//
-// A launch that reached its own exit, zero or not, returns false however
-// long a capture's drain ran afterwards. Callers classify the outcome of
-// such a launch from its exit status, never from a context sampled once
-// the drain has returned: a descendant holding the captured output can
-// carry that context past its deadline long after the launch itself
-// finished.
-func StoppedByCancellation(err error) bool {
-	if err == nil {
-		return false
-	}
-	return WasSignaled(err) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, exec.ErrWaitDelay)
 }
 
 // ExtractExitCode returns the process exit code from an

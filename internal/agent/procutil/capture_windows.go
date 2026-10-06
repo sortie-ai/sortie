@@ -80,16 +80,18 @@ func defaultResumeProcess(pid int) error {
 // zero when keepJobHandle is false, when assignment failed, or when
 // Unix has no Job Object analogue.
 //
-// The returned record is nil on every error. An error with a nil
-// cmd.Process means cmd.Start failed. Any other error means the process
-// started but could not be resumed: by the time startAndAssign returns,
-// the process has already been killed, reaped, and, when keepJobHandle,
-// had its job drained and its teardown record logged.
+// The returned record is nil on every error. A [StageProcessStart]
+// error means cmd.Start failed. A [StageProcessResume] error means the
+// process started but could not be resumed: by the time startAndAssign
+// returns, the process has already been killed, reaped, and, when
+// keepJobHandle, had its job drained and its teardown record logged.
+// Its Cancelled field is true when a stop began before the resume was
+// tried.
 //
 // startedAt is the moment cmd.Start returned, for a caller that later
 // drains the job and needs it for the root probe's PID-reuse guard;
 // it is the zero value when cmd.Start failed.
-func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *Group, jobHandle uintptr, startedAt time.Time, err error) {
+func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *Group, jobHandle uintptr, startedAt time.Time, startErr *StartError) {
 	SetProcessGroup(cmd)
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -100,10 +102,11 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *
 	// that found no record would skip the group.
 	g = newGroup(cmd)
 	groups.Store(cmd, g)
+	recordCancelStop(cmd, g)
 
-	if startErr := cmd.Start(); startErr != nil {
+	if err := cmd.Start(); err != nil {
 		groups.Delete(cmd)
-		return nil, 0, time.Time{}, startErr
+		return nil, 0, time.Time{}, processStartError(err)
 	}
 	startedAt = time.Now()
 
@@ -120,7 +123,14 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *
 
 	resumeSeam()
 
-	if resumeErr := resumeProcess(cmd.Process.Pid); resumeErr != nil {
+	// A stop arriving during the resume call waits for the lock, so the
+	// verdict read here is the order in which the two happened.
+	g.mu.Lock()
+	cancelledFirst := g.stopped
+	resumeErr := resumeProcess(cmd.Process.Pid)
+	g.mu.Unlock()
+
+	if resumeErr != nil {
 		logger.Warn("process resume failed",
 			slog.String("command", filepath.Base(cmd.Path)),
 			slog.String("dir", cmd.Dir),
@@ -135,7 +145,7 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *
 		if keepJobHandle {
 			drainCaptureJob(uintptr(dup), cmd, startedAt, waitMS, logger)
 		}
-		return nil, 0, startedAt, resumeErr
+		return nil, 0, startedAt, &StartError{Stage: StageProcessResume, Err: resumeErr, Cancelled: cancelledFirst}
 	}
 
 	return g, uintptr(dup), startedAt, nil

@@ -8683,34 +8683,69 @@ func TestRunWorkerAttempt_TurnTimeoutBoundIsAttemptStartSnapshot(t *testing.T) {
 	}
 }
 
-func TestRunBoundedTurn_ExpiryWithNilAdapterError(t *testing.T) {
+func TestRunBoundedTurn_ExpiryOutcomes(t *testing.T) {
 	t.Parallel()
 
-	adapter := &mockAgentAdapter{
-		runTurnFn: func(ctx context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
-			<-ctx.Done()
-			return domain.TurnResult{}, nil
+	tests := []struct {
+		name           string
+		result         domain.TurnResult
+		wantTimeout    bool
+		wantExitReason domain.AgentEventType
+	}{
+		{
+			name:           "a cancellation reported with a nil error is turn_timeout",
+			result:         domain.TurnResult{ExitReason: domain.EventTurnCancelled},
+			wantTimeout:    true,
+			wantExitReason: domain.EventTurnCancelled,
+		},
+		{
+			name:           "a completed turn delivered after the deadline stands",
+			result:         domain.TurnResult{ExitReason: domain.EventTurnCompleted},
+			wantTimeout:    false,
+			wantExitReason: domain.EventTurnCompleted,
 		},
 	}
 
-	_, err := runBoundedTurn(
-		context.Background(),
-		adapter,
-		domain.Session{ID: "sess"},
-		domain.RunTurnParams{},
-		50,
-		discardLogger(),
-	)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("err = %v (%T), want *domain.AgentError", err, err)
-	}
-	if agentErr.Kind != domain.ErrTurnTimeout {
-		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err = %v, want the deadline substituted as the wrapped cause", err)
+			adapter := &mockAgentAdapter{
+				runTurnFn: func(ctx context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					<-ctx.Done()
+					return tt.result, nil
+				},
+			}
+
+			result, err := runBoundedTurn(
+				context.Background(),
+				adapter,
+				domain.Session{ID: "sess"},
+				domain.RunTurnParams{},
+				50,
+				discardLogger(),
+			)
+
+			if !tt.wantTimeout {
+				if err != nil {
+					t.Fatalf("runBoundedTurn() error = %v, want nil", err)
+				}
+				if result.ExitReason != tt.wantExitReason {
+					t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, tt.wantExitReason)
+				}
+				return
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) {
+				t.Fatalf("err = %v (%T), want *domain.AgentError", err, err)
+			}
+			if agentErr.Kind != domain.ErrTurnTimeout {
+				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("err = %v, want the deadline substituted as the wrapped cause", err)
+			}
+		})
 	}
 }
 

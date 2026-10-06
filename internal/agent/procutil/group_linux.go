@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +24,21 @@ func observeLeaderExit(pid int) error {
 			continue
 		}
 		return err
+	}
+}
+
+// directChildRunning reports whether the direct child of cmd has not
+// exited. WNOWAIT leaves an exited child unreaped, and a child that is
+// still running leaves the signal number of the returned information
+// zero. A probe that fails counts as running.
+func directChildRunning(cmd *exec.Cmd) bool {
+	var info unix.Siginfo
+	for {
+		err := unix.Waitid(unix.P_PID, cmd.Process.Pid, &info, unix.WEXITED|unix.WNOWAIT|unix.WNOHANG, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		return err != nil || info.Signo == 0
 	}
 }
 

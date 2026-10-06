@@ -122,6 +122,9 @@ type turnRuntime struct {
 type waitResult struct {
 	exitCode int
 	err      error
+	// stopped is the launch record's verdict: a stop began while the
+	// subprocess was still running.
+	stopped bool
 }
 
 // NewOpenCodeAdapter creates an [OpenCodeAdapter].
@@ -306,6 +309,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				Err:     startErr.Err,
 			}
 		default: // procutil.StageProcessStart, procutil.StageProcessResume
+			if startErr.Cancelled {
+				ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
+				return state.usage.Finalize(params.OnEvent, state.logger(), ev, state.currentSessionID(), 0, nil)
+			}
 			return domain.TurnResult{}, &domain.AgentError{
 				Kind:    domain.ErrResponseError,
 				Message: "start opencode subprocess",
@@ -352,6 +359,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	var postExitAt time.Time
 	var exit waitResult
 	processExited := false
+	ctxDone := ctx.Done()
 
 	// handleLine applies one raw stdout line's per-event path: parsing,
 	// the first-JSON latch, and the event switch. It is shared between
@@ -515,13 +523,14 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			if !ok {
 				lineCh = nil
 				if readErr := runtime.reader.Err(); readErr != nil && !errors.Is(readErr, procutil.ErrStdoutAbandoned) {
+					stoppedBeforeKill := runtime.group.Stopped()
 					killTurnProcess(runtime)
 					_ = waitForProcess(runtime)
 					recovered := recoverUsage(ctx, state, runWindow(state))
 					clearActive(state, runtime)
 
 					ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
-					if ctx.Err() == nil && !state.isClosed() {
+					if !stoppedBeforeKill {
 						procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 						ev = agentcore.TurnEvidence{
 							Terminal:          agentcore.TerminalFailure,
@@ -570,9 +579,15 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			}
 			return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 
-		case <-ctx.Done():
+		case <-ctxDone:
 			killTurnProcess(runtime)
-			_ = waitForProcess(runtime)
+			if !waitForProcess(runtime).stopped {
+				// The subprocess had exited on its own before the stop
+				// reached it, so the turn finishes like one whose context
+				// is live: the closed wait channel takes the exit arm next.
+				ctxDone = nil
+				continue
+			}
 			drainReaderBounded(runtime.reader, runtime.drainGrace)
 			recovered := recoverUsage(ctx, state, runWindow(state))
 			clearActive(state, runtime)
@@ -688,11 +703,11 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	ev := agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     exit.exitCode,
-		Cause:        exit.err,
+		WaitErr:      exit.err,
 	}
 	ev.Work, ev.WorkDetail = runtime.work.Report()
 
-	if ctx.Err() == nil && !state.isClosed() {
+	if !exit.stopped {
 		ev.EarlyExit = runtime.output.ExitedBeforeOutput(state.target, exit.err).Report(runtime.stderrCollector)
 	}
 
@@ -710,7 +725,6 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	case runtime.terminalOutcome == domain.EventTurnFailed:
 		ev.Terminal = agentcore.TerminalFailure
 		ev.TerminalErrorKind = domain.ErrTurnFailed
-		ev.Cause = nil
 		ev.TerminalMessage = rawRunErrorMessage(runtime.terminalError)
 		if state.major == major1 && isMaskedServerError(ev.TerminalMessage) {
 			if detail, ok := queryModelNotFound(ctx, state); ok {
@@ -721,10 +735,9 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		ev.TerminalMessage += freeTierRefusalClause(runtime.terminalError, state.passthrough)
 		procutil.EmitWarnLines(stderrLines, state.logger())
 
-	case ctx.Err() != nil || state.isClosed():
+	case exit.stopped:
 		ev.Terminal = agentcore.TerminalCancelled
 		ev.TerminalMessage = "turn cancelled"
-		ev.Cause = nil
 
 	case !runtime.firstJSONSeen:
 		procutil.EmitWarnLines(stderrLines, state.logger())
@@ -761,12 +774,6 @@ func (s *sessionState) currentSessionID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionID
-}
-
-func (s *sessionState) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }
 
 func (s *sessionState) applySessionEvent(eventSessionID string) (bool, bool) {
@@ -811,6 +818,7 @@ func startWait(runtime *turnRuntime, cmd *exec.Cmd, logger *slog.Logger) {
 		runtime.waitRes = waitResult{
 			exitCode: procutil.ExtractExitCode(reaper.Err()),
 			err:      reaper.Err(),
+			stopped:  reaper.Stopped(),
 		}
 		runtime.waitMu.Unlock()
 

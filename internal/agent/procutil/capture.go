@@ -49,6 +49,10 @@ type CaptureResult struct {
 	// group drain, on Windows a running Job Object member, where a
 	// console host is never counted.
 	TerminatedLeftovers bool
+	// Stopped is true when a stop began while the direct child was
+	// still running. False means the child reached an exit of its own,
+	// however long the drain after it ran.
+	Stopped bool
 }
 
 // CaptureAbandonedWarning is the message of the one record Wait logs
@@ -186,7 +190,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 	var streams []*captureStream
 	var writeEnds []*os.File
 
-	fail := func(stage StartStage, err error) (*Capture, error) {
+	fail := func(se *StartError) (*Capture, error) {
 		for _, s := range streams {
 			s.file.Close() //nolint:errcheck,gosec // best-effort cleanup after a failed launch
 		}
@@ -195,13 +199,13 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 		}
 		cmd.Stdout = nil
 		cmd.Stderr = nil
-		return nil, &StartError{Stage: stage, Err: err}
+		return nil, se
 	}
 
 	if sameWriter(params.Stdout, params.Stderr) {
 		read, write, err := os.Pipe()
 		if err != nil {
-			return fail(StageStdoutPipe, err)
+			return fail(&StartError{Stage: StageStdoutPipe, Err: err})
 		}
 		cmd.Stdout, cmd.Stderr = write, write
 		writeEnds = append(writeEnds, write)
@@ -210,7 +214,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 		if params.Stdout != nil {
 			read, write, err := os.Pipe()
 			if err != nil {
-				return fail(StageStdoutPipe, err)
+				return fail(&StartError{Stage: StageStdoutPipe, Err: err})
 			}
 			cmd.Stdout = write
 			writeEnds = append(writeEnds, write)
@@ -219,7 +223,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 		if params.Stderr != nil {
 			read, write, err := os.Pipe()
 			if err != nil {
-				return fail(StageStderrPipe, err)
+				return fail(&StartError{Stage: StageStderrPipe, Err: err})
 			}
 			cmd.Stderr = write
 			writeEnds = append(writeEnds, write)
@@ -229,11 +233,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 
 	_, jobHandle, startedAt, startErr := startAndAssign(cmd, logger, true)
 	if startErr != nil {
-		stage := StageProcessResume
-		if cmd.Process == nil {
-			stage = StageProcessStart
-		}
-		return fail(stage, startErr)
+		return fail(startErr)
 	}
 
 	// A write end passed to exec.Cmd as an *os.File is never closed by
@@ -295,7 +295,7 @@ func (c *Capture) Wait() CaptureResult {
 				slog.Duration("drain_bound", c.drainGrace))
 		}
 
-		c.result = CaptureResult{WaitErr: waitErr, OutputComplete: complete, TerminatedLeftovers: leftover}
+		c.result = CaptureResult{WaitErr: waitErr, OutputComplete: complete, TerminatedLeftovers: leftover, Stopped: c.reaper.Stopped()}
 	})
 	return c.result
 }

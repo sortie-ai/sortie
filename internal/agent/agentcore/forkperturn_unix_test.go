@@ -29,6 +29,7 @@ import (
 type pgidLeaderParams struct {
 	ChildPath string
 	PIDFile   string
+	Escape    bool
 }
 
 // pgidLeaderScenario spawns a background descendant that inherits the
@@ -84,6 +85,9 @@ func stderrOnlyLeaderScenario(_ []string, p pgidLeaderParams) int {
 	fmt.Fprintln(os.Stderr, "direct child stderr")
 	child := exec.Command(p.ChildPath) //nolint:gosec // p.ChildPath is a fake runtime under t.TempDir()
 	child.Stderr = os.Stderr
+	if p.Escape {
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	if err := child.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -142,12 +146,7 @@ func init() {
 	scenarios["trapAndExit"] = trapAndExitScenario
 }
 
-// TestForkPerTurnSession_EarlyExit_StopSignaledTrappedSuppressesReport
-// pins that a process that traps the signal Stop sends and exits with
-// a status of its own, having written nothing readable, still reports
-// today's non-zero-exit outcome rather than the early-exit report,
-// because stopSignaled was true when the skeleton reaped it.
-func TestForkPerTurnSession_EarlyExit_StopSignaledTrappedSuppressesReport(t *testing.T) {
+func TestForkPerTurnSession_StopWhileRunningCancelsWhateverTheRuntimeExitsWith(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -162,7 +161,7 @@ func TestForkPerTurnSession_EarlyExit_StopSignaledTrappedSuppressesReport(t *tes
 		done <- err
 	}()
 
-	time.Sleep(100 * time.Millisecond) // let the subprocess install its handler
+	time.Sleep(100 * time.Millisecond)
 	if err := sess.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() = %v", err)
 	}
@@ -174,15 +173,89 @@ func TestForkPerTurnSession_EarlyExit_StopSignaledTrappedSuppressesReport(t *tes
 		t.Fatal("RunTurn did not return within 6s after Stop")
 	}
 
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrPortExit {
-		t.Fatalf("RunTurn() error = %v, want a port_exit *domain.AgentError", err)
+	requireAgentError(t, err, domain.ErrTurnCancelled)
+	if !hasEventType(*events, domain.EventTurnCancelled) {
+		t.Errorf("EventTurnCancelled not emitted; got %v", *events)
 	}
-	if agentErr.Message != "exit code 5" {
-		t.Errorf("AgentError.Message = %q, want %q (Stop suppresses the early-exit report even for a trapped exit)", agentErr.Message, "exit code 5")
+}
+
+func awaitReaped(t *testing.T, pid string) {
+	t.Helper()
+	n, err := strconv.Atoi(pid)
+	if err != nil {
+		t.Fatalf("pid %q is not a number: %v", pid, err)
 	}
-	if !hasEventType(*events, domain.EventTurnFailed) {
-		t.Errorf("EventTurnFailed not emitted; got %v", *events)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(n, 0), syscall.ESRCH) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("process %d was not reaped within 5s", n)
+}
+
+func TestForkPerTurnSession_StopAfterOwnExitKeepsTheEarlyExitReport(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := agenttest.FakeRuntime(t, tmpDir, "agent", agenttest.OutputScenario, agenttest.Output{Stdout: "not valid JSON\n", ExitCode: 3})
+	hooks := hooksWithEarlyExitDisposition()
+	var sess *ForkPerTurnSession
+	hooks.ParseLine = func(_ []byte, _ func(domain.AgentEvent), pid string) (any, error) {
+		awaitReaped(t, pid)
+		if err := sess.Stop(context.Background()); err != nil {
+			t.Errorf("Stop() = %v", err)
+		}
+		return nil, errors.New("line is not valid JSON")
+	}
+	sess = NewForkPerTurnSession(newTestTarget(tmpDir, script), hooks, slog.Default(), 200)
+
+	emit, _ := sinkEvents()
+	_, err := sess.RunTurn(context.Background(), "p", emit)
+
+	requireAgentError(t, err, domain.ErrPortExit)
+	if _, ok := errors.AsType[*EarlyExitError](err); !ok {
+		t.Errorf("RunTurn() error = %v, want a chain carrying an *EarlyExitError", err)
+	}
+}
+
+func TestForkPerTurnSession_ZeroExitIsNotCancelledWhenTheDeadlineFallsDuringTheDrain(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "descendant.pid")
+	script := writeStderrOnlyDescendantScript(t, tmpDir, pidFile, true)
+	killEscapedGroupOnCleanup(t, pidFile)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	hooks := noopHooks()
+	hooks.ParseLine = func(_ []byte, _ func(domain.AgentEvent), pid string) (any, error) {
+		awaitReaped(t, pid)
+		cancel()
+		return nil, nil
+	}
+	gotExitCode := -1
+	hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ error, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+		gotExitCode = exitCode
+		EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
+		return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+	}
+	sess := NewForkPerTurnSession(newTestTarget(tmpDir, script), hooks, slog.Default(), 0)
+	sess.drainGrace = 200 * time.Millisecond
+
+	emit, _ := sinkEvents()
+	result, err := sess.RunTurn(ctx, "p", emit)
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil for a runtime that exited zero before the deadline", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	if gotExitCode != 0 {
+		t.Errorf("OnFinalize exit code = %d, want 0", gotExitCode)
 	}
 }
 
@@ -211,10 +284,10 @@ func writeEscapedPgidScript(t *testing.T, dir, pidFile string) string {
 // leader's stderr handle, and whose leader writes a stderr line of its own,
 // the descendant PID, and the notification line, then exits normally
 // instead of hanging.
-func writeStderrOnlyDescendantScript(t *testing.T, dir, pidFile string) string {
+func writeStderrOnlyDescendantScript(t *testing.T, dir, pidFile string, escape bool) string {
 	t.Helper()
 	child := agenttest.FakeRuntime(t, dir, "agent-stderr-only-child", agenttest.OutputScenario, agenttest.Output{Hang: true})
-	return agenttest.FakeRuntime(t, dir, "agent-stderr-only-descendant", "stderrOnlyLeader", pgidLeaderParams{ChildPath: child, PIDFile: pidFile})
+	return agenttest.FakeRuntime(t, dir, "agent-stderr-only-descendant", "stderrOnlyLeader", pgidLeaderParams{ChildPath: child, PIDFile: pidFile, Escape: escape})
 }
 
 // pollPgidFileTimeout is the bound every pollPgidFile call in this file
@@ -317,7 +390,7 @@ func TestForkPerTurnSession_Arm5_ExternalSIGTERM(t *testing.T) {
 			getUsage, calls := usageVerdictDouble(wantUsageVerdictSnapshot, measured)
 			hooks := noopHooks()
 			hooks.GetUsage = getUsage
-			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ error, _ []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 				usage, measured := getUsage()
 				return FinalizeTurn(emit, slog.Default(), TurnEvidence{
 					ExitObserved: true,
@@ -424,11 +497,11 @@ func TestForkPerTurnSession_DescendantHoldsStderrOnly(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "descendant.pid")
-	script := writeStderrOnlyDescendantScript(t, tmpDir, pidFile)
+	script := writeStderrOnlyDescendantScript(t, tmpDir, pidFile, false)
 
 	var gotStderrLines []string
 	hooks := noopHooks()
-	hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
+	hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, _ error, stderrLines []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 		gotStderrLines = stderrLines
 		EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
 		return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil

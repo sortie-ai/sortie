@@ -58,6 +58,7 @@ func killDirectChild(g *Group) error {
 	if g.released {
 		return os.ErrProcessDone
 	}
+	g.markStopLocked()
 	err := g.cmd.Process.Kill()
 	if directChildGone(err) {
 		return os.ErrProcessDone

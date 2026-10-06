@@ -33,8 +33,9 @@ func dwordPID(pid int) (uint32, error) {
 	return uint32(pid), nil
 }
 
-// STATUS_CONTROL_C_EXIT (0xC000013A) is used so that [WasSignaled]
-// can distinguish termination from normal non-zero exits.
+// STATUS_CONTROL_C_EXIT (0xC000013A) is the exit status a Job Object
+// termination gives its members, which is how a launch's own wait
+// status tells a termination apart from an ordinary non-zero exit.
 const jobTerminateExitCode uint32 = 0xC000013A
 
 // processAlreadyGone answers for the two states a waited-for process is

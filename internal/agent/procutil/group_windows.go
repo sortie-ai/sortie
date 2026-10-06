@@ -27,6 +27,9 @@ type Group struct {
 	released bool
 	// reaperStarted is guarded by mu.
 	reaperStarted bool
+	// stopped is guarded by mu. The first stop that finds the direct
+	// child running before the release sets it, and nothing clears it.
+	stopped bool
 	// job is the launch's own Job Object handle, guarded by mu. It is
 	// zero when assignment failed and after the release, and only the
 	// launch's reaper closes it.
@@ -55,6 +58,10 @@ func (g *Group) SignalGraceful() error {
 		return nil
 	}
 	<-g.assigned
+
+	g.mu.Lock()
+	g.markStopLocked()
+	g.mu.Unlock()
 
 	pid, err := dwordPID(g.cmd.Process.Pid)
 	if err != nil {
@@ -85,6 +92,7 @@ func (g *Group) Kill() error {
 		g.mu.Unlock()
 		return nil
 	}
+	g.markStopLocked()
 	if g.job == 0 {
 		g.mu.Unlock()
 		err := killDirectChild(g)
@@ -150,6 +158,20 @@ func (t jobEscalationTarget) terminateAll() error {
 
 func (t jobEscalationTarget) close() {
 	_ = windows.CloseHandle(t.job)
+}
+
+// directChildRunning reports whether the direct child of cmd has not
+// exited. A failure to reach its handle means os/exec has already
+// released it after the wait; a wait that fails counts as running.
+func directChildRunning(cmd *exec.Cmd) bool {
+	running := true
+	if withErr := cmd.Process.WithHandle(func(handle uintptr) {
+		event, waitErr := windows.WaitForSingleObject(windows.Handle(handle), 0)
+		running = waitErr != nil || event == uint32(windows.WAIT_TIMEOUT)
+	}); withErr != nil {
+		return false
+	}
+	return running
 }
 
 // directChildGone reports whether err says the direct child is already

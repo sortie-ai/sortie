@@ -5,6 +5,7 @@ package procutil
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -77,6 +78,13 @@ func isZombie(pid int) (bool, error) {
 		return false, fmt.Errorf("reading state of process %d: %w", pid, err)
 	}
 	return kinfo.Proc.P_stat == procStatZombie, nil
+}
+
+// directChildRunning reports whether the direct child of cmd has not
+// exited. A probe that fails counts as running.
+func directChildRunning(cmd *exec.Cmd) bool {
+	exited, err := isZombie(cmd.Process.Pid)
+	return err != nil || !exited
 }
 
 // hasLiveMember reports whether a process other than leader that is not

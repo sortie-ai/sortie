@@ -2,7 +2,6 @@ package procutil
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -75,73 +74,6 @@ func TestExtractExitCode(t *testing.T) {
 			got := ExtractExitCode(tt.makeErr(t))
 			if got != tt.want {
 				t.Errorf("ExtractExitCode() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestStoppedByCancellation asserts the distinction the outcome
-// classification at every capture launch site rests on: a launch that
-// reached an exit of its own is told apart from one its context
-// stopped, whichever of the two shapes os/exec reported that stop in.
-//
-// The signaled shape is platform-specific and is covered where the
-// platform's own termination is exercised; the shapes below are the
-// ones every platform can produce.
-func TestStoppedByCancellation(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		makeErr func(t *testing.T) error
-		want    bool
-	}{
-		{
-			name:    "nil error is its own exit",
-			makeErr: func(_ *testing.T) error { return nil },
-			want:    false,
-		},
-		{
-			name: "plain non-zero exit is its own exit",
-			makeErr: func(t *testing.T) error {
-				t.Helper()
-				return fakeRuntimeCmd(t, agenttest.Output{ExitCode: 1}).Run()
-			},
-			want: false,
-		},
-		{
-			name:    "unrelated error is its own exit",
-			makeErr: func(_ *testing.T) error { return errors.New("something went wrong") },
-			want:    false,
-		},
-		{
-			name:    "deadline exceeded is a cancellation",
-			makeErr: func(_ *testing.T) error { return context.DeadlineExceeded },
-			want:    true,
-		},
-		{
-			name:    "canceled is a cancellation",
-			makeErr: func(_ *testing.T) error { return context.Canceled },
-			want:    true,
-		},
-		{
-			name:    "wrapped deadline is a cancellation",
-			makeErr: func(_ *testing.T) error { return fmt.Errorf("run: %w", context.DeadlineExceeded) },
-			want:    true,
-		},
-		{
-			name:    "wait delay is a cancellation",
-			makeErr: func(_ *testing.T) error { return exec.ErrWaitDelay },
-			want:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := StoppedByCancellation(tt.makeErr(t))
-			if got != tt.want {
-				t.Errorf("StoppedByCancellation() = %v, want %v", got, tt.want)
 			}
 		})
 	}

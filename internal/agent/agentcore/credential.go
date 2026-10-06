@@ -132,8 +132,9 @@ func classifyVerificationStartError(ctx, turnCtx context.Context, turnBound time
 	return startErr
 }
 
-// classifyVerificationRunTurnOutcome checks cancellation and the turn
-// bound before runErr, because both make any RunTurn outcome moot.
+// classifyVerificationRunTurnOutcome checks cancellation before runErr,
+// and the turn bound ahead of it only for an outcome the adapter reports
+// as cancelled: a turn that completed after the bound elapsed stands.
 func classifyVerificationRunTurnOutcome(ctx, turnCtx context.Context, turnBound time.Duration, result domain.TurnResult, runErr error) error {
 	if ctx.Err() != nil {
 		if runErr != nil {
@@ -141,7 +142,7 @@ func classifyVerificationRunTurnOutcome(ctx, turnCtx context.Context, turnBound 
 		}
 		return ctx.Err()
 	}
-	if verificationTurnBoundElapsed(ctx, turnCtx) {
+	if CancelledOutcome(result, runErr) && verificationTurnBoundElapsed(ctx, turnCtx) {
 		return turnBoundError(turnBound, turnCtx.Err())
 	}
 	if runErr != nil && isTerminalVerificationError(runErr) {

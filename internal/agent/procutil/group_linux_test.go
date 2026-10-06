@@ -46,7 +46,7 @@ func TestObserveLeaderExitBlocksWhileRunning(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("observeLeaderExit(%d) did not return within 5s of the exit", cmd.Process.Pid)
 	}
-	if err := cmd.Wait(); !WasSignaled(err) {
+	if err := cmd.Wait(); !killedBySignal(err) {
 		t.Errorf("cmd.Wait() = %v, want the exit status of a child that stayed unreaped", err)
 	}
 }
@@ -95,7 +95,7 @@ func TestObserveLeaderExitReturnsForExitAfterAndBeforeCall(t *testing.T) {
 
 			err := cmd.Wait()
 			if tt.wantExitCode < 0 {
-				if !WasSignaled(err) {
+				if !killedBySignal(err) {
 					t.Errorf("cmd.Wait() = %v, want the signal status of a child that stayed unreaped", err)
 				}
 				return

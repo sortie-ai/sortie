@@ -271,3 +271,47 @@ func TestTeardownLeavesSameIdentifierRecordUntouched(t *testing.T) {
 		})
 	}
 }
+
+func awaitChildExit(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !directChildRunning(cmd) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("process %d did not exit within 5s", cmd.Process.Pid)
+}
+
+func TestCancellationAfterOwnExitIsNotAStop(t *testing.T) {
+	installs := []struct {
+		name    string
+		install func(*exec.Cmd)
+	}{
+		{name: "SetGroupCancel", install: func(cmd *exec.Cmd) { SetGroupCancel(cmd, 100*time.Millisecond) }},
+		{name: "SetGroupKill", install: SetGroupKill},
+	}
+
+	for _, in := range installs {
+		t.Run(in.name, func(t *testing.T) {
+			cmd, p := newCancelProbe(t, in.install, "cmd.exe", "/C", "exit 0")
+			startOwned(t, cmd)
+			awaitChildExit(t, cmd)
+			p.fire()
+
+			r := StartReaper(cmd, slog.New(slog.DiscardHandler))
+			awaitDone(t, r, 10*time.Second)
+
+			if !p.observed.Load() {
+				t.Fatal("the cancellation did not run before the reaper started, want it to have run")
+			}
+			if err := r.Err(); err != nil {
+				t.Errorf("Err() = %v for a child that exited zero before the cancellation, want nil", err)
+			}
+			if r.Stopped() {
+				t.Error("Stopped() = true for a cancellation after the child's own exit, want false")
+			}
+		})
+	}
+}
