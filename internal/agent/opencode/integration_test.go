@@ -596,12 +596,11 @@ func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string
 
 // TestIntegration_ToolRoundTrip drives one real turn with a generated
 // MCP config translated into the runtime's own inline configuration
-// document, and asserts the model calls a Sortie tool through the
-// resulting sidecar and receives its result. Earlier runtime probes
-// left this round trip unverified: the sidecar is spawned with its
-// session environment, but whether the model's call reaches it and a
-// result comes back was never observed until this test runs with a
-// real credential.
+// document, and asserts the sidecar saw a successful sortie_status
+// tools/call. The proof is the recorded JSON-RPC traffic between the
+// runtime and the sidecar: a tool result event proves nothing here,
+// because the runtime also reports its own tools and code-mode calls
+// that never reach Sortie.
 func TestIntegration_ToolRoundTrip(t *testing.T) {
 	skipIfNotEnabled(t)
 
@@ -612,7 +611,8 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 	if err := os.WriteFile(wfPath, []byte(minimalMCPServerWorkflow), 0o644); err != nil {
 		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
 	}
-	mcpConfigPath := writeIntegrationMCPConfig(t, workspace, sortieBin, wfPath)
+	relay := agenttest.NewRecordingMCPRelay(t, t.TempDir(), sortieBin)
+	mcpConfigPath := writeIntegrationMCPConfig(t, workspace, relay.Command, wfPath)
 
 	a := mustNewAdapter(t)
 
@@ -646,16 +646,7 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
 
-	var toolCalled bool
-	for _, e := range events {
-		if e.Type == domain.EventToolResult {
-			toolCalled = true
-			break
-		}
-	}
-	if !toolCalled {
-		t.Error("no EventToolResult observed: the agent turn never called a Sortie tool through the translated MCP channel")
-	}
+	relay.AssertToolCallSucceeded(t, "sortie_status")
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

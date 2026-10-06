@@ -215,6 +215,9 @@ func runScenario(config []byte, scenarios map[string]Scenario) int {
 	if cfg.Scenario == RecordedEnvScenario {
 		run = Typed(runRecordedEnv)
 	}
+	if cfg.Scenario == MCPRelayScenario {
+		run = Typed(runMCPRelay)
+	}
 	if run == nil {
 		fmt.Fprintf(os.Stderr, "fake runtime: unknown scenario %q\n", cfg.Scenario)
 		return 2
