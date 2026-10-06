@@ -2,8 +2,6 @@ version: 2
 
 updates:
   - package-ecosystem: gomod
-    # tools/qualify requires the root module through a local replace and
-    # must pin the same versions of the dependencies they share.
     directories:
       - /
       - /tools/qualify
