@@ -113,8 +113,9 @@ A verdict that withholds the write is, immediately before any of its effects, ch
   - Compute fingerprint from non-outdated review comment IDs.
   - If fingerprint is unchanged and already dispatched: skip.
   - If within debounce window: defer to next tick.
-  - If within `reactions.review_comments.max_continuation_turns` and the retry slot is free: schedule a review-fix dispatch with review comment context injected into the prompt. If the slot is occupied by an incumbent, defer instead (Section 7.5).
-  - If continuation turns exhausted: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim.
+  - If the retry slot is occupied by an incumbent, defer instead (Section 7.5).
+  - On a free slot, decide the continuation budget after the slot arbitration. Below `reactions.review_comments.max_continuation_turns`, schedule a review-fix dispatch with review comment context injected into the prompt.
+  - If continuation turns are exhausted and a surviving comment arrived that no continuation carried: escalate (apply the label or emit the escalation event per the `escalation` posture, Section 5.3.8), cancel retry, release claim. With no such comment, take no action and keep watching. For `reactions.bot_review`, only an inline comment counts as new, and its escalation leaves the claim and the retry in place (Section 11D.5).
 
 - `Merge Completion Observed`
   - Observed on the reconcile tick for an issue still parked in `tracker.handoff_state` and not currently claimed by the orchestrator.
