@@ -288,6 +288,13 @@ func (s *ForkPerTurnSession) RunTurn(
 		}, bindErr
 	}
 
+	// On Windows os/exec resolves the executable before it checks the
+	// context, so a turn already cancelled with a missing binary would
+	// otherwise surface as a failed start rather than a cancellation.
+	if ctx.Err() != nil {
+		return cancelledTurn()
+	}
+
 	// Lock before starting the pipes and the process together, so a Stop
 	// arriving in a reopened window cannot read s.group == nil and miss
 	// signaling a process that was about to be recorded.
