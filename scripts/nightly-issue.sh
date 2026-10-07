@@ -197,7 +197,13 @@ decide() {
 	if ! list_labeled_issues "$CI_LABEL_NAME" "$INCIDENTS_FILE"; then
 		INCIDENT_READ=0
 	fi
-	_match_line=$(awk -F'\t' -v t="$TITLE" '$3 == t { print $1"\t"$2 }' "$INCIDENTS_FILE" | sort -t "$(printf '\t')" -k1,1rn | head -n1)
+	# An incident filed under the job's former name stays the incident of
+	# record, so renaming a job does not orphan it; new incidents use TITLE.
+	FORMER_TITLE=""
+	if [ -n "${FORMER_ADAPTER_NAME:-}" ]; then
+		FORMER_TITLE="Nightly integration failure: ${FORMER_ADAPTER_NAME}"
+	fi
+	_match_line=$(awk -F'\t' -v t="$TITLE" -v f="$FORMER_TITLE" '$3 == t || (f != "" && $3 == f) { print $1"\t"$2 }' "$INCIDENTS_FILE" | sort -t "$(printf '\t')" -k1,1rn | head -n1)
 	if [ -n "$_match_line" ]; then
 		INCIDENT_NUMBER=$(printf '%s' "$_match_line" | cut -f1)
 		INCIDENT_STATE=$(printf '%s' "$_match_line" | cut -f2)
