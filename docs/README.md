@@ -15,7 +15,7 @@ These pages are for working on Sortie itself. To install, configure, and run Sor
     - [Copilot CLI](copilot-adapter-notes.md) - session and cost model and hard-to-diagnose failures
     - [OpenCode](opencode-adapter-notes.md) - why it skips the shared subprocess skeleton
     - [Agent Client Protocol](agent-client-protocol-adapter-notes.md) - the generic ACP adapter: pinned schema artifact and runtime selection
-    - [Kiro CLI](kiro-adapter-notes.md) - Kiro through the generic ACP adapter, the route-parity record, and conversion of the removed `kiro` kind
+    - [Kiro CLI](kiro-adapter-notes.md) - Kiro through the generic ACP adapter
     - [Gemini CLI](gemini-adapter-notes.md) - Gemini through the generic ACP adapter and its token accounting
   - **Tracker and SCM adapters**
     - [Jira](jira-adapter-notes.md) - tracker decisions and failure modes

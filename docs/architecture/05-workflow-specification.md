@@ -176,7 +176,6 @@ Fields:
   - Other kinds (for example, HTTP-based adapters) are available only if you register them separately.
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.9 for the override mechanism.
-  - `kiro` is a retired kind whose replacement is `agent-client-protocol`. A configuration naming it is converted at load, as the next bullet describes.
   - A retired kind has no adapter, and its registry declaration names a replacement kind. A configuration that names a retired kind in `agent.kind`, `dispatch.default.agent`, or a `dispatch.rules` entry's `agent` is converted at load onto the replacement kind, together with the settings block the retired kind read. The conversion runs on startup, on reload, and in `sortie validate`, rewrites the configuration in memory only, and leaves the workflow file untouched. Each conversion emits one `agent.kind.retired` advisory, and a setting the conversion cannot carry fails the load as a configuration error (§6.1, §6.3). A kind that is registered as a live adapter is never converted, even when the registry also declares it retired.
 - `command` (string or list of strings)
   - The command the default agent kind's adapter uses to launch the agent process. The default kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. Adapter-defined default.
