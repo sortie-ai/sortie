@@ -852,7 +852,7 @@ func TestBuildDispatchConfig_RuleSettingsBlockFaults(t *testing.T) {
 		{name: "a reserved key is reported before a missing name", raw: dispatchRaw("", map[string]any{"kind-a": map[string]any{"command": "x"}}), wantField: "dispatch.rules[0].kind-a.command", wantMsg: noCommand},
 		{name: "first failing rule in YAML order is returned", raw: dispatchRaw("", map[string]any{"name": "ok", "match": map[string]any{"labels": []any{"x"}}, "kind-a": map[string]any{}}, map[string]any{"name": "bad", "kind-a": "x"}), wantField: "dispatch.rules[1].kind-a", wantMsg: notMappingHead + "a text value" + notMappingTail},
 		{name: "a key that names no registered kind stays unknown", raw: dispatchRaw("", rule(map[string]any{"match": map[string]any{"labels": []any{"x"}}, "no-such-kind": map[string]any{}})), wantField: "dispatch.rules[0].no-such-kind", wantMsg: "unknown key"},
-		{name: "a rule with none of the four carries", raw: dispatchRaw("", rule(map[string]any{})), wantField: "dispatch.rules[0]", wantMsg: "rule must specify at least one of match, agent, template, or a settings block"},
+		{name: "a rule with none of the four carries", raw: dispatchRaw("", rule(map[string]any{})), wantField: "dispatch.rules[0]", wantMsg: "rule must specify at least one of match, stage, agent, template, or a settings block"},
 		{name: "dispatch.default names a registered kind", raw: map[string]any{"dispatch": map[string]any{"default": map[string]any{"kind-a": map[string]any{}}}}, wantField: "dispatch.default.kind-a", wantMsg: "dispatch.default carries no settings block; the top-level kind-a block holds the default settings"},
 		{name: "dispatch.default names no registered kind", raw: map[string]any{"dispatch": map[string]any{"default": map[string]any{"no-such-kind": map[string]any{}}}}, wantField: "dispatch.default.no-such-kind", wantMsg: "unknown key"},
 	}
@@ -1083,5 +1083,220 @@ func TestBuildDispatchConfig_TitleFaults(t *testing.T) {
 				t.Errorf("BuildDispatchConfig() error Message = %q, want %q", ce.Message, tt.wantMsg)
 			}
 		})
+	}
+}
+
+func stagedRule(name, stage string) map[string]any {
+	return map[string]any{"name": name, "stage": stage}
+}
+
+func TestBuildDispatchConfig_StageFaults(t *testing.T) {
+	t.Parallel()
+
+	const (
+		needsLabel = "needs a label with a character other than white space"
+		withMatch  = "a rule with a stage label is selected by that label and cannot also carry match"
+		needsName  = "a rule that carries a stage label must have a name"
+		unreach    = "unreachable_rules: catch-all rule at index 0 precedes rule at index "
+	)
+	tests := []struct {
+		name      string
+		raw       map[string]any
+		wantField string
+		wantMsg   string
+	}{
+		{name: "number", raw: dispatchRaw("", map[string]any{"name": "r", "stage": 5}), wantField: "dispatch.rules[0].stage", wantMsg: "expected a label, got a number"},
+		{name: "boolean", raw: dispatchRaw("", map[string]any{"name": "r", "stage": true}), wantField: "dispatch.rules[0].stage", wantMsg: "expected a label, got a true/false value"},
+		{name: "list", raw: dispatchRaw("", map[string]any{"name": "r", "stage": []any{"a"}}), wantField: "dispatch.rules[0].stage", wantMsg: "expected a label, got a list"},
+		{name: "map", raw: dispatchRaw("", map[string]any{"name": "r", "stage": map[string]any{"a": "b"}}), wantField: "dispatch.rules[0].stage", wantMsg: "expected a label, got a map"},
+		{name: "bare null", raw: dispatchRaw("", map[string]any{"name": "r", "stage": nil}), wantField: "dispatch.rules[0].stage", wantMsg: needsLabel},
+		{name: "empty string", raw: dispatchRaw("", stagedRule("r", "")), wantField: "dispatch.rules[0].stage", wantMsg: needsLabel},
+		{name: "spaces only", raw: dispatchRaw("", stagedRule("r", "  ")), wantField: "dispatch.rules[0].stage", wantMsg: needsLabel},
+		{name: "tab and newline only", raw: dispatchRaw("", stagedRule("r", "\t\n")), wantField: "dispatch.rules[0].stage", wantMsg: needsLabel},
+		{name: "empty match beside stage", raw: dispatchRaw("", map[string]any{"name": "r", "stage": "s", "match": map[string]any{}}), wantField: "dispatch.rules[0]", wantMsg: withMatch},
+		{name: "populated match beside stage", raw: dispatchRaw("", map[string]any{"name": "r", "stage": "s", "match": map[string]any{"labels": []any{"bug"}}}), wantField: "dispatch.rules[0]", wantMsg: withMatch},
+		{name: "staged rule without a name", raw: dispatchRaw("", map[string]any{"stage": "s"}), wantField: "dispatch.rules[0]", wantMsg: needsName},
+		{name: "staged rule with an empty name", raw: dispatchRaw("", map[string]any{"name": "", "stage": "s"}), wantField: "dispatch.rules[0]", wantMsg: needsName},
+		{name: "duplicate label differing in case", raw: dispatchRaw("", stagedRule("plan", "stage-plan"), stagedRule("again", "Stage-Plan")), wantField: "dispatch.rules[1].stage", wantMsg: `duplicate stage label "Stage-Plan" (first at index 0)`},
+		{name: "duplicate label names the first rule that holds it", raw: dispatchRaw("", stagedRule("a", "x"), map[string]any{"name": "b", "agent": "kind-a"}, stagedRule("c", "y"), stagedRule("d", "Y")), wantField: "dispatch.rules[3].stage", wantMsg: `duplicate stage label "Y" (first at index 2)`},
+		{name: "duplicate label is reported before a catch-all in front of it", raw: dispatchRaw("", map[string]any{"agent": "kind-a"}, stagedRule("a", "x"), stagedRule("b", "X")), wantField: "dispatch.rules[2].stage", wantMsg: `duplicate stage label "X" (first at index 1)`},
+		{name: "catch-all before a rule without a stage", raw: dispatchRaw("", map[string]any{"agent": "kind-a"}, map[string]any{"name": "tail", "agent": "kind-a"}), wantField: "dispatch.rules[0]", wantMsg: unreach + "1"},
+		{name: "catch-all names the first later rule without a stage", raw: dispatchRaw("", map[string]any{"agent": "kind-a"}, stagedRule("a", "x"), stagedRule("b", "y"), map[string]any{"name": "tail", "agent": "kind-a"}), wantField: "dispatch.rules[0]", wantMsg: unreach + "3"},
+		{name: "stage under dispatch.default", raw: map[string]any{"dispatch": map[string]any{"default": map[string]any{"stage": "s"}}}, wantField: "dispatch.default.stage", wantMsg: "unknown key"},
+		{name: "stage inside match", raw: dispatchRaw("", map[string]any{"name": "r", "match": map[string]any{"stage": "s"}}), wantField: "dispatch.rules[0].match.stage", wantMsg: "unknown match key"},
+		{name: "null is reported before match", raw: dispatchRaw("", map[string]any{"name": "r", "stage": nil, "match": map[string]any{}}), wantField: "dispatch.rules[0].stage", wantMsg: needsLabel},
+		{name: "shape is reported before match", raw: dispatchRaw("", map[string]any{"name": "r", "stage": 5, "match": map[string]any{"labels": []any{"bug"}}}), wantField: "dispatch.rules[0].stage", wantMsg: "expected a label, got a number"},
+		{name: "match is reported before a missing name", raw: dispatchRaw("", map[string]any{"stage": "s", "match": map[string]any{"labels": []any{"bug"}}}), wantField: "dispatch.rules[0]", wantMsg: withMatch},
+		{name: "a rule fault is reported before a duplicate label", raw: dispatchRaw("", stagedRule("a", "x"), stagedRule("b", "X"), map[string]any{"stage": "z"}), wantField: "dispatch.rules[2]", wantMsg: needsName},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := BuildDispatchConfig(tt.raw, mkDispatchDir(t), kindsRegistered("kind-a"), "kind-a")
+
+			ce := requireConfigError(t, err)
+			if ce.Field != tt.wantField || ce.Message != tt.wantMsg {
+				t.Errorf("BuildDispatchConfig() error = {Field:%q Message:%q}, want {Field:%q Message:%q}", ce.Field, ce.Message, tt.wantField, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestBuildDispatchConfig_StageAccepted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        map[string]any
+		wantStages []string
+		wantCatch  []bool
+	}{
+		{
+			name:       "catch-all first, staged rule second",
+			raw:        dispatchRaw("", map[string]any{"agent": "kind-a"}, stagedRule("plan", "stage-plan")),
+			wantStages: []string{"", "stage-plan"},
+			wantCatch:  []bool{true, false},
+		},
+		{
+			name:       "catch-all followed only by staged rules",
+			raw:        dispatchRaw("", map[string]any{"agent": "kind-a"}, stagedRule("a", "x"), stagedRule("b", "y")),
+			wantStages: []string{"", "x", "y"},
+			wantCatch:  []bool{true, false, false},
+		},
+		{
+			name:       "rule holding only a name and a stage",
+			raw:        dispatchRaw("", stagedRule("plan", "stage-plan")),
+			wantStages: []string{"stage-plan"},
+			wantCatch:  []bool{false},
+		},
+		{
+			name:       "the name default on a staged rule",
+			raw:        dispatchRaw("", stagedRule("default", "stage-plan")),
+			wantStages: []string{"stage-plan"},
+			wantCatch:  []bool{false},
+		},
+		{
+			name:       "match null beside stage",
+			raw:        dispatchRaw("", map[string]any{"name": "r", "stage": "s", "match": nil}),
+			wantStages: []string{"s"},
+			wantCatch:  []bool{false},
+		},
+		{
+			name:       "label kept as written",
+			raw:        dispatchRaw("", stagedRule("r", " Stage-*[x] ")),
+			wantStages: []string{" Stage-*[x] "},
+			wantCatch:  []bool{false},
+		},
+		{
+			name:       "stage value with an environment reference stays literal",
+			raw:        dispatchRaw("", stagedRule("r", "$SORTIE_STAGE_LABEL_NEVER_SET")),
+			wantStages: []string{"$SORTIE_STAGE_LABEL_NEVER_SET"},
+			wantCatch:  []bool{false},
+		},
+		{
+			name:       "a rule without a stage keeps its catch-all status",
+			raw:        dispatchRaw("", titleRule("by-title", map[string]any{"title": "x"}), map[string]any{"name": "rest", "agent": "kind-a"}),
+			wantStages: []string{"", ""},
+			wantCatch:  []bool{false, true},
+		},
+		{
+			name:       "staged rules may sit before and after the ordered rules",
+			raw:        dispatchRaw("", stagedRule("a", "x"), titleRule("by-title", map[string]any{"title": "x"}), stagedRule("b", "y"), map[string]any{"name": "rest", "agent": "kind-a"}),
+			wantStages: []string{"x", "", "y", ""},
+			wantCatch:  []bool{false, false, false, true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mustBuildDispatch(t, tt.raw)
+
+			var stages []string
+			var catchAll []bool
+			for _, rule := range got.Rules {
+				stages = append(stages, rule.Stage)
+				catchAll = append(catchAll, rule.IsCatchAll)
+			}
+			if !slices.Equal(stages, tt.wantStages) {
+				t.Errorf("Rules Stage = %q, want %q", stages, tt.wantStages)
+			}
+			if !slices.Equal(catchAll, tt.wantCatch) {
+				t.Errorf("Rules IsCatchAll = %v, want %v", catchAll, tt.wantCatch)
+			}
+		})
+	}
+}
+
+func TestStageLabelsEqual(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{name: "identical", a: "stage-plan", b: "stage-plan", want: true},
+		{name: "differing in case", a: "Stage-Plan", b: "stage-plan", want: true},
+		{name: "upper against lower with spaces inside", a: "In Progress", b: "in progress", want: true},
+		{name: "leading space is part of the label", a: " a", b: "a", want: false},
+		{name: "trailing space is part of the label", a: "a ", b: "a", want: false},
+		{name: "different labels", a: "stage-plan", b: "stage-implement", want: false},
+		{name: "glob character is literal", a: "stage-*", b: "stage-plan", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := StageLabelsEqual(tt.a, tt.b)
+
+			if got != tt.want {
+				t.Errorf("StageLabelsEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRuleSettingsKeys_StageIsARuleKey(t *testing.T) {
+	t.Parallel()
+
+	rule := map[string]any{"name": "r", "stage": "s", "match": nil, "agent": "kind-a", "template": "t.md", "kind-a": map[string]any{}}
+
+	got := ruleSettingsKeys(rule)
+
+	if _, ok := got["stage"]; ok {
+		t.Errorf("ruleSettingsKeys(%v) holds %q, want it omitted", rule, "stage")
+	}
+	if _, ok := got["kind-a"]; !ok || len(got) != 1 {
+		t.Errorf("ruleSettingsKeys(%v) = %v, want only kind-a", rule, got)
+	}
+}
+
+func TestResolveRuleBlockEnvRefs_LeavesStageLiteral(t *testing.T) {
+	t.Parallel()
+
+	const literal = "$SORTIE_STAGE_LABEL_NEVER_SET"
+	raw := map[string]any{"dispatch": map[string]any{"rules": []any{
+		map[string]any{"name": "r", "stage": literal, "kind-a": map[string]any{"model": literal}},
+	}}}
+
+	snapshot := resolveRuleBlockEnvRefs(raw, nil)
+
+	rule := raw["dispatch"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	if rule["stage"] != literal {
+		t.Errorf("rule stage after resolveRuleBlockEnvRefs = %q, want %q", rule["stage"], literal)
+	}
+	if got := rule["kind-a"].(map[string]any)["model"]; got == literal {
+		t.Errorf("settings block value after resolveRuleBlockEnvRefs = %q, want the resolved value", got)
+	}
+	if _, ok := snapshot["dispatch.rules[0].stage"]; ok {
+		t.Errorf("snapshot = %v, want no entry for dispatch.rules[0].stage", snapshot)
+	}
+	if _, ok := snapshot["dispatch.rules[0].kind-a.model"]; !ok {
+		t.Errorf("snapshot = %v, want an entry for dispatch.rules[0].kind-a.model", snapshot)
 	}
 }

@@ -8618,6 +8618,54 @@ func TestHandleTick_DispatchUsesResolvedIssue(t *testing.T) {
 	}
 }
 
+func TestHandleTick_WarnsOnceWhenAnIssueCarriesSeveralStageLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		labels          []string
+		wantKind        string
+		wantStageLabels []any
+	}{
+		{name: "two stage labels", labels: []string{"stage-implement", "stage-plan"}, wantKind: "kind-b", wantStageLabels: []any{"Stage-Plan", "stage-implement"}},
+		{name: "two stage labels beside others", labels: []string{"bug", "stage-plan", "stage-implement"}, wantKind: "kind-b", wantStageLabels: []any{"Stage-Plan", "stage-implement"}},
+		{name: "one stage label", labels: []string{"bug", "stage-implement"}, wantKind: "kind-c"},
+		{name: "no stage label", labels: []string{"bug"}, wantKind: "kind-a"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newRunHarness(t, runConfig(t, stagedRulesRaw()), "kind-a", "kind-b", "kind-c")
+			h.tracker.candidates = []domain.Issue{candidate("id-1", "S-1", tt.labels...)}
+			h.build()
+
+			h.o.handleTick(context.Background())
+			h.o.state.WorkerWg.Wait()
+
+			kind, _ := sessionOfWorkspace(t, h.started(), "S-1")
+			if kind != tt.wantKind {
+				t.Errorf("handleTick(labels %v) dispatched on adapter %q, want %q", tt.labels, kind, tt.wantKind)
+			}
+			warnings := logRecords(t, h.logs, severalStageLabelsMessage)
+			if tt.wantStageLabels == nil {
+				if len(warnings) != 0 {
+					t.Fatalf("handleTick(labels %v) logged %v, want no %q record", tt.labels, warnings, severalStageLabelsMessage)
+				}
+				return
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("handleTick(labels %v) logged %d %q records, want 1: %v", tt.labels, len(warnings), severalStageLabelsMessage, warnings)
+			}
+			record := warnings[0]
+			if labels, _ := record["stage_labels"].([]any); record["level"] != "WARN" || !slices.Equal(labels, tt.wantStageLabels) || record["rule_name"] != "plan" || record["issue_identifier"] != "S-1" {
+				t.Errorf("handleTick(labels %v) record = %v, want a WARN for S-1 with stage_labels %v and rule_name %q", tt.labels, record, tt.wantStageLabels, "plan")
+			}
+		})
+	}
+}
+
 func TestHandleTick_CandidateHoldReasons(t *testing.T) {
 	t.Parallel()
 
@@ -10096,6 +10144,20 @@ type retryRow struct {
 	wantResume  string
 	wantMoved   bool
 	wantMovedTo DispatchResolution
+
+	wantStageLabels []any
+}
+
+const severalStageLabelsMessage = "several stage labels found"
+
+func stagedRulesRaw() map[string]any {
+	return map[string]any{
+		"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"},
+		"dispatch": map[string]any{"rules": []any{
+			map[string]any{"name": "plan", "stage": "Stage-Plan", "agent": "kind-b"},
+			map[string]any{"name": "implement", "stage": "stage-implement", "agent": "kind-c"},
+		}},
+	}
 }
 
 func seedRetry(h *runHarness, mode string, entry RetryEntry) {
@@ -10216,6 +10278,41 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 			wantMovedTo: DispatchResolution{AgentKind: "kind-b"},
 		},
 		{
+			name:            "several stage labels on the issue when the frozen kind is gone",
+			raw:             stagedRulesRaw,
+			frozen:          RetryEntry{Attempt: 1, AgentKind: "ghost", RuleName: "old-work", SessionID: "sess-old"},
+			issue:           candidate("id-retry", "R-1", "stage-implement", "stage-plan"),
+			wantKind:        "kind-b",
+			wantMoved:       true,
+			wantMovedTo:     DispatchResolution{AgentKind: "kind-b", RuleName: "plan"},
+			wantStageLabels: []any{"Stage-Plan", "stage-implement"},
+		},
+		{
+			name:        "one stage label on the issue when the frozen kind is gone",
+			raw:         stagedRulesRaw,
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "ghost", RuleName: "old-work", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1", "stage-implement"),
+			wantKind:    "kind-c",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-c", RuleName: "implement"},
+		},
+		{
+			name:       "frozen staged selection stands after the stage label on the issue moved",
+			raw:        stagedRulesRaw,
+			frozen:     RetryEntry{Attempt: 1, AgentKind: "kind-b", RuleName: "plan", SessionID: "sess-old"},
+			issue:      candidate("id-retry", "R-1", "stage-implement"),
+			wantKind:   "kind-b",
+			wantResume: "sess-old",
+		},
+		{
+			name:       "frozen staged selection stands without a warning although the issue carries several stage labels",
+			raw:        stagedRulesRaw,
+			frozen:     RetryEntry{Attempt: 1, AgentKind: "kind-c", RuleName: "implement", SessionID: "sess-old"},
+			issue:      candidate("id-retry", "R-1", "stage-implement", "stage-plan"),
+			wantKind:   "kind-c",
+			wantResume: "sess-old",
+		},
+		{
 			name: "adapter lookup that fails and later succeeds",
 			raw: func() map[string]any {
 				return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}}
@@ -10238,7 +10335,7 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 			t.Run(tt.name+", "+mode, func(t *testing.T) {
 				t.Parallel()
 
-				h := newRunHarness(t, runConfig(t, tt.raw()), "kind-a", "kind-b", "plain", "modern")
+				h := newRunHarness(t, runConfig(t, tt.raw()), "kind-a", "kind-b", "kind-c", "plain", "modern")
 				h.tracker.issues["id-retry"] = tt.issue
 				if tt.unavailable != "" {
 					h.setAvailable(tt.unavailable, false)
@@ -10262,6 +10359,17 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 				}
 				if params.ResumeSessionID != tt.wantResume {
 					t.Errorf("retry ResumeSessionID = %q, want %q", params.ResumeSessionID, tt.wantResume)
+				}
+
+				warnings := logRecords(t, h.logs, severalStageLabelsMessage)
+				if tt.wantStageLabels == nil {
+					if len(warnings) != 0 {
+						t.Errorf("%q records = %v, want none", severalStageLabelsMessage, warnings)
+					}
+				} else if len(warnings) != 1 {
+					t.Errorf("%q records = %v, want exactly one", severalStageLabelsMessage, warnings)
+				} else if labels, _ := warnings[0]["stage_labels"].([]any); !slices.Equal(labels, tt.wantStageLabels) || warnings[0]["rule_name"] != tt.wantMovedTo.RuleName || warnings[0]["level"] != "WARN" {
+					t.Errorf("%q record = %v, want a WARN with stage_labels %v and rule_name %q", severalStageLabelsMessage, warnings[0], tt.wantStageLabels, tt.wantMovedTo.RuleName)
 				}
 
 				records := logRecords(t, h.logs, selectionChangedMessage)

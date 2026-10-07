@@ -18,8 +18,9 @@ import (
 // selection. The zero value selects the workflow-wide fallback for
 // every issue.
 type DispatchConfig struct {
-	// Rules holds the ordered first-match-wins rule list. Empty when
-	// no rules are configured. Order is preserved from the YAML source.
+	// Rules holds the rule list in YAML order. Rules without a stage
+	// label are evaluated first-match-wins; a rule with a stage label is
+	// selected by that label. Empty when no rules are configured.
 	Rules []DispatchRule
 
 	// Default carries the workflow-author fallback selection used when
@@ -36,6 +37,11 @@ type DispatchRule struct {
 	// metrics. Empty when the YAML omits the key.
 	Name string
 
+	// Stage is the rule's stage label as written in WORKFLOW.md, empty
+	// when the rule has no stage key. A rule with a stage label is
+	// selected by that label ahead of the ordered rules and never by Match.
+	Stage string
+
 	// Match holds the per-key predicates evaluated with AND across
 	// keys and OR within a key. A zero Match matches every issue.
 	Match DispatchMatch
@@ -45,8 +51,8 @@ type DispatchRule struct {
 	// dispatch default and finally to the workflow-wide defaults.
 	Selection DispatchSelection
 
-	// IsCatchAll is true when Match carries no keys. Set by the
-	// builder and immutable thereafter.
+	// IsCatchAll is true when Stage is empty and Match carries no keys.
+	// Set by the builder and immutable thereafter.
 	IsCatchAll bool
 
 	// SettingsKind is the kind the rule's settings block is named for,
@@ -126,9 +132,19 @@ const defaultRuleName = "default"
 // ruleKeyAllowed enumerates the closed set of recognized per-rule keys.
 var ruleKeyAllowed = map[string]bool{
 	"name":     true,
+	"stage":    true,
 	"match":    true,
 	"agent":    true,
 	"template": true,
+}
+
+// StageLabelsEqual reports whether two stage labels name the same label.
+// Selection, duplicate detection, and the collision check against tracker
+// states and applied labels all compare through it, so they cannot
+// disagree. The comparison folds case only: tracker labels arrive
+// lowercased and untrimmed, and a stage label is taken literally.
+func StageLabelsEqual(a, b string) bool {
+	return strings.EqualFold(a, b)
 }
 
 // priorityOpAllowed enumerates the closed set of recognized priority
@@ -184,6 +200,9 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 		return DispatchConfig{}, err
 	}
 	if err := validateNoDuplicateRuleNames(rules); err != nil {
+		return DispatchConfig{}, err
+	}
+	if err := validateNoDuplicateStageLabels(rules); err != nil {
 		return DispatchConfig{}, err
 	}
 	if err := validateCatchAllPosition(rules); err != nil {
@@ -289,7 +308,18 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 		}
 	}
 
+	stage, hasStage, err := parseStageLabel(ruleMap, ruleField)
+	if err != nil {
+		return DispatchRule{}, nil, err
+	}
+
 	hasMatch := ruleMap["match"] != nil
+	if hasStage && hasMatch {
+		return DispatchRule{}, nil, &ConfigError{
+			Field:   ruleField,
+			Message: "a rule with a stage label is selected by that label and cannot also carry match",
+		}
+	}
 	hasAgent := false
 	if v, ok := ruleMap["agent"]; ok && v != nil {
 		hasAgent = true
@@ -298,16 +328,22 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 	if v, ok := ruleMap["template"]; ok && v != nil {
 		hasTemplate = true
 	}
-	if !hasMatch && !hasAgent && !hasTemplate && len(blockKeys) == 0 {
+	if !hasMatch && !hasStage && !hasAgent && !hasTemplate && len(blockKeys) == 0 {
 		return DispatchRule{}, nil, &ConfigError{
 			Field:   ruleField,
-			Message: "rule must specify at least one of match, agent, template, or a settings block",
+			Message: "rule must specify at least one of match, stage, agent, template, or a settings block",
 		}
 	}
 
 	name, err := extractRuleName(ruleMap, ruleField)
 	if err != nil {
 		return DispatchRule{}, nil, err
+	}
+	if hasStage && name == "" {
+		return DispatchRule{}, nil, &ConfigError{
+			Field:   ruleField,
+			Message: "a rule that carries a stage label must have a name",
+		}
 	}
 
 	match, err := parseDispatchMatch(ruleMap["match"], ruleField+".match")
@@ -322,10 +358,44 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 
 	return DispatchRule{
 		Name:       name,
+		Stage:      stage,
 		Match:      match,
 		Selection:  selection,
-		IsCatchAll: isEmptyMatch(match),
+		IsCatchAll: stage == "" && isEmptyMatch(match),
 	}, blockKeys, nil
+}
+
+// parseStageLabel reads a rule's optional stage key. present reports
+// whether the key exists, a null value included, because dropping a blank
+// label would leave a rule that no issue can select. The label is returned
+// as written.
+func parseStageLabel(ruleMap map[string]any, ruleField string) (label string, present bool, err error) {
+	raw, present := ruleMap["stage"]
+	if !present {
+		return "", false, nil
+	}
+	field := ruleField + ".stage"
+	if raw == nil {
+		return "", true, errStageNeedsLabel(field)
+	}
+	label, ok := raw.(string)
+	if !ok {
+		return "", true, &ConfigError{
+			Field:   field,
+			Message: "expected a label, got " + describeExtensionValue(raw),
+		}
+	}
+	if strings.TrimFunc(label, unicode.IsSpace) == "" {
+		return "", true, errStageNeedsLabel(field)
+	}
+	return label, true, nil
+}
+
+func errStageNeedsLabel(field string) error {
+	return &ConfigError{
+		Field:   field,
+		Message: "needs a label with a character other than white space",
+	}
 }
 
 // namesAgentKind reports whether key is a registered kind or the rule's
@@ -791,17 +861,39 @@ func validateNoDuplicateRuleNames(rules []DispatchRule) error {
 	return nil
 }
 
-// validateCatchAllPosition rejects any rule that lacks a match block
-// (catch-all) and is followed by another rule.
+// validateNoDuplicateStageLabels returns the first *ConfigError when two
+// rules carry stage labels that [StageLabelsEqual] treats as one.
+func validateNoDuplicateStageLabels(rules []DispatchRule) error {
+	for j, rule := range rules {
+		if rule.Stage == "" {
+			continue
+		}
+		for i := range j {
+			if rules[i].Stage != "" && StageLabelsEqual(rules[i].Stage, rule.Stage) {
+				return &ConfigError{
+					Field:   fmt.Sprintf("dispatch.rules[%d].stage", j),
+					Message: fmt.Sprintf("duplicate stage label %q (first at index %d)", rule.Stage, i),
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateCatchAllPosition rejects a catch-all rule followed by a rule
+// without a stage label. A rule with a stage label is reachable after a
+// catch-all because the stage label selects it ahead of the ordered rules.
 func validateCatchAllPosition(rules []DispatchRule) error {
 	for i, r := range rules {
 		if !r.IsCatchAll {
 			continue
 		}
-		if i != len(rules)-1 {
-			return &ConfigError{
-				Field:   fmt.Sprintf("dispatch.rules[%d]", i),
-				Message: fmt.Sprintf("unreachable_rules: catch-all rule at index %d precedes rule at index %d", i, i+1),
+		for j := i + 1; j < len(rules); j++ {
+			if rules[j].Stage == "" {
+				return &ConfigError{
+					Field:   fmt.Sprintf("dispatch.rules[%d]", i),
+					Message: fmt.Sprintf("unreachable_rules: catch-all rule at index %d precedes rule at index %d", i, j),
+				}
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -2170,6 +2171,284 @@ func TestValidateDispatchConfig_DefaultedTrackerStates(t *testing.T) {
 			}
 			if len(tt.want) > 0 && result.OK() {
 				t.Errorf("ValidateDispatchConfig() OK = true, want false: a state collision is error severity")
+			}
+		})
+	}
+}
+
+const stageCollisionCheck = "dispatch.stage.collision"
+
+func stageCollisionLine(ruleName string, index int, stage, source string) PreflightError {
+	return PreflightError{
+		Check: stageCollisionCheck,
+		Message: "dispatch rule " + strconv.Quote(ruleName) + " (dispatch.rules[" + strconv.Itoa(index) + "].stage): stage label " +
+			strconv.Quote(stage) + " collides with " + source +
+			"; a stage label must not equal a tracker state or a label Sortie applies to issues",
+	}
+}
+
+func stagedPreflightRule(name, stage string) config.DispatchRule {
+	return config.DispatchRule{Name: name, Stage: stage}
+}
+
+func loadedServiceConfig(t *testing.T, raw map[string]any) config.ServiceConfig {
+	t.Helper()
+	cfg, err := config.NewServiceConfig(raw)
+	if err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	return cfg
+}
+
+func TestValidateDispatchConfig_StageCollisions(t *testing.T) {
+	t.Parallel()
+
+	const tracker = "test-tracker"
+	trackerMeta := registry.TrackerMeta{
+		DefaultActiveStates:   []string{"backlog", "review"},
+		DefaultTerminalStates: []string{"done", "wontfix"},
+	}
+	withReactions := func(reactions map[string]config.ReactionConfig, rules ...config.DispatchRule) config.ServiceConfig {
+		return config.ServiceConfig{Tracker: config.TrackerConfig{Kind: tracker}, Reactions: reactions, Dispatch: config.DispatchConfig{Rules: rules}}
+	}
+	withTracker := func(tc config.TrackerConfig, rules ...config.DispatchRule) config.ServiceConfig {
+		tc.Kind = tracker
+		return config.ServiceConfig{Tracker: tc, Dispatch: config.DispatchConfig{Rules: rules}}
+	}
+	ciWithoutProvider := loadedServiceConfig(t, map[string]any{"reactions": map[string]any{"ci_failure": map[string]any{"escalation_label": "ci-stuck"}}})
+	ciWithoutProvider.Tracker.Kind = tracker
+	ciWithoutProvider.Dispatch.Rules = []config.DispatchRule{stagedPreflightRule("ci", "ci-stuck")}
+	reviewDefaulted := loadedServiceConfig(t, map[string]any{"reactions": map[string]any{
+		"review_comments": map[string]any{"provider": "github"},
+		"merge_conflicts": map[string]any{"provider": "github"},
+	}})
+	reviewDefaulted.Tracker.Kind = tracker
+	reviewDefaulted.Dispatch.Rules = []config.DispatchRule{stagedPreflightRule("hold", "needs-human")}
+
+	tests := []struct {
+		name         string
+		cfg          config.ServiceConfig
+		meta         registry.TrackerMeta
+		unregistered bool
+		want         []PreflightError
+	}{
+		{
+			name: "a stage label differing from an active state in case only",
+			cfg:  withTracker(config.TrackerConfig{ActiveStates: []string{"in progress"}}, stagedPreflightRule("work", "In Progress")),
+			want: []PreflightError{stageCollisionLine("work", 0, "In Progress", `active state "in progress"`)},
+		},
+		{
+			name: "a stage label equal to an active state in the second rule",
+			cfg:  withTracker(config.TrackerConfig{ActiveStates: []string{"To Do", "stage-plan"}}, config.DispatchRule{Name: "everything", IsCatchAll: true}, stagedPreflightRule("plan", "Stage-Plan")),
+			want: []PreflightError{stageCollisionLine("plan", 1, "Stage-Plan", `active state "stage-plan"`)},
+		},
+		{
+			name: "a stage label equal to a terminal state",
+			cfg:  withTracker(config.TrackerConfig{TerminalStates: []string{"Done"}}, stagedPreflightRule("finish", "done")),
+			want: []PreflightError{stageCollisionLine("finish", 0, "done", `terminal state "Done"`)},
+		},
+		{
+			name: "the parking label with no reactions block",
+			cfg:  withTracker(config.TrackerConfig{}, stagedPreflightRule("implement", "Needs-Human")),
+			want: []PreflightError{stageCollisionLine("implement", 0, "Needs-Human", `the parking label "needs-human"`)},
+		},
+		{
+			name: "the fallback active list when the written list is empty",
+			cfg:  withTracker(config.TrackerConfig{}, stagedPreflightRule("rev", "Review")),
+			meta: trackerMeta,
+			want: []PreflightError{stageCollisionLine("rev", 0, "Review", `active state "review", which the "test-tracker" adapter falls back to because tracker.active_states is empty`)},
+		},
+		{
+			name: "the fallback terminal list when the written list is empty",
+			cfg:  withTracker(config.TrackerConfig{}, stagedPreflightRule("fin", "WontFix")),
+			meta: trackerMeta,
+			want: []PreflightError{stageCollisionLine("fin", 0, "WontFix", `terminal state "wontfix", which the "test-tracker" adapter falls back to because tracker.terminal_states is empty`)},
+		},
+		{
+			name: "a written active list suppresses the fallback active list",
+			cfg:  withTracker(config.TrackerConfig{ActiveStates: []string{"To Do"}}, stagedPreflightRule("rev", "review")),
+			meta: trackerMeta,
+		},
+		{
+			name: "a written terminal list suppresses the fallback terminal list",
+			cfg:  withTracker(config.TrackerConfig{TerminalStates: []string{"Closed"}}, stagedPreflightRule("fin", "done")),
+			meta: trackerMeta,
+		},
+		{
+			name: "a written active list is compared in full although the fallback holds other values",
+			cfg:  withTracker(config.TrackerConfig{ActiveStates: []string{"To Do", "Triage"}}, stagedPreflightRule("t", "triage")),
+			meta: trackerMeta,
+			want: []PreflightError{stageCollisionLine("t", 0, "triage", `active state "Triage"`)},
+		},
+		{
+			name: "the handoff state",
+			cfg:  withTracker(config.TrackerConfig{HandoffState: "In Review"}, stagedPreflightRule("rev", "in review")),
+			want: []PreflightError{stageCollisionLine("rev", 0, "in review", `tracker.handoff_state "In Review"`)},
+		},
+		{
+			name: "the in-progress state",
+			cfg:  withTracker(config.TrackerConfig{InProgressState: "Doing"}, stagedPreflightRule("d", "doing")),
+			want: []PreflightError{stageCollisionLine("d", 0, "doing", `tracker.in_progress_state "Doing"`)},
+		},
+		{
+			name: "the no-change state",
+			cfg:  withTracker(config.TrackerConfig{NoChangeState: "Wontdo"}, stagedPreflightRule("w", "WONTDO")),
+			want: []PreflightError{stageCollisionLine("w", 0, "WONTDO", `tracker.no_change_state "Wontdo"`)},
+		},
+		{
+			name: "unset handoff, in-progress and no-change states collide with nothing",
+			cfg:  withTracker(config.TrackerConfig{}, stagedPreflightRule("plan", "stage-plan")),
+		},
+		{
+			name: "one label equal to several sources draws one line per source in table order",
+			cfg: withTracker(config.TrackerConfig{
+				ActiveStates:    []string{"review"},
+				TerminalStates:  []string{"Review"},
+				HandoffState:    "REVIEW",
+				InProgressState: "review",
+				NoChangeState:   "Review",
+			}, stagedPreflightRule("rev", "review")),
+			want: []PreflightError{
+				stageCollisionLine("rev", 0, "review", `active state "review"`),
+				stageCollisionLine("rev", 0, "review", `terminal state "Review"`),
+				stageCollisionLine("rev", 0, "review", `tracker.handoff_state "REVIEW"`),
+				stageCollisionLine("rev", 0, "review", `tracker.in_progress_state "review"`),
+				stageCollisionLine("rev", 0, "review", `tracker.no_change_state "Review"`),
+			},
+		},
+		{
+			name: "two staged rules draw their lines in rule order",
+			cfg: withTracker(config.TrackerConfig{ActiveStates: []string{"b"}, HandoffState: "a"},
+				stagedPreflightRule("first", "a"), config.DispatchRule{Name: "rest", IsCatchAll: true}, stagedPreflightRule("second", "b")),
+			want: []PreflightError{
+				stageCollisionLine("first", 0, "a", `tracker.handoff_state "a"`),
+				stageCollisionLine("second", 2, "b", `active state "b"`),
+			},
+		},
+		{
+			name: "a reaction escalation label",
+			cfg:  withReactions(map[string]config.ReactionConfig{"merge_conflicts": {Provider: "github", EscalationLabel: "stuck"}}, stagedPreflightRule("s", "Stuck")),
+			want: []PreflightError{stageCollisionLine("s", 0, "Stuck", `reactions.merge_conflicts.escalation_label "stuck"`)},
+		},
+		{
+			name: "a reaction without a provider and with escalation none is compared",
+			cfg:  withReactions(map[string]config.ReactionConfig{"merge_conflicts": {Escalation: "none", EscalationLabel: "stuck"}}, stagedPreflightRule("s", "stuck")),
+			want: []PreflightError{stageCollisionLine("s", 0, "stuck", `reactions.merge_conflicts.escalation_label "stuck"`)},
+		},
+		{
+			name: "a reaction with an empty escalation label is not compared",
+			cfg:  withReactions(map[string]config.ReactionConfig{"merge_conflicts": {Provider: "github"}}, stagedPreflightRule("s", "stuck")),
+		},
+		{
+			name: "the ci_failure escalation label with a provider",
+			cfg: func() config.ServiceConfig {
+				cfg := withTracker(config.TrackerConfig{}, stagedPreflightRule("ci", "CI-Stuck"))
+				cfg.CIFeedback = config.CIFeedbackConfig{Kind: "github", EscalationLabel: "ci-stuck"}
+				return cfg
+			}(),
+			want: []PreflightError{stageCollisionLine("ci", 0, "CI-Stuck", `reactions.ci_failure.escalation_label "ci-stuck"`)},
+		},
+		{
+			name: "a ci_failure block without a provider is never compared",
+			cfg:  ciWithoutProvider,
+		},
+		{
+			name: "the review_comments override is both an escalation label and the parking label",
+			cfg:  withReactions(map[string]config.ReactionConfig{"review_comments": {Provider: "github", EscalationLabel: "parked"}}, stagedPreflightRule("p", "Parked")),
+			want: []PreflightError{
+				stageCollisionLine("p", 0, "Parked", `reactions.review_comments.escalation_label "parked"`),
+				stageCollisionLine("p", 0, "Parked", `the parking label "parked"`),
+			},
+		},
+		{
+			name: "needs-human against two reaction blocks draws one line per block and the parking label",
+			cfg:  reviewDefaulted,
+			want: []PreflightError{
+				stageCollisionLine("hold", 0, "needs-human", `reactions.merge_conflicts.escalation_label "needs-human"`),
+				stageCollisionLine("hold", 0, "needs-human", `reactions.review_comments.escalation_label "needs-human"`),
+				stageCollisionLine("hold", 0, "needs-human", `the parking label "needs-human"`),
+			},
+		},
+		{
+			name: "escalation labels are listed ahead of the parking label whatever their key order",
+			cfg: withReactions(map[string]config.ReactionConfig{
+				"zeta":            {EscalationLabel: "x"},
+				"review_comments": {EscalationLabel: "x"},
+				"alpha":           {EscalationLabel: "x"},
+			}, stagedPreflightRule("x", "x")),
+			want: []PreflightError{
+				stageCollisionLine("x", 0, "x", `reactions.alpha.escalation_label "x"`),
+				stageCollisionLine("x", 0, "x", `reactions.review_comments.escalation_label "x"`),
+				stageCollisionLine("x", 0, "x", `reactions.zeta.escalation_label "x"`),
+				stageCollisionLine("x", 0, "x", `the parking label "x"`),
+			},
+		},
+		{
+			name: "a registered kind with no declared fallback lists compares only the written states",
+			cfg:  withTracker(config.TrackerConfig{HandoffState: "hand"}, stagedPreflightRule("rev", "review")),
+		},
+		{
+			name:         "an unregistered kind reads no fallback list",
+			cfg:          withTracker(config.TrackerConfig{}, stagedPreflightRule("rev", "review")),
+			meta:         trackerMeta,
+			unregistered: true,
+		},
+		{
+			name: "an empty tracker kind reads no fallback list and still compares the written states",
+			cfg: config.ServiceConfig{
+				Tracker:  config.TrackerConfig{HandoffState: "Hold"},
+				Dispatch: config.DispatchConfig{Rules: []config.DispatchRule{stagedPreflightRule("h", "hold")}},
+			},
+			meta: trackerMeta,
+			want: []PreflightError{stageCollisionLine("h", 0, "hold", `tracker.handoff_state "Hold"`)},
+		},
+		{
+			name: "a workflow without a staged rule draws no line although its other labels collide",
+			cfg: withTracker(config.TrackerConfig{ActiveStates: []string{"needs-human"}, HandoffState: "review"},
+				config.DispatchRule{Name: "rest", IsCatchAll: true}),
+			meta: trackerMeta,
+		},
+		{
+			name: "a stage label that equals no source",
+			cfg:  withTracker(config.TrackerConfig{ActiveStates: []string{"To Do"}, TerminalStates: []string{"Done"}, HandoffState: "In Review"}, stagedPreflightRule("plan", "stage-plan")),
+			meta: trackerMeta,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var metaKinds []string
+			params := validPreflightParams()
+			params.ConfigFunc = func() config.ServiceConfig { return tt.cfg }
+			params.TrackerRegistry = &stubTrackerRegistry{
+				getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+				metaFunc: func(kind string) (registry.TrackerMeta, bool) {
+					metaKinds = append(metaKinds, kind)
+					if tt.unregistered {
+						return registry.TrackerMeta{}, false
+					}
+					return tt.meta, true
+				},
+			}
+
+			result := ValidateDispatchConfig(params)
+
+			var got []PreflightError
+			for _, e := range result.Errors {
+				if e.Check == stageCollisionCheck {
+					got = append(got, e)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("ValidateDispatchConfig() %s errors = %q, want %q", stageCollisionCheck, got, tt.want)
+			}
+			if len(tt.want) > 0 && result.OK() {
+				t.Error("ValidateDispatchConfig() OK = true, want false: a stage collision is error severity")
+			}
+			if slices.Contains(metaKinds, "") {
+				t.Errorf("TrackerRegistry.Meta called with an empty kind: %q", metaKinds)
 			}
 		})
 	}
