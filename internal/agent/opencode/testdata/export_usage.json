@@ -1,29 +1,34 @@
 {
+  "info": {
+    "id": "ses_abc123"
+  },
   "messages": [
     {
-      "info": {
-        "role": "user",
-        "sessionID": "ses_abc123"
+      "type": "user",
+      "time": {
+        "created": 1790405604602
       }
     },
     {
-      "info": {
-        "role": "assistant",
-        "sessionID": "ses_abc123",
-        "providerID": "anthropic",
-        "modelID": "claude-sonnet-4-5",
-        "finish": "stop",
-        "tokens": {
-          "input": 1500,
-          "output": 300,
-          "total": 1800,
-          "cache": {
-            "read": 200,
-            "write": 50
-          }
-        },
-        "cost": 0.05
-      }
+      "type": "assistant",
+      "time": {
+        "created": 1790405604627
+      },
+      "finish": "stop",
+      "model": {
+        "id": "claude-sonnet-4-5",
+        "providerID": "anthropic"
+      },
+      "tokens": {
+        "input": 1500,
+        "output": 300,
+        "reasoning": 0,
+        "cache": {
+          "read": 200,
+          "write": 50
+        }
+      },
+      "cost": 0.05
     }
   ]
 }

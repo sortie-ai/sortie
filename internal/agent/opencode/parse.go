@@ -6,23 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
-)
-
-// runtimeMajor identifies which of OpenCode's two launch contracts a
-// session drives. The zero value, majorUnknown, is never launched
-// with: [detectRuntimeMajor] resolves it to major1 or major2 before
-// StartSession returns, or refuses the session.
-type runtimeMajor int
-
-const (
-	majorUnknown runtimeMajor = 0
-	major1       runtimeMajor = 1
-	major2       runtimeMajor = 2
 )
 
 type parsedLine struct {
@@ -39,30 +26,16 @@ type rawRunEvent struct {
 }
 
 type rawRunError struct {
-	Name    string         `json:"name,omitempty"`    // 1.x
-	Data    map[string]any `json:"data,omitempty"`    // 1.x
-	Type    string         `json:"type,omitempty"`    // 2.x
-	Message string         `json:"message,omitempty"` // 2.x
-	Status  any            `json:"status,omitempty"`  // 2.x, a JSON number when present
-}
-
-// gatewayErrorBody is the 1.x free-tier gateway's error envelope,
-// decoded from [rawRunError.Data]'s "responseBody" member, itself a
-// JSON string carrying a second, nested JSON document.
-type gatewayErrorBody struct {
-	Error struct {
-		Type string `json:"type"`
-	} `json:"error"`
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
+	Status  any    `json:"status,omitempty"` // a JSON number when present
 }
 
 const (
-	// freeTierRefusalType is the 1.x gateway error type a free-tier
-	// refusal decodes to.
-	freeTierRefusalType = "FreeTierError"
-	// freeTierAuthType is the 2.x error type a provider authorization
+	// freeTierAuthType is the error type a provider authorization
 	// refusal, free-tier refusals included, carries.
 	freeTierAuthType = "provider.auth"
-	// freeTierMessageMarker is the substring that distinguishes a 2.x
+	// freeTierMessageMarker is the substring that distinguishes a
 	// free-tier refusal from any other provider's authorization refusal
 	// under the same error type.
 	freeTierMessageMarker = "free tier can only be used from within OpenCode"
@@ -212,9 +185,8 @@ func parseStepFinishPart(raw json.RawMessage) (rawStepFinishPart, error) {
 }
 
 // freeTierRefusalClause returns a clause naming the free-tier-required
-// tools state's policy denies, or "" when runErr does not match either
-// major's free-tier refusal envelope, or the policy denies neither
-// tool. It reads no member of runErr beyond what identifies the
+// tools state's policy denies, or "" when runErr does not match the
+// free-tier refusal envelope, or the policy denies neither tool. It reads no member of runErr beyond what identifies the
 // refusal shape, starts no subprocess, and emits no event.
 func freeTierRefusalClause(runErr *rawRunError, pt passthroughConfig) string {
 	if runErr == nil || !isFreeTierRefusal(runErr) {
@@ -245,16 +217,9 @@ func freeTierRefusalClause(runErr *rawRunError, pt passthroughConfig) string {
 	}
 }
 
-// isFreeTierRefusal reports whether runErr matches the 1.x or the 2.x
-// free-tier refusal envelope.
+// isFreeTierRefusal reports whether runErr matches the free-tier
+// refusal envelope.
 func isFreeTierRefusal(runErr *rawRunError) bool {
-	if body, ok := runErr.Data["responseBody"].(string); ok {
-		var gateway gatewayErrorBody
-		if err := json.Unmarshal([]byte(body), &gateway); err == nil && gateway.Error.Type == freeTierRefusalType {
-			return true
-		}
-	}
-
 	if runErr.Type != freeTierAuthType {
 		return false
 	}
@@ -265,11 +230,13 @@ func isFreeTierRefusal(runErr *rawRunError) bool {
 	return strings.Contains(runErr.Message, freeTierMessageMarker)
 }
 
-// parseSessionExport extracts run-cumulative token usage from the 2.x
-// `session export --standalone --sanitize` document, mirroring
-// [parseExportOutput]'s 1.x semantics over that document's flat message
-// shape. Returns the zero exportUsage unless the document decodes and
-// its info.id equals sessionID.
+// parseSessionExport extracts run-cumulative token usage from the
+// `session export --standalone --sanitize` document, summing over every
+// finished assistant message. When sinceUnixMS is non-zero, only messages
+// created at or after it are counted. A message without a tokens object
+// is skipped. The reported model comes from the last kept message.
+// Returns the zero exportUsage unless the document decodes and its
+// info.id equals sessionID.
 func parseSessionExport(data []byte, sessionID string, sinceUnixMS int64) exportUsage {
 	var payload struct {
 		Info struct {
@@ -351,7 +318,7 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
-	cmd, err := auxiliaryCommand(queryCtx, state, exportArgs(state.major, sessionID))
+	cmd, err := auxiliaryCommand(queryCtx, state, exportArgs(sessionID))
 	if err != nil {
 		state.logger().Warn("failed to build opencode export environment", slog.Any("error", err))
 		return exportUsage{}
@@ -371,182 +338,15 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 		return exportUsage{}
 	}
 
-	usage := parseUsageExport(state.major, stdout.Bytes(), sessionID, sinceUnixMS)
+	usage := parseSessionExport(stdout.Bytes(), sessionID, sinceUnixMS)
 	if !usage.Recovered {
 		state.logger().Warn("no assistant token usage found in opencode export")
 	}
 	return usage
 }
 
-// parseUsageExport decodes the export document the given major
-// produces: [parseSessionExport]'s flat message shape on major2,
-// [parseExportOutput]'s nested info shape otherwise.
-func parseUsageExport(major runtimeMajor, data []byte, sessionID string, sinceUnixMS int64) exportUsage {
-	if major == major2 {
-		return parseSessionExport(data, sessionID, sinceUnixMS)
-	}
-	return parseExportOutput(data, sessionID, sinceUnixMS)
-}
-
-// queryModelNotFound reports whether the model configured for this session is
-// absent from the catalog served by `opencode models`. An unknown model raises
-// two independent errors, the actionable diagnostic opencode publishes on the
-// session and the generic masked placeholder its run command reports, and the
-// run command can exit before the diagnostic reaches the stream. This
-// reconstructs the diagnostic for the turns that see the placeholder alone.
-// ok is false when no model is configured, the listing fails or is empty, or
-// the model is present.
-func queryModelNotFound(ctx context.Context, state *sessionState) (message string, ok bool) {
-	model := state.passthrough.Model
-	if model == "" {
-		return "", false
-	}
-
-	// WithoutCancel: a turn finalized after its context ended still needs
-	// the listing, and a bound derived from the ended context would make
-	// cmd.Start refuse it.
-	queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentcore.AuxiliaryTimeout(state.agentConfig))
-	defer cancel()
-
-	modelsArgs := []string{"models"}
-	cmd, err := auxiliaryCommand(queryCtx, state, modelsArgs)
-	if err != nil {
-		state.logger().Warn("failed to build opencode models environment", slog.Any("error", err))
-		return "", false
-	}
-
-	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
-		Stdout: &stdout,
-		Logger: state.logger(),
-	})
-	if startErr != nil || result.WaitErr != nil {
-		err := startErr
-		if err == nil {
-			err = result.WaitErr
-		}
-		state.logger().Warn("failed to list opencode models", slog.Any("error", err))
-		return "", false
-	}
-
-	// Model identifiers are provider/model slugs without whitespace, so the
-	// catalog collapses to one entry per field regardless of line endings.
-	entries := strings.Fields(stdout.String())
-	if len(entries) == 0 || slices.Contains(entries, model) {
-		return "", false
-	}
-
-	message = "Model not found: " + model
-	if provider, _, cut := strings.Cut(model, "/"); cut && !hasProviderModel(entries, provider) {
-		message += fmt.Sprintf("; the runtime lists no %s model, which is how it presents a provider with no credential", provider)
-	}
-	return message, true
-}
-
-func hasProviderModel(entries []string, provider string) bool {
-	prefix := provider + "/"
-	return slices.ContainsFunc(entries, func(entry string) bool {
-		return strings.HasPrefix(entry, prefix)
-	})
-}
-
-// parseExportOutput extracts run-cumulative token usage from the JSON
-// returned by opencode export, summing over every assistant message for
-// sessionID. When sinceUnixMS is non-zero, only messages whose
-// info.time.created is present, parseable, and greater than or equal to
-// sinceUnixMS are counted; sinceUnixMS of 0 counts every matching
-// message. A message without a tokens object is skipped. The reported
-// model comes from the last kept message. Returns the zero exportUsage
-// on any parse failure or when no message is kept.
-func parseExportOutput(data []byte, sessionID string, sinceUnixMS int64) exportUsage {
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return exportUsage{}
-	}
-	messages, ok := payload["messages"].([]any)
-	if !ok {
-		return exportUsage{}
-	}
-
-	var sum exportUsage
-	kept := false
-	for _, v := range messages {
-		message, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-		info := mapFromAny(message["info"])
-		if info == nil {
-			continue
-		}
-		if stringFromAny(info["role"]) != "assistant" {
-			continue
-		}
-		if stringFromAny(info["sessionID"]) != sessionID {
-			continue
-		}
-		if sinceUnixMS != 0 {
-			created, ok := messageCreatedMS(info)
-			if !ok || created < sinceUnixMS {
-				continue
-			}
-		}
-		// The runtime saves an assistant message with all-zero tokens before
-		// it calls the model, and fills them in together with `finish` when
-		// the step finishes. A message without `finish` is that placeholder,
-		// which a turn killed mid-step leaves behind, not a measurement.
-		if stringFromAny(info["finish"]) == "" {
-			continue
-		}
-		tokens := mapFromAny(info["tokens"])
-		if tokens == nil {
-			continue
-		}
-		inputTokens, ok := int64FromAny(tokens["input"])
-		if !ok {
-			continue
-		}
-		outputTokens, ok := int64FromAny(tokens["output"])
-		if !ok {
-			continue
-		}
-		var reasoningTokens int64
-		if reasoning, ok := int64FromAny(tokens["reasoning"]); ok {
-			reasoningTokens = reasoning
-		}
-		var cacheReadTokens, cacheWriteTokens int64
-		if cache := mapFromAny(tokens["cache"]); cache != nil {
-			if read, ok := int64FromAny(cache["read"]); ok {
-				cacheReadTokens = read
-			}
-			if write, ok := int64FromAny(cache["write"]); ok {
-				cacheWriteTokens = write
-			}
-		}
-
-		sum.InputTokens += inputTokens + cacheReadTokens + cacheWriteTokens
-		sum.OutputTokens += outputTokens + reasoningTokens
-		sum.CacheReadTokens += cacheReadTokens
-		sum.CacheWriteTokens += cacheWriteTokens
-		kept = true
-
-		providerID := stringFromAny(info["providerID"])
-		modelID := stringFromAny(info["modelID"])
-		if providerID != "" && modelID != "" {
-			sum.Model = providerID + "/" + modelID
-		}
-	}
-	if !kept {
-		return exportUsage{}
-	}
-
-	sum.TotalTokens = sum.InputTokens + sum.OutputTokens
-	sum.Recovered = true
-	return sum
-}
-
-// messageCreatedMS extracts info.time.created (Unix milliseconds) from an
-// assistant message's info object. ok is false when the field is absent
+// messageCreatedMS extracts time.created (Unix milliseconds) from an
+// assistant message. ok is false when the field is absent
 // or not parseable as a number.
 func messageCreatedMS(info map[string]any) (createdMS int64, ok bool) {
 	t := mapFromAny(info["time"])

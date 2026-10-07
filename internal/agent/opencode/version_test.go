@@ -2,22 +2,13 @@ package opencode
 
 import (
 	"context"
-	"log/slog"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
-
-func deprecationWarnings(entries []agenttest.LogSpyEntry, msg string) []agenttest.LogSpyEntry {
-	var out []agenttest.LogSpyEntry
-	for _, e := range entries {
-		if e.Level == slog.LevelWarn && e.Msg == msg {
-			out = append(out, e)
-		}
-	}
-	return out
-}
 
 func TestParseRuntimeVersion(t *testing.T) {
 	t.Parallel()
@@ -66,78 +57,24 @@ func TestParseRuntimeVersion(t *testing.T) {
 	}
 }
 
-func TestCheckMajorSettings(t *testing.T) {
+func TestStartSession_RefusesUnsupportedMajor(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		pt      passthroughConfig
-		major   runtimeMajor
-		wantMsg string
+		name            string
+		reportedVersion string
+		refusedVersion  string
 	}{
-		{name: "major1 never refuses pure", pt: passthroughConfig{Pure: true}, major: major1},
-		{name: "major1 never refuses a variant without a model", pt: passthroughConfig{Variant: "thinking"}, major: major1},
-		{name: "major2 pass-through with none of the three conditions set", pt: passthroughConfig{Model: "anthropic/claude-3-5-sonnet"}, major: major2},
-		{
-			name:    "major2 refuses pure",
-			pt:      passthroughConfig{Pure: true},
-			major:   major2,
-			wantMsg: "opencode.pure is not supported by OpenCode 2.x; remove it or install a 1.x release",
-		},
-		{
-			name:    "major2 refuses a variant without a model",
-			pt:      passthroughConfig{Variant: "thinking"},
-			major:   major2,
-			wantMsg: "opencode.variant needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.variant",
-		},
-		{
-			name:    "major2 refuses a variant when the model already names one",
-			pt:      passthroughConfig{Model: "anthropic/claude-3-5-sonnet#thinking", Variant: "thinking"},
-			major:   major2,
-			wantMsg: "opencode.model already names a variant after #; remove that suffix or remove opencode.variant",
-		},
+		{name: "major 1", reportedVersion: "1.18.33", refusedVersion: "1.18.33"},
+		{name: "major 0 development build", reportedVersion: "0.0.0-dev-202609250101", refusedVersion: "0.0.0-dev-202609250101"},
+		{name: "major 3", reportedVersion: "3.0.0", refusedVersion: "3.0.0"},
+		{name: "major 2 starts", reportedVersion: "opencode v2.0.18"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := checkMajorSettings(tt.pt, tt.major)
-
-			if tt.wantMsg == "" {
-				if got != nil {
-					t.Fatalf("checkMajorSettings() = %v, want nil", got)
-				}
-				return
-			}
-			if got == nil {
-				t.Fatalf("checkMajorSettings() = nil, want message %q", tt.wantMsg)
-			}
-			if got.Message != tt.wantMsg {
-				t.Errorf("checkMajorSettings().Message = %q, want %q", got.Message, tt.wantMsg)
-			}
-		})
-	}
-}
-
-func TestStartSession_MajorOneDeprecationWarning(t *testing.T) {
-	const wantMsg = "support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli"
-
-	tests := []struct {
-		name                   string
-		reportedVersion        string
-		credentialVerification bool
-		wantMajor              int
-		wantVersionAttr        string
-	}{
-		{name: "major 1 working session logs one warning", reportedVersion: "1.18.33", wantMajor: 1, wantVersionAttr: "1.18.33"},
-		{name: "major 2 working session logs none", reportedVersion: "opencode v2.0.19", wantMajor: 2},
-		{name: "major 1 credential verification session logs none", reportedVersion: "1.18.33", credentialVerification: true, wantMajor: 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spy := agenttest.InstallLogSpy(t)
 			dir := t.TempDir()
 			command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: tt.reportedVersion})
 			a, err := NewOpenCodeAdapter()
@@ -146,34 +83,35 @@ func TestStartSession_MajorOneDeprecationWarning(t *testing.T) {
 			}
 
 			session, err := a.StartSession(context.Background(), domain.StartSessionParams{
-				WorkspacePath:          dir,
-				AgentConfig:            domain.AgentConfig{Command: command},
-				CredentialVerification: tt.credentialVerification,
+				WorkspacePath: dir,
+				AgentConfig:   domain.AgentConfig{Command: command},
 			})
-			if err != nil {
-				t.Fatalf("StartSession(version %q, credentialVerification=%v) error = %v, want nil", tt.reportedVersion, tt.credentialVerification, err)
-			}
 
-			gotMajor, err := RuntimeMajorForTest(session)
-			if err != nil {
-				t.Fatalf("RuntimeMajorForTest() error = %v", err)
-			}
-			if gotMajor != tt.wantMajor {
-				t.Errorf("RuntimeMajorForTest(version %q) = %d, want %d", tt.reportedVersion, gotMajor, tt.wantMajor)
-			}
-
-			warnings := deprecationWarnings(spy.Entries(), wantMsg)
-			if tt.wantVersionAttr == "" {
-				if len(warnings) != 0 {
-					t.Fatalf("StartSession(version %q, credentialVerification=%v) logged %d deprecation warnings, want 0", tt.reportedVersion, tt.credentialVerification, len(warnings))
+			if tt.refusedVersion == "" {
+				if err != nil {
+					t.Fatalf("StartSession(version %q) error = %v, want nil", tt.reportedVersion, err)
+				}
+				if session.Internal == nil {
+					t.Errorf("StartSession(version %q) session = %+v, want a started session", tt.reportedVersion, session)
 				}
 				return
 			}
-			if len(warnings) != 1 {
-				t.Fatalf("StartSession(version %q) logged %d deprecation warnings, want 1", tt.reportedVersion, len(warnings))
+			if err == nil {
+				t.Fatalf("StartSession(version %q) = session %+v, error nil, want an agent_not_found refusal", tt.reportedVersion, session)
 			}
-			if got := warnings[0].Attrs["version"]; got != tt.wantVersionAttr {
-				t.Errorf("deprecation warning version attribute = %q, want %q", got, tt.wantVersionAttr)
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) {
+				t.Fatalf("StartSession(version %q) error = %v (%T), want a *domain.AgentError", tt.reportedVersion, err, err)
+			}
+			if agentErr.Kind != domain.ErrAgentNotFound {
+				t.Errorf("StartSession(version %q) Kind = %q, want %q", tt.reportedVersion, agentErr.Kind, domain.ErrAgentNotFound)
+			}
+			wantMessage := fmt.Sprintf("OpenCode %s is not supported; install OpenCode 2.x, published on npm as @opencode/cli", tt.refusedVersion)
+			if agentErr.Message != wantMessage {
+				t.Errorf("StartSession(version %q) Message = %q, want %q", tt.reportedVersion, agentErr.Message, wantMessage)
+			}
+			if session.Internal != nil {
+				t.Errorf("StartSession(version %q) session.Internal = %v, want no session", tt.reportedVersion, session.Internal)
 			}
 		})
 	}

@@ -1,10 +1,7 @@
 // Package opencode implements [domain.AgentAdapter] for the OpenCode CLI.
 // It launches one `opencode run --format json` subprocess per turn,
 // normalizes stdout envelopes into domain events, and recovers final token
-// usage with `opencode export --sanitize`. When a turn fails and the run
-// stream carried nothing but opencode's masked generic server error, the
-// adapter consults `opencode models` to reconstruct the unknown-model
-// diagnostic.
+// usage with `opencode session export --standalone --sanitize`.
 //
 // The CLI accepts no MCP configuration path as an argument, so on a local
 // launch the adapter translates the file named by
@@ -38,9 +35,6 @@ import (
 
 // defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "opencode"
-
-// majorOneDeprecationMessage is the record a working session on OpenCode 1.x logs.
-const majorOneDeprecationMessage = "support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli"
 
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
@@ -80,15 +74,10 @@ type sessionState struct {
 	// reads it when it builds each turn's own turnRuntime.
 	drainGrace time.Duration
 
-	// major is the OpenCode major this session drives, detected once by
-	// StartSession and never re-detected or cached anywhere else.
-	major runtimeMajor
-
-	// turnConfigContent is the configuration value every turn carries
-	// through OPENCODE_CONFIG_CONTENT: the 1.x MCP document on major1,
-	// the 2.x inline document on major2. Never empty, because both carry
-	// the title-agent switch. Set once in StartSession and never mutated
-	// after.
+	// turnConfigContent is the inline configuration document every turn
+	// carries through OPENCODE_CONFIG_CONTENT. Never empty, because the
+	// document always carries the title-agent switch. Set once in
+	// StartSession and never mutated after.
 	turnConfigContent string
 
 	credentialVerification bool
@@ -132,11 +121,11 @@ func NewOpenCodeAdapter() (domain.AgentAdapter, error) {
 	return &OpenCodeAdapter{}, nil
 }
 
-// StartSession parses the session's settings, detects the installed
-// OpenCode major, and initializes session state without starting a turn
-// subprocess. It refuses an unusable settings block before launching
-// anything, a major other than 1 or 2, and a setting that major cannot
-// carry. A working session on major 1 logs one deprecation warning.
+// StartSession parses the session's settings, checks that the installed
+// OpenCode is a 2.x release, and initializes session state without
+// starting a turn subprocess. It refuses an unusable settings block, a
+// set pure, and a model-variant setting without a plain model before
+// launching anything, and a major other than 2 once the version is read.
 func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	pt, fault := parsePassthroughConfig(params.Settings)
 	if fault != nil {
@@ -165,7 +154,6 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		agentConfig:            params.AgentConfig,
 		passthrough:            pt,
 		sessionID:              params.ResumeSessionID,
-		major:                  majorUnknown,
 		baseLogger:             slog.Default().With(slog.String("component", "opencode-adapter")),
 		createdSession:         params.ResumeSessionID == "",
 		runStartedAtMS:         time.Now().UnixMilli(),
@@ -174,23 +162,11 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		credentialVerification: params.CredentialVerification,
 	}
 
-	version, major, majorErr := detectRuntimeMajor(ctx, state)
-	if majorErr != nil {
-		return domain.Session{}, majorErr
-	}
-	state.major = major
-
-	// The credential-verification session runs the same version query right
-	// before the working session, so only the working session logs.
-	if major == major1 && !state.credentialVerification {
-		state.logger().Warn(majorOneDeprecationMessage, slog.String("version", version))
+	if versionErr := checkRuntimeVersion(ctx, state); versionErr != nil {
+		return domain.Session{}, versionErr
 	}
 
-	if settingsErr := checkMajorSettings(state.passthrough, state.major); settingsErr != nil {
-		return domain.Session{}, settingsErr
-	}
-
-	turnConfigContent, buildErr := buildTurnConfigContent(state.major, state.passthrough, servers)
+	turnConfigContent, buildErr := buildInlineConfig(state.passthrough, servers)
 	if buildErr != nil {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -223,23 +199,8 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		}
 	}
 
-	env, err := buildTurnEnv(state)
-	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "build opencode environment",
-			Err:     err,
-		}
-	}
-
-	managedEnv, err := buildManagedEnv(state.passthrough, state.major)
-	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "build opencode managed environment",
-			Err:     err,
-		}
-	}
+	env := buildTurnEnv(state)
+	managedEnv := buildManagedEnv()
 
 	state.mu.Lock()
 	if state.closed {
@@ -257,7 +218,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		}
 	}
 	state.turnCount++
-	cmdArgs := buildRunArgs(state, params.Prompt, state.passthrough)
+	cmdArgs := buildRunArgs(state, state.passthrough)
 	logger := state.loggerLocked()
 
 	var cmd *exec.Cmd
@@ -281,7 +242,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		state.mu.Unlock()
 		return domain.TurnResult{}, bindErr
 	}
-	cmd.Stdin = buildTurnStdin(state.major, params.Prompt, launch.StdinReader())
+	cmd.Stdin = buildTurnStdin(params.Prompt, launch.StdinReader())
 
 	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
@@ -664,7 +625,7 @@ func deleteVerificationSession(ctx context.Context, state *sessionState, session
 	deleteCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
-	cmd, buildErr := auxiliaryCommand(deleteCtx, state, deleteArgs(state.major, sessionID))
+	cmd, buildErr := auxiliaryCommand(deleteCtx, state, deleteArgs(sessionID))
 	if buildErr != nil {
 		state.logger().Warn("failed to delete credential verification session", slog.Any("error", buildErr))
 		return
@@ -726,12 +687,6 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		ev.Terminal = agentcore.TerminalFailure
 		ev.TerminalErrorKind = domain.ErrTurnFailed
 		ev.TerminalMessage = rawRunErrorMessage(runtime.terminalError)
-		if state.major == major1 && isMaskedServerError(ev.TerminalMessage) {
-			if detail, ok := queryModelNotFound(ctx, state); ok {
-				state.logger().Debug("recovered masked opencode failure detail", slog.String("detail", detail))
-				ev.TerminalMessage = detail
-			}
-		}
 		ev.TerminalMessage += freeTierRefusalClause(runtime.terminalError, state.passthrough)
 		procutil.EmitWarnLines(stderrLines, state.logger())
 
@@ -942,23 +897,14 @@ func toolDuration(partTime rawPartTime) int64 {
 	return partTime.End - partTime.Start
 }
 
-// rawRunErrorMessage returns the first non-empty of runErr's 1.x
-// nested message, its 2.x message, its name, or its 2.x type, falling
-// back to a generic message when none carry text.
+// rawRunErrorMessage returns the first non-empty of runErr's message or
+// type, falling back to a generic message when neither carries text.
 func rawRunErrorMessage(runErr *rawRunError) string {
 	if runErr == nil {
 		return "opencode reported an unknown error"
 	}
-	if runErr.Data != nil {
-		if message, ok := runErr.Data["message"].(string); ok && message != "" {
-			return message
-		}
-	}
 	if runErr.Message != "" {
 		return runErr.Message
-	}
-	if runErr.Name != "" {
-		return runErr.Name
 	}
 	if runErr.Type != "" {
 		return runErr.Type

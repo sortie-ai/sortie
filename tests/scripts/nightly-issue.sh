@@ -60,7 +60,7 @@ chmod +x "$tmp/bin/gh"
 
 cat >"$tmp/bin/nite" <<'EOF'
 #!/bin/sh
-cat >/dev/null
+cat >"${NITE_INPUT_LOG:-/dev/null}"
 [ "${NITE_FAIL:-0}" -eq 0 ] || exit 1
 printf '{"action":"%s","body":"%s","summary":"summary","annotation":""}\n' "$NITE_FORCE_ACTION" "$NITE_FORCE_BODY"
 EOF
@@ -84,6 +84,8 @@ run_revision() {
 		GITHUB_SHA=deadbeef GITHUB_STEP_SUMMARY="$tmp/summary" \
 		GH_ARGV_LOG="$_gh_log" GH_BODIES_LOG="$_bodies_log" \
 		GH_ISSUES_JSON="$ISSUES_JSON" \
+		NITE_INPUT_LOG="$tmp/nite.in" \
+		FORMER_ADAPTER_NAME="${FORMER_ADAPTER_NAME:-}" \
 		GH_FAIL_MUTATION="${GH_FAIL_MUTATION:-0}" \
 		NITE_FAIL="${NITE_FAIL:-0}" \
 		NITE_FORCE_ACTION="$NITE_FORCE_ACTION" NITE_FORCE_BODY="canned incident body" \
@@ -121,6 +123,27 @@ check_action reopen "$closed_row" reopen
 check_action none '[]' none
 
 grep -q '=== call ===' "$tmp/gh.log" || fail "no gh calls were recorded for the none action"
+
+former_name='Example Renamed'
+former_row=$(printf '[{"number":99,"state":"open","title":"Nightly integration failure: %s","pull_request":null}]' "$former_name")
+both_rows=$(printf '[{"number":99,"state":"open","title":"Nightly integration failure: %s","pull_request":null},{"number":120,"state":"open","title":"%s","pull_request":null}]' "$former_name" "$title_row")
+
+incident_sent_to_nite() {
+	jq -r '"\(.incident_state) \(.incident_number)"' "$tmp/nite.in"
+}
+
+FORMER_ADAPTER_NAME=$former_name
+check_action close "$former_row" close
+
+ISSUES_JSON=$both_rows
+NITE_FORCE_ACTION=none
+run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
+[ "$(incident_sent_to_nite)" = 'open 120' ] || fail "highest-numbered incident did not win across the current and former titles: $(incident_sent_to_nite)"
+
+FORMER_ADAPTER_NAME=
+ISSUES_JSON=$former_row
+run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
+[ "$(incident_sent_to_nite)" = 'absent 0' ] || fail "former-title incident matched without FORMER_ADAPTER_NAME: $(incident_sent_to_nite)"
 
 GH_FAIL_MUTATION=1
 ISSUES_JSON=$open_row

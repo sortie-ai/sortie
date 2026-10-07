@@ -3,7 +3,6 @@ package opencode
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -317,19 +316,15 @@ func TestMCPInjectionConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("translateMCPServers() error = %v", err)
 		}
-		document, err := json.Marshal(mcpConfigDocument{MCP: servers})
+		document, err := buildInlineConfig(passthroughConfig{}, servers)
 		if err != nil {
-			t.Fatalf("json.Marshal() error = %v", err)
+			t.Fatalf("buildInlineConfig() error = %v", err)
 		}
 
 		state := newTestSessionState("/workspace", "")
-		state.major = major1
-		args := buildRunArgs(state, "do work", passthroughConfig{})
-		env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{}, major1)
-		if err != nil {
-			t.Fatalf("buildRunEnv() error = %v", err)
-		}
-		env = append(env, "OPENCODE_CONFIG_CONTENT="+string(document))
+		args := buildRunArgs(state, passthroughConfig{})
+		env := buildRunEnv([]string{"PATH=/usr/bin"})
+		env = append(env, "OPENCODE_CONFIG_CONTENT="+document)
 
 		agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
 	})
@@ -338,12 +333,8 @@ func TestMCPInjectionConformance(t *testing.T) {
 		t.Parallel()
 
 		state := newTestSessionState("/workspace", "")
-		state.major = major1
-		args := buildRunArgs(state, "do work", passthroughConfig{})
-		env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{}, major1)
-		if err != nil {
-			t.Fatalf("buildRunEnv() error = %v", err)
-		}
+		args := buildRunArgs(state, passthroughConfig{})
+		env := buildRunEnv([]string{"PATH=/usr/bin"})
 
 		// StartSession's remote guard skips rendering entirely, so a
 		// remote session's turn environment carries nothing to append
@@ -515,7 +506,7 @@ func TestTranslateMCPServers(t *testing.T) {
 	})
 }
 
-// TestBuildInlineConfig asserts the 2.x inline document's marshaled
+// TestBuildInlineConfig asserts the inline document's marshaled
 // shape: share is always present as "disabled" and the title agent is
 // always disabled; permission, compaction, and mcp are each present only
 // when their source data is non-empty.
@@ -574,78 +565,23 @@ func TestBuildInlineConfig(t *testing.T) {
 	}
 }
 
-func TestBuildTurnConfigContent(t *testing.T) {
-	t.Parallel()
-
-	servers := map[string]mcpConfigDocumentEntry{
-		"sortie-tools": {Type: "local", Command: []string{"/usr/local/bin/sortie"}, Enabled: true},
-	}
-
-	tests := []struct {
-		name          string
-		major         runtimeMajor
-		servers       map[string]mcpConfigDocumentEntry
-		wantMCP       bool
-		wantOnlyAgent bool
-	}{
-		{name: "1.x without servers carries the agent member alone", major: major1, wantOnlyAgent: true},
-		{name: "1.x with servers carries mcp beside the agent member", major: major1, servers: servers, wantMCP: true},
-		{name: "2.x without servers carries the agent member", major: major2},
-		{name: "2.x with servers carries mcp beside the agent member", major: major2, servers: servers, wantMCP: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			content, err := buildTurnConfigContent(tt.major, passthroughConfig{}, tt.servers)
-			if err != nil {
-				t.Fatalf("buildTurnConfigContent(%v) error = %v", tt.major, err)
-			}
-			if content == "" {
-				t.Fatalf("buildTurnConfigContent(%v) = %q, want a non-empty document", tt.major, content)
-			}
-
-			doc := decodeConfigDocument(t, content)
-
-			assertTitleAgentDisabled(t, doc)
-			if _, ok := doc["mcp"]; ok != tt.wantMCP {
-				t.Errorf("buildTurnConfigContent(%v) mcp present = %v, want %v", tt.major, ok, tt.wantMCP)
-			}
-			if tt.wantOnlyAgent && len(doc) != 1 {
-				t.Errorf("buildTurnConfigContent(%v) members = %d, want 1", tt.major, len(doc))
-			}
-		})
-	}
-}
-
 func TestBuildTurnEnv_CarriesTitleAgentDisabled(t *testing.T) {
 	t.Parallel()
 
-	for _, major := range []runtimeMajor{major1, major2} {
-		t.Run(fmt.Sprintf("major %v", major), func(t *testing.T) {
-			t.Parallel()
-
-			content, err := buildTurnConfigContent(major, passthroughConfig{}, nil)
-			if err != nil {
-				t.Fatalf("buildTurnConfigContent(%v) error = %v", major, err)
-			}
-			state := newTestSessionState("/workspace", "")
-			state.major = major
-			state.turnConfigContent = content
-
-			env, err := buildTurnEnv(state)
-			if err != nil {
-				t.Fatalf("buildTurnEnv() error = %v", err)
-			}
-
-			carried, ok := envLookup(env, "OPENCODE_CONFIG_CONTENT")
-			if !ok {
-				t.Fatalf("buildTurnEnv() env lacks OPENCODE_CONFIG_CONTENT, want the turn document")
-			}
-			assertTitleAgentDisabled(t, decodeConfigDocument(t, carried))
-		})
+	content, err := buildInlineConfig(passthroughConfig{}, nil)
+	if err != nil {
+		t.Fatalf("buildInlineConfig() error = %v", err)
 	}
+	state := newTestSessionState("/workspace", "")
+	state.turnConfigContent = content
+
+	env := buildTurnEnv(state)
+
+	carried, ok := envLookup(env, "OPENCODE_CONFIG_CONTENT")
+	if !ok {
+		t.Fatalf("buildTurnEnv() env lacks OPENCODE_CONFIG_CONTENT, want the turn document")
+	}
+	assertTitleAgentDisabled(t, decodeConfigDocument(t, carried))
 }
 
 // TestRunTurn_InheritedOpencodeConfigContentScrubbed asserts that an
@@ -657,10 +593,7 @@ func TestRunTurn_InheritedOpencodeConfigContentScrubbed(t *testing.T) {
 
 	base := []string{"OPENCODE_CONFIG_CONTENT=inherited-from-parent-process", "PATH=/usr/bin"}
 
-	env, err := buildRunEnv(base, passthroughConfig{}, major1)
-	if err != nil {
-		t.Fatalf("buildRunEnv() error = %v", err)
-	}
+	env := buildRunEnv(base)
 
 	assertEnvAbsent(t, env, "OPENCODE_CONFIG_CONTENT")
 
@@ -678,51 +611,50 @@ func TestBuildRunArgs(t *testing.T) {
 		name        string
 		sessionID   string
 		pt          passthroughConfig
-		prompt      string
 		wantPresent []string
 		wantPairs   [][2]string
 		wantAbsent  []string
+		wantArgs    []string
 	}{
+		{
+			name:     "minimal_vector_carries_no_directory_variant_or_prompt",
+			pt:       passthroughConfig{},
+			wantArgs: []string{"run", "--format", "json", "--standalone"},
+		},
+		{
+			name:     "effort_rides_the_model_suffix",
+			pt:       passthroughConfig{Model: "provider/model", Effort: "high"},
+			wantArgs: []string{"run", "--format", "json", "--standalone", "--model", "provider/model#high"},
+		},
 		{
 			name:       "fresh_session",
 			sessionID:  "",
 			pt:         passthroughConfig{},
-			prompt:     "do work",
 			wantAbsent: []string{"--session"},
 		},
 		{
 			name:      "resume_session",
 			sessionID: "ses_abc",
 			pt:        passthroughConfig{},
-			prompt:    "continue",
 			wantPairs: [][2]string{{"--session", "ses_abc"}},
 		},
 		{
 			name:        "skip_permissions_default",
 			sessionID:   "",
 			pt:          passthroughConfig{DangerousSkipPermissions: true},
-			prompt:      "work",
 			wantPresent: []string{"--dangerously-skip-permissions"},
 		},
 		{
 			name:       "skip_permissions_disabled",
 			sessionID:  "",
 			pt:         passthroughConfig{DangerousSkipPermissions: false},
-			prompt:     "work",
 			wantAbsent: []string{"--dangerously-skip-permissions"},
 		},
 		{
 			name:      "model_flag",
 			sessionID: "",
 			pt:        passthroughConfig{Model: "anthropic/claude-3-5-sonnet"},
-			prompt:    "work",
 			wantPairs: [][2]string{{"--model", "anthropic/claude-3-5-sonnet"}},
-		},
-		{
-			name:      "prompt_after_dashdash",
-			sessionID: "",
-			pt:        passthroughConfig{},
-			prompt:    "my --prompt with flags",
 		},
 	}
 
@@ -731,8 +663,9 @@ func TestBuildRunArgs(t *testing.T) {
 			t.Parallel()
 
 			state := newTestSessionState("/tmp/workspace", tt.sessionID)
-			args := buildRunArgs(state, tt.prompt, tt.pt)
+			args := buildRunArgs(state, tt.pt)
 
+			assertHasFlag(t, args, "--standalone")
 			for _, flag := range tt.wantPresent {
 				assertHasFlag(t, args, flag)
 			}
@@ -742,17 +675,8 @@ func TestBuildRunArgs(t *testing.T) {
 			for _, flag := range tt.wantAbsent {
 				assertNoFlag(t, args, flag)
 			}
-
-			// Prompt must be the last argument, after "--".
-			if len(args) < 2 {
-				t.Fatalf("args too short: %v", args)
-			}
-			lastTwo := args[len(args)-2:]
-			if lastTwo[0] != "--" {
-				t.Errorf("second-to-last arg = %q, want %q", lastTwo[0], "--")
-			}
-			if lastTwo[1] != tt.prompt {
-				t.Errorf("last arg = %q, want prompt %q", lastTwo[1], tt.prompt)
+			if tt.wantArgs != nil && !slices.Equal(args, tt.wantArgs) {
+				t.Errorf("buildRunArgs(%+v) = %v, want %v", tt.pt, args, tt.wantArgs)
 			}
 		})
 	}
@@ -773,7 +697,7 @@ func TestBuildRunArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
 	}
 
 	state := newTestSessionState("/tmp/workspace", "")
-	args := buildRunArgs(state, "work", pt)
+	args := buildRunArgs(state, pt)
 
 	assertHasFlag(t, args, "--dangerously-skip-permissions")
 }
@@ -830,42 +754,27 @@ func TestBuildRunEnv(t *testing.T) {
 	tests := []struct {
 		name      string
 		base      []string
-		pt        passthroughConfig
 		checkFunc func(t *testing.T, env []string)
 	}{
 		{
 			name: "baseline_always_set",
 			base: []string{},
-			pt:   passthroughConfig{},
 			checkFunc: func(t *testing.T, env []string) {
 				t.Helper()
-				assertEnvPresent(t, env, "OPENCODE_AUTO_SHARE", "false")
 				assertEnvPresent(t, env, "OPENCODE_DISABLE_AUTOUPDATE", "true")
-				assertEnvPresent(t, env, "OPENCODE_DISABLE_LSP_DOWNLOAD", "true")
 			},
 		},
 		{
-			name: "autocompact_default_true",
-			base: []string{},
-			pt:   passthroughConfig{DisableAutocompact: true},
+			name: "inherited_autoupdate_overridden",
+			base: []string{"OPENCODE_DISABLE_AUTOUPDATE=false"},
 			checkFunc: func(t *testing.T, env []string) {
 				t.Helper()
-				assertEnvPresent(t, env, "OPENCODE_DISABLE_AUTOCOMPACT", "true")
-			},
-		},
-		{
-			name: "autocompact_disabled",
-			base: []string{},
-			pt:   passthroughConfig{DisableAutocompact: false},
-			checkFunc: func(t *testing.T, env []string) {
-				t.Helper()
-				assertEnvPresent(t, env, "OPENCODE_DISABLE_AUTOCOMPACT", "false")
+				assertEnvPresent(t, env, "OPENCODE_DISABLE_AUTOUPDATE", "true")
 			},
 		},
 		{
 			name: "inherited_permission_removed",
 			base: []string{"OPENCODE_PERMISSION=old_value", "OTHER_VAR=keep"},
-			pt:   passthroughConfig{},
 			checkFunc: func(t *testing.T, env []string) {
 				t.Helper()
 				assertEnvAbsent(t, env, "OPENCODE_PERMISSION")
@@ -873,53 +782,17 @@ func TestBuildRunEnv(t *testing.T) {
 			},
 		},
 		{
-			name: "allowed_tools_policy",
-			base: []string{},
-			pt:   passthroughConfig{AllowedTools: []string{"read"}},
-			checkFunc: func(t *testing.T, env []string) {
-				t.Helper()
-				raw, ok := envLookup(env, "OPENCODE_PERMISSION")
-				if !ok {
-					t.Fatal("OPENCODE_PERMISSION absent")
-				}
-				var policy map[string]string
-				if err := json.Unmarshal([]byte(raw), &policy); err != nil {
-					t.Fatalf("OPENCODE_PERMISSION unmarshal: %v", err)
-				}
-				if policy["read"] != "allow" {
-					t.Errorf("OPENCODE_PERMISSION[read] = %q, want %q", policy["read"], "allow")
-				}
-				if policy["bash"] != "deny" {
-					t.Errorf("OPENCODE_PERMISSION[bash] = %q, want %q", policy["bash"], "deny")
-				}
+			name: "inherited_policy_variables_removed",
+			base: []string{
+				"OPENCODE_AUTO_SHARE=true",
+				"OPENCODE_DISABLE_AUTOCOMPACT=false",
+				"OPENCODE_DISABLE_LSP_DOWNLOAD=false",
 			},
-		},
-		{
-			name: "denied_tools_policy",
-			base: []string{},
-			pt:   passthroughConfig{DeniedTools: []string{"bash"}},
 			checkFunc: func(t *testing.T, env []string) {
 				t.Helper()
-				raw, ok := envLookup(env, "OPENCODE_PERMISSION")
-				if !ok {
-					t.Fatal("OPENCODE_PERMISSION absent")
-				}
-				var policy map[string]string
-				if err := json.Unmarshal([]byte(raw), &policy); err != nil {
-					t.Fatalf("OPENCODE_PERMISSION unmarshal: %v", err)
-				}
-				if policy["bash"] != "deny" {
-					t.Errorf("OPENCODE_PERMISSION[bash] = %q, want %q", policy["bash"], "deny")
-				}
-			},
-		},
-		{
-			name: "no_policy_no_permission_key",
-			base: []string{},
-			pt:   passthroughConfig{},
-			checkFunc: func(t *testing.T, env []string) {
-				t.Helper()
-				assertEnvAbsent(t, env, "OPENCODE_PERMISSION")
+				assertEnvAbsent(t, env, "OPENCODE_AUTO_SHARE")
+				assertEnvAbsent(t, env, "OPENCODE_DISABLE_AUTOCOMPACT")
+				assertEnvAbsent(t, env, "OPENCODE_DISABLE_LSP_DOWNLOAD")
 			},
 		},
 	}
@@ -928,13 +801,9 @@ func TestBuildRunEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env, err := buildRunEnv(tt.base, tt.pt, major1)
-			if err != nil {
-				t.Fatalf("buildRunEnv() error = %v", err)
-			}
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, env)
-			}
+			env := buildRunEnv(tt.base)
+
+			tt.checkFunc(t, env)
 		})
 	}
 }

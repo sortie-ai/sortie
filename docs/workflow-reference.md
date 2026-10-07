@@ -60,6 +60,7 @@
   - [9.2 Configuration Errors](#92-configuration-errors)
   - [9.3 Environment Variable Errors](#93-environment-variable-errors)
   - [9.4 Template Errors](#94-template-errors)
+  - [9.5 Agent Errors](#95-agent-errors)
 - [10. Config Fields Summary (Cheat Sheet)](#10-config-fields-summary-cheat-sheet)
 - [11. Complete Annotated Examples](#11-complete-annotated-examples)
   - [11.1 Minimal Workflow](#111-minimal-workflow)
@@ -2301,7 +2302,6 @@ opencode:
   agent: build
   effort: high
   thinking: true
-  pure: false
   dangerously_skip_permissions: true
   disable_autocompact: true
   allowed_tools:
@@ -2311,30 +2311,27 @@ opencode:
     - bash
 ```
 
-The `opencode` block is forwarded to the OpenCode adapter, which supports OpenCode 1.x and 2.x and detects which one `agent.command` names by querying its version at the start of each session, refusing a version it cannot read and any major other than 1 or 2. A string key whose YAML value carries another type fails the session start and, offline, is reported by `sortie validate` under the check `opencode.<key>.wrong_type`.
+The `opencode` block is forwarded to the OpenCode adapter, which drives OpenCode 2.x. It queries `agent.command` for its version at the start of each session and refuses a version it cannot read and any major other than 2. OpenCode 2.x is published on npm as `@opencode/cli`. A string key whose YAML value carries another type fails the session start and, offline, is reported by `sortie validate` under the check `opencode.<key>.wrong_type`.
 
-Support for OpenCode 1.x is deprecated, and a later Sortie release removes it. A run on 1.x works unchanged and logs one warning when its agent session starts, reading `support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli` with the detected version in `version`. OpenCode 2.x is published on npm as `@opencode/cli`, and the `opencode-ai` package ships only 1.x. Both packages install the `opencode` command, so run `npm uninstall -g opencode-ai` before a global install of `@opencode/cli`, which npm otherwise refuses with `EEXIST`. A workflow moving to 2.x first clears `opencode.pure`, and gives `opencode.effort` or `opencode.variant`, whichever it sets, an `opencode.model` without a `#` suffix, because the rows of the table below say those settings fail session start on that major otherwise. `sortie validate` does not report the deprecation, because it never runs `agent.command`.
-
-On 1.x the adapter runs `opencode run --format json --dir <workspace>` once per turn with the prompt as the final positional argument, appends `--session <session_id>` when continuing a session, and recovers final token usage with `opencode export --sanitize <session_id>` when the session ID is known. On 2.x it runs `opencode run --format json --standalone` with the prompt on standard input instead, and recovers usage with `opencode session export --standalone --sanitize <session_id>`.
+The adapter runs `opencode run --format json --standalone` once per turn with the prompt on standard input, appends `--session <session_id>` when continuing a session, and recovers final token usage with `opencode session export --standalone --sanitize <session_id>` when the session ID is known.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model` on both majors. On 2.x, a non-empty `opencode.effort` or `opencode.variant` is appended after a `#`. |
-| `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent` on both majors. Selects the OpenCode agent profile for the turn. |
-| `opencode.effort` | string | _(absent)_ | Fills OpenCode's model-variant slot on every turn, credential verification included; see the reasoning effort paragraph above. On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. A variant the model does not define is refused on 2.x before any model request, with `Variant unavailable for <provider>/<model>: <variant>`, and the turn fails with that text, the credential-verification session first. On 1.x the run proceeds without a variant, exits 0, and reports nothing. Setting it together with `opencode.variant` fails under `opencode.effort.conflict`. |
-| `opencode.variant` | string | _(absent)_ | Fills the same slot as `opencode.effort`; setting both fails the session start and, offline, is reported by `sortie validate` under the check `opencode.effort.conflict`. On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. |
-| `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command on both majors. |
-| `opencode.pure` | boolean | `false` | Adds `--pure` to the run command on 1.x. OpenCode 2.x accepts no equivalent switch, so a `true` value fails session start on that major. |
-| `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`, on both majors. When `false`, the runtime refuses every permissioned tool call instead of performing it; OpenCode 2.x also ends the turn at the first refusal. |
-| `opencode.disable_autocompact` | boolean | `true` | On 1.x, sets `OPENCODE_DISABLE_AUTOCOMPACT`; the adapter always also sets `OPENCODE_AUTO_SHARE=false`, `OPENCODE_DISABLE_AUTOUPDATE=true`, and `OPENCODE_DISABLE_LSP_DOWNLOAD=true`. On 2.x, sets the turn's inline configuration document's `compaction.auto` to `false`; the adapter always sets that document's `share` to `disabled` and, in the launch environment, `OPENCODE_DISABLE_AUTOUPDATE=true`. |
-| `opencode.allowed_tools` | list of strings | `[]` | On 1.x, builds `OPENCODE_PERMISSION` allow rules. On 2.x, builds the turn's inline configuration document's `permission` member instead. On both majors, listed keys become `allow`; known OpenCode permission keys not listed become `deny`; unknown keys are forwarded unchanged. |
-| `opencode.denied_tools` | list of strings | `[]` | Builds explicit `deny` rules in the same policy `opencode.allowed_tools` builds, per major. |
+| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model`. A non-empty `opencode.effort` or `opencode.variant` is appended after a `#`. |
+| `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent`. Selects the OpenCode agent profile for the turn. |
+| `opencode.effort` | string | _(absent)_ | Fills OpenCode's model-variant slot on every turn, credential verification included; see the reasoning effort paragraph above. Folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start. A variant the model does not define is refused before any model request, with `Variant unavailable for <provider>/<model>: <variant>`, and the turn fails with that text, the credential-verification session first. Setting it together with `opencode.variant` fails under `opencode.effort.conflict`. |
+| `opencode.variant` | string | _(absent)_ | Fills the same slot as `opencode.effort`; setting both fails the session start and, offline, is reported by `sortie validate` under the check `opencode.effort.conflict`. Folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start. |
+| `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command. |
+| `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`. When `false`, the runtime refuses every permissioned tool call instead of performing it and ends the turn at the first refusal. |
+| `opencode.disable_autocompact` | boolean | `true` | Sets the turn's inline configuration document's `compaction.auto` to `false`; the adapter always sets that document's `share` to `disabled` and, in the launch environment, `OPENCODE_DISABLE_AUTOUPDATE=true`. |
+| `opencode.allowed_tools` | list of strings | `[]` | Builds the turn's inline configuration document's `permission` member: listed keys become `allow`; known OpenCode permission keys not listed become `deny`; unknown keys are forwarded unchanged. |
+| `opencode.denied_tools` | list of strings | `[]` | Builds explicit `deny` rules in the same policy `opencode.allowed_tools` builds. |
 
 **Validation rules:**
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
 - `opencode.effort` and `opencode.variant` MUST NOT both be set, because both fill the model-variant slot.
-- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one for the detected major. The configuration document the adapter writes disables OpenCode's title agent on both majors, so a local turn makes no title request and a session keeps OpenCode's default title.
+- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one. The configuration document the adapter writes disables OpenCode's title agent, so a local turn makes no title request and a session keeps OpenCode's default title.
 
 **Agent Client Protocol adapter:**
 
@@ -3144,6 +3141,15 @@ These errors are raised when `SORTIE_*` environment variables or `.env` file val
 template parse error in WORKFLOW.md (line 47): template: prompt:4:15: ...
 template render error in WORKFLOW.md (line 52): template: prompt:9: ...
 ```
+
+### 9.5 Agent Errors
+
+These errors are raised when an agent session starts, before any turn runs, and fail the session start with the error kind `agent_not_found`.
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `opencode.pure is not supported by OpenCode 2.x; remove it` | The `opencode` block sets `pure: true`. | Remove `opencode.pure`. |
+| `OpenCode <version> is not supported; install OpenCode 2.x, published on npm as @opencode/cli` | `agent.command` reports a major other than 2. | Install OpenCode 2.x, or point `agent.command` at an installation of it. |
 
 ---
 
