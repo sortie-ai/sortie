@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Removed
 
 - A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))
+- The `opencode` agent kind runs OpenCode 2.x only: a session on 1.x fails at start, naming the installed version and asking for OpenCode 2.x (`@opencode/cli`). A session with `opencode.pure: true` fails at start with an error naming the setting, and `opencode.effort` or `opencode.variant` needs `opencode.model`. ([#1179](https://github.com/sortie-ai/sortie/issues/1179))
 
 ### Fixed
 
