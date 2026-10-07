@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A dispatch rule can now carry a `stage` label in place of a `match` block: an issue that carries the label runs on that rule wherever it sits in the list, so one label puts an issue on a stage, and an issue with several stage labels runs on the first such rule and logs a warning. `sortie validate` rejects a stage label that two rules share, that names a tracker state, or that is a label Sortie adds itself, such as `needs-human`. ([#1256](https://github.com/sortie-ai/sortie/issues/1256))
+
 ### Removed
 
 - A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))

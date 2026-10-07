@@ -93,6 +93,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
+- Dispatch stage labels: an issue that carries a rule's stage label is selected by that rule ahead of every ordered rule, a catch-all and a `labels` match included; an issue that carries none routes as it does without stage labels and never matches a rule with a stage label; an issue that carries several resolves to the rule listed first and logs one warning naming every label in list order, once per evaluation on the poll tick and on a retry routed afresh, and none for a retry whose selection stands; selection, the duplicate check, and the collision check share one case-insensitive comparison; each load-time stage error reports its field and message, in the order the checks run when a rule has several faults; a catch-all may precede rules with a stage label; `sortie validate` reports every stage label collision with a tracker state, an escalation label, or the parking label, one entry for each rule and collision, and exits with code 1
 - Issue with non-terminal blockers in a non-running active state is not eligible
 - An issue whose blockers could not be resolved is not eligible either
 - Issue with terminal blockers is eligible
