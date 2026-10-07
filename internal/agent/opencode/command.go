@@ -3,13 +3,13 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
@@ -123,7 +123,8 @@ func variantConflictMessage(pt passthroughConfig) string {
 }
 
 // checkCrossField rejects a passthrough whose allowed_tools and
-// denied_tools overlap, or whose effort and variant are both set.
+// denied_tools overlap, whose effort and variant are both set, that sets
+// pure, or whose model-variant slot has no plain model to attach to.
 func checkCrossField(pt passthroughConfig) error {
 	if message := overlapMessage(pt.AllowedTools, pt.DeniedTools); message != "" {
 		return fmt.Errorf("%s", message)
@@ -131,77 +132,52 @@ func checkCrossField(pt passthroughConfig) error {
 	if message := variantConflictMessage(pt); message != "" {
 		return fmt.Errorf("%s", message)
 	}
+	if pt.Pure {
+		return errors.New("opencode.pure is not supported by OpenCode 2.x; remove it")
+	}
+
+	slot, slotKey := pt.variantSlot()
+	switch {
+	case slot != "" && pt.Model == "":
+		return fmt.Errorf("opencode.%[1]s needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.%[1]s", slotKey)
+	case slot != "" && strings.Contains(pt.Model, "#"):
+		return fmt.Errorf("opencode.model already names a variant after #; remove that suffix or remove opencode.%s", slotKey)
+	}
 	return nil
 }
 
-// buildRunArgs builds one turn's argument vector for state.major's
-// contract: 1.x takes the workspace on --dir and the prompt as the
-// final, "--"-separated positional argument; 2.x takes neither, since
-// its working directory comes from PWD (agentcore.LaunchTarget.BindWorkspace)
-// and its prompt from standard input.
-func buildRunArgs(state *sessionState, prompt string, pt passthroughConfig) []string {
+// buildRunArgs builds one turn's argument vector. The runtime takes its
+// working directory from PWD (agentcore.LaunchTarget.BindWorkspace) and
+// its prompt from standard input, so neither rides on the command line.
+func buildRunArgs(state *sessionState, pt passthroughConfig) []string {
 	slot, _ := pt.variantSlot()
-	if state.major == major2 {
-		args := []string{"run", "--format", "json", "--standalone"}
-		if state.sessionID != "" {
-			args = append(args, "--session", state.sessionID)
-		}
-		if pt.Model != "" {
-			model := pt.Model
-			if slot != "" {
-				model += "#" + slot
-			}
-			args = append(args, "--model", model)
-		}
-		if pt.Agent != "" {
-			args = append(args, "--agent", pt.Agent)
-		}
-		if pt.Thinking {
-			args = append(args, "--thinking")
-		}
-		if pt.DangerousSkipPermissions {
-			args = append(args, "--dangerously-skip-permissions")
-		}
-		return args
-	}
-
-	args := []string{"run", "--format", "json", "--dir", state.target.WorkspacePath}
-
+	args := []string{"run", "--format", "json", "--standalone"}
 	if state.sessionID != "" {
 		args = append(args, "--session", state.sessionID)
 	}
 	if pt.Model != "" {
-		args = append(args, "--model", pt.Model)
+		model := pt.Model
+		if slot != "" {
+			model += "#" + slot
+		}
+		args = append(args, "--model", model)
 	}
 	if pt.Agent != "" {
 		args = append(args, "--agent", pt.Agent)
 	}
-	if slot != "" {
-		args = append(args, "--variant", slot)
-	}
 	if pt.Thinking {
 		args = append(args, "--thinking")
-	}
-	if pt.Pure {
-		args = append(args, "--pure")
 	}
 	if pt.DangerousSkipPermissions {
 		args = append(args, "--dangerously-skip-permissions")
 	}
-
-	args = append(args, "--", prompt)
 	return args
 }
 
-// buildTurnStdin returns the reader a turn's subprocess reads its
-// prompt from. On major1, preamble alone (nil on a local launch, the
-// SSH preamble otherwise): the prompt already rode on buildRunArgs's
-// positional argument. On major2, prompt follows preamble, since 2.x
-// takes no positional prompt.
-func buildTurnStdin(major runtimeMajor, prompt string, preamble io.Reader) io.Reader {
-	if major != major2 {
-		return preamble
-	}
+// buildTurnStdin returns the reader a turn's subprocess reads from:
+// prompt, preceded by preamble (nil on a local launch, the SSH preamble
+// otherwise).
+func buildTurnStdin(prompt string, preamble io.Reader) io.Reader {
 	promptReader := strings.NewReader(prompt)
 	if preamble == nil {
 		return promptReader
@@ -209,29 +185,18 @@ func buildTurnStdin(major runtimeMajor, prompt string, preamble io.Reader) io.Re
 	return io.MultiReader(preamble, promptReader)
 }
 
-// exportArgs returns the usage-recovery invocation's argument vector
-// for major.
-func exportArgs(major runtimeMajor, sessionID string) []string {
-	if major == major2 {
-		return []string{"session", "export", "--standalone", "--sanitize", sessionID}
-	}
-	return []string{"export", "--sanitize", sessionID}
+// exportArgs returns the usage-recovery invocation's argument vector.
+func exportArgs(sessionID string) []string {
+	return []string{"session", "export", "--standalone", "--sanitize", sessionID}
 }
 
-// deleteArgs returns the session-deletion invocation's argument vector
-// for major.
-func deleteArgs(major runtimeMajor, sessionID string) []string {
-	if major == major2 {
-		return []string{"session", "delete", "--standalone", sessionID}
-	}
-	return []string{"session", "delete", sessionID}
+// deleteArgs returns the session-deletion invocation's argument vector.
+func deleteArgs(sessionID string) []string {
+	return []string{"session", "delete", "--standalone", sessionID}
 }
 
-func buildRunEnv(base []string, pt passthroughConfig, major runtimeMajor) ([]string, error) {
-	managedEnv, err := buildManagedEnv(pt, major)
-	if err != nil {
-		return nil, err
-	}
+func buildRunEnv(base []string) []string {
+	managedEnv := buildManagedEnv()
 
 	env := make([]string, 0, len(base)+len(managedEnv))
 	for _, entry := range base {
@@ -250,39 +215,28 @@ func buildRunEnv(base []string, pt passthroughConfig, major runtimeMajor) ([]str
 		env = append(env, key+"="+managedEnv[key])
 	}
 
-	return env, nil
+	return env
 }
 
 // buildTurnEnv returns the environment every local turn's subprocess
 // carries: the scrubbed base environment and managed settings
-// [buildRunEnv] builds for state.major, with state.turnConfigContent
-// appended as OPENCODE_CONFIG_CONTENT when non-empty. It is the one
-// path a turn's environment is built from, on both majors.
-func buildTurnEnv(state *sessionState) ([]string, error) {
-	env, err := buildRunEnv(os.Environ(), state.passthrough, state.major)
-	if err != nil {
-		return nil, err
-	}
+// [buildRunEnv] builds, with state.turnConfigContent appended as
+// OPENCODE_CONFIG_CONTENT when non-empty. It is the one path a turn's
+// environment is built from.
+func buildTurnEnv(state *sessionState) []string {
+	env := buildRunEnv(os.Environ())
 	if state.turnConfigContent != "" {
 		env = append(env, "OPENCODE_CONFIG_CONTENT="+state.turnConfigContent)
 	}
-	return env, nil
+	return env
 }
 
 // auxiliaryCommand builds a one-shot opencode subcommand through the
 // session's launch target, carrying the same environment and managed
-// variables every working turn carries, so a delete, an export query,
-// and a models query never diverge in what they run with.
+// variables every working turn carries, so a delete and an export query
+// never diverge in what they run with.
 func auxiliaryCommand(ctx context.Context, state *sessionState, args []string) (*exec.Cmd, error) {
-	env, err := buildRunEnv(os.Environ(), state.passthrough, state.major)
-	if err != nil {
-		return nil, err
-	}
-	managedEnv, err := buildManagedEnv(state.passthrough, state.major)
-	if err != nil {
-		return nil, err
-	}
-	cmd, agentErr := state.target.AuxiliaryCommand(ctx, args, nil, env, sortedEnvVars(managedEnv)...)
+	cmd, agentErr := state.target.AuxiliaryCommand(ctx, args, nil, buildRunEnv(os.Environ()), sortedEnvVars(buildManagedEnv())...)
 	if agentErr != nil {
 		return nil, agentErr
 	}
@@ -308,33 +262,11 @@ func sortedEnvVars(managed map[string]string) []sshutil.EnvVar {
 }
 
 // buildManagedEnv returns the environment variables the adapter itself
-// sets on every launch for major. On major2, tool policy, sharing, and
-// compaction ride in the turn's inline configuration document instead,
-// so the only managed variable is the update check.
-func buildManagedEnv(pt passthroughConfig, major runtimeMajor) (map[string]string, error) {
-	if major == major2 {
-		return map[string]string{"OPENCODE_DISABLE_AUTOUPDATE": "true"}, nil
-	}
-
-	managed := map[string]string{
-		"OPENCODE_AUTO_SHARE":           "false",
-		"OPENCODE_DISABLE_AUTOCOMPACT":  strconv.FormatBool(pt.DisableAutocompact),
-		"OPENCODE_DISABLE_AUTOUPDATE":   "true",
-		"OPENCODE_DISABLE_LSP_DOWNLOAD": "true",
-	}
-
-	policy, ok := buildPermissionPolicy(pt)
-	if !ok {
-		return managed, nil
-	}
-
-	encoded, err := json.Marshal(policy)
-	if err != nil {
-		return nil, fmt.Errorf("marshal opencode permission policy: %w", err)
-	}
-	managed["OPENCODE_PERMISSION"] = string(encoded)
-
-	return managed, nil
+// sets on every launch. Tool policy, sharing, and compaction ride in the
+// turn's inline configuration document, so the only managed variable is
+// the update check.
+func buildManagedEnv() map[string]string {
+	return map[string]string{"OPENCODE_DISABLE_AUTOUPDATE": "true"}
 }
 
 func buildPermissionPolicy(pt passthroughConfig) (permissionPolicy, bool) {
@@ -386,17 +318,8 @@ func shouldDropManagedEnv(entry string) bool {
 	}
 }
 
-// mcpConfigDocument is the 1.x OPENCODE_CONFIG_CONTENT value: the
-// runtime's own inline configuration document, carrying the tool
-// servers and the per-agent settings a 1.x session delivers through
-// its inline-configuration environment variable.
-type mcpConfigDocument struct {
-	MCP   map[string]mcpConfigDocumentEntry `json:"mcp,omitempty"`
-	Agent *agentConfigDocument              `json:"agent,omitempty"`
-}
-
-// agentConfigDocument is the per-agent member both majors' turn
-// documents carry.
+// agentConfigDocument is the per-agent member of the turn's inline
+// configuration document.
 type agentConfigDocument struct {
 	Title agentSwitch `json:"title"`
 }
@@ -413,8 +336,7 @@ func titleAgentDisabled() *agentConfigDocument {
 	return &agentConfigDocument{Title: agentSwitch{Disable: true}}
 }
 
-// mcpConfigDocumentEntry is one server entry of [mcpConfigDocument] and
-// of [inlineConfigDocument].
+// mcpConfigDocumentEntry is one server entry of [inlineConfigDocument].
 type mcpConfigDocumentEntry struct {
 	Type        string            `json:"type"`
 	Command     []string          `json:"command,omitempty"`
@@ -424,11 +346,9 @@ type mcpConfigDocumentEntry struct {
 	Enabled     bool              `json:"enabled"`
 }
 
-// inlineConfigDocument is the 2.x OPENCODE_CONFIG_CONTENT value: the
+// inlineConfigDocument is the OPENCODE_CONFIG_CONTENT value: the
 // runtime's own inline configuration document, carrying the tool
-// policy, sharing, compaction, and tool servers a 1.x session instead
-// spreads across several environment variables and its own MCP
-// document.
+// policy, sharing, compaction, and tool servers.
 type inlineConfigDocument struct {
 	Permission permissionPolicy                  `json:"permission,omitempty"`
 	Share      string                            `json:"share"`
@@ -461,24 +381,7 @@ func translateMCPServers(mcpConfigPath string, remote bool) (map[string]mcpConfi
 	return buildMCPConfigEntries(servers)
 }
 
-// buildTurnConfigContent returns the turn-carried configuration value
-// [sessionState.turnConfigContent] holds for major: the 1.x shape,
-// [mcpConfigDocument] rendered by json.Marshal with mcp present only
-// when servers is non-empty; or the 2.x inline document
-// [buildInlineConfig] builds. Both carry the title-agent switch, so the
-// value is never empty.
-func buildTurnConfigContent(major runtimeMajor, pt passthroughConfig, servers map[string]mcpConfigDocumentEntry) (string, error) {
-	if major == major2 {
-		return buildInlineConfig(pt, servers)
-	}
-	encoded, err := json.Marshal(mcpConfigDocument{MCP: servers, Agent: titleAgentDisabled()})
-	if err != nil {
-		return "", fmt.Errorf("marshal opencode mcp document: %w", err)
-	}
-	return string(encoded), nil
-}
-
-// buildInlineConfig returns the 2.x OPENCODE_CONFIG_CONTENT document:
+// buildInlineConfig returns the OPENCODE_CONFIG_CONTENT document:
 // the session's tool policy, sharing fixed to disabled, autocompaction
 // disabled when pt asks for it, the title agent disabled, and servers
 // when non-empty.
@@ -502,9 +405,7 @@ func buildInlineConfig(pt passthroughConfig, servers map[string]mcpConfigDocumen
 }
 
 // buildMCPConfigEntries translates servers into the runtime's own MCP
-// server-entry shape, shared by [translateMCPServers] and
-// [buildTurnConfigContent] so the two never drift on how a server
-// renders.
+// server-entry shape.
 func buildMCPConfigEntries(servers []mcpconfig.Server) (map[string]mcpConfigDocumentEntry, error) {
 	entries := make(map[string]mcpConfigDocumentEntry, len(servers))
 

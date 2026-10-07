@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -220,7 +219,7 @@ func TestIntegration_InvalidModelFailure(t *testing.T) {
 			continue
 		}
 		sawTurnFailed = true
-		if strings.Contains(event.Message, "Model not found") || strings.Contains(event.Message, "Model unavailable: nonexistent/nonexistent") {
+		if strings.Contains(event.Message, "Model unavailable: nonexistent/nonexistent") {
 			sawModelNotFound = true
 		}
 	}
@@ -319,10 +318,9 @@ func TestIntegration_TurnCancellation(t *testing.T) {
 }
 
 // TestIntegration_PermissionDeepMerge reads the resolved tool-
-// permission document a session's own turns carry, on both majors,
-// with no model request: the operator's own opencode.json must survive
-// the adapter's merge, and the adapter's own entries must win a
-// conflict.
+// permission document a session's own turns carry, with no model
+// request: the operator's own opencode.json must survive the adapter's
+// merge, and the adapter's own entries must win a conflict.
 func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	skipIfNotEnabled(t)
 
@@ -363,15 +361,6 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
 
-	major, err := opencode.RuntimeMajorForTest(session)
-	if err != nil {
-		t.Fatalf("RuntimeMajorForTest(): %v", err)
-	}
-	shellKey := "bash"
-	if major == 2 {
-		shellKey = "shell"
-	}
-
 	permCtx, permCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer permCancel()
 	effective, raw, err := opencode.EffectivePermissionsForTest(permCtx, session)
@@ -392,41 +381,13 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	if effective["glob"] != "allow" {
 		t.Errorf("effective[%q] = %q, want %q", "glob", effective["glob"], "allow")
 	}
-	if effective[shellKey] != "deny" {
-		t.Errorf("effective[%q] = %q, want %q", shellKey, effective[shellKey], "deny")
+	if effective["shell"] != "deny" {
+		t.Errorf("effective[%q] = %q, want %q", "shell", effective["shell"], "deny")
 	}
 }
 
-// TestIntegration_RuntimeMajor asserts the detected runtime major
-// matches the operator's own expectation for the binary under test,
-// catching a shard or leg that silently installs the wrong major.
-func TestIntegration_RuntimeMajor(t *testing.T) {
-	skipIfNotEnabled(t)
-
-	wantStr := os.Getenv("SORTIE_OPENCODE_MAJOR")
-	if wantStr == "" {
-		t.Skip("set SORTIE_OPENCODE_MAJOR=1 or 2 to assert the detected runtime major")
-	}
-	want, convErr := strconv.Atoi(wantStr)
-	if convErr != nil || (want != 1 && want != 2) {
-		t.Fatalf("SORTIE_OPENCODE_MAJOR = %q, want \"1\" or \"2\"", wantStr)
-	}
-
-	a := mustNewAdapter(t)
-	session := mustStartIntegrationSession(t, a)
-	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
-
-	got, err := opencode.RuntimeMajorForTest(session)
-	if err != nil {
-		t.Fatalf("RuntimeMajorForTest(): %v", err)
-	}
-	if got != want {
-		t.Errorf("RuntimeMajorForTest() = %d, want %d (SORTIE_OPENCODE_MAJOR)", got, want)
-	}
-}
-
-// TestIntegration_ToolServerIdentity proves tool-server delivery on
-// both majors without a model call invoking the tool, mirroring
+// TestIntegration_ToolServerIdentity proves tool-server delivery
+// without a model call invoking the tool, mirroring
 // internal/agent/claude's TestIntegration_ToolServerIdentity.
 //
 // It does not call agenttest.AssertToolServerIdentity: that helper

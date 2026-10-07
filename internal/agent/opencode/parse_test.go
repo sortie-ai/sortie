@@ -131,14 +131,11 @@ func TestParseRunEvent(t *testing.T) {
 				if ev.Error == nil {
 					t.Fatal("Error is nil, want non-nil")
 				}
-				if ev.Error.Name != "ProviderAuthError" {
-					t.Errorf("Error.Name = %q, want %q", ev.Error.Name, "ProviderAuthError")
+				if ev.Error.Type != "provider.auth" {
+					t.Errorf("Error.Type = %q, want %q", ev.Error.Type, "provider.auth")
 				}
-				if ev.Error.Data == nil {
-					t.Fatal("Error.Data is nil, want non-nil")
-				}
-				if msg, _ := ev.Error.Data["message"].(string); msg != "invalid api key" {
-					t.Errorf("Error.Data[message] = %q, want %q", msg, "invalid api key")
+				if ev.Error.Message != "invalid api key" {
+					t.Errorf("Error.Message = %q, want %q", ev.Error.Message, "invalid api key")
 				}
 			},
 		},
@@ -243,7 +240,7 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage.json")
-		usage := parseExportOutput(data, "ses_abc123", 0)
+		usage := parseSessionExport(data, "ses_abc123", 0)
 
 		// InputTokens is tokens.input plus cache.read plus cache.write
 		// (1500 + 200 + 50); OutputTokens is tokens.output plus
@@ -270,7 +267,7 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage_missing_tokens.json")
-		usage := parseExportOutput(data, "ses_abc123", 0)
+		usage := parseSessionExport(data, "ses_abc123", 0)
 
 		if usage.InputTokens != 0 {
 			t.Errorf("InputTokens = %d, want 0", usage.InputTokens)
@@ -291,10 +288,10 @@ func TestQueryExportUsage(t *testing.T) {
 		// any other. Reading the VALUES to decide whether anything was
 		// recovered turned that known zero into an unknown spend, and
 		// threw away the model the export named along with it.
-		data := []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123",` +
-			`"providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop",` +
-			`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}}]}`)
-		usage := parseExportOutput(data, "ses_abc123", 0)
+		data := []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop",` +
+			`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
+			`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}`)
+		usage := parseSessionExport(data, "ses_abc123", 0)
 
 		if !usage.Recovered {
 			t.Error("Recovered = false, want true for an export that reported zero tokens")
@@ -318,16 +315,14 @@ func TestQueryExportUsage(t *testing.T) {
 		// distinguishable from "a figure that happens to be zero", or the
 		// presence test is just a way of always saying yes.
 		for name, data := range map[string][]byte{
-			"empty_messages": []byte(`{"messages":[]}`),
-			"invalid_json":   []byte("not valid json"),
-			"user_message":   []byte(`{"messages":[{"info":{"role":"user","sessionID":"ses_abc123","tokens":{"input":100,"output":50}}}]}`),
-			"missing_tokens": []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","finish":"stop"}}]}`),
-			"other_session":  []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_other","finish":"stop","tokens":{"input":1,"output":1}}}]}`),
-			"unparseable_in": []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","finish":"stop","tokens":{"input":"x","output":1}}}]}`),
-			"unfinished_step": []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123",` +
-				`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}}]}`),
+			"empty_messages":  []byte(`{"info":{"id":"ses_abc123"},"messages":[]}`),
+			"invalid_json":    []byte("not valid json"),
+			"user_message":    []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"user","tokens":{"input":100,"output":50}}]}`),
+			"missing_tokens":  []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop"}]}`),
+			"other_session":   []byte(`{"info":{"id":"ses_other"},"messages":[{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1}}]}`),
+			"unfinished_step": []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}`),
 		} {
-			usage := parseExportOutput(data, "ses_abc123", 0)
+			usage := parseSessionExport(data, "ses_abc123", 0)
 			if usage.Recovered {
 				t.Errorf("%s: Recovered = true, want false", name)
 			}
@@ -341,125 +336,30 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage.json")
-		usage := parseExportOutput(data, "ses_different_session", 0)
+		usage := parseSessionExport(data, "ses_different_session", 0)
 
 		if usage.InputTokens != 0 {
 			t.Errorf("InputTokens = %d, want 0 for mismatched session", usage.InputTokens)
 		}
 	})
-
-	t.Run("parse_invalid_json_returns_zero", func(t *testing.T) {
-		t.Parallel()
-
-		usage := parseExportOutput([]byte("not valid json"), "ses_abc123", 0)
-		if usage.InputTokens != 0 || usage.OutputTokens != 0 {
-			t.Errorf("invalid JSON should return zero usage, got InputTokens=%d OutputTokens=%d",
-				usage.InputTokens, usage.OutputTokens)
-		}
-	})
-
-	t.Run("parse_empty_messages_returns_zero", func(t *testing.T) {
-		t.Parallel()
-
-		usage := parseExportOutput([]byte(`{"messages":[]}`), "ses_abc123", 0)
-		if usage.InputTokens != 0 {
-			t.Errorf("empty messages should return zero usage, got InputTokens=%d", usage.InputTokens)
-		}
-	})
-
-	t.Run("parse_user_message_skipped", func(t *testing.T) {
-		t.Parallel()
-
-		// Only user message in the array; should return zero usage.
-		data := []byte(`{"messages":[{"info":{"role":"user","sessionID":"ses_abc123","tokens":{"input":100,"output":50}}}]}`)
-		usage := parseExportOutput(data, "ses_abc123", 0)
-		if usage.InputTokens != 0 {
-			t.Errorf("user message should be skipped, got InputTokens=%d", usage.InputTokens)
-		}
-	})
-
-	// parse_multi_message_sums_across_the_session drives export_usage_multi.json,
-	// captured from opencode 1.17.1 (session ses_18c61ba15ffe1524eHja237B0R,
-	// per-message vendor totals 16593, 16609, 16626), asserting the sum
-	// across all three assistant messages rather than only the last one.
-	t.Run("parse_multi_message_sums_across_the_session", func(t *testing.T) {
-		t.Parallel()
-
-		data := loadFixture(t, "export_usage_multi.json")
-		usage := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 0)
-
-		if usage.InputTokens != 49814 {
-			t.Errorf("InputTokens = %d, want 49814", usage.InputTokens)
-		}
-		if usage.OutputTokens != 14 {
-			t.Errorf("OutputTokens = %d, want 14", usage.OutputTokens)
-		}
-		if usage.CacheReadTokens != 16586 {
-			t.Errorf("CacheReadTokens = %d, want 16586", usage.CacheReadTokens)
-		}
-		if usage.TotalTokens != 49828 {
-			t.Errorf("TotalTokens = %d, want 49828", usage.TotalTokens)
-		}
-
-		const vendorTotalSum = 16593 + 16609 + 16626
-		if usage.TotalTokens != vendorTotalSum {
-			t.Errorf("TotalTokens = %d, want %d (sum of the per-message vendor totals)", usage.TotalTokens, vendorTotalSum)
-		}
-	})
-
-	t.Run("parse_multi_message_window_keeps_only_messages_at_or_after_sinceUnixMS", func(t *testing.T) {
-		t.Parallel()
-
-		data := loadFixture(t, "export_usage_multi.json")
-
-		// The second message's own time.created (1780056268100): the
-		// first message (created 1780056264932) falls out of the window,
-		// leaving only the second and third.
-		windowed := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 1780056268100)
-		if windowed.InputTokens != 33225 {
-			t.Errorf("windowed InputTokens = %d, want 33225 (second and third messages' input+cache.read+cache.write)", windowed.InputTokens)
-		}
-		if windowed.OutputTokens != 10 {
-			t.Errorf("windowed OutputTokens = %d, want 10 (second and third messages only)", windowed.OutputTokens)
-		}
-		if windowed.CacheReadTokens != 11064 {
-			t.Errorf("windowed CacheReadTokens = %d, want 11064", windowed.CacheReadTokens)
-		}
-
-		// sinceUnixMS zero counts all three messages.
-		all := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 0)
-		if all.OutputTokens != 14 {
-			t.Errorf("unwindowed OutputTokens = %d, want 14 (all three messages)", all.OutputTokens)
-		}
-	})
-
-	t.Run("parse_export_without_tokens_object_returns_zero", func(t *testing.T) {
-		t.Parallel()
-
-		data := []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop"}}]}`)
-		usage := parseExportOutput(data, "ses_abc123", 0)
-		if usage != (exportUsage{}) {
-			t.Errorf("usage = %+v, want zero value (no tokens object)", usage)
-		}
-	})
 }
 
 // TestCacheWriteTokensMapping drives a non-zero cache-write count
-// through both export parse paths: the 1.x nested-info shape
-// (parseExportOutput, against the recorded fixture) and the 2.x flat
-// message shape (parseSessionExport). The two results form a rising
-// two-event sequence run through agenttest.AssertUsageContract, so the
-// shared cache-sum and monotonicity invariants are checked against
-// real mapping output rather than a hand-built domain.TokenUsage.
+// through parseSessionExport twice, once against the recorded fixture and
+// once against a document carrying its own figures. The two results form
+// a rising two-event sequence run through agenttest.AssertUsageContract,
+// so the shared cache-sum and monotonicity invariants are checked
+// against real mapping output rather than a hand-built
+// domain.TokenUsage.
 func TestCacheWriteTokensMapping(t *testing.T) {
 	t.Parallel()
 
-	exportOutput := parseExportOutput(loadFixture(t, "export_usage.json"), "ses_abc123", 0)
+	exportOutput := parseSessionExport(loadFixture(t, "export_usage.json"), "ses_abc123", 0)
 	if exportOutput.CacheWriteTokens != 50 {
-		t.Errorf("parseExportOutput().CacheWriteTokens = %d, want 50", exportOutput.CacheWriteTokens)
+		t.Errorf("parseSessionExport(export_usage.json).CacheWriteTokens = %d, want 50", exportOutput.CacheWriteTokens)
 	}
 
-	const sessionID = "ses_cache_write_v2"
+	const sessionID = "ses_cache_write"
 	data := []byte(`{"info":{"id":"` + sessionID + `"},"messages":[{"type":"assistant","finish":"stop",` +
 		`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
 		`"tokens":{"input":3000,"output":500,"reasoning":0,"cache":{"read":400,"write":900}}}]}`)
@@ -484,15 +384,15 @@ func TestCacheWriteTokensMapping(t *testing.T) {
 	})
 }
 
-// TestParseSessionExport drives the 2.x export document fixture,
-// mirroring parseExportOutput's 1.x semantics: input sums tokens.input
-// plus both cache figures, output sums tokens.output plus reasoning,
-// and a sinceUnixMS window keeps only messages created at or after it.
+// TestParseSessionExport drives the export document fixture: input sums
+// tokens.input plus both cache figures, output sums tokens.output plus
+// reasoning, and a sinceUnixMS window keeps only messages created at or
+// after it.
 func TestParseSessionExport(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "ses_f23828cc8ffeXAmvklUEWnLCuA"
-	data := loadFixture(t, "export_usage_v2.json")
+	data := loadFixture(t, "export_usage_multi.json")
 
 	t.Run("sinceUnixMS zero sums every kept message", func(t *testing.T) {
 		t.Parallel()
@@ -559,15 +459,13 @@ func loadFreeTierRunError(t *testing.T, fixture string) *rawRunError {
 	return ev.Error
 }
 
-// TestFreeTierRefusalClause drives freeTierRefusalClause directly
-// against both envelope shapes, proving the denied-tool clause is
-// drawn only when the envelope matches a free-tier refusal and the
-// session's own tool policy denies bash, read, or both.
+// TestFreeTierRefusalClause proves the denied-tool clause is drawn only
+// when the envelope matches a free-tier refusal and the session's own
+// tool policy denies bash, read, or both.
 func TestFreeTierRefusalClause(t *testing.T) {
 	t.Parallel()
 
-	oneX := loadFreeTierRunError(t, "free_tier_refusal.jsonl")
-	twoX := loadFreeTierRunError(t, "free_tier_refusal_v2.jsonl")
+	refusal := loadFreeTierRunError(t, "free_tier_refusal.jsonl")
 
 	const wantMessage = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"
 	const clauseBash = "; the opencode.allowed_tools and opencode.denied_tools settings deny bash, a tool the runtime's free tier requires"
@@ -580,48 +478,29 @@ func TestFreeTierRefusalClause(t *testing.T) {
 		pt     passthroughConfig
 		want   string
 	}{
-		{name: "1.x denies bash", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"read", "glob"}}, want: clauseBash},
-		{name: "1.x denies bash and read", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"glob"}}, want: clauseBoth},
-		{name: "1.x denies read", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"bash", "glob"}}, want: clauseRead},
-		{name: "1.x denied_tools names bash", runErr: oneX, pt: passthroughConfig{DeniedTools: []string{"bash"}}, want: clauseBash},
-		{name: "1.x allows both required tools", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"bash", "read"}}, want: ""},
-		{name: "1.x no tool lists configured", runErr: oneX, pt: passthroughConfig{}, want: ""},
-		{name: "1.x wildcard deny is not an exact match", runErr: oneX, pt: passthroughConfig{DeniedTools: []string{"*"}}, want: ""},
+		{name: "denies bash", runErr: refusal, pt: passthroughConfig{AllowedTools: []string{"read", "glob"}}, want: clauseBash},
+		{name: "denies bash and read", runErr: refusal, pt: passthroughConfig{AllowedTools: []string{"glob"}}, want: clauseBoth},
+		{name: "denies read", runErr: refusal, pt: passthroughConfig{AllowedTools: []string{"bash", "glob"}}, want: clauseRead},
+		{name: "denied_tools names bash", runErr: refusal, pt: passthroughConfig{DeniedTools: []string{"bash"}}, want: clauseBash},
+		{name: "allows both required tools", runErr: refusal, pt: passthroughConfig{AllowedTools: []string{"bash", "read"}}, want: ""},
+		{name: "no tool lists configured", runErr: refusal, pt: passthroughConfig{}, want: ""},
+		{name: "wildcard deny is not an exact match", runErr: refusal, pt: passthroughConfig{DeniedTools: []string{"*"}}, want: ""},
+		{name: "denied_tools names read", runErr: refusal, pt: passthroughConfig{DeniedTools: []string{"read"}}, want: clauseRead},
+		{name: "denied_tools names an unmapped alias", runErr: refusal, pt: passthroughConfig{DeniedTools: []string{"shell"}}, want: ""},
 		{
-			name:   "1.x a different gateway error type is not a refusal",
-			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"responseBody": `{"type":"error","error":{"type":"RegionError","message":"unavailable in your region"}}`}},
-			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
-			want:   "",
-		},
-		{
-			name:   "1.x without a responseBody is not a refusal",
-			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"message": wantMessage}},
-			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
-			want:   "",
-		},
-		{
-			name:   "1.x with a non-JSON responseBody is not a refusal",
-			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"responseBody": "not json"}},
-			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
-			want:   "",
-		},
-		{name: "2.x denies bash", runErr: twoX, pt: passthroughConfig{AllowedTools: []string{"read", "glob"}}, want: clauseBash},
-		{name: "2.x denied_tools names read", runErr: twoX, pt: passthroughConfig{DeniedTools: []string{"read"}}, want: clauseRead},
-		{name: "2.x denied_tools names an unmapped alias", runErr: twoX, pt: passthroughConfig{DeniedTools: []string{"shell"}}, want: ""},
-		{
-			name:   "2.x status 401 is not a refusal",
+			name:   "status 401 is not a refusal",
 			runErr: &rawRunError{Type: freeTierAuthType, Status: float64(401), Message: wantMessage},
 			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
 			want:   "",
 		},
 		{
-			name:   "2.x type provider.quota is not a refusal",
+			name:   "type provider.quota is not a refusal",
 			runErr: &rawRunError{Type: "provider.quota", Status: float64(403), Message: wantMessage},
 			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
 			want:   "",
 		},
 		{
-			name:   "2.x message without the marker is not a refusal",
+			name:   "message without the marker is not a refusal",
 			runErr: &rawRunError{Type: freeTierAuthType, Status: float64(403), Message: "Error from provider (Console): rate limited"},
 			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
 			want:   "",

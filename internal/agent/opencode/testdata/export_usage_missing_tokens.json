@@ -1,10 +1,14 @@
 {
+  "info": {
+    "id": "ses_abc123"
+  },
   "messages": [
     {
-      "info": {
-        "role": "assistant",
-        "sessionID": "ses_abc123"
-      }
+      "type": "assistant",
+      "time": {
+        "created": 1790405604627
+      },
+      "finish": "stop"
     }
   ]
 }

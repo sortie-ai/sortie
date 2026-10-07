@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +17,45 @@ import (
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-const effortProbeModel = "anthropic/claude-sonnet-4-5"
+const (
+	effortProbeModel = "provider/model"
+
+	scenarioVersionMarker = "opencode.versionmarker"
+)
+
+type versionMarker struct {
+	Path    string
+	Version string
+}
+
+func init() {
+	fakeScenarios[scenarioVersionMarker] = agenttest.Typed(runVersionMarker)
+}
+
+func runVersionMarker(_ []string, params versionMarker) int {
+	if err := os.WriteFile(params.Path, nil, 0o600); err != nil {
+		return 2
+	}
+	fmt.Println(params.Version)
+	return 0
+}
+
+func startOnVersionMarkerRuntime(t *testing.T, settings map[string]any) (session domain.Session, err error, launched bool) {
+	t.Helper()
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "launched")
+	command := agenttest.FakeRuntime(t, dir, "opencode", scenarioVersionMarker, versionMarker{Path: marker, Version: "opencode v2.0.18"})
+	a, _ := NewOpenCodeAdapter()
+
+	session, err = a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: dir,
+		AgentConfig:   domain.AgentConfig{Command: command},
+		Settings:      settings,
+	})
+	_, statErr := os.Stat(marker)
+	return session, err, statErr == nil
+}
 
 func flagValue(args []string, flag string) string {
 	i := slices.Index(args, flag)
@@ -25,20 +65,14 @@ func flagValue(args []string, flag string) string {
 	return args[i+1]
 }
 
-func opencodeEffortProbe(major runtimeMajor) agenttest.EffortProbe {
-	version := "1.18.33"
-	if major == major2 {
-		version = "2.0.18"
-	}
+func opencodeEffortProbe() agenttest.EffortProbe {
 	return func(t *testing.T, settings map[string]any, verification, resumed bool, turns int) ([]string, error) {
 		t.Helper()
 
 		config := maps.Clone(settings)
-		if major == major2 {
-			config["model"] = effortProbeModel
-		}
+		config["model"] = effortProbeModel
 		dir := t.TempDir()
-		command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: version})
+		command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: "2.0.18"})
 		adapter, _ := NewOpenCodeAdapter()
 		resumeID := ""
 		if resumed {
@@ -61,13 +95,9 @@ func opencodeEffortProbe(major runtimeMajor) agenttest.EffortProbe {
 			if turn > 1 {
 				state.sessionID = "ses_probe"
 			}
-			args := buildRunArgs(state, "probe prompt", state.passthrough)
-			if major == major2 {
-				_, suffix, _ := strings.Cut(flagValue(args, "--model"), "#")
-				carried = append(carried, suffix)
-				continue
-			}
-			carried = append(carried, flagValue(args, "--variant"))
+			args := buildRunArgs(state, state.passthrough)
+			_, suffix, _ := strings.Cut(flagValue(args, "--model"), "#")
+			carried = append(carried, suffix)
 		}
 		return carried, nil
 	}
@@ -76,21 +106,7 @@ func opencodeEffortProbe(major runtimeMajor) agenttest.EffortProbe {
 func TestEffortForwarding(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name  string
-		major runtimeMajor
-	}{
-		{name: "major 1 reads the variant flag", major: major1},
-		{name: "major 2 reads the model suffix", major: major2},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			agenttest.AssertEffortForwarding(t, opencodeEffortProbe(tt.major))
-		})
-	}
+	agenttest.AssertEffortForwarding(t, opencodeEffortProbe())
 }
 
 func TestEffortVariantConflict(t *testing.T) {
@@ -105,9 +121,9 @@ func TestEffortVariantConflict(t *testing.T) {
 		wantConflict bool
 	}{
 		{name: "effort and variant both set", passthrough: map[string]any{registry.EffortKey: "high", "variant": "max"}, wantConflict: true},
-		{name: "effort alone", passthrough: map[string]any{registry.EffortKey: "high"}},
-		{name: "variant alone", passthrough: map[string]any{"variant": "max"}},
-		{name: "effort set and variant empty", passthrough: map[string]any{registry.EffortKey: "high", "variant": ""}},
+		{name: "effort alone", passthrough: map[string]any{"model": "provider/model", registry.EffortKey: "high"}},
+		{name: "variant alone", passthrough: map[string]any{"model": "provider/model", "variant": "max"}},
+		{name: "effort set and variant empty", passthrough: map[string]any{"model": "provider/model", registry.EffortKey: "high", "variant": ""}},
 	}
 
 	for _, tt := range tests {
@@ -150,71 +166,6 @@ func TestEffortVariantConflict(t *testing.T) {
 	}
 }
 
-func TestEffortMajor2Refusals(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		pt      passthroughConfig
-		major   runtimeMajor
-		wantMsg string
-	}{
-		{
-			name:    "effort without a model names opencode.effort",
-			pt:      passthroughConfig{Effort: "high"},
-			major:   major2,
-			wantMsg: fmt.Sprintf("opencode.%[1]s needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.%[1]s", registry.EffortKey),
-		},
-		{
-			name:    "effort with a model carrying a suffix names opencode.effort",
-			pt:      passthroughConfig{Effort: "high", Model: "anthropic/claude-sonnet-4-5#max"},
-			major:   major2,
-			wantMsg: fmt.Sprintf("opencode.model already names a variant after #; remove that suffix or remove opencode.%s", registry.EffortKey),
-		},
-		{
-			name:    "variant without a model still names opencode.variant",
-			pt:      passthroughConfig{Variant: "high"},
-			major:   major2,
-			wantMsg: "opencode.variant needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.variant",
-		},
-		{
-			name:    "variant with a model carrying a suffix still names opencode.variant",
-			pt:      passthroughConfig{Variant: "high", Model: "anthropic/claude-sonnet-4-5#max"},
-			major:   major2,
-			wantMsg: "opencode.model already names a variant after #; remove that suffix or remove opencode.variant",
-		},
-		{
-			name:  "major 1 never refuses effort without a model",
-			pt:    passthroughConfig{Effort: "high"},
-			major: major1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := checkMajorSettings(tt.pt, tt.major)
-
-			if tt.wantMsg == "" {
-				if got != nil {
-					t.Fatalf("checkMajorSettings(%+v, %d) = %v, want nil", tt.pt, tt.major, got)
-				}
-				return
-			}
-			if got == nil {
-				t.Fatalf("checkMajorSettings(%+v, %d) = nil, want message %q", tt.pt, tt.major, tt.wantMsg)
-			}
-			if got.Kind != domain.ErrAgentNotFound {
-				t.Errorf("checkMajorSettings(%+v, %d).Kind = %q, want %q", tt.pt, tt.major, got.Kind, domain.ErrAgentNotFound)
-			}
-			if got.Message != tt.wantMsg {
-				t.Errorf("checkMajorSettings(%+v, %d).Message = %q, want %q", tt.pt, tt.major, got.Message, tt.wantMsg)
-			}
-		})
-	}
-}
-
 func TestEffortWrongType(t *testing.T) {
 	t.Parallel()
 
@@ -236,5 +187,74 @@ func TestEffortWrongType(t *testing.T) {
 	}
 	if agentErr, ok := errors.AsType[*domain.AgentError](startErr); !ok || diag.Message != agentErr.Message {
 		t.Errorf("validateConfig(%v) %q Message = %q, want the text StartSession refused with: %v", passthrough, wantCheck, diag.Message, startErr)
+	}
+}
+
+func TestStartSession_RefusesPureAndBareSlot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		settings    map[string]any
+		wantMessage string
+	}{
+		{
+			name:        "pure true",
+			settings:    map[string]any{"pure": true},
+			wantMessage: "opencode.pure is not supported by OpenCode 2.x; remove it",
+		},
+		{
+			name:        "effort without a model",
+			settings:    map[string]any{registry.EffortKey: "high"},
+			wantMessage: fmt.Sprintf("opencode.%[1]s needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.%[1]s", registry.EffortKey),
+		},
+		{
+			name:        "effort with a model carrying a suffix",
+			settings:    map[string]any{"model": "provider/model#max", registry.EffortKey: "high"},
+			wantMessage: fmt.Sprintf("opencode.model already names a variant after #; remove that suffix or remove opencode.%s", registry.EffortKey),
+		},
+		{
+			name:        "variant without a model",
+			settings:    map[string]any{"variant": "high"},
+			wantMessage: "opencode.variant needs opencode.model on OpenCode 2.x; set opencode.model or remove opencode.variant",
+		},
+		{
+			name:        "variant with a model carrying a suffix",
+			settings:    map[string]any{"model": "provider/model#max", "variant": "high"},
+			wantMessage: "opencode.model already names a variant after #; remove that suffix or remove opencode.variant",
+		},
+		{name: "pure false starts", settings: map[string]any{"pure": false}},
+		{name: "pure as the string true starts", settings: map[string]any{"pure": "true"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			session, err, launched := startOnVersionMarkerRuntime(t, tt.settings)
+
+			if tt.wantMessage == "" {
+				if err != nil {
+					t.Fatalf("StartSession(%v) error = %v, want nil", tt.settings, err)
+				}
+				if session.Internal == nil {
+					t.Errorf("StartSession(%v) session = %+v, want a started session", tt.settings, session)
+				}
+				return
+			}
+			agentErr, ok := errors.AsType[*domain.AgentError](err)
+			if !ok {
+				t.Fatalf("StartSession(%v) error = %v, want a *domain.AgentError", tt.settings, err)
+			}
+			if agentErr.Kind != domain.ErrAgentNotFound {
+				t.Errorf("StartSession(%v) Kind = %q, want %q", tt.settings, agentErr.Kind, domain.ErrAgentNotFound)
+			}
+			if agentErr.Message != tt.wantMessage {
+				t.Errorf("StartSession(%v) Message = %q, want %q", tt.settings, agentErr.Message, tt.wantMessage)
+			}
+			if launched {
+				t.Errorf("StartSession(%v) launched the runtime, want the refusal before any launch", tt.settings)
+			}
+		})
 	}
 }

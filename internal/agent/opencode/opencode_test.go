@@ -29,59 +29,18 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
-// writeOpenCodeScript writes an executable shell script named fake-opencode
-// in dir with the given body and returns its path. Every script answers a
-// leading --version argument with a fixed 1.x version string before body
-// runs, so a session start against it always detects major1 without
-// disturbing body's own turn-fixture behavior.
 func writeOpenCodeScript(t *testing.T, dir, body string) string {
 	t.Helper()
 	return agenttest.WriteScript(t, dir, "fake-opencode", versionAnsweringScript(body))
 }
 
 func versionAnsweringScript(body string) string {
-	return "case \"$1\" in\n  --version) echo '1.18.32'; exit 0;;\nesac\n" + body
+	return "case \"$1\" in\n  --version) echo 'opencode v2.0.18'; exit 0;;\nesac\n" + body
 }
 
-// fakeMinimalRuntime returns the path to a fake opencode binary that
-// answers --version and otherwise exits 0 with no output, for a test
-// that only needs StartSession to succeed and never inspects a turn's
-// subprocess behavior.
 func fakeMinimalRuntime(t *testing.T) string {
 	t.Helper()
 	return writeOpenCodeScript(t, t.TempDir(), "exit 0")
-}
-
-// writeOpenCodeScriptMajor2 is [writeOpenCodeScript]'s major2
-// counterpart: it answers a leading --version argument with a 2.x
-// version string, so a session start against it detects major2.
-func writeOpenCodeScriptMajor2(t *testing.T, dir, body string) string {
-	t.Helper()
-	return agenttest.WriteScript(t, dir, "fake-opencode", "case \"$1\" in\n  --version) echo 'opencode v2.0.18'; exit 0;;\nesac\n"+body)
-}
-
-// writeRunFixtureScriptMajor2 is [writeRunFixtureScript]'s major2
-// counterpart: the usage-recovery invocation is "session export", not
-// "export", so the case match is on the first two arguments.
-func writeRunFixtureScriptMajor2(t *testing.T, dir, fixtureName string) string {
-	t.Helper()
-
-	runPath := filepath.Join(dir, fixtureName)
-	if err := os.WriteFile(runPath, loadFixture(t, fixtureName), 0o644); err != nil {
-		t.Fatalf("WriteFile(%q): %v", fixtureName, err)
-	}
-
-	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"info":{"id":""},"messages":[]}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(export.json): %v", err)
-	}
-
-	body := `case "$1 $2" in
-  "session export") cat '` + exportPath + `'; exit 0;;
-esac
-cat '` + runPath + `'`
-
-	return writeOpenCodeScriptMajor2(t, dir, body)
 }
 
 func mustStartSession(t *testing.T, a domain.AgentAdapter, workDir, cmd string) domain.Session {
@@ -121,7 +80,6 @@ func mustBuildSSHSessionWithLocalScript(t *testing.T, workDir, script, sshHost s
 			SSHHost:       sshHost,
 		},
 		passthrough: pt,
-		major:       major1,
 		baseLogger:  slog.Default(),
 		usage:       agentcore.NewTurnEndUsage(),
 		drainGrace:  procutil.DefaultDrainGrace,
@@ -137,12 +95,12 @@ func writeRunFixtureScript(t *testing.T, dir, fixtureName string) string {
 	}
 
 	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(exportPath, []byte(`{"info":{"id":""},"messages":[]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(export.json): %v", err)
 	}
 
-	body := `case "$1" in
-  export) cat '` + exportPath + `'; exit 0;;
+	body := `case "$1 $2" in
+  "session export") cat '` + exportPath + `'; exit 0;;
 esac
 cat '` + runPath + `'`
 
@@ -255,7 +213,7 @@ func TestStartSession_SettingsArePerSession(t *testing.T) {
 		t.Errorf("resumed session settings = %+v, want model-b with no allowed_tools", resumed.passthrough)
 	}
 	for turn := 1; turn <= 2; turn++ {
-		if got := flagValue(buildRunArgs(resumed, "p", resumed.passthrough), "--model"); got != "provider/model-b" {
+		if got := flagValue(buildRunArgs(resumed, resumed.passthrough), "--model"); got != "provider/model-b" {
 			t.Errorf("resumed session turn %d --model = %q, want %q", turn, got, "provider/model-b")
 		}
 	}
@@ -361,22 +319,16 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 		name    string
 		content string
 		sshHost string
-		major2  bool
 		wantMCP bool
 	}{
 		{name: "local launch carries the document", content: withServer, wantMCP: true},
-		{name: "local 2.x launch carries the document", content: withServer, major2: true, wantMCP: true},
 		{name: "remote launch stores the agent member alone", content: withServer, sshHost: "build-host"},
 		{name: "no declared server stores the agent member alone", content: `{"mcpServers":{}}`},
-		{name: "no declared server on 2.x stores the agent member", content: `{"mcpServers":{}}`, major2: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			command := fakeMinimalRuntime(t)
-			if tt.major2 {
-				command = writeOpenCodeScriptMajor2(t, t.TempDir(), "exit 0")
-			}
 			if tt.sshHost == "" {
 				t.Parallel()
 			} else {
@@ -384,7 +336,7 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 				// through t.Setenv, so the version query never reaches a
 				// real network host.
 				sshDir := t.TempDir()
-				agenttest.FakeRuntime(t, sshDir, "ssh", agenttest.OutputScenario, agenttest.Output{Stdout: "1.18.32\n"})
+				agenttest.FakeRuntime(t, sshDir, "ssh", agenttest.OutputScenario, agenttest.Output{Stdout: "opencode v2.0.18\n"})
 				t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			}
 
@@ -616,8 +568,8 @@ func TestStopSession_ContextDeadline(t *testing.T) {
 	defer testCancel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 trap '' TERM
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
@@ -847,8 +799,8 @@ func TestRunTurn_CancelledTurnEscalatesOnConfiguredGrace(t *testing.T) {
 	// exec and keep the stdout pipe open after os/exec's own WaitDelay
 	// escalation kills only the direct child, hanging the reader
 	// instead of exercising the bounded escalation this test measures.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 trap '' TERM
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
@@ -941,23 +893,23 @@ func TestRunTurn_MultiTurnAccumulation(t *testing.T) {
 	}
 
 	export1Path := filepath.Join(tmpDir, "export1.json")
-	export1 := `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}}]}`
+	export1 := `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(export1Path, []byte(export1), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	export2Path := filepath.Join(tmpDir, "export2.json")
-	export2 := `{"messages":[` +
-		`{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}},` +
-		`{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":0,"output":60,"total":60,"cache":{"read":0,"write":0}}}}` +
+	export2 := `{"info":{"id":"ses_abc123"},"messages":[` +
+		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}},` +
+		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":60,"total":60,"cache":{"read":0,"write":0}}}` +
 		`]}`
 	if err := os.WriteFile(export2Path, []byte(export2), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	counterPath := filepath.Join(tmpDir, "export-call-count")
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export)
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export")
     if [ -f '`+counterPath+`' ]; then
       cat '`+export2Path+`'
     else
@@ -1014,7 +966,7 @@ func TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn(t *testing.T) {
 	}
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1023,8 +975,8 @@ func TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn(t *testing.T) {
 	// behind; the second invocation, detecting it, emits one event and
 	// blocks until the test cancels its turn's context.
 	counterPath := filepath.Join(tmpDir, "turn-count")
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 if [ -f '`+counterPath+`' ]; then
   printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
@@ -1192,31 +1144,6 @@ func TestRunTurn_LogicalFailureExitZero(t *testing.T) {
 	}, result, err)
 }
 
-// writeUnreachableModelsScript writes a fake opencode whose run stream is
-// fixtureName and whose models subcommand always fails, so a reported detail
-// that names the unknown model can only have come from the run stream.
-func writeUnreachableModelsScript(t *testing.T, dir, fixtureName string) string {
-	t.Helper()
-
-	runPath := filepath.Join(dir, fixtureName)
-	if err := os.WriteFile(runPath, loadFixture(t, fixtureName), 0o644); err != nil {
-		t.Fatalf("WriteFile(%q): %v", fixtureName, err)
-	}
-
-	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(export.json): %v", err)
-	}
-
-	body := `case "$1" in
-  export) cat '` + exportPath + `'; exit 0;;
-  models) exit 1;;
-esac
-cat '` + runPath + `'`
-
-	return writeOpenCodeScript(t, dir, body)
-}
-
 // TestRunTurn_LogicalFailureDualError covers a failure that emits both the
 // actionable diagnostic and opencode's masked placeholder on the run stream.
 // Either order is possible, and the operator must see the diagnostic in both.
@@ -1236,7 +1163,7 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 			t.Parallel()
 
 			tmpDir := t.TempDir()
-			script := writeUnreachableModelsScript(t, tmpDir, tt.fixture)
+			script := writeRunFixtureScript(t, tmpDir, tt.fixture)
 
 			a, _ := NewOpenCodeAdapter()
 			session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
@@ -1283,40 +1210,6 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 	}
 }
 
-// writeMaskedRunScript writes a fake opencode whose run stream emits only the
-// masked generic server error and whose models subcommand runs modelsCase.
-func writeMaskedRunScript(t *testing.T, dir, modelsCase string) string {
-	t.Helper()
-
-	runPath := filepath.Join(dir, "logical_failure_masked_error.jsonl")
-	if err := os.WriteFile(runPath, loadFixture(t, "logical_failure_masked_error.jsonl"), 0o644); err != nil {
-		t.Fatalf("WriteFile(logical_failure_masked_error.jsonl): %v", err)
-	}
-
-	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(export.json): %v", err)
-	}
-
-	body := `case "$1" in
-  export) cat '` + exportPath + `'; exit 0;;
-  models) ` + modelsCase + `;;
-esac
-cat '` + runPath + `'`
-
-	return writeOpenCodeScript(t, dir, body)
-}
-
-func collectTurnFailedMessages(events []domain.AgentEvent) []string {
-	var messages []string
-	for _, event := range events {
-		if event.Type == domain.EventTurnFailed {
-			messages = append(messages, event.Message)
-		}
-	}
-	return messages
-}
-
 func turnFailedEvents(events []domain.AgentEvent) []domain.AgentEvent {
 	var out []domain.AgentEvent
 	for _, e := range events {
@@ -1327,193 +1220,11 @@ func turnFailedEvents(events []domain.AgentEvent) []domain.AgentEvent {
 	return out
 }
 
-func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nanthropic/claude-sonnet-4-6\n'; exit 0`)
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
-	}
-
-	// Exactly one terminal event fires per turn even when the
-	// masked-model recovery succeeds: the recovered detail replaces the
-	// masked relay message in place, rather than the two-event trail
-	// this arm produced before the shared decision.
-	messages := collectTurnFailedMessages(events)
-	if len(messages) != 1 {
-		t.Fatalf("turn_failed count = %d, want 1 (the recovered detail replaces the masked relay), messages=%q", len(messages), messages)
-	}
-	const wantMessage = "Model not found: nonexistent/nonexistent; the runtime lists no nonexistent model, which is how it presents a provider with no credential"
-	if messages[0] != wantMessage {
-		t.Errorf("turn_failed message = %q, want %q", messages[0], wantMessage)
-	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		TerminalMessage:   wantMessage,
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkAbsent,
-		WorkDetail:        "no assistant output on the run stream",
-	}, result, err)
-}
-
-func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nexisting/model\n'; exit 0`)
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "existing/model"})
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
-	}
-
-	messages := collectTurnFailedMessages(events)
-	if len(messages) != 1 {
-		t.Fatalf("turn_failed count = %d, want 1 (listed model must not be reported missing), messages=%q", len(messages), messages)
-	}
-	if !strings.Contains(messages[0], "Unexpected server error") {
-		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
-	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		TerminalMessage:   messages[0],
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkAbsent,
-		WorkDetail:        "no assistant output on the run stream",
-	}, result, err)
-}
-
-func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeMaskedRunScript(t, tmpDir, `exit 1`)
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"model": "nonexistent/nonexistent"})
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
-	}
-
-	messages := collectTurnFailedMessages(events)
-	if len(messages) != 1 {
-		t.Fatalf("turn_failed count = %d, want 1 (failed listing must not invent detail), messages=%q", len(messages), messages)
-	}
-	if !strings.Contains(messages[0], "Unexpected server error") {
-		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
-	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		TerminalMessage:   messages[0],
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkAbsent,
-		WorkDetail:        "no assistant output on the run stream",
-	}, result, err)
-}
-
-func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	sentinel := filepath.Join(tmpDir, "models-invoked")
-	script := writeMaskedRunScript(t, tmpDir, `touch '`+sentinel+`'; exit 0`)
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSession(t, a, tmpDir, script)
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
-	}
-
-	messages := collectTurnFailedMessages(events)
-	if len(messages) != 1 {
-		t.Fatalf("turn_failed count = %d, want 1, messages=%q", len(messages), messages)
-	}
-	if _, statErr := os.Stat(sentinel); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("models subcommand was invoked without a configured model (sentinel stat err = %v)", statErr)
-	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		TerminalMessage:   messages[0],
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkAbsent,
-		WorkDetail:        "no assistant output on the run stream",
-	}, result, err)
-}
-
 func TestRunTurn_FreeTierRefusalNamesDeniedTools(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 	script := writeRunFixtureScript(t, tmpDir, "free_tier_refusal.jsonl")
-
-	a, err := NewOpenCodeAdapter()
-	if err != nil {
-		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
-	}
-	session := mustStartSessionWith(t, a, tmpDir, script, map[string]any{"allowed_tools": []any{"read", "glob"}})
-
-	events, result, _ := collectEvents(t, a, session, "work")
-
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	failed := turnFailedEvents(events)
-	if len(failed) != 1 {
-		t.Fatalf("turn_failed event count = %d, want 1; got %v", len(failed), events)
-	}
-	const wantMessage = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode" +
-		"; the opencode.allowed_tools and opencode.denied_tools settings deny bash, a tool the runtime's free tier requires"
-	if failed[0].Message != wantMessage {
-		t.Errorf("turn_failed Message = %q, want %q", failed[0].Message, wantMessage)
-	}
-}
-
-func TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeRunFixtureScriptMajor2(t, tmpDir, "free_tier_refusal_v2.jsonl")
 
 	a, err := NewOpenCodeAdapter()
 	if err != nil {
@@ -1588,15 +1299,15 @@ func TestRunTurn_ReadErrorRecoversUsageFromExport(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// The first event teaches the adapter the session id an export needs;
 	// the oversized line after it is what fails the read.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 head -c $((10*1024*1024+1)) /dev/zero | tr '\000' 'a'
@@ -1730,13 +1441,13 @@ func TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage(t *testing.T) {
 	}
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 cat '`+runPath+`'`)
 
@@ -1770,15 +1481,15 @@ func TestRunTurn_UsageMeasured_TrueWhenTheExportIsAGenuineZero(t *testing.T) {
 	}
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123",` +
-		`"providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop",` +
-		`"tokens":{"input":0,"output":0,"total":0,"cache":{"read":0,"write":0}}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop",` +
+		`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
+		`"tokens":{"input":0,"output":0,"total":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 cat '`+runPath+`'`)
 
@@ -1838,8 +1549,8 @@ func TestAssertUsageReporting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 cat '`+runPath+`'`)
 
@@ -1865,8 +1576,8 @@ func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 	// notification, malformed-event, and session-lifecycle visibility
 	// during an otherwise-successful turn, rather than becoming a
 	// duplicate of the dedicated zero-work-row pin.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '! permission requested: external_directory (/etc/*); auto-rejecting\n' >&2
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_visibility123","part":{"id":"p1","messageID":"m1","sessionID":"ses_visibility123","snapshot":"","type":"step-start"}}\n'
@@ -1949,8 +1660,8 @@ func TestRunTurn_ReasoningPartCountsAsWork(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '{"type":"reasoning","timestamp":1000,"sessionID":"ses_reasoning123","part":{"id":"p1","messageID":"m1","sessionID":"ses_reasoning123","type":"reasoning","text":"thinking it through"}}\n'`)
 
@@ -2006,10 +1717,10 @@ func TestRunTurn_PermissionWarningRecognizedOnStderr(t *testing.T) {
 
 	stdoutPath := writeFixtureFile(t, tmpDir, "stdout.jsonl", stdoutLine+"\n")
 	stderrPath := writeFixtureFile(t, tmpDir, "stderr.txt", warningLine+"\n")
-	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"messages":[]}`)
+	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"info":{"id":""},"messages":[]}`)
 
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 cat '`+stderrPath+`' >&2
 cat '`+stdoutPath+`'`)
@@ -2049,10 +1760,10 @@ func TestRunTurn_PermissionWarningOnStdoutIsNotRecognized(t *testing.T) {
 	warningLine, stdoutLine := splitPermissionWarningFixture(t)
 
 	stdoutPath := writeFixtureFile(t, tmpDir, "stdout.jsonl", warningLine+"\n"+stdoutLine+"\n")
-	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"messages":[]}`)
+	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"info":{"id":""},"messages":[]}`)
 
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 cat '`+stdoutPath+`'`)
 
@@ -2090,8 +1801,8 @@ func TestRunTurn_TurnCancelledOnContextCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Script: emit one JSON event on a run call, then block until killed.
 	// Handle export subcommand immediately so queryExportUsage doesn't block.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 sleep 1000`)
@@ -2163,8 +1874,8 @@ func TestRunTurn_StopSessionUnblocksReader(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Script: emit one JSON event on a run call, then block until killed.
 	// Handle export subcommand immediately so queryExportUsage doesn't block.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 sleep 1000`)
@@ -2230,8 +1941,8 @@ func TestRunTurn_ExitZeroNoAssistantOutputPart(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_c1","part":{"id":"p1","messageID":"m1","sessionID":"ses_c1","snapshot":"","type":"step-start"}}\n'
 printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id":"p2","messageID":"m1","sessionID":"ses_c1","type":"step-finish","reason":"stop"}}\n'`)
@@ -2275,8 +1986,8 @@ func TestRunTurn_ExitZeroNoJSONEventAtAll(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 exit 0`)
 
@@ -2310,8 +2021,8 @@ func TestRunTurn_UnparseableLineDoesNotCountAsResponse(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 echo 'Usage: opencode [options]'
 exit 0`)
@@ -2346,8 +2057,8 @@ func TestRunTurn_NonZeroExitNoTerminalReport(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_nonzero","part":{"id":"p1","messageID":"m1","sessionID":"ses_nonzero","snapshot":"","type":"step-start"}}\n'
 exit 7`)
@@ -2386,8 +2097,8 @@ func TestRunTurn_ReadTimeoutBeforeFirstJSONEvent(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 sleep 5`)
 
@@ -2476,8 +2187,8 @@ func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	counterFile := filepath.Join(tmpDir, "turn-count")
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 if [ -f '%s' ]; then
   printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_both_then_none","part":{"id":"p1","messageID":"m1","sessionID":"ses_both_then_none","snapshot":"","type":"step-start"}}\n'
@@ -2518,8 +2229,8 @@ func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	counterFile := filepath.Join(tmpDir, "turn-count")
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 if [ -f '%s' ]; then
   printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_work_pin","part":{"id":"p1","messageID":"m1","sessionID":"ses_work_pin","snapshot":"","type":"step-start"}}\n'
@@ -2670,8 +2381,8 @@ func pollOpenCodePIDFile(t *testing.T, pidFile string, timeout time.Duration) in
 // is what ends the descendant once the turn returns.
 func writeOpenCodeInGroupDescendantScript(t *testing.T, dir, pidFile, sessionID string) string {
 	t.Helper()
-	body := fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	body := fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 sleep 3600 &
 printf '%%s\n' "$!" > %s
@@ -2687,8 +2398,8 @@ exit 0
 // inheriting the standard-output handle and survives the group kill.
 func writeOpenCodeEscapedDescendantScript(t *testing.T, dir, pidFile, sessionID string) string {
 	t.Helper()
-	body := fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	body := fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 %sprintf '{"type":"step_start","timestamp":1000,"sessionID":"%s","part":{"id":"p1","messageID":"m1","sessionID":"%s","snapshot":"","type":"step-start"}}\n'
 exit 0
@@ -2797,8 +2508,8 @@ func TestRunTurn_EscapedStderrHolderKeepsLinesUnblocked(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "stderr-holder.pid")
 	killEscapedGroupOnCleanup(t, pidFile)
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf 'direct child stderr\n' >&2
 %sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_stderr_holder","part":{"id":"p1","messageID":"m1","sessionID":"ses_stderr_holder","snapshot":"","type":"step-start"}}\n'
@@ -2854,8 +2565,8 @@ func TestRunTurn_ZeroExitCompletesWhenTheDeadlineFallsAfterTheReap(t *testing.T)
 	holderPID := filepath.Join(tmpDir, "stderr-holder.pid")
 	runtimePID := filepath.Join(tmpDir, "runtime.pid")
 	killEscapedGroupOnCleanup(t, holderPID)
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf '%%s\n' "$$" > %s
 %sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_deadline_after_reap","part":{"id":"p1","messageID":"m1","sessionID":"ses_deadline_after_reap","snapshot":"","type":"step-start"}}\n'
@@ -2948,8 +2659,8 @@ func TestRunTurn_ContextCancellationArm_BoundedDrain(t *testing.T) {
 			if tt.spawn != nil {
 				spawn = tt.spawn(pidFile)
 			}
-			script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+			script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 %sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_ctxcancel","part":{"id":"p1","messageID":"m1","sessionID":"ses_ctxcancel","snapshot":"","type":"step-start"}}\n'
 sleep 3600
@@ -3031,8 +2742,8 @@ func TestRunTurn_SessionMismatchArm_BoundedDrain(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "escaped.pid")
 	killEscapedGroupOnCleanup(t, pidFile)
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 %sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_mismatch","part":{"id":"p1","messageID":"m1","sessionID":"ses_mismatch","snapshot":"","type":"step-start"}}\n'
 sleep 3600
@@ -3087,8 +2798,8 @@ func TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "escaped.pid")
 	killEscapedGroupOnCleanup(t, pidFile)
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 %sexit 0
 `, writeEscapedHolderSpawn(pidFile, "2>/dev/null")))
@@ -3132,8 +2843,8 @@ func writeOpenCodeLatchMoveScript(t *testing.T, dir, gatePath, pidFile, sessionI
 			`printf '{"type":"text","timestamp":1001,"sessionID":"%s","part":{"id":"p2","messageID":"m1","sessionID":"%s","type":"text","text":"done","time":{"start":1001,"end":1001}}}\n'`,
 		pidFile, shellQuote(gatePath), sessionID, sessionID,
 	)
-	body := fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	body := fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf 'direct child stderr\n' >&2
 setsid sh -c %s 2>/dev/null &
@@ -3221,8 +2932,8 @@ func TestRunTurn_ReadTimeoutDoesNotFireWhileStderrBoundRuns(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "stderr-holder-timeout.pid")
 	killEscapedGroupOnCleanup(t, pidFile)
-	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 printf 'direct child stderr\n' >&2
 %sexit 0
@@ -3262,8 +2973,8 @@ func TestRunTurn_LongTurnOutlivesTheDrainGrace(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) echo '{"messages":[]}'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 sleep 0.6
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_long","part":{"id":"p1","messageID":"m1","sessionID":"ses_long","snapshot":"","type":"step-start"}}\n'
@@ -3301,15 +3012,15 @@ func TestRunTurn_CancelledTurnRecoversUsageFromExport(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// One event so the test knows the turn is running, then block until
 	// the context is cancelled.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
 sleep 1000`)
@@ -3392,19 +3103,19 @@ func TestRunTurn_ReadTimeoutRecoversUsageFromExport(t *testing.T) {
 
 	// A resumed session exports the whole history, so the adapter filters
 	// on the run's start time. This message has to fall inside that
-	// window; the window itself is covered by TestQueryExportUsage.
+	// window; the window itself is covered by TestParseSessionExport.
 	createdMS := time.Now().Add(time.Minute).UnixMilli()
 	exportPath := filepath.Join(tmpDir, "export.json")
-	export := fmt.Sprintf(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123",`+
-		`"providerID":"anthropic","modelID":"claude-sonnet-4-5","finish":"stop","time":{"created":%d},`+
-		`"tokens":{"input":7,"output":3,"total":10,"cache":{"read":0,"write":0}}}}]}`, createdMS)
+	export := fmt.Sprintf(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","time":{"created":%d},`+
+		`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},`+
+		`"tokens":{"input":7,"output":3,"total":10,"cache":{"read":0,"write":0}}}]}`, createdMS)
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Never emits a json event, so the read timer is what ends the turn.
-	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
-  export) cat '`+exportPath+`'; exit 0;;
+	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
 esac
 sleep 1000`)
 
@@ -3455,12 +3166,12 @@ func writeRunFixtureScriptWithCapture(t *testing.T, dir, fixtureName, argvPath, 
 	}
 
 	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(exportPath, []byte(`{"info":{"id":""},"messages":[]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(export.json): %v", err)
 	}
 
-	body := `case "$1" in
-  export) cat '` + exportPath + `'; exit 0;;
+	body := `case "$1 $2" in
+  "session export") cat '` + exportPath + `'; exit 0;;
 esac
 cat > '` + stdinPath + `'
 printf '%s\n' "$@" > '` + argvPath + `'
@@ -3470,13 +3181,13 @@ cat '` + runPath + `'`
 }
 
 // TestRunTurn_LocalLaunchIgnoresSSHEnvNames asserts that a local turn
-// (RemoteCommand empty) sends the same argument vector and empty
-// standard input whether or not LaunchTarget.SSHEnvNames names a set
-// variable: RunTurn's local branch never consults it. This reddens if
-// that branch starts treating a non-empty SSHEnvNames as a signal to
-// take the remote path, which would replace the local argument vector
-// with an SSH option vector and attach a non-empty preamble to
-// standard input.
+// (RemoteCommand empty) sends the same argument vector and a standard
+// input holding the prompt alone whether or not
+// LaunchTarget.SSHEnvNames names a set variable: RunTurn's local branch
+// never consults it. This reddens if that branch starts treating a
+// non-empty SSHEnvNames as a signal to take the remote path, which
+// would replace the local argument vector with an SSH option vector and
+// put a preamble ahead of the prompt on standard input.
 func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 	// Not parallel: sets the carried variable via t.Setenv.
 	const varName = "SORTIE_OPENCODE_RUNTURN_LOCAL_INVARIANCE"
@@ -3528,8 +3239,8 @@ func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: ReadFile(stdin.txt): %v", tc.name, err)
 		}
-		if len(stdin) != 0 {
-			t.Errorf("%s: subprocess standard input = %q, want empty on a local launch", tc.name, stdin)
+		if string(stdin) != "work" {
+			t.Errorf("%s: subprocess standard input = %q, want the prompt alone on a local launch", tc.name, stdin)
 		}
 	}
 }
@@ -3537,7 +3248,7 @@ func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 // newHookTestState builds a sessionState pointing to a local fake
 // runtime, for a test-only hook that reads a session's own auxiliary
 // commands directly rather than through StartSession.
-func newHookTestState(t *testing.T, major runtimeMajor, scriptBody string) *sessionState {
+func newHookTestState(t *testing.T, scriptBody string) *sessionState {
 	t.Helper()
 
 	script := agenttest.WriteScript(t, t.TempDir(), "fake-opencode", scriptBody)
@@ -3551,41 +3262,8 @@ func newHookTestState(t *testing.T, major runtimeMajor, scriptBody string) *sess
 			WorkspacePath: t.TempDir(),
 		},
 		passthrough: pt,
-		major:       major,
 		baseLogger:  slog.Default(),
 	}
-}
-
-func TestRuntimeMajorForTest(t *testing.T) {
-	t.Parallel()
-
-	t.Run("wrong internal type", func(t *testing.T) {
-		t.Parallel()
-
-		if _, err := RuntimeMajorForTest(domain.Session{Internal: "not a sessionState"}); err == nil {
-			t.Fatal("RuntimeMajorForTest() error = nil, want non-nil")
-		}
-	})
-
-	t.Run("major never detected", func(t *testing.T) {
-		t.Parallel()
-
-		if _, err := RuntimeMajorForTest(domain.Session{Internal: &sessionState{major: majorUnknown}}); err == nil {
-			t.Fatal("RuntimeMajorForTest() error = nil, want non-nil")
-		}
-	})
-
-	t.Run("detected major is returned", func(t *testing.T) {
-		t.Parallel()
-
-		got, err := RuntimeMajorForTest(domain.Session{Internal: &sessionState{major: major2}})
-		if err != nil {
-			t.Fatalf("RuntimeMajorForTest() error = %v", err)
-		}
-		if got != 2 {
-			t.Errorf("RuntimeMajorForTest() = %d, want 2", got)
-		}
-	})
 }
 
 func TestEffectivePermissionsForTest(t *testing.T) {
@@ -3599,14 +3277,6 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 		}
 	})
 
-	t.Run("major never detected", func(t *testing.T) {
-		t.Parallel()
-
-		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: &sessionState{major: majorUnknown}}); err == nil {
-			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
-		}
-	})
-
 	t.Run("workspace re-verification failure fails the build", func(t *testing.T) {
 		t.Parallel()
 
@@ -3615,7 +3285,6 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 				Command:       "/usr/bin/opencode",
 				WorkspacePath: filepath.Join(t.TempDir(), "missing"),
 			},
-			major:      major1,
 			baseLogger: slog.Default(),
 		}
 		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
@@ -3631,7 +3300,6 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 				Command:       filepath.Join(t.TempDir(), "no-such-binary"),
 				WorkspacePath: t.TempDir(),
 			},
-			major:      major1,
 			baseLogger: slog.Default(),
 		}
 		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
@@ -3642,7 +3310,7 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 	t.Run("a non-zero exit is an error", func(t *testing.T) {
 		t.Parallel()
 
-		state := newHookTestState(t, major1, "exit 1")
+		state := newHookTestState(t, "exit 1")
 		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
 			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
 		}
@@ -3651,7 +3319,7 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 	t.Run("output that does not decode is an error", func(t *testing.T) {
 		t.Parallel()
 
-		state := newHookTestState(t, major1, "echo 'not json'")
+		state := newHookTestState(t, "echo 'not json'")
 		effective, raw, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
 		if err == nil {
 			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
@@ -3664,28 +3332,14 @@ func TestEffectivePermissionsForTest(t *testing.T) {
 		}
 	})
 
-	t.Run("1.x permission object", func(t *testing.T) {
-		t.Parallel()
-
-		state := newHookTestState(t, major1, `printf '{"permission":{"bash":"deny","read":"allow"}}'`)
-		effective, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
-		if err != nil {
-			t.Fatalf("EffectivePermissionsForTest() error = %v", err)
-		}
-		want := map[string]string{"bash": "deny", "read": "allow"}
-		if !maps.Equal(effective, want) {
-			t.Errorf("EffectivePermissionsForTest() effective = %v, want %v", effective, want)
-		}
-	})
-
-	t.Run("2.x a later document rule overwrites an earlier one", func(t *testing.T) {
+	t.Run("a later document rule overwrites an earlier one", func(t *testing.T) {
 		t.Parallel()
 
 		const doc = `[{"type":"document","info":{"permissions":[{"resource":"*","action":"bash","effect":"allow"}]}},` +
 			`{"type":"document","info":{"permissions":[{"resource":"*","action":"bash","effect":"deny"},{"resource":"*","action":"read","effect":"allow"}]}},` +
 			`{"type":"other","info":{"permissions":[{"resource":"*","action":"webfetch","effect":"allow"}]}}]`
 
-		state := newHookTestState(t, major2, "printf '"+doc+"'")
+		state := newHookTestState(t, "printf '"+doc+"'")
 		effective, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
 		if err != nil {
 			t.Fatalf("EffectivePermissionsForTest() error = %v", err)

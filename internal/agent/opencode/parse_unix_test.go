@@ -106,13 +106,14 @@ func sshStandInEnvPath(t *testing.T, includeDD bool) string {
 
 // writeSSHCaptureScript writes a script that answers a leading
 // --version argument for StartSession's own version query, and
-// otherwise captures carriedName's value and the OPENCODE_AUTO_SHARE
-// managed setting's value, each to its own file, then exits 0.
+// otherwise captures carriedName's value and the
+// OPENCODE_DISABLE_AUTOUPDATE managed setting's value, each to its own
+// file, then exits 0.
 func writeSSHCaptureScript(t *testing.T, dir, carriedName, envCapturePath, settingCapturePath string) string {
 	t.Helper()
-	content := "case \"$1\" in\n  --version) echo '1.18.32'; exit 0;;\nesac\n" +
+	content := "case \"$1\" in\n  --version) echo 'opencode v2.0.18'; exit 0;;\nesac\n" +
 		"printf '%s' \"$" + carriedName + "\" > '" + envCapturePath + "'\n" +
-		"printf '%s' \"$OPENCODE_AUTO_SHARE\" > '" + settingCapturePath + "'\n"
+		"printf '%s' \"$OPENCODE_DISABLE_AUTOUPDATE\" > '" + settingCapturePath + "'\n"
 	return agenttest.WriteScript(t, dir, "fake-opencode-ssh", content)
 }
 
@@ -177,65 +178,6 @@ func TestQueryExportUsage_HeldDescendantHoldingOutput(t *testing.T) {
 	}
 
 	pollOpencodePIDAndAssertGone(t, pidPath)
-}
-
-// TestQueryModelNotFound_HeldDescendantHoldingOutput asserts that with
-// a held descendant holding the models query's output,
-// queryModelNotFound returns within its timer reporting the configured
-// model present in the catalog (ok false), and the descendant is gone.
-func TestQueryModelNotFound_HeldDescendantHoldingOutput(t *testing.T) {
-	tmpDir := t.TempDir()
-	pidPath := filepath.Join(tmpDir, "descendant.pid")
-
-	body := "printf 'anthropic/claude-sonnet-4-5\\nopenai/gpt-5\\n'\n" +
-		"sleep 30 & echo $! > '" + pidPath + "'\n"
-	script := agenttest.WriteScript(t, tmpDir, "fake-models", body)
-
-	state := &sessionState{
-		target: agentcore.LaunchTarget{
-			Command:       script,
-			WorkspacePath: tmpDir,
-		},
-		baseLogger: slog.Default(),
-	}
-	state.passthrough.Model = "anthropic/claude-sonnet-4-5"
-
-	start := time.Now()
-	message, ok := queryModelNotFound(context.Background(), state)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("queryModelNotFound() took %v, want within 3s", elapsed)
-	}
-	if ok {
-		t.Errorf("ok = true (message %q), want false: the configured model is present in the catalog", message)
-	}
-
-	pollOpencodePIDAndAssertGone(t, pidPath)
-}
-
-func TestQueryModelNotFound_EndedContextStillListsTheModels(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := agenttest.WriteScript(t, tmpDir, "fake-models", "printf 'openai/gpt-5\\n'\n")
-	state := &sessionState{
-		target: agentcore.LaunchTarget{
-			Command:       script,
-			WorkspacePath: tmpDir,
-		},
-		baseLogger: slog.Default(),
-	}
-	state.passthrough.Model = "anthropic/claude-sonnet-4-5"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	message, ok := queryModelNotFound(ctx, state)
-
-	if !ok {
-		t.Fatal("queryModelNotFound() ok = false after the context ended, want true: the listing keeps its own bound")
-	}
-	if !strings.HasPrefix(message, "Model not found: anthropic/claude-sonnet-4-5") {
-		t.Errorf("queryModelNotFound() message = %q, want it to name the missing model", message)
-	}
 }
 
 func writeExportScript(t *testing.T, dir, fixtureName string, exitCode int) (string, string) {
@@ -316,8 +258,8 @@ func TestQueryExportSubprocess(t *testing.T) {
 		} {
 			tmpDir := t.TempDir()
 			exportPath := filepath.Join(tmpDir, "export.json")
-			export := `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123",` + tc.finish +
-				`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}}]}`
+			export := `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant",` + tc.finish +
+				`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 			if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil { //nolint:gosec // fixture file under t.TempDir()
 				t.Fatal(err)
 			}
@@ -357,8 +299,8 @@ func TestQueryExportSubprocess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(args.log): %v", err)
 		}
-		if string(args) != "export\n--sanitize\nses_abc123\n" {
-			t.Errorf("export args = %q, want %q", string(args), "export\n--sanitize\nses_abc123\n")
+		if string(args) != "session\nexport\n--standalone\n--sanitize\nses_abc123\n" {
+			t.Errorf("export args = %q, want %q", string(args), "session\nexport\n--standalone\n--sanitize\nses_abc123\n")
 		}
 	})
 
@@ -425,7 +367,7 @@ func TestQueryExportSubprocess(t *testing.T) {
 // TestQueryExportUsage_SSH_CarriesEnvironmentVariableAndSetting drives
 // queryExportUsage's remote branch through a stand-in ssh runtime and
 // asserts that the fake remote command observes both a carried
-// variable's value and the OPENCODE_AUTO_SHARE managed setting,
+// variable's value and the OPENCODE_DISABLE_AUTOUPDATE managed setting,
 // delivered only through the SSH session's standard input rather than
 // through the stand-in's own inherited environment.
 //
@@ -465,68 +407,16 @@ func TestQueryExportUsage_SSH_CarriesEnvironmentVariableAndSetting(t *testing.T)
 	if err != nil {
 		t.Fatalf("ReadFile(setting.out): %v", err)
 	}
-	if string(gotSetting) != "false" {
-		t.Errorf("OPENCODE_AUTO_SHARE = %q, want %q", string(gotSetting), "false")
-	}
-}
-
-// TestQueryModelNotFound_SSH_CarriesEnvironmentVariableAndSetting
-// mirrors TestQueryExportUsage_SSH_CarriesEnvironmentVariableAndSetting
-// for queryModelNotFound's remote branch.
-//
-// Not run with t.Parallel(): sets PATH and the carried variable via
-// t.Setenv.
-func TestQueryModelNotFound_SSH_CarriesEnvironmentVariableAndSetting(t *testing.T) {
-	tmpDir := t.TempDir()
-	sshDir := t.TempDir()
-
-	agenttest.FakeRuntime(t, sshDir, "ssh", scenarioOpencodeSSHStandIn, sshStandInParams{PATH: sshStandInEnvPath(t, true)})
-	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	const carriedName = "OPENCODE_TEST_CARRY_MODELS"
-	const carriedValue = "carried-value-models"
-	t.Setenv(carriedName, carriedValue)
-
-	envCapturePath := filepath.Join(tmpDir, "env.out")
-	settingCapturePath := filepath.Join(tmpDir, "setting.out")
-	agentScript := writeSSHCaptureScript(t, tmpDir, carriedName, envCapturePath, settingCapturePath)
-
-	state := &sessionState{
-		target: agentcore.LaunchTarget{
-			Command:       agentScript,
-			WorkspacePath: tmpDir,
-			RemoteCommand: agentScript,
-			SSHHost:       "user@stand-in-host",
-			SSHEnvNames:   []string{carriedName},
-		},
-		baseLogger: slog.Default(),
-	}
-	state.passthrough.Model = "anthropic/claude-sonnet-4-5"
-
-	queryModelNotFound(context.Background(), state)
-
-	gotEnv, err := os.ReadFile(envCapturePath)
-	if err != nil {
-		t.Fatalf("ReadFile(env.out): %v", err)
-	}
-	if string(gotEnv) != carriedValue {
-		t.Errorf("carried variable = %q, want %q", string(gotEnv), carriedValue)
-	}
-
-	gotSetting, err := os.ReadFile(settingCapturePath)
-	if err != nil {
-		t.Fatalf("ReadFile(setting.out): %v", err)
-	}
-	if string(gotSetting) != "false" {
-		t.Errorf("OPENCODE_AUTO_SHARE = %q, want %q", string(gotSetting), "false")
+	if string(gotSetting) != "true" {
+		t.Errorf("OPENCODE_DISABLE_AUTOUPDATE = %q, want %q", string(gotSetting), "true")
 	}
 }
 
 // TestRunTurn_SSH_CarriesEnvironmentVariableAndSetting drives
 // OpenCodeAdapter.RunTurn's remote branch through a stand-in ssh
 // runtime and asserts that the fake remote command observes both a
-// carried variable's value and the OPENCODE_AUTO_SHARE managed
-// setting.
+// carried variable's value and the OPENCODE_DISABLE_AUTOUPDATE
+// managed setting.
 //
 // Not run with t.Parallel(): sets PATH and the carried variable via
 // t.Setenv.
@@ -577,8 +467,8 @@ func TestRunTurn_SSH_CarriesEnvironmentVariableAndSetting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(setting.out): %v", err)
 	}
-	if string(gotSetting) != "false" {
-		t.Errorf("OPENCODE_AUTO_SHARE = %q, want %q", string(gotSetting), "false")
+	if string(gotSetting) != "true" {
+		t.Errorf("OPENCODE_DISABLE_AUTOUPDATE = %q, want %q", string(gotSetting), "true")
 	}
 }
 
@@ -640,67 +530,9 @@ func TestQueryExportUsage_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: ReadFile(args.log): %v", tc.name, err)
 		}
-		const wantArgs = "export\n--sanitize\nses_abc123\n"
+		const wantArgs = "session\nexport\n--standalone\n--sanitize\nses_abc123\n"
 		if string(args) != wantArgs {
 			t.Errorf("%s: export args = %q, want %q", tc.name, string(args), wantArgs)
-		}
-
-		stdin, err := os.ReadFile(stdinPath)
-		if err != nil {
-			t.Fatalf("%s: ReadFile(stdin.txt): %v", tc.name, err)
-		}
-		if len(stdin) != 0 {
-			t.Errorf("%s: subprocess standard input = %q, want empty on a local launch", tc.name, stdin)
-		}
-	}
-}
-
-// TestQueryModelNotFound_LocalLaunchIgnoresSSHEnvNames mirrors
-// [TestQueryExportUsage_LocalLaunchIgnoresSSHEnvNames] for
-// queryModelNotFound's local branch.
-func TestQueryModelNotFound_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
-	// Not parallel: sets the carried variable via t.Setenv.
-	const varName = "SORTIE_OPENCODE_MODELS_LOCAL_INVARIANCE"
-	t.Setenv(varName, "should-never-reach-a-local-launch")
-
-	for _, tc := range []struct {
-		name        string
-		sshEnvNames []string
-	}{
-		{"SSHEnvNames absent", nil},
-		{"SSHEnvNames naming a set variable", []string{varName}},
-	} {
-		tmpDir := t.TempDir()
-		argvPath := filepath.Join(tmpDir, "argv.txt")
-		stdinPath := filepath.Join(tmpDir, "stdin.txt")
-		body := `cat > '` + stdinPath + `'
-printf '%s\n' "$@" > '` + argvPath + `'
-printf 'anthropic/claude-sonnet-4-5\nopenai/gpt-5\n'
-`
-		script := agenttest.WriteScript(t, tmpDir, "fake-models", body)
-
-		state := &sessionState{
-			target: agentcore.LaunchTarget{
-				Command:       script,
-				WorkspacePath: tmpDir,
-				SSHEnvNames:   tc.sshEnvNames,
-			},
-			baseLogger: slog.Default(),
-		}
-		state.passthrough.Model = "anthropic/claude-sonnet-4-5"
-
-		_, ok := queryModelNotFound(context.Background(), state)
-		if ok {
-			t.Errorf("%s: ok = true, want false: the configured model is present in the catalog", tc.name)
-		}
-
-		argv, err := os.ReadFile(argvPath)
-		if err != nil {
-			t.Fatalf("%s: ReadFile(argv.txt): %v", tc.name, err)
-		}
-		const wantArgv = "models\n"
-		if string(argv) != wantArgv {
-			t.Errorf("%s: models argv = %q, want %q", tc.name, string(argv), wantArgv)
 		}
 
 		stdin, err := os.ReadFile(stdinPath)

@@ -55,15 +55,15 @@ func TestDeleteVerificationSession_CarriesManagedEnv(t *testing.T) {
 func writeSSHExit255Script(t *testing.T, dir string, runOutput []byte) string {
 	t.Helper()
 	exportPath := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(exportPath, []byte(`{"info":{"id":""},"messages":[]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(export.json): %v", err)
 	}
 	runPath := filepath.Join(dir, "run.jsonl")
 	if err := os.WriteFile(runPath, runOutput, 0o644); err != nil {
 		t.Fatalf("WriteFile(run.jsonl): %v", err)
 	}
-	body := `case "$1" in
-  export) cat '` + exportPath + `'; exit 0;;
+	body := `case "$1 $2" in
+  "session export") cat '` + exportPath + `'; exit 0;;
 esac
 cat '` + runPath + `'
 exit 255
