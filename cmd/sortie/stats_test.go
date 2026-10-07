@@ -638,15 +638,15 @@ func TestStatsTokenReporting(t *testing.T) {
 			t.Errorf("Summary.CostPerSucceededRunUSD = %v, want 5 (10 / 2 succeeded measured runs)", report.Summary.CostPerSucceededRunUSD)
 		}
 
-		kiroGroup := findGroup(t, report.ByAdapter, "kiro")
-		if kiroGroup.Tokens != nil {
-			t.Errorf("by_adapter[kiro].Tokens = %+v, want nil (no measured run)", kiroGroup.Tokens)
+		unmeasuredGroup := findGroup(t, report.ByAdapter, "kiro")
+		if unmeasuredGroup.Tokens != nil {
+			t.Errorf("by_adapter[kiro].Tokens = %+v, want nil (no measured run)", unmeasuredGroup.Tokens)
 		}
-		if kiroGroup.CostUSD != nil {
-			t.Errorf("by_adapter[kiro].CostUSD = %v, want nil", *kiroGroup.CostUSD)
+		if unmeasuredGroup.CostUSD != nil {
+			t.Errorf("by_adapter[kiro].CostUSD = %v, want nil", *unmeasuredGroup.CostUSD)
 		}
-		if kiroGroup.TokensUnmeasuredRuns != 1 {
-			t.Errorf("by_adapter[kiro].TokensUnmeasuredRuns = %d, want 1", kiroGroup.TokensUnmeasuredRuns)
+		if unmeasuredGroup.TokensUnmeasuredRuns != 1 {
+			t.Errorf("by_adapter[kiro].TokensUnmeasuredRuns = %d, want 1", unmeasuredGroup.TokensUnmeasuredRuns)
 		}
 	})
 
@@ -675,19 +675,19 @@ func TestStatsTokenReporting(t *testing.T) {
 			t.Errorf("stdout = %q, want no trace of the old \"(all runs)\" labels", out)
 		}
 
-		kiroLine := ""
+		unmeasuredLine := ""
 		for line := range strings.SplitSeq(out, "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), "kiro") {
-				kiroLine = line
+				unmeasuredLine = line
 				break
 			}
 		}
-		if kiroLine == "" {
+		if unmeasuredLine == "" {
 			t.Fatalf("stdout = %q, want a kiro row in the by-coding-agent table", out)
 		}
-		fields := strings.Fields(kiroLine)
+		fields := strings.Fields(unmeasuredLine)
 		if len(fields) == 0 || fields[len(fields)-1] != "-" || fields[len(fields)-2] != "-" {
-			t.Errorf("kiro row = %q, want its total-tokens and cost columns to both be %q", kiroLine, "-")
+			t.Errorf("kiro row = %q, want its total-tokens and cost columns to both be %q", unmeasuredLine, "-")
 		}
 
 		if !strings.Contains(out, "the token and cost figures skip 1 of these runs") {

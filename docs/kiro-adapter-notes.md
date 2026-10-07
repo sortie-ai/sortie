@@ -1,6 +1,6 @@
 # Kiro adapter notes
 
-Working notes for anyone dealing with Kiro CLI through Sortie. The one route that reaches it is the generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`; a workflow that still names the removed `kiro` kind converts onto it at load. The one thing that decides whether Sortie's own tools reach the agent at all is the credential, which the load-bearing observations below cover.
+Working notes for anyone dealing with Kiro CLI through Sortie. The one route that reaches it is the generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`. Sortie's own tools reach the agent only on a local launch, and there the credential decides whether they reach it at all, which the load-bearing observations below cover.
 
 Eligibility: qualified
 
@@ -20,7 +20,7 @@ The runtime keeps its own log, and it is the only place some failures are explai
 
 ## Entry points
 
-One route reaches this runtime: the generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. It delivers session continuation and, subject to the credential constraint below, Sortie's own tool servers. A workflow that names the removed `kiro` kind converts onto this route at load, and `## Route parity` below is the record the removal rests on.
+One route reaches this runtime: the generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. It delivers session continuation and, on a local launch and subject to the credential constraint below, Sortie's own tool servers.
 
 The `acp` subcommand does not appear in `kiro-cli --help`. It is listed under `--help-all` only, which is worth knowing before concluding a build does not have it.
 
@@ -28,55 +28,19 @@ Where other runtimes on this transport spell trust and asking posture as two sep
 
 `--model <id>` on the `acp` entry point does take effect: the session-creation response reports the requested identifier as the session's current model. The same flag on the runtime's own `chat` surface with the JSON-Lines output format can fail silently instead, warning that the model could not be set and running the turn on the default; the warning goes to standard error as prose and never into the JSON stream.
 
-## Route parity
-
-| Axis | Removed `kiro` kind | Protocol route (`agent-client-protocol` running `kiro-cli acp`) | Verdict |
-|---|---|---|---|
-| Tool-server delivery | Never delivered: the kind declared no delivery, and the runtime's backend disables tool servers under an API key | Delivered on a local launch under a stored device login (graded usable). None under an API key (the same backend gate), and none on a remote launch | The protocol route delivers at least what the kind delivers |
-| Session continuation | Continued the workspace's most recent conversation | Loads the session by identifier from a fresh process (graded usable) | Parity |
-| Credential verification before the first session | Shared verification step. No login gave `credential_unverified` naming no signed-in account. A refused key failed before the first turn | Shared verification step. No login makes the runtime exit before its handshake: the run records `port_exit`, whose report carries the runtime's own not-logged-in message. A refused key fails before the first turn | Parity under the shipped rule for a runtime that rejects a credential by exiting: both fail before the first turn, both messages name the missing login, and both retry with the same backoff. The recorded failure kind differed |
-| Configured credentials on a remote launch | `KIRO_API_KEY` was carried automatically | Carries the names `worker.ssh_pass_env` lists | Parity at the cost of one configuration line |
-| What `sortie validate` refuses offline | Refused wrong-typed `kiro` keys, both trust keys set together, and any posture short of full trust | Its one block key's type. A switch the runtime rejects fails before the first turn with the runtime's exit status and error text. A posture short of full trust costs refused tool calls at run time, never an unanswered approval | Parity: no refusal guards a failure the protocol route can reach |
-| `kiro` configuration keys | `model`, `agent`, and `trust_all_tools` (full trust was the only valid posture); `trust_tools` was refused. An unknown agent name fell back to the runtime's default agent | `--model` (measured: the session reports the requested model), `--agent` (measured: the session reports the named agent, defined globally or in the workspace, and that agent's own model unless `--model` names another), `-a`; `--trust-tools` is also offered. An unknown agent name falls back to the runtime's default agent | Parity: every key has a switch on the protocol entry point, measured to take effect |
-| Token accounting | None. `sortie validate` warned when `agent.max_tokens` or a `token_rates` entry targeted the kind, and each dispatch under a non-zero ceiling logged that the ceiling could not bound the run | None. Under a non-zero ceiling each run logs once, at its end, that the ceiling could not bound it | Shared shortfall; product conformance not qualified on either route. The earlier warning is an accepted difference |
-| Turn outcome, retry classification, permission handling | Was read from the text transcript, the exit status and the credits trailer | Graded usable; eligibility qualified | The protocol route meets the richest native reference |
-| Accepted differences | None | One verification conversation per worker run stays in kiro-cli's own store, because the runtime offers no session delete. A session load shortly after this process creates it waits briefly for the runtime's own store to catch up. Runs after the move are recorded under the kind `agent-client-protocol`, which every protocol runtime's runs carry, so the `kiro` series in run history and `sortie stats` ends at the move. No warning before spend says a token ceiling cannot bound the run | Accepted differences, not withdrawn capabilities |
-
-Every session in the tracked capture names its own runtime version in that capture's provenance record, and every row above rests on that build. The nightly integration run cited below ran a later build, read from that run's own job log rather than pinned here.
-
-The qualification rows rest on the tracked capture and the eligibility summary rendered from it, described above this section.
-
-The credential and early-exit rows rest on the shared credential-verification and early-exit cases that the protocol adapter's own gated suite runs against this runtime. The protocol route's `port_exit` outcome is the shipped rule: the credential-verification section of `docs/workflow-reference.md` reports that a runtime rejecting a credential only by printing a message and exiting is recorded as `port_exit`, not `credential_unverified`, and the domain error catalog gives both outcomes the same retryable, backoff-bound classification.
-
 Launching the protocol entry point with no stored login and no API key exits before the handshake completes, printing a message on standard error that names the login command and states the account is not signed in. No nightly case exercises this on the protocol route; a regression there still ends at the protocol adapter's own bounded handshake wait, so it cannot hold a run.
 
 Naming an agent definition on the protocol entry point, whether declared globally or inside the workspace, makes the session report that name as its own mode and that definition's own model unless a model flag names another; leaving the flag unset, or naming an undefined agent, reports the runtime's default agent and model instead, and an undefined name also carries a vendor notification naming the requested and the fallback agent. Both flags scope to the one session a launch starts, which matches how the protocol adapter starts or loads exactly one session per launch.
 
-The removed kind's own offline warning was `agent.kind.no_usage_reporting`; the protocol route instead logs its own end-of-run record. Both name a token ceiling the run could not bound, and neither route accounts tokens.
-
-The verification session the protocol route opens stays in the runtime's own store outside the workspace rather than being deleted, because the runtime advertises no delete capability. A session load shortly after its own creation waits briefly for the runtime's own store to catch up. A workflow that moves onto the protocol route keys its run history under the protocol kind rather than the native one from that point on, which is where the native kind's own series in run history and in reported stats ends.
-
-Mechanical mapping. Every row below is a fixed rewrite that needs no judgment, so every `kiro` configuration has a behavior-preserving conversion onto the protocol route, apart from the accepted differences above.
-
-| `kiro` configuration | Protocol-route equivalent | Basis |
-|---|---|---|
-| `kiro` in `agent.kind`, `dispatch.default.agent` or any `dispatch.rules[*].agent` | `agent-client-protocol` in the same place | The same selectors pick every kind |
-| `agent.command` (empty selects `kiro-cli`) | The same executable, `kiro-cli` when it was empty, followed by `acp -a`. The load-time conversion builds this command, so a workflow that still names `kiro` needs no edit; when a string command is converted and an appended argument holds whitespace, a local launch becomes the list form | The kind fell back to `kiro-cli`, which the conversion keeps as its default command (`defaultCommand` in `convertRetired`); the protocol kind has none (`startSession` in `internal/agent/clientprotocol/session.go`). Command governance gives `agent.command` to the default kind alone, so a converted `kiro` route reached through `dispatch` beside a different default kind launches its own converted command and never the default kind's. A hand migration of such a route has no command to write, because the protocol kind reads `agent.command` only as the default kind, so `sortie validate` reports it under the check `agent.command` until the protocol kind is the default kind |
-| `kiro.model` | `--model <id>` appended | Measured (configuration-keys row) |
-| `kiro.agent` | `--agent <name>` appended; a name holding whitespace is its own element of the list form on a local launch, and single-quoted on a remote one | Measured (`--agent` evidence); the runtime accepts such a name. A `$VAR` reference in the value converts to its resolved value, so a hand migration writes the resolved value, since the flag takes the text literally |
-| `kiro.trust_all_tools`, full trust being the only posture the kind accepts | `-a`, already in the command | `validateTrustToolsUntrusted`, which `convertRetired` runs, refuses any posture short of full trust |
-| `kiro.mcp_config` | `agent-client-protocol.mcp_config` in a hand migration; the load-time conversion does not carry it, and its warning lists `kiro.mcp_config` as not carried | The kind never delivered it; the protocol route delivers it on a local launch under a stored login, so carrying it would start tool servers that never ran on this route |
-| The `kiro:` block | Deleted; a kind reached only through `dispatch` needs `agent-client-protocol: {}` | `dispatch.agent.missing_block` in `ValidateDispatchConfig` |
-| A rule's `kiro:` block under a rule that runs `kiro` | Converted with the kind and then deleted. `model` and `agent` reach only the command, so a block that would change the command the converted route launches fails the load whenever the conversion governs that route's sessions; when it governs none, the warning states that the sessions carry none of the `kiro` settings | A rule's settings block cannot set a command, and the keys the conversion does not carry are listed in the warning as `dispatch.rules[i].kiro.<key>` |
-| `KIRO_API_KEY` with `worker.ssh_hosts` | `KIRO_API_KEY` added to `worker.ssh_pass_env` in a hand migration; the load-time conversion carries it on a remote launch of the converted route as a declared name, with no entry | The retirement declares it as the kind's credential variable; the protocol kind declares none. `worker.ssh_pass_env` warns when the name is unset and reaches every kind, which the declared name does not |
+The verification session the protocol route opens stays in the runtime's own store outside the workspace rather than being deleted, because the runtime advertises no delete capability. A session load shortly after its own creation waits briefly for the runtime's own store to catch up.
 
 ## Load-bearing capability observations
 
-No row blocks transport parity: session continuation grades usable on both surfaces, so an operator moving from the removed kind to the protocol route loses nothing that was measured. Token accounting blocks product conformance without blocking parity, because both routes miss it equally, and a shortfall both routes share costs nothing in moving between them while still meaning the capability does not work.
+No row blocks transport parity: session continuation grades usable on both surfaces. Token accounting blocks product conformance without blocking parity, because both routes miss it equally, and a shortfall both routes share costs nothing in moving between them while still meaning the capability does not work.
 
 The credential decides whether Sortie's tools arrive, and this is the single most important thing on this page. Authenticating with `KIRO_API_KEY` starts sessions, runs turns and continues sessions correctly, and silently carries none of Sortie's tools. The runtime's backend refuses to serve a governance profile for the key, and the runtime responds by disabling MCP entirely for the session: `Failed to get governance config from API - MCP disabled, web tools disabled` in its own log, plus a vendor-namespaced `governance_disabled` notification on the wire. The declared server is never started, the model is never offered the tool, and the turn completes normally while answering that it has no such tool. Nothing on the wire and nothing in Sortie's own output marks this as a failure, which makes it the most expensive way to get this integration wrong: the route is chosen for the tools, and it silently delivers everything except them.
 
-The same server-side profile check also blocked tool servers on the removed kind. It governs both routes, and no flag turns it off.
+No flag turns the server-side profile check off.
 
 Whether the check fails for every API key or only for keys on some plans is unestablished; one key was available to try. An operator seeing tools go missing should read the runtime log first, because that line is the only place the cause is stated.
 
@@ -148,7 +112,5 @@ Tool servers declared in the session-creation request are merged over whatever t
 Windows live qualification is unobserved.
 
 ## Verifying a change
-
-The conversion is covered by the unit tests in `internal/agent/kiro` and by the validate and dry-run tests in `cmd/sortie`.
 
 The protocol route is covered by the generic adapter's own gated suite, pointed at this runtime through the client-protocol command coordinate, and by the live qualification profile, which is separately gated and spends real credits.

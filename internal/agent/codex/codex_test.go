@@ -1227,9 +1227,12 @@ func TestRunTurn_BurstBetweenTurnsNoLongerHangs(t *testing.T) {
 // one write before the notification the handshake waits for: the first
 // answers account/login/start after account/login/completed, with
 // CODEX_API_KEY set; the second answers thread/start after
-// thread/started. Each StartSession must succeed within 2s: the burst
-// must not cost the handshake the notification it is waiting for.
+// thread/started. Each StartSession must succeed well inside its read
+// timeout: a lost thread/started is accepted silently once that
+// timeout expires, so only elapsed time can expose it, and the bound
+// sits far enough below the timeout to tolerate a slow race build.
 func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T) {
+	const readTimeout = 30 * time.Second
 	tests := []struct {
 		name     string
 		scenario string
@@ -1258,7 +1261,7 @@ func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T)
 				WorkspacePath: t.TempDir(),
 				AgentConfig: domain.AgentConfig{
 					Command:       command,
-					ReadTimeoutMS: 5000,
+					ReadTimeoutMS: int(readTimeout.Milliseconds()),
 				},
 			})
 			elapsed := time.Since(start)
@@ -1272,8 +1275,8 @@ func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T)
 			}
 			t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 
-			if elapsed > 2*time.Second {
-				t.Fatalf("StartSession() took %v past its 2s bound, want the burst to cost it nothing", elapsed)
+			if bound := readTimeout / 2; elapsed > bound {
+				t.Fatalf("StartSession() took %v past its %v bound, want the burst to cost it nothing", elapsed, bound)
 			}
 		})
 	}

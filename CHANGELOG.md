@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+
+- A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))
+
 ### Fixed
 
 - Stopping or finishing an agent session, a hook, or a command Sortie runs can no longer terminate unrelated processes that received the same process ID after the command exited, and on Windows the finished command's own leftover processes no longer survive in that case. ([#1095](https://github.com/sortie-ai/sortie/issues/1095))

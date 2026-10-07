@@ -86,10 +86,6 @@ func checkEmptyInputConversion(kind string, decl registry.RetiredAgent) []retire
 func TestEveryRetiredKindDeclaresAValidConversion(t *testing.T) {
 	t.Parallel()
 
-	if len(retirementCompletenessDeclaredKinds) == 0 {
-		t.Fatal("registry.RetiredAgents.Kinds() returned no kinds, want at least the declaration main.go's blank imports register")
-	}
-
 	retired := func(kind string) (registry.RetiredAgent, bool) {
 		decl, err := registry.RetiredAgents.Get(kind)
 		return decl, err == nil
