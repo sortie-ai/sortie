@@ -38,3 +38,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0030](0030-keep-both-kinds-registered-and-retire-only-at-parity.md) | Keep Both Kinds Registered and Retire a Hand-Written One Only at Parity | Accepted |
 | [0031](0031-let-a-dispatch-rule-carry-its-agent-kinds-settings.md) | Let a Dispatch Rule Carry the Settings of the Agent Kind It Selects | Accepted |
 | [0032](0032-route-outbound-messages-through-per-destination-event-subscriptions.md) | Route Outbound Messages Through Per-Destination Event Subscriptions | Accepted |
+| [0033](0033-advance-an-issue-to-the-next-stage-by-swapping-a-stage-label.md) | Advance an Issue to the Next Stage by Swapping a Stage Label | Accepted |
