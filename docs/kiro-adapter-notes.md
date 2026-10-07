@@ -1,6 +1,6 @@
 # Kiro adapter notes
 
-Working notes for anyone dealing with Kiro CLI through Sortie. The one route that reaches it is the generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`. The one thing that decides whether Sortie's own tools reach the agent at all is the credential, which the load-bearing observations below cover.
+Working notes for anyone dealing with Kiro CLI through Sortie. The one route that reaches it is the generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`. Sortie's own tools reach the agent only on a local launch, and there the credential decides whether they reach it at all, which the load-bearing observations below cover.
 
 Eligibility: qualified
 
@@ -20,7 +20,7 @@ The runtime keeps its own log, and it is the only place some failures are explai
 
 ## Entry points
 
-One route reaches this runtime: the generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. It delivers session continuation and, subject to the credential constraint below, Sortie's own tool servers.
+One route reaches this runtime: the generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. It delivers session continuation and, on a local launch and subject to the credential constraint below, Sortie's own tool servers.
 
 The `acp` subcommand does not appear in `kiro-cli --help`. It is listed under `--help-all` only, which is worth knowing before concluding a build does not have it.
 
