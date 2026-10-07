@@ -221,9 +221,6 @@ var contractAllowlist = map[string]map[contractRule]string{
 	"workspacekit": {
 		ruleANCHOR: "owns the workspace-anchoring mechanism",
 	},
-	"kiro": {
-		ruleIDENTITY: "declares its retirement, naming its replacement kind",
-	},
 }
 
 // The outcomes checkContractCoreImports renders as
@@ -2271,19 +2268,19 @@ const cmd = "gemini --acp"
 
 	t.Run("a kind-anchored profile-declared token in a package outside internal/agent still passes", func(t *testing.T) {
 		anchoredKindImportPaths := map[string][]string{
-			"github.com/sortie-ai/sortie/internal/agent/kiro": {"kiro"},
+			"github.com/sortie-ai/sortie/internal/agent/fixtureruntime": {"fixtureruntime"},
 		}
-		if !contractTokenIsKindAnchored("kiro", anchoredKindImportPaths) {
-			t.Fatal("contractTokenIsKindAnchored(\"kiro\", ...) = false, want true: kiro's own kind package anchors it")
+		if !contractTokenIsKindAnchored("fixtureruntime", anchoredKindImportPaths) {
+			t.Fatal("contractTokenIsKindAnchored(\"fixtureruntime\", ...) = false, want true: fixtureruntime's own kind package anchors it")
 		}
 
 		anchoredSnapshot := contractAgentIdentitySnapshot{
-			tokens:                []string{"kiro"},
+			tokens:                []string{"fixtureruntime"},
 			kindImportPaths:       anchoredKindImportPaths,
-			profileDeclaredTokens: map[string]bool{"kiro": true},
+			profileDeclaredTokens: map[string]bool{"fixtureruntime": true},
 		}
 		if wide := contractWideScopedTokens(anchoredSnapshot); len(wide) != 0 {
-			t.Errorf("contractWideScopedTokens() = %v, want none: kiro is anchored by its own kind package", wide)
+			t.Errorf("contractWideScopedTokens() = %v, want none: fixtureruntime is anchored by its own kind package", wide)
 		}
 	})
 }
@@ -2291,9 +2288,8 @@ const cmd = "gemini --acp"
 // TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks proves the
 // mechanisms TestContractIdentityWideScope relies on can fail, not just
 // pass against the current tree: a profile that fails to decode is
-// reported, and dropping either the anchoring clause or the
-// profile-source clause reddens against a real collision (kiro, cursor).
-// The last two subtests confirm today's snapshot keeps both green.
+// reported, and marking cursor profile-declared reddens against a real
+// collision.
 func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	snapshot := contractAgentIdentitySnapshotData()
 
@@ -2320,37 +2316,6 @@ func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T)
 		}
 		if !declared["gemini"] {
 			t.Errorf("contractProfileDeclaredTokens(%q) = %v, want it to mark %q profile-declared from the tracked gemini-cli profile", contractRuntimeProfilesGlob, declared, "gemini")
-		}
-	})
-
-	t.Run("dropping the anchoring clause makes an unanchored kiro redden against the real preflight_test.go collision", func(t *testing.T) {
-		fset := token.NewFileSet()
-		unanchored := contractAgentIdentitySnapshot{
-			tokens:                []string{"kiro"},
-			kindImportPaths:       map[string][]string{},
-			profileDeclaredTokens: map[string]bool{"kiro": true},
-		}
-		wide := contractWideScopedTokens(unanchored)
-		if !slices.Contains(wide, "kiro") {
-			t.Fatalf("contractWideScopedTokens() = %v, want it to carry kiro once the anchoring clause is dropped, so this control can prove the clause is load-bearing", wide)
-		}
-
-		var violations []contractViolation
-		for _, root := range contractWideIdentityRoots {
-			v, _ := contractWideIdentityTestViolations(t, fset, root, wide)
-			violations = append(violations, v...)
-		}
-		if len(violations) == 0 {
-			t.Fatal("the wide test-file scan found no violation for an unanchored kiro token, want it to catch var kiroErrors in internal/orchestrator/preflight_test.go")
-		}
-	})
-
-	t.Run("kiro stays kind-anchored against the real snapshot, so today's wide check passes it", func(t *testing.T) {
-		if !contractTokenIsKindAnchored("kiro", snapshot.kindImportPaths) {
-			t.Fatal("contractTokenIsKindAnchored(\"kiro\", ...) = false against the real snapshot, want true: internal/agent/kiro registers kind kiro")
-		}
-		if wide := contractWideScopedTokens(snapshot); slices.Contains(wide, "kiro") {
-			t.Errorf("contractWideScopedTokens() = %v, want no kiro: it is kind-anchored", wide)
 		}
 	})
 

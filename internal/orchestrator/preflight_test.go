@@ -1699,19 +1699,19 @@ func TestValidateDispatchConfig_MissingBlockMessage(t *testing.T) {
 
 		result := ValidateDispatchConfig(params)
 
-		var kiroErrors []PreflightError
+		var kindErrors []PreflightError
 		for _, e := range result.Errors {
 			if e.Check == "dispatch.agent.missing_block" || e.Check == "kiro.check" {
-				kiroErrors = append(kiroErrors, e)
+				kindErrors = append(kindErrors, e)
 			}
 		}
 		want := []string{"dispatch.agent.missing_block", "kiro.check"}
-		if len(kiroErrors) != len(want) {
-			t.Fatalf("ValidateDispatchConfig() kiro errors = %v, want checks %v in order", kiroErrors, want)
+		if len(kindErrors) != len(want) {
+			t.Fatalf("ValidateDispatchConfig() kiro errors = %v, want checks %v in order", kindErrors, want)
 		}
 		for i, wantCheck := range want {
-			if kiroErrors[i].Check != wantCheck {
-				t.Errorf("kiroErrors[%d].Check = %q, want %q", i, kiroErrors[i].Check, wantCheck)
+			if kindErrors[i].Check != wantCheck {
+				t.Errorf("kindErrors[%d].Check = %q, want %q", i, kindErrors[i].Check, wantCheck)
 			}
 		}
 

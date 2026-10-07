@@ -103,7 +103,7 @@ func TestRunDryRunRetiredKindLogsOneWarning(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeIssuesFixture(t, dir)
-	wfPath := writeCustomWorkflowFile(t, dir, kiroRetiredKindWorkflow())
+	wfPath := writeCustomWorkflowFile(t, dir, agentKindWorkflow("  kind: "+retiredValidateKind, ""))
 
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"--dry-run", wfPath}, &stdout, &stderr)
@@ -120,7 +120,7 @@ func TestRunDryRunRetiredKindLogsOneWarning(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("WARN records = %d, want 1\nstderr:\n%s", len(warnings), stderr.String())
 	}
-	for _, attr := range []string{"agent_kind=kiro", "replacement_kind=agent-client-protocol"} {
+	for _, attr := range []string{"agent_kind=" + retiredValidateKind, "replacement_kind=mock"} {
 		if !strings.Contains(warnings[0], attr) {
 			t.Errorf("WARN record = %q, want to contain %q", warnings[0], attr)
 		}
