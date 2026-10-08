@@ -17,8 +17,18 @@ Tick sequence:
 7. Rebuild the exhausted-issue set from the session and token ceilings (§14.2).
 8. Evaluate the release rule for every parked issue (§14.2): observe the tick's candidates directly for a state change or a confirmed parking label's removal, then read the tracker state of the parked issues the candidate fetch did not return, through one batched, comment-free call. This is the only tracker call this step makes beyond the candidate fetch in step 5; it is skipped when every parked issue is already a candidate.
 9. Park each candidate whose consecutive handoff-absence count has just reached the ceiling (§14.2), skipped entirely under `tracker.handoff_evidence: off`.
-10. Dispatch eligible issues while slots remain. For a candidate whose tracker adapter declares the per-issue blocker source, this step may read that one candidate's blocker list, bounded by the per-pass read budget and its rotating window (§8.2); a candidate the budget or window excludes this tick is held rather than dispatched.
+10. Dispatch eligible issues while slots remain. For a candidate whose tracker adapter declares the per-issue blocker source, this step may read that one candidate's blocker list, bounded by the per-pass read budget and its rotating window (§8.2); a candidate the budget or window excludes this tick is held rather than dispatched. A candidate that holds a stage hop record whose target label no read has yet shown passes the stage hop hold below after it is admitted and before its rule is selected.
 11. Notify observability/status consumers of state changes.
+
+Stage hop hold:
+
+- After a hop (Section 7.3), the issue holds a hop record that remembers the label the hop added and whether any read has shown it. Until a read does, the issue is dispatched on no rule other than the hop's target, because a candidate listing can lag the label write and would otherwise select the previous stage again.
+- A candidate that carries the target label marks the record observed and dispatches. A candidate that lacks it is read directly through `fetch_issue_by_id`, at most once per hop per tick and only when the listing lacks the label. The tracker contract requires that read to reflect the hop's own write (Section 11.1).
+- A read that shows the target label marks the record observed and dispatches the target. A read that shows a terminal state, or a state outside the active states, resets the hop count (below) and dispatches nothing this tick. A read that shows an active issue without the target label marks the record observed, logs the release at `Info`, and routes the issue by the labels the read shows, so an issue whose label was removed or replaced by a person or by tracker automation is never left active and undispatched. A failed read logs a warning and holds the issue for that tick.
+- The observed flag is persisted, so a restart does not repeat a hold that already lifted.
+- A held issue the candidate listing omits is never read here; reconciliation observes it (Section 8.5).
+- Stage selection receives the hop route, the latest hop's target rule and label, so that an issue carrying the target label is selected by the target before any other stage label it carries (Section 5.3.9).
+- The poll tick is the only lane that dispatches an issue after a hop, because the hop leaves no retry entry and no pending reaction; the retry lane needs no hold.
 
 Preflight runs first so the reload it forces is visible to reconciliation and to the sweep, not only to dispatch. If validation fails, dispatch is skipped for that tick, but configuration is still applied, reconciliation still runs, and the sweep still runs when due: those steps keep orchestrator state aligned with the tracker using the last known good configuration, which remains valid for that purpose. Dispatch is the only step gated on preflight success.
 
@@ -85,7 +95,7 @@ Retry handling behavior:
 4. If found and still candidate-eligible:
    - Dispatch if slots are available, on the selection the configuration in force gives the retry (Retry selection, below).
    - Otherwise requeue with error `no available orchestrator slots`.
-5. If found but no longer active, release claim.
+5. If found but no longer active, release claim. When the issue is terminal or otherwise outside the active states, the issue's consecutive stage hop count resets.
 6. A reaction retry the issue's own current state does not permit to dispatch is rescheduled with backoff, but only for as long as it has been pausing consecutively for that reason; past 30 minutes of consecutive pausing it is dropped instead, its persisted row deleted and its claim released, with a warning naming the kind and the dwell (Section 7.5).
 7. A retry entry whose timer event was never delivered is re-armed with a zero delay once its due time is more than 60 seconds in the past, so a dropped timer event self-heals within a few ticks instead of holding its slot for the process lifetime (Section 7.5).
 
@@ -95,13 +105,16 @@ Retry selection:
 - Selection algorithm:
 
 ```
-retry_selection(cfg, template_held, frozen, issue):
+retry_selection(cfg, template_held, frozen, issue, hop):
   target = replacement of the conversion record in cfg whose kind is frozen.agent_kind,
            else frozen.agent_kind
   if target is among the agent kinds cfg reaches and template_held(frozen.template_id):
     return (target, frozen.template_id, frozen.rule_name)
-  return resolve_rule(issue, cfg.dispatch, cfg.agent.kind)
+  return resolve_rule(issue, cfg.dispatch, hop, cfg.agent.kind)
 ```
+
+- `hop` is the issue's hop route, the target rule and label of its latest hop record, or empty when it holds none. A retry routed afresh therefore selects the latest hop's target under the same precedence as a poll tick.
+- A retry that keeps its frozen rule renders the frozen `stage.previous` and `stage.previous_outcome` pair, also after a restart; a retry routed afresh to another rule renders the pair as a poll tick does, filled only when the selected rule is the target of the issue's latest hop and the hop count has not reset. `stage.current` is computed at each dispatch from the configuration in force.
 
 - A frozen kind that is still reached, through `agent.kind`, `dispatch.default.agent`, or any rule, keeps its selection whether or not the rule matches the issue now. The kind launches its own command as the configuration states it at that timer.
 - A selection that differs from the frozen one in kind or template clears the resume session identifier, because session identifiers are adapter-specific; the continuation context, reaction kind, attempt number, and last SSH host carry over. A changed selection is logged once at `Info` (Section 13.1).
@@ -154,7 +167,8 @@ Part A: Stall detection
 
 Part B: Tracker state refresh
 
-- Fetch current issue states for the deduplicated union of all running issue IDs and every issue ID holding a pending reaction entry; skip the call entirely when that union is empty or no tracker adapter is configured.
+- Fetch current issue states for the deduplicated union of all running issue IDs, every issue ID holding a pending reaction entry, and every issue ID holding a stage hop record; a hop-record issue is read on every tick, whether or not it runs and whether or not preflight passes. An issue missing from the response, a deleted one included, keeps its record and its place in the set until a read reports a terminal or inactive state or a park resets the count. Skip the call entirely when that union is empty or no tracker adapter is configured.
+- For each issue in the response that holds a stage hop record: if its state is terminal, or otherwise outside the active states, delete the record and reset its consecutive hop count. A stage label that changes while the issue stays active does not reset the count.
 - For each running issue:
   - If tracker state is terminal: terminate worker and clean workspace.
   - If tracker state is still active: update the in-memory issue snapshot.

@@ -174,7 +174,7 @@ Detection covers Sortie-managed PRs only: those whose workspace SCM metadata (§
 
 A pending `label-fix` entry is seeded the same way, on normal worker exit, when the SCM adapter is configured and the fix feature is active, but its predicate adds the branch guard the review predicate omits: the workspace SCM metadata must additionally report a non-empty head branch. A fix session checks out that branch, so a PR record without one has nothing to check out and seeds no fix entry. The seeded entry carries the branch alongside the PR number, owner, and repo, and the same frozen agent kind, rule name, and template id the review seed carries.
 
-Neither seeding block fires on the command session's own exit, and not because the metadata is absent: both sessions reuse the per-issue workspace directory, which may still hold the `.sortie/scm.json` a prior full session wrote. The operative gate is the reaction-enqueue predicate shared by every seeding block: the issue must have been claimed at exit and the exit must either take the handoff path or leave the claim held. A read-only review exit and a fix exit (§11F.13) are both excluded from the handoff path and always release the claim, so the predicate is never satisfied and no seeding block reads the workspace metadata at all on either exit. Repeatability after a completed review or fix is carried instead by the reconcile re-enqueue on dispatch (§11F.4).
+Neither seeding block fires on the command session's own exit, and not because the metadata is absent: both sessions reuse the per-issue workspace directory, which may still hold the `.sortie/scm.json` a prior full session wrote. The operative gate is the reaction-enqueue predicate shared by every seeding block: the issue must have been claimed at exit, the exit must either take the handoff path or leave the claim held, and the exit must not have made a stage hop (§7.3), which seeds no reaction of any kind. A read-only review exit and a fix exit (§11F.13) are both excluded from the handoff path and always release the claim, so the predicate is never satisfied and no seeding block reads the workspace metadata at all on either exit. Repeatability after a completed review or fix is carried instead by the reconcile re-enqueue on dispatch (§11F.4).
 
 Startup recovery re-seeds a `label-review` entry for each recovered active-issue run with the same PR metadata, again omitting the branch guard, and re-seeds a `label-fix` entry under the same branch guard seeding uses, so a label applied while Sortie was down is detected on the first tick after restart (the journal is durable) for either command. The persisted mark is read back from `reaction_fingerprints` for each kind, so recovery does not reset deduplication state.
 
@@ -211,7 +211,7 @@ Per-issue `label-review` reaction lifecycle (the `issue_id:label-review` slot):
 
 | From | Event | To | Action |
 |------|-------|----|--------|
-| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9), SCM adapter and label-review configured, PR metadata present | pending | Seed the entry if absent (frozen agent kind, rule, template). |
+| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9; a made stage hop never passes it), SCM adapter and label-review configured, PR metadata present | pending | Seed the entry if absent (frozen agent kind, rule, template). |
 | (none) | Startup recovery, recovered active run with PR metadata | pending | Re-seed the entry if absent; read the mark back from SQLite. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
 | pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |
@@ -226,7 +226,7 @@ Per-issue `label-fix` reaction lifecycle (the `issue_id:label-fix` slot) follows
 
 | From | Event | To | Action |
 |------|-------|----|--------|
-| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9), SCM adapter and label-fix configured, PR metadata present with a non-empty head branch | pending | Seed the entry if absent (frozen agent kind, rule, template, and branch). |
+| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9; a made stage hop never passes it), SCM adapter and label-fix configured, PR metadata present with a non-empty head branch | pending | Seed the entry if absent (frozen agent kind, rule, template, and branch). |
 | (none) | Startup recovery, recovered active run with PR metadata carrying a non-empty head branch | pending | Re-seed the entry if absent; read the mark back from SQLite. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
 | pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |

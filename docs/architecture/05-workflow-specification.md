@@ -84,6 +84,8 @@ Fields:
   - Target tracker state for orchestrator-initiated handoff transitions after a successful worker run (see ADR-0007).
   - Supports `$VAR` environment indirection.
   - When absent, no handoff transition is performed; the orchestrator uses continuation retry as before.
+  - Required when any dispatch rule carries `next` (Section 5.3.9): every path on which a hop is not made lands on the handoff transition, and without a handoff state it would degrade to a continuation retry that re-runs the same stage.
+  - A successful run of a rule that carries `next` takes this transition only when the hop to the next stage is not made (Section 5.3.9, Stage chains); when the hop is made, no transition is written and the issue stays in its active state.
   - Empty values, including `$VAR` references that resolve to empty, are treated as configuration errors.
   - Must not appear in `active_states` (would cause immediate re-dispatch after handoff).
   - Must not appear in `terminal_states` (handoff is not terminal; the issue may return to active).
@@ -95,6 +97,7 @@ Fields:
   - When absent, a declared run targets `handoff_state` instead; a deployment that does not set this field sees no change in where its issues land.
   - Empty values, including `$VAR` references that resolve to empty, are treated as configuration errors.
   - Requires `handoff_state` to be non-empty: a declared run performs no transition where no handoff path applies.
+  - A declared run of a rule that carries `next` hops like any other successful run and selects this state only when the hop is not made.
   - Must equal `handoff_state` (case-insensitive) or name a member of `terminal_states` exactly as written in front matter (case-insensitive); no other value is permitted, and no tracker adapter's default terminal-state list is consulted.
   - Changes take effect for future worker exits, not in-flight sessions.
 - `in_progress_state` (string, optional)
@@ -415,23 +418,25 @@ The kind carries no `watch_window_ms`: a pull request may remain unmerged for an
 
 #### 5.3.9 `dispatch` (object, optional)
 
-Routes the initial dispatch to an `(agent_kind, template_id)` selection. A rule that carries a stage label is selected by that label; the other rules are first-match-wins. When absent, the orchestrator behaves identically to today: the resolver returns the top-level defaults (`agent.kind` and the Markdown body template).
+Routes the initial dispatch to an `(agent_kind, template_id)` selection. A rule that carries a stage label is selected by that label; the other rules are first-match-wins. A rule may name the rule that follows it with `next`, so that a successful run advances the issue to that rule's stage instead of ending on the handoff state. When absent, the orchestrator behaves identically to today: the resolver returns the top-level defaults (`agent.kind` and the Markdown body template).
 
 Fields:
 
 - `rules` (list of `DispatchRule`, optional): list of dispatch rules. Rules without a stage label are evaluated in order and the first match wins; a rule with a stage label is selected by that label before they are evaluated.
 - `default` (object, optional): carries `agent` and `template` overrides applied when no rule matches.
+- `max_consecutive_hops` (integer, optional): per-issue ceiling on consecutive automatic hops (see Stage chains below). When absent or null it defaults to the larger of `10` and the number of hops in the longest configured chain. A zero or negative value, a value that is not an integer, and a value below the number of hops in the longest configured chain are configuration errors. Changes take effect for future worker exits, not in-flight sessions.
 
-Each `DispatchRule` has five keys and an optional settings block:
+Each `DispatchRule` has six keys and an optional settings block:
 
-- `name` (optional unless the rule carries a settings block or a stage label): operator-supplied rule identifier used in metrics labels, in run history, and to find the rule again after a reload. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`. A rule that carries a settings block MUST have a name, and the name MUST NOT be `default`, which run history and statistics give the `dispatch.default` selection. A rule that carries a stage label MUST have a name.
+- `name` (optional unless the rule carries a settings block or a stage label): operator-supplied rule identifier used in metrics labels, in run history, and to find the rule again after a reload. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`. A rule that carries a settings block MUST have a name, and the name MUST NOT be `default`, which run history and statistics give the `dispatch.default` selection. A rule that carries a stage label or a `next` MUST have a name.
 - `stage`: a label that selects the rule. A rule that carries it is selected by that label instead of by a `match` block, so `stage` and `match` are mutually exclusive on one rule.
+- `next`: the `name` of the rule that follows this one. A successful run of this rule advances the issue to the named rule instead of taking the handoff write. The named rule MUST exist, MUST NOT be the rule that carries `next`, and MUST carry a stage label. A rule that carries no `next` ends on the handoff state. `next` may sit on a rule without a stage label, so that an entry rule selected by an ordinary `match` can start a chain. Each rule has at most one `next`. `dispatch.default` and `match` do not accept it.
 - `match`: a block whose keys define the predicate evaluated against the issue.
 - `agent`: optional override of the agent kind for matching issues.
 - `template`: optional override of the prompt template path for matching issues.
 - `<kind>`: an optional settings block named for the agent kind the rule runs.
 
-A rule MUST carry at least one of `match`, `stage`, `agent`, `template`, or a settings block. A rule key that names a registered agent kind, or equals the rule's own `agent` value, is its settings block; any other unrecognized key is a configuration error. `dispatch.default` carries no settings block: a key in it that names an agent kind is a configuration error, because the top-level block of each kind holds the default settings.
+A rule MUST carry at least one of `match`, `stage`, `agent`, `template`, or a settings block; `next` does not satisfy this requirement. A rule key that names a registered agent kind, or equals the rule's own `agent` value, is its settings block; any other unrecognized key is a configuration error. `dispatch.default` carries no settings block: a key in it that names an agent kind is a configuration error, because the top-level block of each kind holds the default settings.
 
 **Rule settings blocks**
 
@@ -455,7 +460,7 @@ Stage labels compare case-insensitively against the label set the tracker adapte
 
 A stage label MUST NOT equal, under that comparison, a state name the workflow configures (an active or terminal state, where an empty list takes the tracker adapter's own fallback list, and the handoff, in-progress, and no-change states) or a label the orchestrator applies to issues (a reaction's escalation label or the parking label). The check reads configuration and adapter metadata only and makes no tracker call. A reaction block for `ci_failure` that names no provider is disabled and its escalation label is not compared.
 
-An issue that carries the stage labels of several rules is selected by the rule listed first, and the dispatch logs one warning naming every stage label it found.
+An issue that carries the stage labels of several rules is selected by the three-step precedence of the resolution semantics below, and the dispatch logs one warning naming every stage label it found.
 
 **Match-block keys and semantics**
 
@@ -475,13 +480,19 @@ Match keys are evaluated with AND semantics across keys and OR semantics within 
 
 **Resolution semantics and freeze-on-dispatch invariant**
 
-Stage labels are evaluated before the ordered rules. An issue that carries the stage label of a rule is selected by that rule, whatever its position in the list; when it carries several, the rule listed first is selected and the warning above is logged. An issue that carries none is routed by the rules without a stage label, and a rule with a stage label never matches it. A catch-all is a rule with neither a stage label nor a `match` key; only the last rule without a stage label may be one, while a rule with a stage label may follow it.
+Stage labels are evaluated before the ordered rules. An issue that carries the stage label of a rule is selected by that rule, whatever its position in the list. When it carries several, the selection follows three steps in order:
+
+1. While the issue's hop count has not reset since its latest hop and the issue carries the label that hop added, the issue is selected by the rule that hop targeted, provided a rule of that name still exists. The orchestrator recorded where it sent the issue, so a stage label a failed removal left behind cannot capture it, whether or not that label lies on the target's chain.
+2. Otherwise the issue is selected by the rule furthest along the `next` links among the rules whose labels it carries. A rule is furthest along when no other candidate is reached from it by following `next`.
+3. Where the candidates do not lie on one chain, the rule listed first among the furthest-along candidates is selected.
+
+The warning above is logged in each case. With no `next` anywhere, no hop record exists and every candidate is furthest along, so the rule listed first is selected. An issue that carries none is routed by the rules without a stage label, and a rule with a stage label never matches it. A catch-all is a rule with neither a stage label nor a `match` key; only the last rule without a stage label may be one, while a rule with a stage label may follow it.
 
 Among the rules without a stage label, first-match wins: evaluation stops at the first rule whose `match` block succeeds. Absent rule fields fall through to `dispatch.default`, then to the top-level `agent.kind` and the Markdown-body template (the pre-dispatch top-level defaults).
 
 The default agent kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. It is the kind every selection without an agent of its own runs, and the only kind that launches `agent.command` as written.
 
-The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. The selection is frozen per claim; the settings are not. Every attempt, whether the first dispatch, a retry, or a reaction continuation, resolves its settings block from the configuration in force when it starts: the top-level block of the frozen kind with the frozen rule's block laid over it. A running session never changes settings. When no rule carries the frozen name any longer, or the rule no longer carries a block for the frozen kind, the attempt runs on the top-level block and logs one `Info` record naming the rule. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
+The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. The previous-stage pair rendered as `stage.previous` and `stage.previous_outcome` (Section 5.4) travels with the selection and is frozen with it, so a retry or reaction continuation, also one recovered after a restart, renders the same pair. The selection is frozen per claim; the settings are not. Every attempt, whether the first dispatch, a retry, or a reaction continuation, resolves its settings block from the configuration in force when it starts: the top-level block of the frozen kind with the frozen rule's block laid over it. A running session never changes settings. When no rule carries the frozen name any longer, or the rule no longer carries a block for the frozen kind, the attempt runs on the top-level block and logs one `Info` record naming the rule. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
 
 - The frozen selection stands, with its session identifier, when its kind is still named by `agent.kind`, `dispatch.default.agent`, or a rule, and its template is still held. The kind launches its own command as the configuration now states it.
 - A frozen kind that a conversion record retired is replaced by its replacement kind, keeping the frozen template and rule name.
@@ -492,6 +503,36 @@ The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry
 A change of resolved settings between attempts never clears the session identifier; only a changed kind or template does. A selection the retry changes emits one `Info` record (§13.1).
 
 An attempt whose resolved block fails an error-severity settings check starts no session (§8.4).
+
+**Stage chains**
+
+A rule that carries `next` advances the issue instead of ending on the handoff state. The advance, called a hop, applies where the run would otherwise take the handoff write: the issue is still active, the exit is not a blocked soft stop, the dispatch drives issue state, the frozen `tracker.handoff_evidence` policy permits the write, and the run's rule carries `next` in the configuration in force at the exit. A declaration that the requested outcome already held, once it stands, is a success and hops like any other; it selects `tracker.no_change_state` only when the hop is not made. A blocked, failed, timed-out, stalled, or terminal exit never hops.
+
+A hop is one tracker write in two calls. The orchestrator adds the next rule's stage label, then removes every other configured stage label that the dispatch read showed on the issue. It releases the issue's claim, queued retry, and pending reactions, and seeds no reaction from the exit. It writes no tracker state: the issue stays in its active state, and the next poll tick selects the next rule by its label, takes a fresh claim, freezes a fresh selection, and starts a fresh session without resuming the previous stage's. The next dispatch performs `tracker.in_progress_state` as every dispatch does.
+
+When the hop is not made, the exit takes the disposition it would have taken had the rule carried no `next`, which is the handoff write with its own target selection and failure semantics. That fallback applies when the label add fails, when the hop ceiling is reached, and when a reload removed `next` from the rule. When the add succeeds and a removal fails, the hop stands and the issue routes forward by the precedence above; one warning is logged, and the leftover label is removed by the next hop or by a person.
+
+Until a read observes the label a hop added, the issue is dispatched on no rule other than the hop's target, because a candidate listing can lag a write and would otherwise run the previous stage again. When a candidate listing shows the issue without the target label, the orchestrator reads the issue directly. A read that shows the label dispatches the target. A read that shows neither the label nor a terminal or inactive state releases the hold, and the issue routes by the labels that read shows. A failed read holds the issue for that tick. The hold survives a restart.
+
+Two guards bound a chain. At load, `next` MUST name an existing rule other than its own, the named rule MUST carry a stage label, and the `next` links MUST NOT form a cycle; `next` also requires `tracker.handoff_state`. At runtime, the orchestrator keeps a durable count of consecutive hops per issue, and a hop that would exceed `dispatch.max_consecutive_hops` is not made. The count resets when the issue is observed in a terminal state or in any state outside the active states, when a handoff transition succeeds, when the issue is parked, and when a park on it is released. It does not reset when a stage label changes while the issue stays active, because a label move cannot be told apart from tracker automation that rebuilds a cycle. The load path also emits an advisory when `agent.max_sessions` is positive and smaller than the number of runs the longest chain needs.
+
+Prompt templates see the chain through the `stage` object (Section 5.4).
+
+```yaml
+dispatch:
+  max_consecutive_hops: 10
+  rules:
+    - name: specify
+      match:
+        labels: ["feature"]
+      next: implement
+      template: ./prompts/specify.md
+    - name: implement
+      stage: stage-implement
+      template: ./prompts/implement.md
+```
+
+A successful run of `specify` adds `stage-implement` to the issue and leaves it active; the next tick dispatches `implement`; a successful run of `implement` ends on `tracker.handoff_state`.
 
 **Template lifecycle**
 
@@ -657,6 +698,12 @@ Template input variables:
   - `turn_number` (integer): current turn number within the session.
   - `max_turns` (integer): configured maximum turns per session.
   - `is_continuation` (boolean): true when this is a continuation turn in a multi-turn session, as distinct from a retry after an error.
+- `stage` (object)
+  - Always present, on every render of every turn; its three fields are strings and are empty when they do not apply, so a template that references them never fails.
+  - `current` (string): the name of the selected rule when that rule carries a stage label, computed at each dispatch from the configuration in force; otherwise empty.
+  - `previous` (string): the name of the rule whose hop led to this dispatch; filled when the dispatch selects the target of the issue's latest hop and the hop count has not reset since; otherwise empty.
+  - `previous_outcome` (string): `succeeded`, or `no_change` when the previous stage's run declared that the requested outcome already held; empty when `previous` is empty.
+  - `previous` and `previous_outcome` are frozen with the dispatch selection, so a retry or reaction continuation renders the pair its first dispatch rendered, also after a restart.
 
 Fallback prompt behavior:
 

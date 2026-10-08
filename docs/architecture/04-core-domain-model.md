@@ -101,6 +101,10 @@ Fields (logical):
   - The `effort` the attempt's resolved settings block carried, empty by the same rule.
 - `reported_model` (string)
   - The model the runtime reported running, taken from the last token-usage event that named one. Empty when the runtime reported none. A reported model never overwrites a configured one, and nothing compares the two: routing aliases and runtime fallbacks make them differ legitimately.
+- `stage_previous` (string)
+  - The name of the rule whose stage hop led to the attempt's dispatch, frozen with the dispatch selection and rendered as `stage.previous` (Section 12.1). Empty when no hop led to the dispatch.
+- `stage_previous_outcome` (string)
+  - `succeeded` or `no_change`: the outcome of the run of `stage_previous` that ended in the hop, rendered as `stage.previous_outcome`. Empty whenever `stage_previous` is empty.
 - `error` (optional)
 
 #### 4.1.6 Live Session (Agent Session Metadata)
@@ -144,7 +148,7 @@ Note: `timer_handle` is a runtime-only field and is not persisted. On restart, p
 
 #### 4.1.8 Orchestrator Runtime State
 
-Single authoritative state owned by the orchestrator. The running map and active timers are in-memory for performance; retry_attempts, completed set, and agent_totals are backed by SQLite and survive restarts.
+Single authoritative state owned by the orchestrator. The running map and active timers are in-memory for performance; retry_attempts, completed set, agent_totals, parked, and stage_hops are backed by SQLite and survive restarts.
 
 Fields:
 
@@ -159,6 +163,8 @@ Fields:
 - `reaction_attempts` (map `issue_id:kind -> integer`; number of reaction-fix continuations dispatched per issue and reaction kind; deleted by the owning kind's own paths (a passing CI status, a closed episode, an escalation, a watch-window drop) and, for every kind at once, when the tracker reports the issue terminal; a `bot-review` escalation, and a `review` or `bot-review` watch-window drop at a spent counter, keep it; runtime-only, not persisted)
 - `reaction_handoffs` (map `issue_id:kind -> set of review comment IDs`, kinds `review` and `bot-review` only; a per-key cache over the persisted `reaction_handoffs` table, whose rows hold the IDs of the comments the issue's runs were given under the kind's prompt variable, recorded when a run exits normally; a present key is authoritative for the process and an absent key means the rows were not loaded, never that the set is empty; a comment is new when it is outside the set, the reported set, and the IDs the issue's running turn carries; dropped by a watch window at any counter value and by the terminal release, and never rebuilt by an escalation; no path deletes a row)
 - `reaction_reported_comments` (map `issue_id:kind -> set of review comment IDs`, kind `bot-review` only; the IDs a spent-budget decision observed and a triage escalation reported to a person; deleted wherever the matching `reaction_attempts` counter is deleted and kept wherever it is kept; runtime-only, never persisted)
+- `parked` (map `issue_id -> ParkedEntry`; issues held out of primary dispatch until a person acts on them; each entry records the identifier, the park reason, the tracker state observed when the park was recorded, the parking label the orchestrator applied and whether it is confirmed to have reached the tracker, and the park time; backed by the persisted park records, which are reloaded at startup)
+- `stage_hops` (map `issue_id -> hop record`; one record per issue since the issue's consecutive hop count last reset; each record holds the identifier, the count of consecutive hops, the latest hop's source rule, target rule, and target label, the outcome of the source run (`succeeded` or `no_change`), the source run's dispatch ID, whether a read has shown the target label, and the hop time; the observed flag is the durable stage hop hold (Section 8.1); a reset deletes the record; backed by the persisted stage hop records, which are reloaded at startup)
 - `pending_reactions` (map `issue_id:kind -> PendingReaction`; populated by worker exit on normal exits with SCM metadata when a CI status provider or SCM adapter is configured, and reconstructed at startup by `RecoverPendingReactions` for eligible handoff-stage runs, including `merge`-kind entries; consumed by the per-kind reconcile functions during the reconcile tick: `reconcile_ci_status` for kind `ci`, `reconcile_review_comments` for kind `review`, `reconcile_bot_review_comments` for kind `bot-review`, `reconcile_auto_merge` for kind `merge`, `reconcile_merge_conflicts` for kind `merge-conflict`, `reconcile_label_review_commands` for kind `label-review`, `reconcile_label_fix_commands` for kind `label-fix`, `reconcile_merge_completion` for kind `merge-completion`; runtime-only, not persisted)
 - `auto_merge_preflight_failed` (boolean): sticky after a startup auth-class preflight failure; cleared only by a successful one-shot transport-class retry or by an orchestrator restart.
 - `auto_merge_preflight_retry_due_at` (timestamp): non-zero only when the startup preflight failed with a transport-class error and scheduled a single bounded retry; cleared by the reconcile tick that consumes the retry.

@@ -82,7 +82,7 @@ Per-issue `bot-review` reaction lifecycle (the `issue_id:bot-review` slot):
 
 | From | Event | To | Action |
 |------|-------|----|--------|
-| (none) | Worker exits normally, SCM adapter and bot-review configured, PR metadata present | pending | Seed the entry if absent. |
+| (none) | Worker exits normally and passes the reaction-enqueue gate (§7.3; a made stage hop never passes it), SCM adapter and bot-review configured, PR metadata present | pending | Seed the entry if absent. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no API call. |
 | pending | Reconcile tick, fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue, count error. |
 | pending | Reconcile tick, no actionable comments | pending | Re-enqueue at `now + poll_interval`. |

@@ -8,6 +8,11 @@ Inputs to prompt rendering:
 - normalized `issue` object
 - optional `attempt` integer (retry/continuation metadata)
 - `run` object: `turn_number`, `max_turns`, `is_continuation`
+- `stage` object: `current`, `previous`, `previous_outcome`, all strings. It is present on every render of every turn, including the first turn, the seeded first turn, continuation turns, and per-rule templates, and each field is the empty string when it does not apply, so a template that references `.stage.previous` never fails under strict `missingkey=error` evaluation. The renderer seeds the three fields itself, ahead of any option, rather than relying on a caller to supply them.
+  - `current`: the selected rule's name when that rule carries a stage label, computed at each dispatch from the configuration in force; empty otherwise, and for a dispatch that selects no rule or selects `dispatch.default`.
+  - `previous`: the name of the rule whose hop led to the dispatch. It is filled when the dispatch selects the target of the issue's latest stage hop and the issue's hop count has not reset since (Section 7.3); otherwise it is empty.
+  - `previous_outcome`: `succeeded`, or `no_change` when the previous stage's run declared that the requested outcome already held; empty whenever `previous` is empty.
+  - The pair is frozen with the dispatch selection and persisted with the retry entry and the run-history row, so a retry, a reaction continuation, and a pending reaction recovered at startup render the pair their first dispatch rendered. A retry routed afresh to another rule renders the pair as a poll tick does.
 - `ci_failure` (map or nil): CI failure context injected into CI-fix continuation prompts via `CIResult.ToTemplateMap()`. Nil on initial dispatch and non-CI retries. When non-nil, contains:
   - `status`: aggregate CI pipeline status string (`failing`)
   - `check_runs`: list of individual check run maps (each with `name`, `status`, `conclusion`, `details_url`)

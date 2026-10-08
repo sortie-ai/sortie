@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - A dispatch rule can now carry a `stage` label in place of a `match` block: an issue that carries the label runs on that rule wherever it sits in the list, so one label puts an issue on a stage, and an issue with several stage labels runs on the first such rule and logs a warning. `sortie validate` rejects a stage label that two rules share, that names a tracker state, or that is a label Sortie adds itself, such as `needs-human`. ([#1256](https://github.com/sortie-ai/sortie/issues/1256))
 
+- A dispatch rule can now name the rule that follows it with `next`: after a successful run Sortie moves the issue to that rule's stage label instead of writing `tracker.handoff_state`, so a chain such as specify then implement runs without a person moving the issue between stages, and the last stage still ends on the handoff state. Prompt templates see the current and the previous stage in `stage`, and `dispatch.max_consecutive_hops` limits how many times in a row Sortie moves one issue. ([#1257](https://github.com/sortie-ai/sortie/issues/1257))
+
+- `sortie validate` now rejects a stage chain Sortie cannot run, such as a `next` that names a missing rule, a loop of `next` links, or `next` without `tracker.handoff_state`, and warns when `agent.max_sessions` would stop an issue before its chain ends. ([#1257](https://github.com/sortie-ai/sortie/issues/1257))
+
 ### Removed
 
 - A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))
@@ -28,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Migrations
 
 - Add the `reaction_handoffs` table, recording the review comments each issue's runs were given. An upgrade starts with it empty, so a comment given before the upgrade can be given once more.
+
+- Add the `stage_hops` table, keeping each issue's count of consecutive automatic stage moves, and add `stage_previous` and `stage_previous_outcome` to `run_history` and `retry_entries`. An upgrade starts with no moves counted, and a run or retry recorded before the upgrade reads back with no previous stage. ([#1257](https://github.com/sortie-ai/sortie/issues/1257))
 
 ## [1.26.0] - 2026-10-01
 

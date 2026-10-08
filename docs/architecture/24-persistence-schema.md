@@ -19,6 +19,8 @@ Sortie uses an embedded SQLite database for durable state. The database file pat
 | `rule_name`   | TEXT   | Dispatch rule that routed the original dispatch; empty when none matched (migration 010) |
 | `template_id` | TEXT   | Prompt template the rule selected (migration 010) |
 | `agent_kind`  | TEXT   | Agent adapter the rule selected; empty on a pre-migration entry (migration 010) |
+| `stage_previous` | TEXT | Source rule of the stage hop the frozen selection carries into its `stage.previous`; empty when none (migration 023) |
+| `stage_previous_outcome` | TEXT | Outcome of that hop, `succeeded` or `no_change`; empty when `stage_previous` is empty (migration 023) |
 
 Note: `timer_handle` is runtime-only and is not stored.
 
@@ -52,6 +54,8 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `configured_model`  | TEXT    | The `model` the attempt's resolved settings block carried; empty when unset, which leaves the runtime's own default, and on a row written before migration 021 (migration 021) |
 | `configured_effort` | TEXT    | The `effort` the attempt's resolved settings block carried, empty by the same rule (migration 021) |
 | `reported_model`    | TEXT    | The model the runtime reported running, from the last token-usage event that named one; empty when it reported none. The `ci_failed` row leaves all three columns empty (migration 021) |
+| `stage_previous`    | TEXT    | Source rule of the stage hop the run's selection carried into its `stage.previous`; empty when none. Reaction recovery restores it (migration 023) |
+| `stage_previous_outcome` | TEXT | Outcome of that hop, `succeeded` or `no_change`; empty when `stage_previous` is empty (migration 023) |
 
 The configured and reported model columns record what the operator asked for beside what ran, which differ under routing aliases and runtime-side fallbacks. A reported value never overwrites a configured one and nothing compares them. `sortie stats` groups runs by `configured_model` when the database carries the migration and otherwise reports no such breakdown. No metric carries a model or effort label, because the cardinality of model names is unbounded.
 
@@ -173,6 +177,23 @@ One row per parked issue, holding current state rather than history: the row is 
 | `noticed_at` | TEXT    | ISO-8601 timestamp the posted notice reported                 |
 
 One row per issue whose current budget hold has been announced to at least one destination. A row records that the notice had a destination: a hold whose `budget.held` event reached none writes no row, and the issue is routed again on a later pass, so a destination subscribed afterward still receives the notice. The row is written before the delivery and survives a failed delivery. The table holds current state rather than history: the row is deleted when the hold clears, on the same evidence rule that prunes the in-memory announcement latch, or when both budgets are disabled. An issue held by a ceiling and then closed, or otherwise never observed as a candidate again, never has its row deleted, so the row persists for the rest of the deployment's lifetime. `noticed_at` exists so an operator reading the database can align a row with the notice, which is the comment on the issue when the `tracker_comment` destination received it; no runtime decision reads it.
+
+**`stage_hops`**: current stage hop record per issue (migration 023)
+
+| Column               | Type    | Notes                                                              |
+| -------------------- | ------- | ------------------------------------------------------------------ |
+| `issue_id`           | TEXT PK | Tracker-internal issue ID                                          |
+| `identifier`         | TEXT    | Human-readable ticket key                                          |
+| `hop_count`          | INTEGER | Consecutive automatic hops since the last reset, the latest included |
+| `source_rule`        | TEXT    | Dispatch rule whose run made the latest hop                        |
+| `target_rule`        | TEXT    | Dispatch rule the latest hop advanced the issue to                 |
+| `target_label`       | TEXT    | Stage label the latest hop added                                   |
+| `previous_outcome`   | TEXT    | `succeeded`, or `no_change` when the source run declared that no change was needed |
+| `source_dispatch_id` | TEXT    | Dispatch ID of the run that made the latest hop                    |
+| `target_observed`    | INTEGER | `1` once a read has shown `target_label` on the issue; `0` while the hold is open |
+| `hopped_at`          | TEXT    | RFC 3339 timestamp of the latest hop                               |
+
+One row per issue, holding current state since the last reset rather than history: the row is deleted when the count resets (a handoff write succeeds, the issue turns terminal or non-active, or the issue is parked or released from a park). The row serves the per-issue ceiling on consecutive hops, the hold that keeps a lagging candidate listing from sending the issue back to the stage it left, and the `stage.previous` pair of the target's dispatch. Recording a hop upserts the row and deletes the issue's `retry_entries` row in one transaction, so a restart cannot restore the retry of the stage the hop left. Recording a second hop with the `source_dispatch_id` already stored keeps the stored `hop_count`, so one source run is counted once. Startup loads every row before the event loop starts, after `parked_issues`.
 
 ### 19.3 Migration Strategy
 
