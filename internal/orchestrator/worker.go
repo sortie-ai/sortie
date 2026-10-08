@@ -1119,6 +1119,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
+	stageOption := prompt.WithStage(stageRenderFrom(ctx))
 
 	publishWorkerState := func(turn int) error {
 		if mcpConfigPath == "" {
@@ -1227,9 +1228,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			if contCtx == nil {
 				contCtx = ContinuationFromContext(ctx)
 			}
-			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, contCtx, deps.ReactionKind == "")
+			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, contCtx, deps.ReactionKind == "", stageOption)
 		} else {
-			rendered, err = prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns)
+			rendered, err = prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
 		}
 		cancelledAtEnding = ctx.Err() != nil
 		if err != nil {
@@ -1638,9 +1639,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 // only when its render still contains every line of the unseeded render in
 // order; otherwise the unseeded render is returned and nothing is presented,
 // since a template that switches modes on the seed would lose its task text.
-func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attempt, maxTurns int, continuation map[string]any, freshRun bool) (string, map[string][]string, error) {
+// baseOpts apply to every render, the unseeded probes included.
+func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attempt, maxTurns int, continuation map[string]any, freshRun bool, baseOpts ...prompt.RenderOption) (string, map[string][]string, error) {
 	render := func(seed map[string]any) (string, error) {
-		var opts []prompt.RenderOption
+		opts := slices.Clone(baseOpts)
 		if seed != nil {
 			opts = append(opts, prompt.WithContinuationContext(seed))
 		}

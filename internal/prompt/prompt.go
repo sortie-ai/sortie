@@ -38,6 +38,25 @@ func runContextToMap(rc RunContext) map[string]any {
 	}
 }
 
+// StageContext carries the stage chain position passed to the prompt
+// template as the "stage" variable. Empty fields render as empty strings,
+// so templates may reference them on every dispatch.
+type StageContext struct {
+	Current         string
+	Previous        string
+	PreviousOutcome string
+}
+
+// stageContextToMap converts a [StageContext] to the map representation
+// used as the "stage" template variable, with snake_case keys.
+func stageContextToMap(sc StageContext) map[string]any {
+	return map[string]any{
+		"current":          sc.Current,
+		"previous":         sc.Previous,
+		"previous_outcome": sc.PreviousOutcome,
+	}
+}
+
 // promptFuncMap is the minimal, prompt-essential FuncMap shipped with
 // every template. Each entry is permanent API surface.
 var promptFuncMap = template.FuncMap{
@@ -119,7 +138,7 @@ func Parse(body, source string, frontMatterLines int) (*Template, error) {
 
 // RenderOption applies optional overrides to the template data map
 // before execution. Use [WithContinuationContext] to inject reaction
-// continuation data.
+// continuation data and [WithStage] to supply the stage chain position.
 type RenderOption func(m map[string]any)
 
 // continuationKeys lists all template variable names reserved for
@@ -150,9 +169,17 @@ func WithContinuationContext(data map[string]any) RenderOption {
 	}
 }
 
+// WithStage returns a [RenderOption] that replaces the "stage" template
+// variable with the values in sc.
+func WithStage(sc StageContext) RenderOption {
+	return func(m map[string]any) {
+		m["stage"] = stageContextToMap(sc)
+	}
+}
+
 // Render executes the template with the given inputs and returns the
 // rendered prompt string. The data map contains the top-level keys
-// "issue", "attempt", and "run", plus every key in [continuationKeys]
+// "issue", "attempt", "run", and "stage", plus every key in [continuationKeys]
 // (currently "ci_failure", "review_comments", "bot_review_comments",
 // "merge_conflict", "label_review", "label_fix").
 // Continuation keys default to nil when no [RenderOption] overrides them,
@@ -165,6 +192,7 @@ func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opt
 		"issue":   issue,
 		"attempt": attempt,
 		"run":     runContextToMap(run),
+		"stage":   stageContextToMap(StageContext{}),
 	}
 	for _, k := range continuationKeys {
 		templateVars[k] = nil

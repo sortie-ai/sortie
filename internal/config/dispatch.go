@@ -27,6 +27,12 @@ type DispatchConfig struct {
 	// no rule matches. Zero value falls back further to the top-level
 	// agent kind and the WORKFLOW.md body template.
 	Default DispatchSelection
+
+	// MaxConsecutiveHops is the per-issue ceiling on consecutive automatic
+	// hops: dispatch.max_consecutive_hops as written, or the larger of 10
+	// and the hop count of the longest chain when the key is absent or
+	// null. Zero when the workflow has no dispatch section.
+	MaxConsecutiveHops int
 }
 
 // DispatchRule pairs a match block with the selection it produces.
@@ -41,6 +47,10 @@ type DispatchRule struct {
 	// when the rule has no stage key. A rule with a stage label is
 	// selected by that label ahead of the ordered rules and never by Match.
 	Stage string
+
+	// Next is the name of the rule a successful run advances the issue to,
+	// as written; empty when the rule has no next key.
+	Next string
 
 	// Match holds the per-key predicates evaluated with AND across
 	// keys and OR within a key. A zero Match matches every issue.
@@ -125,6 +135,13 @@ var ruleBlockForbiddenKeys = map[string]string{
 	"stop_grace_ms":    "agent.stop_grace_ms is workflow-wide; a dispatch rule cannot override it",
 }
 
+// defaultMaxConsecutiveHops is the ceiling when dispatch.max_consecutive_hops
+// is unset and the longest chain needs fewer hops.
+const defaultMaxConsecutiveHops = 10
+
+// chainSeparator joins rule names in chain paths shown to operators.
+const chainSeparator = " -> "
+
 // defaultRuleName is the name run history gives the dispatch.default
 // selection.
 const defaultRuleName = "default"
@@ -133,6 +150,7 @@ const defaultRuleName = "default"
 var ruleKeyAllowed = map[string]bool{
 	"name":     true,
 	"stage":    true,
+	"next":     true,
 	"match":    true,
 	"agent":    true,
 	"template": true,
@@ -145,6 +163,138 @@ var ruleKeyAllowed = map[string]bool{
 // lowercased and untrimmed, and a stage label is taken literally.
 func StageLabelsEqual(a, b string) bool {
 	return strings.EqualFold(a, b)
+}
+
+// RuleByName returns the rule with exactly the given name. An empty name is
+// never found, so an unnamed rule cannot be reached by name.
+func (d DispatchConfig) RuleByName(name string) (DispatchRule, bool) {
+	i := d.ruleIndex(name)
+	if i < 0 {
+		return DispatchRule{}, false
+	}
+	return d.Rules[i], true
+}
+
+// LongestChain returns the rule names of the longest path along next links,
+// or nil when no rule carries next. Among paths of equal length it returns
+// the one whose first rule has the lowest index. The hop count of the chain
+// is its length minus one.
+func (d DispatchConfig) LongestChain() []string {
+	var longest []int
+	for i := range d.Rules {
+		if walk := d.walkNext(i); len(walk) > len(longest) {
+			longest = walk
+		}
+	}
+	if len(longest) < 2 {
+		return nil
+	}
+	return d.ruleNames(longest)
+}
+
+// HopCeiling returns the per-issue ceiling on consecutive automatic hops in
+// force: MaxConsecutiveHops when positive, otherwise the larger of the
+// default and the hop count of the longest chain. A configuration without a
+// dispatch section carries a zero MaxConsecutiveHops, so callers read the
+// ceiling here rather than from the field.
+func (d DispatchConfig) HopCeiling() int {
+	if d.MaxConsecutiveHops > 0 {
+		return d.MaxConsecutiveHops
+	}
+	return max(defaultMaxConsecutiveHops, len(d.LongestChain())-1)
+}
+
+// ChainPath returns the configured next path through the named rule: the
+// rule itself, the rules that lead to it while exactly one rule names the
+// path's first rule as its next, and the rules that follow it. No rule
+// appears twice, so a path through a loop ends before it repeats.
+func (d DispatchConfig) ChainPath(ruleName string) []string {
+	path := []string{ruleName}
+	for {
+		predecessor := d.soleRuleNaming(path[0])
+		if predecessor == "" || slices.Contains(path, predecessor) {
+			break
+		}
+		path = slices.Insert(path, 0, predecessor)
+	}
+	for {
+		source, ok := d.RuleByName(path[len(path)-1])
+		if !ok || source.Next == "" || slices.Contains(path, source.Next) {
+			break
+		}
+		if _, ok := d.RuleByName(source.Next); !ok {
+			break
+		}
+		path = append(path, source.Next)
+	}
+	return path
+}
+
+// ruleIndex returns the index of the rule with the given name, or -1.
+func (d DispatchConfig) ruleIndex(name string) int {
+	if name == "" {
+		return -1
+	}
+	return slices.IndexFunc(d.Rules, func(r DispatchRule) bool { return r.Name == name })
+}
+
+// walkNext returns the indices of the rules reached from start by following
+// next, start included. The walk ends at a rule without next, at a next that
+// names no rule, or before a rule it already holds.
+func (d DispatchConfig) walkNext(start int) []int {
+	walk := []int{start}
+	for {
+		following := d.ruleIndex(d.Rules[walk[len(walk)-1]].Next)
+		if following < 0 || slices.Contains(walk, following) {
+			return walk
+		}
+		walk = append(walk, following)
+	}
+}
+
+// soleRuleNaming returns the name of the rule whose next is name, or empty
+// when no rule or several rules name it.
+func (d DispatchConfig) soleRuleNaming(name string) string {
+	if name == "" {
+		return ""
+	}
+	found := ""
+	for _, rule := range d.Rules {
+		if rule.Next != name {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = rule.Name
+	}
+	return found
+}
+
+func (d DispatchConfig) ruleNames(indices []int) []string {
+	names := make([]string, len(indices))
+	for i, index := range indices {
+		names[i] = d.Rules[index].Name
+	}
+	return names
+}
+
+// ValidateNextRequiresHandoff reports a *ConfigError for the first rule, in
+// list order, that carries next when handoffState is empty: a chain's last
+// stage ends on that state, and so does every hop that is not made.
+func ValidateNextRequiresHandoff(dispatch DispatchConfig, handoffState string) error {
+	if handoffState != "" {
+		return nil
+	}
+	for i, rule := range dispatch.Rules {
+		if rule.Next != "" {
+			return &ConfigError{
+				Field:   fmt.Sprintf("dispatch.rules[%d].next", i),
+				Message: "next requires tracker.handoff_state, the state a stage ends on when a hop is not made",
+			}
+		}
+	}
+	return nil
 }
 
 // priorityOpAllowed enumerates the closed set of recognized priority
@@ -208,6 +358,13 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 	if err := validateCatchAllPosition(rules); err != nil {
 		return DispatchConfig{}, err
 	}
+	if err := validateNextLinks(rules); err != nil {
+		return DispatchConfig{}, err
+	}
+	maxHops, err := parseMaxConsecutiveHops(dispatchMap["max_consecutive_hops"], DispatchConfig{Rules: rules}.LongestChain())
+	if err != nil {
+		return DispatchConfig{}, err
+	}
 
 	defaultSel, err := parseDispatchDefault(dispatchMap["default"], agentKindProbe)
 	if err != nil {
@@ -243,8 +400,9 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 	defaultSel.TemplateID = resolvedDefaultTemplate
 
 	return DispatchConfig{
-		Rules:   rules,
-		Default: defaultSel,
+		Rules:              rules,
+		Default:            defaultSel,
+		MaxConsecutiveHops: maxHops,
 	}, nil
 }
 
@@ -313,6 +471,11 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 		return DispatchRule{}, nil, err
 	}
 
+	next, err := parseNextRule(ruleMap, ruleField)
+	if err != nil {
+		return DispatchRule{}, nil, err
+	}
+
 	hasMatch := ruleMap["match"] != nil
 	if hasStage && hasMatch {
 		return DispatchRule{}, nil, &ConfigError{
@@ -345,6 +508,12 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 			Message: "a rule that carries a stage label must have a name",
 		}
 	}
+	if next != "" && name == "" {
+		return DispatchRule{}, nil, &ConfigError{
+			Field:   ruleField,
+			Message: "a rule that carries next must have a name",
+		}
+	}
 
 	match, err := parseDispatchMatch(ruleMap["match"], ruleField+".match")
 	if err != nil {
@@ -359,6 +528,7 @@ func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) boo
 	return DispatchRule{
 		Name:       name,
 		Stage:      stage,
+		Next:       next,
 		Match:      match,
 		Selection:  selection,
 		IsCatchAll: stage == "" && isEmptyMatch(match),
@@ -389,6 +559,35 @@ func parseStageLabel(ruleMap map[string]any, ruleField string) (label string, pr
 		return "", true, errStageNeedsLabel(field)
 	}
 	return label, true, nil
+}
+
+// parseNextRule reads a rule's optional next key and returns the rule name
+// as written, empty when the key is absent. A null value is a fault, like a
+// blank one, because dropping it would turn a chained rule into a last stage.
+func parseNextRule(ruleMap map[string]any, ruleField string) (string, error) {
+	raw, present := ruleMap["next"]
+	if !present {
+		return "", nil
+	}
+	field := ruleField + ".next"
+	if raw == nil {
+		return "", errNextNeedsName(field)
+	}
+	next, ok := raw.(string)
+	if !ok {
+		return "", &ConfigError{
+			Field:   field,
+			Message: "expected a rule name, got " + describeExtensionValue(raw),
+		}
+	}
+	if strings.TrimFunc(next, unicode.IsSpace) == "" {
+		return "", errNextNeedsName(field)
+	}
+	return next, nil
+}
+
+func errNextNeedsName(field string) error {
+	return &ConfigError{Field: field, Message: "needs a rule name"}
 }
 
 func errStageNeedsLabel(field string) error {
@@ -898,6 +1097,76 @@ func validateCatchAllPosition(rules []DispatchRule) error {
 		}
 	}
 	return nil
+}
+
+// validateNextLinks returns the first *ConfigError among the next links:
+// a target that does not exist, is the rule itself, or carries no stage
+// label, then a loop. A loop is reported on its lowest-index rule with the
+// path starting there, so the message does not depend on where a walk enters.
+func validateNextLinks(rules []DispatchRule) error {
+	dispatch := DispatchConfig{Rules: rules}
+	for i, rule := range rules {
+		if rule.Next == "" {
+			continue
+		}
+		field := fmt.Sprintf("dispatch.rules[%d].next", i)
+		target := dispatch.ruleIndex(rule.Next)
+		switch {
+		case target < 0:
+			return &ConfigError{Field: field, Message: fmt.Sprintf("next %q names no dispatch rule", rule.Next)}
+		case target == i:
+			return &ConfigError{Field: field, Message: "next names the rule that carries it"}
+		case rules[target].Stage == "":
+			return &ConfigError{
+				Field:   field,
+				Message: fmt.Sprintf("next %q names a rule without a stage label; the rule a next names must carry stage", rule.Next),
+			}
+		}
+	}
+
+	for i := range rules {
+		walk := dispatch.walkNext(i)
+		reentry := dispatch.ruleIndex(rules[walk[len(walk)-1]].Next)
+		if reentry < 0 {
+			continue
+		}
+		loop := walk[slices.Index(walk, reentry):]
+		lowest := slices.Min(loop)
+		start := slices.Index(loop, lowest)
+		cycle := append(slices.Clone(loop[start:]), loop[:start]...)
+		cycle = append(cycle, lowest)
+		return &ConfigError{
+			Field:   fmt.Sprintf("dispatch.rules[%d].next", lowest),
+			Message: "next links form a cycle: " + strings.Join(dispatch.ruleNames(cycle), chainSeparator),
+		}
+	}
+	return nil
+}
+
+// parseMaxConsecutiveHops reads dispatch.max_consecutive_hops. An absent or
+// null value yields the larger of the default and the hop count of the
+// longest chain, so a long chain never needs the key.
+func parseMaxConsecutiveHops(raw any, longestChain []string) (int, error) {
+	longestHops := max(len(longestChain)-1, 0)
+	if raw == nil {
+		return max(defaultMaxConsecutiveHops, longestHops), nil
+	}
+	const field = "dispatch.max_consecutive_hops"
+	n, err := coerceInt(raw)
+	if err != nil {
+		return 0, &ConfigError{Field: field, Message: integerFaultMessage(err, fmt.Sprintf("invalid integer value: %v", raw))}
+	}
+	if n <= 0 {
+		return 0, &ConfigError{Field: field, Message: "must be greater than 0"}
+	}
+	if n < longestHops {
+		return 0, &ConfigError{
+			Field: field,
+			Message: fmt.Sprintf("must be at least %d, the number of hops in the longest stage chain (%s)",
+				longestHops, strings.Join(longestChain, chainSeparator)),
+		}
+	}
+	return n, nil
 }
 
 // probeAgentKind validates that the kind, when non-empty, is currently

@@ -4163,3 +4163,5 @@ func TestHandleRetryTimer_ReactionRetryRecordsNoHandedOffComments(t *testing.T) 
 		})
 	}
 }
+
+func (m *mockRetryStore) DeleteStageHop(context.Context, string) error { return nil }

@@ -400,7 +400,7 @@ func TestShouldDispatchParkedIssue(t *testing.T) {
 }
 
 // TestShouldDispatch_ReopenAfterTerminalRelease verifies that releasing an
-// issue's claim through [releaseTerminalIssueState] makes it dispatchable
+// issue's claim through [releaseIssueRuntimeState] makes it dispatchable
 // again once the tracker reports it back in an active state, and that the
 // same evaluation returns false beforehand while the claim is still held.
 func TestShouldDispatch_ReopenAfterTerminalRelease(t *testing.T) {
@@ -418,7 +418,7 @@ func TestShouldDispatch_ReopenAfterTerminalRelease(t *testing.T) {
 	}
 
 	store := &mockReconcileStore{}
-	releaseTerminalIssueState(context.Background(), state, store, issue.ID, discardLogger())
+	releaseIssueRuntimeState(context.Background(), state, store, issue.ID, discardLogger())
 
 	if len(state.Running) != 0 || len(state.RetryAttempts) != 0 || len(state.BudgetExhausted) != 0 {
 		t.Fatalf("state not empty after release: running=%d retry=%d budget=%d",

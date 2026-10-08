@@ -436,6 +436,7 @@ func handleCIFailure(
 		ReactionKind:        ReactionKindCI,
 		AgentKind:           pending.AgentKind,
 		RuleName:            pending.RuleName,
+		StagePrevious:       pending.StagePrevious,
 		RuleSettingsApplied: pending.RuleSettingsApplied,
 		TemplateID:          pending.TemplateID,
 		Logger:              log,

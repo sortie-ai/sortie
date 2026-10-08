@@ -368,6 +368,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		orchestrator.PopulateParked(state, parkedRows, br.logger)
 	}
 
+	stageHopRows, err := store.ListStageHops(ctx)
+	if err != nil {
+		br.logger.Warn("failed to load stage hop records, starting with none", slog.Any("error", err))
+	} else {
+		orchestrator.PopulateStageHops(state, stageHopRows, br.logger)
+	}
+
 	budgetHoldNoticeRows, err := store.ListBudgetHoldNotices(ctx)
 	if err != nil {
 		br.logger.Warn("failed to load budget hold notices, starting with none", slog.Any("error", err))

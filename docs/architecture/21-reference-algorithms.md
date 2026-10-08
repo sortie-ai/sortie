@@ -79,6 +79,9 @@ on_tick(state):
       break
 
     if should_dispatch(issue, state):
+      issue, dispatchable = hold_for_stage_hop(issue, state)   // Section 16.4
+      if not dispatchable:
+        continue
       # The seed holds the pull request's review comments no run of the
       # issue was given, per configured kind without a triage block; nil
       # dispatches as before.
@@ -280,8 +283,10 @@ function reconcile_review_comments(state):
 ```text
 function dispatch_issue(issue, state, attempt):
   (agent_kind, template_id, rule_name) = resolve_rule(
-    issue, state.dispatch_cfg, state.default_agent_kind, state.default_template_id
+    issue, state.dispatch_cfg, hop_route_of(state, issue.id),
+    state.default_agent_kind, state.default_template_id
   )
+  stage_previous = fresh_previous(state, issue.id, rule_name)
 
   // The selection is frozen per claim; the settings are resolved for every attempt.
   attempt_settings = resolve_attempt_settings(state.cfg, (agent_kind, rule_name), ssh_host)
@@ -308,6 +313,7 @@ function dispatch_issue(issue, state, attempt):
     agent_kind,
     template_id,
     rule_name,
+    stage_previous,
     rule_settings_applied: attempt_settings.settings.rule_name != "",
     configured_model: attempt_settings.settings.model,
     configured_effort: attempt_settings.settings.effort,
@@ -331,14 +337,24 @@ function dispatch_issue(issue, state, attempt):
   return state
 ```
 
-The `resolve_rule` call checks stage labels first and then evaluates the rules without a stage label in order, returning the first match:
+The `resolve_rule` call takes the hop route first, then the stage labels, and then evaluates the rules without a stage label in order, returning the first match:
 
 ```text
-function resolve_rule(issue, dispatch_cfg, default_agent_kind, default_template_id):
+function resolve_rule(issue, dispatch_cfg, hop, default_agent_kind, default_template_id):
+  // The hop route names the rule the issue's latest hop advanced to. It
+  // wins while the issue carries the target's stage label, so a leftover
+  // label of a downstream stage cannot pull the issue past its target.
+  if hop.target_rule is set and issue.labels contains hop.target_label (case-insensitive):
+    rule = dispatch_cfg.rule_named(hop.target_rule)
+    if rule exists:
+      return selection_of(rule)
+
   staged = [rule for rule in dispatch_cfg.rules
             if rule.stage is set and issue.labels contains rule.stage (case-insensitive)]
   if staged is not empty:
-    return selection_of(staged[0])                  // list order when several labels are carried
+    // The most downstream candidate: one that no other candidate reaches by
+    // following next links forward from it. The lowest list index breaks ties.
+    return selection_of(most_downstream(staged))
 
   for rule in dispatch_cfg.rules:
     if rule.stage is set:
@@ -347,11 +363,48 @@ function resolve_rule(issue, dispatch_cfg, default_agent_kind, default_template_
       return selection_of(rule)
 
   return dispatch_cfg.default, then the workflow-wide defaults
+
+function hop_route_of(state, issue_id):
+  record = state.stage_hops[issue_id]
+  return {record.target_rule, record.target_label} if record exists else {}
 ```
 
 See §5.3.9 for match semantics and stage labels. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
 `resolve_attempt_settings` lays the frozen rule's settings block over the top-level block of the frozen kind (§5.3.9) and returns the resolved block, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
+
+A poll tick holds an issue that carries a stage hop record until a read shows the hop's target label, so a candidate listing that lags the label write cannot send the issue back to the stage it just left. The hold runs after the issue is admitted as a candidate and before `resolve_rule`:
+
+```text
+function hold_for_stage_hop(issue, state):
+  hop = state.stage_hops[issue.id]
+  if hop is absent or hop.target_observed:
+    return issue, dispatchable
+  if issue.labels contains hop.target_label:
+    mark_observed(state, issue.id)
+    return issue, dispatchable
+  read, err = tracker.fetch_issue_by_id(issue.id)
+  if err:
+    log_warn("stage hop target read failed, holding issue")
+    return issue, held                                   // retried next tick
+  if is_terminal_state(read.state):
+    reset_stage_hop(state, issue.id, "terminal")
+    return issue, held
+  if not is_active_state(read.state):
+    reset_stage_hop(state, issue.id, "not_active")
+    return issue, held
+  mark_observed(state, issue.id)
+  if read.labels does not contain hop.target_label:
+    log_info("stage hop target label absent, hold released")
+  issue.labels = read.labels                             // routing uses the fresher read
+  return issue, dispatchable
+
+function mark_observed(state, issue_id):
+  state.stage_hops[issue_id].target_observed = true
+  persist_stage_hop_observed(issue_id)                   // a failure is logged; the runtime value stands
+```
+
+The hold reads at most once per hop and only when the listing lacks the target label. A held issue the listing omits is never read here; reconciliation reads it every tick (§16.3). The retry lane needs no hold, because a made hop leaves the issue with no queued retry. The dispatch records the frozen stage pair the render reads: `fresh_previous(state, issue_id, rule_name)` returns the hop's source rule and outcome when the issue holds a hop record whose target is `rule_name`, and an empty pair otherwise. A retry that keeps its frozen rule reuses the pair it froze; a retry routed afresh computes it as a poll tick does. Every worker prompt render passes the pair with `stage.current`, which is the rule name when the rule carries a stage label and empty otherwise (§12.1).
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
@@ -678,6 +731,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
       record_handed_off_comments(state, issue_id, kind, ids)
     was_claimed = issue_id in state.claimed
     claim_protected_for_incumbent = false
+    stage_hop_made = false
 
     # Exactly one of six dispositions applies, evaluated in this order;
     # the first match wins and overrides every later one.
@@ -686,7 +740,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
     # stop. Blocked work has nowhere to continue to. Where the dispatch
     # drives issue state, park the issue instead of merely releasing the
     # claim, so it stays out of dispatch until a later tick observes a
-    # release (Section 14.2).
+    # release (Section 14.2). Parking ends the issue's hop count.
     if blocked_soft_stop:
       if drives_state:
         park_issue(state, issue_id, reason="agent_blocked")
@@ -704,6 +758,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
     if terminal:
       cancel_retry(state, issue_id)
       state.claimed.remove(issue_id)
+      reset_stage_hop(state, issue_id, "terminal")
       log_info("handoff suppressed for terminal issue", observation)
       notify_observers()
       return state
@@ -733,22 +788,39 @@ on_worker_exit(issue_id, reason, worker_result, state):
       # where that field is configured, and cfg.tracker.handoff_state otherwise.
       declared = worker_result.soft_stop and worker_result.soft_stop_reason == "no-change-needed"
       target = cfg.tracker.no_change_state if (declared and cfg.tracker.no_change_state) else cfg.tracker.handoff_state
-      result = perform_handoff_transition(issue_id, target)
-      if result.ok:
-        if retry_slot_incumbent(state, issue_id) is nil:
-          state.claimed.remove(issue_id)
-        else:
-          claim_protected_for_incumbent = true  # incumbent kept, claim stays
-      elif is_soft_stop(running_entry, worker_result):
-        state.claimed.remove(issue_id)
-      elif retry_slot_incumbent(state, issue_id) is nil:
-        state = schedule_retry(state, issue_id, 1, {
-          identifier: running_entry.identifier,
-          delay_type: continuation,
-          session_id: worker_result.session_id or running_entry.session_id
-        })
+
+      # The terminal test and verification read of Section 11.5 run once and
+      # serve both the hop and the handoff write. A terminal result keeps the
+      # existing suppression and ends the issue's hop count.
+      verification = verify_exit_state(issue_id, observation)
+      if verification.terminal:
+        reset_stage_hop(state, issue_id, "terminal")
       else:
-        claim_protected_for_incumbent = true  # deferred to incumbent, claim stays
+        stage_hop_made = advance_stage(state, running_entry, worker_result, declared)
+
+      if stage_hop_made:
+        # The hop released the retry, the reactions, and the claim, and
+        # wrote no tracker state. The issue stays active on its new stage
+        # label, so the next poll tick dispatches the next rule.
+        pass
+      else:
+        result = perform_handoff_transition(issue_id, target, verification)
+        if result.ok:
+          reset_stage_hop(state, issue_id, "handoff")
+          if retry_slot_incumbent(state, issue_id) is nil:
+            state.claimed.remove(issue_id)
+          else:
+            claim_protected_for_incumbent = true  # incumbent kept, claim stays
+        elif is_soft_stop(running_entry, worker_result):
+          state.claimed.remove(issue_id)
+        elif retry_slot_incumbent(state, issue_id) is nil:
+          state = schedule_retry(state, issue_id, 1, {
+            identifier: running_entry.identifier,
+            delay_type: continuation,
+            session_id: worker_result.session_id or running_entry.session_id
+          })
+        else:
+          claim_protected_for_incumbent = true  # deferred to incumbent, claim stays
 
     # Disposition 4: any other soft stop. An unrecognized soft-stop
     # reason is logged before taking this path.
@@ -775,6 +847,10 @@ on_worker_exit(issue_id, reason, worker_result, state):
     # consulted before the cancellation, so an incumbent is never
     # destroyed by the very step that is meant to leave it alone.
     else:
+      # An active label-command dispatch also lands here and keeps its
+      # issue's hop count.
+      if not is_active:
+        reset_stage_hop(state, issue_id, "not_active")
       if retry_slot_incumbent(state, issue_id) is nil:
         cancel_retry(state, issue_id)
         state.claimed.remove(issue_id)
@@ -794,9 +870,11 @@ on_worker_exit(issue_id, reason, worker_result, state):
     # never widens which reaction kinds this exit seeds. A label-command
     # dispatch never satisfies this predicate: it always takes
     # disposition 6, and its retained claim counts as released here
-    # exactly as an ordinary released claim would.
+    # exactly as an ordinary released claim would. An exit that made a stage
+    # hop seeds no reaction of any kind: the hop released the previous
+    # stage's reactions and the next stage owns the issue.
     still_claimed = (issue_id in state.claimed) and not claim_protected_for_incumbent
-    if was_claimed and (handoff_path or still_claimed):
+    if was_claimed and not stage_hop_made and (handoff_path or still_claimed):
       scm = read_scm_metadata(workspace_path) if workspace_path is not empty else nil
 
       # CI is rewritten on every exit so it always carries the ref the
@@ -846,6 +924,57 @@ on_worker_exit(issue_id, reason, worker_result, state):
   return state
 ```
 
+A made hop replaces the handoff write. The hop runs on the event loop, synchronously, like the write it replaces:
+
+```text
+function advance_stage(state, entry, result, declared) -> made:
+  source = cfg.dispatch.rule_named(entry.rule_name)
+  if source is absent or source.next is empty:
+    return false                                       // no next, or a reload removed it
+  target = cfg.dispatch.rule_named(source.next)
+  if target is absent or target.stage is empty:
+    return false
+
+  count = state.stage_hops[issue_id].count, or 0
+  ceiling = cfg.dispatch.max_consecutive_hops
+  if count + 1 > ceiling:
+    log_warn("stage hop not made", reason="ceiling")
+    return false                                       // the handoff write follows
+
+  err = tracker.add_label(issue_id, target.stage)
+  if err:
+    missing = stage_labels_the_dispatch_read_showed_and_a_fresh_read_lacks(entry)
+    log_warn("stage hop not made", reason="add_failed", missing)
+    return false                                       // the handoff write follows
+
+  state.stage_hops[issue_id] = {
+    count: count + 1, source_rule: source.name, target_rule: target.name,
+    target_label: target.stage,
+    previous_outcome: "no_change" if declared else "succeeded",
+    source_dispatch_id: entry.dispatch_id, target_observed: false
+  }
+  persist_stage_hop(state.stage_hops[issue_id])        // a failure is logged; the runtime record stands
+
+  // Cancel the previous stage's follow-ups: the queued retry and its row,
+  // the pending reactions, their attempt counters and comment caches, and
+  // the claim. The next dispatch is the poll tick's.
+  release_issue_runtime_state(state, issue_id)
+
+  left = []
+  for label in configured_stage_labels(cfg.dispatch):  // list order, deduplicated case-insensitively
+    if label equals target.stage or entry.issue.labels does not contain label:
+      continue                                         // only labels the dispatch read showed
+    err = tracker.remove_label(issue_id, label)
+    if err: left.append(label)
+  if left is empty:
+    log_info("stage hop made")
+  else:
+    log_warn("stage hop made, stage labels left on the issue", left)
+  return true
+```
+
+The hop leaves the issue in its active tracker state with the target's stage label added and the source's label removed, does not increment `sortie_handoff_transitions_total`, and writes no state; the next dispatch performs the in-progress transition like any dispatch. A run that never reaches the handoff arm (a blocked soft stop, a terminal exit, a withheld verdict, an abnormal exit, a label-command dispatch, or an unset handoff state) never reaches `advance_stage`.
+
 ```text
 on_retry_timer(issue_id, state):
   retry_entry = state.retry_attempts.pop(issue_id)
@@ -873,7 +1002,7 @@ on_retry_timer(issue_id, state):
     })
 
   frozen = (retry_entry.agent_kind, retry_entry.template_id, retry_entry.rule_name)
-  selection = retry_selection(state.cfg, template_held, frozen, issue)
+  selection = retry_selection(state.cfg, template_held, frozen, issue, hop_route_of(state, issue_id))
   if selection != frozen:
     log_info("retry dispatching on the selection the configuration in force gives it")
   resume_session_id = retry_entry.session_id
@@ -904,5 +1033,5 @@ on_retry_timer(issue_id, state):
 
 A changed settings result never clears `resume_session_id`; only a changed kind or template does.
 
-`retry_selection` keeps the frozen triple, with a retired kind replaced by its replacement kind, while the kind is still reachable through `agent.kind`, `dispatch.default.agent`, or a rule and the template is still held, and otherwise returns `resolve_rule` over the configuration in force (§5.3.9, §8.4).
+`retry_selection` keeps the frozen triple, with a retired kind replaced by its replacement kind, while the kind is still reachable through `agent.kind`, `dispatch.default.agent`, or a rule and the template is still held, and otherwise returns `resolve_rule` over the configuration in force, passing the issue's hop route (§5.3.9, §8.4). A retry that finds its issue terminal or no longer active ends the issue's hop count.
 

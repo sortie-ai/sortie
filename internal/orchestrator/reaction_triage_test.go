@@ -1230,3 +1230,5 @@ func (s *triageGateStore) AddReactionHandedOffComments(_ context.Context, _, _ s
 func (s *triageGateStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *triageGateStore) DeleteStageHop(context.Context, string) error { return nil }

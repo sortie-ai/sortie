@@ -1866,3 +1866,5 @@ func (s *mgcStoreFake) AddReactionHandedOffComments(_ context.Context, _, _ stri
 func (s *mgcStoreFake) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *mgcStoreFake) DeleteStageHop(context.Context, string) error { return nil }

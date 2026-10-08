@@ -1300,3 +1300,48 @@ func TestResolveRuleBlockEnvRefs_LeavesStageLiteral(t *testing.T) {
 		t.Errorf("snapshot = %v, want an entry for dispatch.rules[0].kind-a.model", snapshot)
 	}
 }
+
+func TestBuildDispatchConfig_NextLinks(t *testing.T) {
+	t.Parallel()
+
+	chained := func(name, stage, next string) map[string]any {
+		return map[string]any{"name": name, "stage": stage, "next": next}
+	}
+	tests := []struct {
+		name      string
+		raw       map[string]any
+		wantField string
+		wantMsg   string
+		wantNexts []string
+	}{
+		{name: "two-rule chain is accepted", raw: dispatchRaw("", chained("a", "x", "b"), stagedRule("b", "y")), wantNexts: []string{"b", ""}},
+		{name: "cycle", raw: dispatchRaw("", chained("a", "x", "b"), chained("b", "y", "a")), wantField: "dispatch.rules[0].next", wantMsg: "next links form a cycle: a -> b -> a"},
+		{name: "unknown rule", raw: dispatchRaw("", chained("a", "x", "ghost")), wantField: "dispatch.rules[0].next", wantMsg: `next "ghost" names no dispatch rule`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.wantField == "" {
+				got := mustBuildDispatch(t, tt.raw)
+
+				var nexts []string
+				for _, rule := range got.Rules {
+					nexts = append(nexts, rule.Next)
+				}
+				if !slices.Equal(nexts, tt.wantNexts) {
+					t.Errorf("BuildDispatchConfig() Rules Next = %q, want %q", nexts, tt.wantNexts)
+				}
+				return
+			}
+
+			_, err := BuildDispatchConfig(tt.raw, mkDispatchDir(t), kindsRegistered("kind-a"), "kind-a")
+
+			ce := requireConfigError(t, err)
+			if ce.Field != tt.wantField || ce.Message != tt.wantMsg {
+				t.Errorf("BuildDispatchConfig() error = {Field:%q Message:%q}, want {Field:%q Message:%q}", ce.Field, ce.Message, tt.wantField, tt.wantMsg)
+			}
+		})
+	}
+}

@@ -971,3 +971,5 @@ func (s *labelFixDispatchedFlagStore) AddReactionHandedOffComments(_ context.Con
 func (s *labelFixDispatchedFlagStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *labelFixDispatchedFlagStore) DeleteStageHop(context.Context, string) error { return nil }

@@ -419,6 +419,9 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		return config.ServiceConfig{}, nil, nil, err
 	}
 	cfg.SetDispatch(dispatchCfg)
+	if err := config.ValidateNextRequiresHandoff(dispatchCfg, cfg.Tracker.HandoffState); err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
 
 	if m.advisoryFunc != nil {
 		cfg.AddAdvisories(m.advisoryFunc(cfg)...)

@@ -52,6 +52,7 @@ func PopulateRetries(state *State, entries []persistence.PendingRetry, log *slog
 			DueAtMS:          e.DueAtMs,
 			Error:            errStr,
 			RuleName:         e.RuleName,
+			StagePrevious:    StagePrevious{Rule: e.StagePrevious, Outcome: e.StagePreviousOutcome},
 			TemplateID:       e.TemplateID,
 			AgentKind:        e.AgentKind,
 			scheduledDelayMS: pending.RemainingMs,
@@ -311,9 +312,10 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.ReviewRecovered++
 			added++
@@ -337,9 +339,10 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.BotReviewRecovered++
 			added++
@@ -369,9 +372,10 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.CIRecovered++
 			added++
@@ -395,9 +399,10 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.AutoMergeRecovered++
 			added++
@@ -421,9 +426,10 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.MergeConflictRecovered++
 			added++
@@ -447,9 +453,10 @@ func recoverPendingReactionKinds(
 					Owner:    meta.Owner,
 					Repo:     meta.Repo,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.LabelReviewRecovered++
 			added++
@@ -475,9 +482,10 @@ func recoverPendingReactionKinds(
 					Repo:     meta.Repo,
 					Branch:   meta.Branch,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.LabelFixRecovered++
 			added++
@@ -502,9 +510,10 @@ func recoverPendingReactionKinds(
 					Owner:    meta.Owner,
 					Repo:     meta.Repo,
 				},
-				AgentKind:  run.AgentAdapter,
-				RuleName:   run.RuleName,
-				TemplateID: run.TemplateID,
+				AgentKind:     run.AgentAdapter,
+				RuleName:      run.RuleName,
+				StagePrevious: StagePrevious{Rule: run.StagePrevious, Outcome: run.StagePreviousOutcome},
+				TemplateID:    run.TemplateID,
 			}
 			outcome.MergeCompletionRecovered++
 			added++

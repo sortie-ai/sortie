@@ -768,3 +768,5 @@ func (s *retrySlotStore) AddReactionHandedOffComments(_ context.Context, _, _ st
 func (s *retrySlotStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *retrySlotStore) DeleteStageHop(context.Context, string) error { return nil }

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,8 @@ type mockExitStore struct {
 	sessionMetadata []persistence.SessionMetadata
 	retryEntries    []persistence.RetryEntry
 	deletedRetryIDs []string
+
+	recordedStageHops []persistence.StageHop
 
 	// absenceResetAt maps an issue ID to the run-history watermark at
 	// which its absence sequence was last reset.
@@ -9668,7 +9671,7 @@ func TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile(t
 	}
 
 	releaseStore := &mockReconcileStore{}
-	releaseTerminalIssueState(context.Background(), state, releaseStore, issueID, discardLogger())
+	releaseIssueRuntimeState(context.Background(), state, releaseStore, issueID, discardLogger())
 
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions present after the terminal-issue release, want removed")
@@ -10001,5 +10004,238 @@ func TestHandleWorkerExit_RecordsPresentedCommentsOnlyOnNormalExit(t *testing.T)
 			assertStoredHandedOff(t, store, issueID, ReactionKindReview, tt.wantReview...)
 			assertStoredHandedOff(t, store, issueID, ReactionKindBotReview, tt.wantBotReview...)
 		})
+	}
+}
+
+func (m *mockExitStore) DeleteStageHop(context.Context, string) error { return nil }
+
+func (m *mockExitStore) RecordStageHop(_ context.Context, hop persistence.StageHop) error {
+	m.recordedStageHops = append(m.recordedStageHops, hop)
+	return nil
+}
+
+const (
+	hopExitIssueID     = "HOP-1"
+	hopExitHandoff     = "Human Review"
+	hopExitSourceLabel = "stage-specify"
+	hopExitTargetLabel = "stage-implement"
+)
+
+type hopExitTracker struct {
+	*mockTrackerAdapter
+	added   []string
+	removed []string
+	addErr  error
+}
+
+func (h *hopExitTracker) AddLabel(_ context.Context, _, label string) error {
+	h.added = append(h.added, label)
+	return h.addErr
+}
+
+func (h *hopExitTracker) RemoveLabel(_ context.Context, _, label string) error {
+	h.removed = append(h.removed, label)
+	return nil
+}
+
+type hopExitFixture struct {
+	state   *State
+	store   *mockExitStore
+	tracker *hopExitTracker
+	params  HandleWorkerExitParams
+	result  WorkerResult
+}
+
+func newHopExitFixture(t *testing.T) *hopExitFixture {
+	t.Helper()
+
+	store := &mockExitStore{}
+	tracker := &hopExitTracker{mockTrackerAdapter: &mockTrackerAdapter{}}
+
+	state := exitStateWithIssue(t, hopExitIssueID, "In Progress")
+	entry := state.Running[hopExitIssueID]
+	entry.RuleName = "specify"
+	entry.Issue.Labels = []string{"feature", hopExitSourceLabel}
+	t.Cleanup(func() { stopRetryTimer(state, hopExitIssueID) })
+
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = hopExitHandoff
+	params.ActiveStates = []string{"In Progress"}
+	params.TerminalStates = []string{"Done"}
+	params.Dispatch = config.DispatchConfig{
+		Rules: []config.DispatchRule{
+			{Name: "specify", Stage: hopExitSourceLabel, Next: "implement"},
+			{Name: "implement", Stage: hopExitTargetLabel},
+		},
+		MaxConsecutiveHops: 3,
+	}
+
+	return &hopExitFixture{
+		state:   state,
+		store:   store,
+		tracker: tracker,
+		params:  params,
+		result:  WorkerResult{IssueID: hopExitIssueID, Identifier: "HOP-1-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock"},
+	}
+}
+
+func (f *hopExitFixture) exit() {
+	HandleWorkerExit(f.state, f.result, f.params)
+	f.state.TrackerOpsWg.Wait()
+}
+
+func TestHandleWorkerExit_StageHopOnlyForSuccessfulRun(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		setup   func(f *hopExitFixture)
+		wantHop bool
+	}{
+		{name: "successful run", wantHop: true},
+		{name: "failed run", setup: func(f *hopExitFixture) {
+			f.result.ExitKind = WorkerExitError
+			f.result.Error = errors.New("agent crashed")
+		}},
+		{name: "cancelled run", setup: func(f *hopExitFixture) { f.result.ExitKind = WorkerExitCancelled }},
+		{name: "blocked run", setup: func(f *hopExitFixture) {
+			f.result.SoftStop = true
+			f.result.SoftStopReason = string(workspace.StatusBlocked)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newHopExitFixture(t)
+			if tt.setup != nil {
+				tt.setup(f)
+			}
+
+			f.exit()
+
+			if !tt.wantHop {
+				if len(f.tracker.added) != 0 || len(f.tracker.removed) != 0 || len(f.state.StageHops) != 0 {
+					t.Errorf("AddLabel, RemoveLabel, StageHops = %q, %q, %v, want no hop", f.tracker.added, f.tracker.removed, f.state.StageHops)
+				}
+				return
+			}
+			if !slices.Equal(f.tracker.added, []string{hopExitTargetLabel}) {
+				t.Errorf("AddLabel labels = %q, want [%q]", f.tracker.added, hopExitTargetLabel)
+			}
+			if !slices.Equal(f.tracker.removed, []string{hopExitSourceLabel}) {
+				t.Errorf("RemoveLabel labels = %q, want [%q]", f.tracker.removed, hopExitSourceLabel)
+			}
+			if len(f.tracker.transitionCalls) != 0 {
+				t.Errorf("TransitionIssue calls = %+v, want none after a made hop", f.tracker.transitionCalls)
+			}
+			if hop := f.state.StageHops[hopExitIssueID]; hop == nil || hop.Count != 1 {
+				t.Errorf("StageHops[%q] = %+v, want Count 1", hopExitIssueID, hop)
+			}
+			if len(f.store.recordedStageHops) != 1 || f.store.recordedStageHops[0].HopCount != 1 {
+				t.Errorf("RecordStageHop rows = %+v, want one with HopCount 1", f.store.recordedStageHops)
+			}
+		})
+	}
+}
+
+func TestHandleWorkerExit_StageHopFallsBackToHandoff(t *testing.T) {
+	t.Parallel()
+
+	restoredRow := persistence.StageHop{
+		IssueID: hopExitIssueID, HopCount: 3, SourceRule: "specify", TargetRule: "implement", TargetLabel: hopExitTargetLabel,
+		HoppedAt: "2026-03-15T12:00:00Z",
+	}
+
+	tests := []struct {
+		name  string
+		setup func(f *hopExitFixture)
+	}{
+		{"count at the ceiling", func(f *hopExitFixture) {
+			f.state.StageHops[hopExitIssueID] = &StageHopEntry{Count: 3, SourceRule: "specify", TargetRule: "implement", TargetLabel: hopExitTargetLabel}
+		}},
+		{"count restored from the store at the ceiling", func(f *hopExitFixture) {
+			PopulateStageHops(f.state, []persistence.StageHop{restoredRow}, discardLogger())
+		}},
+		{"label add fails", func(f *hopExitFixture) { f.tracker.addErr = errors.New("add refused") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newHopExitFixture(t)
+			tt.setup(f)
+
+			f.exit()
+
+			if len(f.tracker.transitionCalls) != 1 || f.tracker.transitionCalls[0].TargetState != hopExitHandoff {
+				t.Errorf("TransitionIssue calls = %+v, want one to %q", f.tracker.transitionCalls, hopExitHandoff)
+			}
+			if len(f.tracker.removed) != 0 || len(f.store.recordedStageHops) != 0 {
+				t.Errorf("RemoveLabel, RecordStageHop = %q, %+v, want no hop writes", f.tracker.removed, f.store.recordedStageHops)
+			}
+			if len(f.state.StageHops) != 0 {
+				t.Errorf("StageHops = %v, want the record reset by the handoff write", f.state.StageHops)
+			}
+		})
+	}
+}
+
+func TestHandleWorkerExit_StageHopCancelsPendingReactionsAndRetry(t *testing.T) {
+	t.Parallel()
+
+	kinds := []string{
+		ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge,
+		ReactionKindMergeConflict, ReactionKindLabelReview, ReactionKindLabelFix, ReactionKindMergeCompletion,
+	}
+
+	f := newHopExitFixture(t)
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 42, "acme", "myrepo", "feature/HOP-1", "deadbeef")
+	f.result.WorkspacePath = wsPath
+	f.params.SCMAdapter = &scmAdapterStubExit{}
+	f.params.CIProvider = &ciProviderStubExit{}
+	f.params.AutoMergeReactionConfigured = true
+	f.params.BotReviewReactionConfigured = true
+	f.params.MergeConflictReactionConfigured = true
+	f.params.LabelReviewReactionConfigured = true
+	f.params.LabelFixReactionConfigured = true
+	f.params.MergeCompletionReactionConfigured = true
+	for _, kind := range kinds {
+		key := ReactionKey(hopExitIssueID, kind)
+		f.state.PendingReactions[key] = &PendingReaction{IssueID: hopExitIssueID, Identifier: f.result.Identifier, Kind: kind, Attempt: 7}
+		f.state.ReactionAttempts[key] = 2
+	}
+	ScheduleRetry(f.state, ScheduleRetryParams{
+		IssueID:      hopExitIssueID,
+		Identifier:   f.result.Identifier,
+		Attempt:      4,
+		DelayMS:      3_600_000,
+		ReactionKind: ReactionKindReview,
+		RuleName:     "specify",
+		Logger:       discardLogger(),
+	}, noopRetryFire)
+	incumbent := f.state.RetryAttempts[hopExitIssueID]
+	t.Cleanup(func() { incumbent.TimerHandle.Stop() })
+
+	f.exit()
+
+	if !slices.Equal(f.tracker.added, []string{hopExitTargetLabel}) {
+		t.Fatalf("AddLabel labels = %q, want [%q]: the exit must hop for the cancellation to apply", f.tracker.added, hopExitTargetLabel)
+	}
+	if len(f.state.PendingReactions) != 0 || len(f.state.ReactionAttempts) != 0 {
+		t.Errorf("PendingReactions, ReactionAttempts = %v, %v, want none: a hop releases the pending reactions and seeds no new one", f.state.PendingReactions, f.state.ReactionAttempts)
+	}
+	if _, ok := f.state.RetryAttempts[hopExitIssueID]; ok {
+		t.Error("RetryAttempts holds the queued incumbent after a made hop, want it cancelled")
+	}
+	if incumbent.TimerHandle.Stop() {
+		t.Error("incumbent retry timer still pending after a made hop, want it stopped")
+	}
+	if !slices.Contains(f.store.deletedRetryIDs, hopExitIssueID) {
+		t.Errorf("DeleteRetryEntry ids = %v, want %q: the persisted retry row goes with the hop", f.store.deletedRetryIDs, hopExitIssueID)
 	}
 }

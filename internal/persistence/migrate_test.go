@@ -183,6 +183,8 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"rule_name", "TEXT", true, 0},
 				{"template_id", "TEXT", true, 0},
 				{"agent_kind", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+				{"stage_previous_outcome", "TEXT", true, 0},
 			},
 		},
 		{
@@ -214,6 +216,23 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"configured_model", "TEXT", true, 0},
 				{"configured_effort", "TEXT", true, 0},
 				{"reported_model", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+				{"stage_previous_outcome", "TEXT", true, 0},
+			},
+		},
+		{
+			table: "stage_hops",
+			cols: []colSpec{
+				{"issue_id", "TEXT", false, 1},
+				{"identifier", "TEXT", true, 0},
+				{"hop_count", "INTEGER", true, 0},
+				{"source_rule", "TEXT", true, 0},
+				{"target_rule", "TEXT", true, 0},
+				{"target_label", "TEXT", true, 0},
+				{"previous_outcome", "TEXT", true, 0},
+				{"source_dispatch_id", "TEXT", true, 0},
+				{"target_observed", "INTEGER", true, 0},
+				{"hopped_at", "TEXT", true, 0},
 			},
 		},
 		{

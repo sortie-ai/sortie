@@ -61,6 +61,12 @@ type RunHistory struct {
 	// non-zero count makes this row's total a lower bound. Orthogonal to
 	// TokensMeasured.
 	UnaccountedTurns int
+
+	// StagePrevious and StagePreviousOutcome are the frozen stage.previous
+	// pair the attempt rendered with; both are empty when no hop led to the
+	// dispatch and for pre-migration rows.
+	StagePrevious        string
+	StagePreviousOutcome string
 }
 
 // AppendRunHistory inserts a completed run attempt. The input ID is
@@ -88,13 +94,14 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
 		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens, run.CacheWriteTokens, run.TokensMeasured,
 		run.UnaccountedTurns, run.ConfiguredModel, run.ConfiguredEffort, run.ReportedModel,
+		run.StagePrevious, run.StagePreviousOutcome,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -188,7 +195,8 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			r.workspace, r.started_at, r.completed_at, r.status, r.error, r.workflow_file,
 			r.turns_completed, r.review_metadata, r.rule_name, r.template_id,
 			r.input_tokens, r.output_tokens, r.total_tokens, r.cache_read_tokens, r.cache_write_tokens, r.tokens_measured,
-			r.unaccounted_turns, r.configured_model, r.configured_effort, r.reported_model
+			r.unaccounted_turns, r.configured_model, r.configured_effort, r.reported_model,
+			r.stage_previous, r.stage_previous_outcome
 		FROM run_history AS r
 		JOIN bounded ON bounded.latest_id = r.id
 		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
@@ -207,6 +215,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName, &run.TemplateID,
 			&run.InputTokens, &run.OutputTokens, &run.TotalTokens, &run.CacheReadTokens, &run.CacheWriteTokens, &run.TokensMeasured,
 			&run.UnaccountedTurns, &run.ConfiguredModel, &run.ConfiguredEffort, &run.ReportedModel,
+			&run.StagePrevious, &run.StagePreviousOutcome,
 		); err != nil {
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}

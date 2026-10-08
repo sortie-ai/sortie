@@ -1224,7 +1224,7 @@ func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
 		t.Errorf("validateOutput.Valid = false, want true")
 	}
 
-	const wantMessage = `unknown template variable ".not_a_reaction"; valid top-level variables are: .issue, .attempt, .run, .ci_failure, .review_comments, .bot_review_comments, .merge_conflict, .label_review, .label_fix`
+	const wantMessage = `unknown template variable ".not_a_reaction"; valid top-level variables are: .issue, .attempt, .run, .stage, .ci_failure, .review_comments, .bot_review_comments, .merge_conflict, .label_review, .label_fix`
 
 	var unknownVarWarnings []validateDiag
 	for _, w := range out.Warnings {
