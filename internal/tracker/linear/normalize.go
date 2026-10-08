@@ -2,6 +2,7 @@ package linear
 
 import (
 	"cmp"
+	"encoding/json"
 	"log/slog"
 	"slices"
 	"strings"
@@ -68,10 +69,31 @@ type linearLabel struct {
 }
 
 // linearLabelConn is the nested labels connection. PageInfo carries
-// hasNextPage so the normalizer can emit the nested-overflow tripwire.
+// hasNextPage and endCursor so the reader can complete a capped list.
 type linearLabelConn struct {
 	Nodes    []linearLabel  `json:"nodes"`
 	PageInfo linearPageInfo `json:"pageInfo"`
+}
+
+// linearIssueLabel is one label node of the issue labels query, with the
+// handles removal and group swap need.
+type linearIssueLabel struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Parent *struct {
+		ID string `json:"id"`
+	} `json:"parent"`
+}
+
+// issueLabelsData is the data payload for the issue labels query. A nil Issue
+// distinguishes a missing issue from an issue with no labels.
+type issueLabelsData struct {
+	Issue *struct {
+		Labels struct {
+			Nodes    []linearIssueLabel `json:"nodes"`
+			PageInfo linearPageInfo     `json:"pageInfo"`
+		} `json:"labels"`
+	} `json:"issue"`
 }
 
 // linearRelatedIssue is the issue referenced by an inverse relation node.
@@ -225,12 +247,33 @@ type teamResolveData struct {
 	} `json:"issue"`
 }
 
-// issueUpdateData is the data payload for both issueUpdate mutations, the
-// transition and the label attach. Only the success boolean drives correctness.
+// issueUpdateData is the data payload for the transition issueUpdate mutation.
+// Only the success boolean drives correctness.
 type issueUpdateData struct {
 	IssueUpdate struct {
 		Success bool `json:"success"`
 	} `json:"issueUpdate"`
+}
+
+// issueUpdateLabelsData is the data payload for the label issueUpdate
+// mutations. The labels stay raw so a payload that does not hold the expected
+// label set leaves the write unreported instead of failing it.
+type issueUpdateLabelsData struct {
+	IssueUpdate struct {
+		Success bool `json:"success"`
+		Issue   *struct {
+			Labels json.RawMessage `json:"labels"`
+		} `json:"issue"`
+	} `json:"issueUpdate"`
+}
+
+// labelSetPayload is the label connection a label mutation selects on the
+// issue.
+type labelSetPayload struct {
+	Nodes    []linearIssueLabel `json:"nodes"`
+	PageInfo struct {
+		HasNextPage bool `json:"hasNextPage"`
+	} `json:"pageInfo"`
 }
 
 // commentCreateData is the data payload for the commentCreate mutation.
@@ -247,11 +290,17 @@ type commentCreateData struct {
 // Team is a pointer so a workspace-scoped label (team null) is distinguishable
 // from a team-scoped label. Team.Key is the team key the configured project is
 // matched against; Team.ID is a UUID and is not the configured project value.
+// Parent is the label's group, whose GroupType is empty for a group without a
+// selection mode.
 type labelResolveData struct {
 	IssueLabels struct {
 		Nodes []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Parent *struct {
+				ID        string `json:"id"`
+				GroupType string `json:"groupType"`
+			} `json:"parent"`
 			Team *struct {
 				ID  string `json:"id"`
 				Key string `json:"key"`
@@ -275,7 +324,8 @@ type labelCreateData struct {
 // Labels are lowercased, priority 0 maps to nil while 1..4 map to a non-nil
 // pointer, a null description maps to the empty string, and blockers are
 // derived from inverse relations of type "blocks". Comments are left nil; the
-// by-id caller populates them. When log is non-nil, a nested labels or
+// by-id caller populates them. The caller completes a capped labels
+// connection first, so Labels holds every label. When log is non-nil, a nested
 // inverseRelations connection truncated at its first-page cap emits a WARN.
 func normalizeIssue(li linearIssue, log *slog.Logger) domain.Issue {
 	labelNames := make([]string, 0, len(li.Labels.Nodes))
@@ -283,7 +333,6 @@ func normalizeIssue(li linearIssue, log *slog.Logger) domain.Issue {
 		labelNames = append(labelNames, label.Name)
 	}
 
-	warnNestedOverflow(log, li.Identifier, "labels", li.Labels.PageInfo.HasNextPage)
 	warnNestedOverflow(log, li.Identifier, "inverseRelations", li.InverseRelations.PageInfo.HasNextPage)
 
 	var description string
@@ -367,8 +416,8 @@ func extractBlockers(rel linearRelationConn) []domain.BlockerRef {
 
 // warnNestedOverflow emits a single WARN when a nested connection reports more
 // pages at its first-page cap. The truncation is logged rather than treated as
-// an error because the read path does not paginate nested connections, and a
-// dropped label or blocker must remain observable.
+// an error because the read path does not paginate this nested connection, and a
+// dropped blocker must remain observable.
 func warnNestedOverflow(log *slog.Logger, identifier, connection string, hasNextPage bool) {
 	if log == nil || !hasNextPage {
 		return

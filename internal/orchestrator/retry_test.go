@@ -206,6 +206,8 @@ func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) e
 	return m.addLabelErr
 }
 
+func (m *mockRetryTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 func retryState(t *testing.T, id, identifier string, attempt int) *State {
 	t.Helper()
 	state := NewState(5000, 4, 0, nil, AgentTotals{})

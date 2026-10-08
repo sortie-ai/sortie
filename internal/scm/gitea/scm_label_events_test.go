@@ -208,6 +208,10 @@ func TestGiteaSCMRemoveLabel(t *testing.T) {
 				w.WriteHeader(http.StatusNoContent)
 			case strings.HasSuffix(r.URL.Path, "/labels"):
 				w.Header().Set("Content-Type", "application/json")
+				if deleteCalls.Load() > 0 {
+					_, _ = w.Write([]byte(`[]`))
+					return
+				}
 				_, _ = w.Write(labelsFixture)
 			default:
 				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -310,5 +314,75 @@ func TestGiteaSCMRemoveLabel(t *testing.T) {
 		// Only a merge write path promotes 405/409 to ErrSCMConflict;
 		// RemoveLabel is not on that path.
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
+	})
+
+	t.Run("a blank label returns nil without any request", func(t *testing.T) {
+		t.Parallel()
+
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, " \t")
+
+		adaptertest.AssertLabelAbsentDisposition(t, err)
+		if n := requests.Load(); n != 0 {
+			t.Errorf("requests = %d, want 0", n)
+		}
+	})
+
+	t.Run("surrounding white space removes the label it trims to", func(t *testing.T) {
+		t.Parallel()
+
+		var deletedPath atomic.Value
+		var removed atomic.Bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				deletedPath.Store(r.URL.Path)
+				removed.Store(true)
+				w.WriteHeader(http.StatusNoContent)
+			case strings.HasSuffix(r.URL.Path, "/labels"):
+				if removed.Load() {
+					_, _ = w.Write([]byte(`[]`))
+					return
+				}
+				_, _ = w.Write([]byte(`[{"id":9,"name":"Sortie:Review"}]`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "  sortie:review\t")
+		if err != nil {
+			t.Fatalf("RemoveLabel: unexpected error: %v", err)
+		}
+
+		want := "/api/v1/repos/" + testOwner + "/" + testRepo + "/issues/6/labels/9"
+		if got, _ := deletedPath.Load().(string); got != want {
+			t.Errorf("delete path = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a missing pull request returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		errorBody := loadFixture(t, "error_404.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write(errorBody)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug")
+
+		adaptertest.AssertLabelAbsentDisposition(t, err)
 	})
 }

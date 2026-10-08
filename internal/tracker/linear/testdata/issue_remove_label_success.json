@@ -5,8 +5,7 @@
       "issue": {
         "labels": {
           "nodes": [
-            { "id": "label-team-existing", "name": "existing" },
-            { "id": "label-team-needs-human", "name": "needs-human" }
+            { "id": "label-team-existing", "name": "existing" }
           ],
           "pageInfo": { "hasNextPage": false }
         }

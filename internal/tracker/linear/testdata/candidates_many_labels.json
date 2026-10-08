@@ -1,0 +1,82 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+          "identifier": "SOR-5",
+          "title": "Issue SOR-5 with many labels",
+          "description": "Carries more labels than the nested connection returns.",
+          "priority": 1,
+          "branchName": "tasks/sor-5-many-labels",
+          "url": "https://linear.app/sortie-ai/issue/SOR-5/many-labels",
+          "createdAt": "2026-06-10T09:00:00.000Z",
+          "updatedAt": "2026-06-12T14:30:00.000Z",
+          "state": {
+            "name": "Todo"
+          },
+          "assignee": null,
+          "parent": null,
+          "labels": {
+            "nodes": [
+              {
+                "name": "Label-01"
+              },
+              {
+                "name": "Label-02"
+              },
+              {
+                "name": "Label-03"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": true,
+              "endCursor": "labels-cursor-03"
+            }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "id": "b2d9e4a1-3c7f-4b8e-9d2a-1f6c5b4e3a2d",
+          "identifier": "SOR-8",
+          "title": "Issue SOR-8 with many labels",
+          "description": "Carries more labels than the nested connection returns.",
+          "priority": 3,
+          "branchName": "tasks/sor-8-many-labels",
+          "url": "https://linear.app/sortie-ai/issue/SOR-8/many-labels",
+          "createdAt": "2026-06-10T09:00:00.000Z",
+          "updatedAt": "2026-06-12T14:30:00.000Z",
+          "state": {
+            "name": "Todo"
+          },
+          "assignee": null,
+          "parent": null,
+          "labels": {
+            "nodes": [
+              {
+                "name": "Feature"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false
+      }
+    }
+  }
+}

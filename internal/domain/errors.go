@@ -38,7 +38,9 @@ const (
 	ErrTrackerNotFound TrackerErrorKind = "tracker_not_found"
 
 	// ErrTrackerPayload indicates a malformed or unexpected response
-	// structure from the tracker.
+	// structure from the tracker. A label write also returns it for a
+	// blank label, a write the tracker rejects as invalid, and a write
+	// the tracker acknowledges without applying.
 	ErrTrackerPayload TrackerErrorKind = "tracker_payload_error"
 
 	// ErrTrackerMissingCursor indicates a pagination integrity error

@@ -3,6 +3,7 @@ package gitlab
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -2270,7 +2271,7 @@ func TestAddLabel(t *testing.T) {
 			putCalls.Add(1)
 			putBody = readRequestBody(t, r)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+			w.Write([]byte(`{"labels":["existing","needs-human"]}`)) //nolint:errcheck // test helper
 		})
 		a := mustAdapter(t, s)
 
@@ -2292,7 +2293,7 @@ func TestAddLabel(t *testing.T) {
 		adaptertest.AssertLabelAddIsAdditive(t, before, after, "needs-human")
 	})
 
-	t.Run("empty or whitespace-only label attaches nothing and warns", func(t *testing.T) {
+	t.Run("empty or whitespace-only label returns payload error without a request", func(t *testing.T) {
 		t.Parallel()
 
 		tests := []string{"", "  "}
@@ -2312,21 +2313,124 @@ func TestAddLabel(t *testing.T) {
 
 				afterConstruction := labelCalls.Load()
 
-				var buf bytes.Buffer
-				a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+				err := a.AddLabel(context.Background(), "1", label)
 
-				if err := a.AddLabel(context.Background(), "1", label); err != nil {
-					t.Fatalf("AddLabel: %v", err)
-				}
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 				if got := labelCalls.Load(); got != afterConstruction {
 					t.Errorf("labels-route call count = %d, want %d (no catalog read for an empty label)", got, afterConstruction)
-				}
-				if !strings.Contains(buf.String(), "gitlab add_label received an empty label; nothing attached") {
-					t.Errorf("log output missing the empty-label WARN\noutput: %s", buf.String())
 				}
 			})
 		}
 	})
+}
+
+func TestLabelWrites_GitLabWire(t *testing.T) {
+	t.Parallel()
+
+	add := func(label string) func(*GitLabAdapter) error {
+		return func(a *GitLabAdapter) error { return a.AddLabel(context.Background(), "4", label) }
+	}
+	remove := func(label string) func(*GitLabAdapter) error {
+		return func(a *GitLabAdapter) error { return a.RemoveLabel(context.Background(), "4", label) }
+	}
+
+	tests := []struct {
+		name        string
+		write       func(*GitLabAdapter) error
+		issueLabels []string
+		issueType   string
+		putResponse string
+		wantPuts    []string
+		wantKind    domain.TrackerErrorKind
+	}{
+		{
+			name:        "remove sends every stored spelling in one remove_labels request",
+			write:       remove("stage-plan"),
+			issueLabels: []string{"Stage-Plan", "bug", "stage-plan"},
+			putResponse: `{"labels":["bug"]}`,
+			wantPuts:    []string{`{"remove_labels":["Stage-Plan","stage-plan"]}`},
+		},
+		{
+			name:        "remove answered 200 with the label still present is a payload error",
+			write:       remove("needs-human"),
+			issueLabels: []string{"needs-human"},
+			putResponse: `{"labels":["needs-human"]}`,
+			wantPuts:    []string{`{"remove_labels":["needs-human"]}`},
+			wantKind:    domain.ErrTrackerPayload,
+		},
+		{
+			name:        "remove answered 200 without a label set is settled by the read",
+			write:       remove("needs-human"),
+			issueLabels: []string{"needs-human"},
+			putResponse: `{}`,
+			wantPuts:    []string{`{"remove_labels":["needs-human"]}`},
+			wantKind:    domain.ErrTrackerPayload,
+		},
+		{
+			name:        "remove of a non-issue entity is not found and sends no write",
+			write:       remove("needs-human"),
+			issueLabels: []string{"needs-human"},
+			issueType:   "incident",
+			wantKind:    domain.ErrTrackerNotFound,
+		},
+		{
+			name:        "add answered 200 with the label missing is a payload error",
+			write:       add("needs-human"),
+			issueLabels: []string{"backlog"},
+			putResponse: `{"labels":["backlog"]}`,
+			wantPuts:    []string{`{"add_labels":["needs-human"]}`},
+			wantKind:    domain.ErrTrackerPayload,
+		},
+		{
+			name:        "add with surrounding white space attaches the trimmed spelling and fails the as-given confirmation",
+			write:       add(" needs-human "),
+			issueLabels: []string{"needs-human"},
+			putResponse: `{"labels":["needs-human"]}`,
+			wantPuts:    []string{`{"add_labels":["needs-human"]}`},
+			wantKind:    domain.ErrTrackerPayload,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueBody, err := json.Marshal(map[string]any{"iid": 4, "state": "opened", "issue_type": tt.issueType, "labels": tt.issueLabels})
+			if err != nil {
+				t.Fatalf("marshal issue: %v", err)
+			}
+			var mu sync.Mutex
+			var puts []string
+			s := newPreflightServer(t)
+			issuePath := "/api/v4/projects/" + testEscapedProject + "/issues/4"
+			s.handle(issuePath, func(w http.ResponseWriter, _ *http.Request) {
+				w.Write(issueBody) //nolint:errcheck // test helper
+			})
+			s.handleMethod(http.MethodPut, issuePath, func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				puts = append(puts, string(body))
+				mu.Unlock()
+				w.Write([]byte(tt.putResponse)) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, s)
+
+			err = tt.write(a)
+
+			if tt.wantKind == "" {
+				if err != nil {
+					t.Fatalf("write = %v, want nil", err)
+				}
+			} else {
+				assertTrackerErrorKind(t, err, tt.wantKind)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(puts, tt.wantPuts) {
+				t.Errorf("PUT bodies = %q, want %q", puts, tt.wantPuts)
+			}
+		})
+	}
 }
 
 func TestLabelCatalogPagination(t *testing.T) {
@@ -2391,7 +2495,7 @@ func TestLabelCatalogPagination(t *testing.T) {
 		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/6", func(w http.ResponseWriter, r *http.Request) {
 			putBody = readRequestBody(t, r)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+			w.Write([]byte(`{"labels":["Review"]}`)) //nolint:errcheck // test helper
 		})
 
 		srv := httptest.NewServer(s)

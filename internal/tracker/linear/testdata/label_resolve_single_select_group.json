@@ -1,0 +1,26 @@
+{
+  "data": {
+    "issueLabels": {
+      "nodes": [
+        {
+          "id": "label-workspace-needs-human",
+          "name": "needs-human",
+          "parent": null,
+          "team": null
+        },
+        {
+          "id": "label-team-needs-human",
+          "name": "needs-human",
+          "parent": {
+            "id": "group-stage",
+            "groupType": "singleSelect"
+          },
+          "team": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "key": "SOR"
+          }
+        }
+      ]
+    }
+  }
+}

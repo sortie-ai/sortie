@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
@@ -160,18 +161,18 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 	return events, nil
 }
 
-// RemoveLabel deletes the named label from the given pull request. An
-// already-absent label (HTTP 404) is a successful no-op. Returns a
-// [*domain.SCMError] on any other failure.
+// RemoveLabel removes the named label from the given pull request. A label
+// that is blank, already absent, or on a pull request that does not exist is a
+// successful no-op. Returns a [*domain.SCMError] on any other failure.
 func (a *GitHubSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error {
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
-		url.PathEscape(owner), url.PathEscape(repo), prNumber, url.PathEscape(label))
-	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := scmcore.ToSCMError(err)
-		if scm.Kind == domain.ErrSCMNotFound {
-			return nil
-		}
-		return scm
+	if strings.TrimSpace(label) == "" {
+		return nil
 	}
-	return nil
+
+	ops := githubIssueLabelOps(a.client, owner, repo, strconv.Itoa(prNumber))
+	err := issuekit.RemoveIssueLabel(ctx, label, ops)
+	if err == nil || domain.IsNotFound(err) {
+		return nil
+	}
+	return scmcore.ToSCMError(err)
 }

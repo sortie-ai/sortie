@@ -923,3 +923,45 @@ func nativeIssueState(t *testing.T, ctx context.Context, adapter *GitLabAdapter,
 	}
 	return issue.State
 }
+
+func TestIntegration_LabelRoundTrip(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter := newIntegrationAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	issue := firstCandidate(t, ctx, adapter)
+	const probe = "sortie-label-probe"
+
+	if err := adapter.AddLabel(ctx, issue.ID, probe); err != nil {
+		t.Fatalf("AddLabel(%s, %q): %v", issue.Identifier, probe, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := adapter.RemoveLabel(cleanupCtx, issue.ID, probe); err != nil {
+			t.Errorf("cleanup RemoveLabel(%s, %q): %v", issue.Identifier, probe, err)
+		}
+	})
+
+	fetched, err := adapter.FetchIssueByID(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s): %v", issue.ID, err)
+	}
+	if !slices.Contains(fetched.Labels, probe) {
+		t.Fatalf("FetchIssueByID(%s) labels = %v, want %q after AddLabel", issue.ID, fetched.Labels, probe)
+	}
+
+	if err := adapter.RemoveLabel(ctx, issue.ID, probe); err != nil {
+		t.Fatalf("RemoveLabel(%s, %q): %v", issue.Identifier, probe, err)
+	}
+	fetched, err = adapter.FetchIssueByID(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s) after removal: %v", issue.ID, err)
+	}
+	if slices.Contains(fetched.Labels, probe) {
+		t.Errorf("FetchIssueByID(%s) labels = %v, want %q gone immediately after RemoveLabel", issue.ID, fetched.Labels, probe)
+	}
+}

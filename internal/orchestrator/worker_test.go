@@ -319,6 +319,8 @@ func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) err
 	return nil
 }
 
+func (m *mockTrackerAdapter) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 type stubAgentTool struct {
 	toolName string
 	desc     string

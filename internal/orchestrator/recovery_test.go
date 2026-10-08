@@ -705,6 +705,8 @@ func (s *recoveryTrackerStub) AddLabel(_ context.Context, _ string, _ string) er
 	return nil
 }
 
+func (s *recoveryTrackerStub) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // panicSCMAdapter panics if any method is called, asserting recovery makes no SCM calls.
 type panicSCMAdapter struct{}
 

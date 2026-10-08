@@ -1,0 +1,14 @@
+{
+  "data": {
+    "issue": {
+      "labels": {
+        "nodes": [
+          { "id": "label-id-bug", "name": "bug", "parent": null },
+          { "id": "label-id-plan", "name": "stage-plan", "parent": { "id": "group-stage" } },
+          { "id": "label-id-other", "name": "other-group", "parent": { "id": "group-other" } }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }
+    }
+  }
+}

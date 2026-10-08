@@ -1878,15 +1878,15 @@ func TestResolveLabelID(t *testing.T) {
 
 		adapter := newTestAdapter(t, f)
 
-		labelID, found, err := adapter.resolveLabelID(context.Background(), "needs-human")
+		target, found, err := adapter.resolveLabelID(context.Background(), "needs-human")
 		if err != nil {
 			t.Fatalf("resolveLabelID: %v", err)
 		}
 		if found {
 			t.Errorf("resolveLabelID found = %v, want false (the only match belongs to another team)", found)
 		}
-		if labelID != "" {
-			t.Errorf("resolveLabelID id = %q, want empty string", labelID)
+		if target.id != "" {
+			t.Errorf("resolveLabelID id = %q, want empty string", target.id)
 		}
 	})
 }

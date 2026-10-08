@@ -268,6 +268,42 @@ func TestRemoveLabel_409IsNotPromotedToConflict(t *testing.T) {
 	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 }
 
+func TestRemoveLabel_SendsNoDeleteForAbsentInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		label        string
+		labelsStatus int
+		wantRequests int
+	}{
+		{"label the pull request lacks", "urgent", 0, 1},
+		{"label with surrounding white space is passed as given", " sortie:review", 0, 1},
+		{"blank label", "  ", 0, 0},
+		{"missing pull request", "sortie:review", http.StatusNotFound, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newIssueLabelFake(t, "sortie:review")
+			fake.labelsStatus = tt.labelsStatus
+			adapter := newTestSCMAdapter(t, fake.srv.URL)
+
+			err := adapter.RemoveLabel(context.Background(), 42, "owner", "repo", tt.label)
+
+			adaptertest.AssertLabelAbsentDisposition(t, err)
+			if got := len(fake.requestLog()); got != tt.wantRequests {
+				t.Errorf("RemoveLabel(%q) sent %d requests, want %d", tt.label, got, tt.wantRequests)
+			}
+			if got := fake.paths(http.MethodDelete); len(got) != 0 {
+				t.Errorf("DELETE paths = %v, want none", got)
+			}
+		})
+	}
+}
+
 func TestListLabelEvents_MalformedTimestampIsPayloadError(t *testing.T) {
 	t.Parallel()
 

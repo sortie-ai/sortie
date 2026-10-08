@@ -42,6 +42,8 @@ func (fakeTrackerAdapter) CommentIssueWithLiteral(context.Context, string, strin
 }
 func (fakeTrackerAdapter) AddLabel(context.Context, string, string) error { return nil }
 
+func (fakeTrackerAdapter) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // fakeBlockerReaderAdapter embeds fakeTrackerAdapter and additionally
 // implements domain.BlockerReader, recording every call and returning
 // a scripted result.

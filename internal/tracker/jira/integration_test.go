@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -499,4 +500,56 @@ func TestIntegration_CommentIssueWithLiteral_StoresOneCodeBlock(t *testing.T) {
 		return
 	}
 	t.Fatalf("no stored comment contains %q among %d comments", marker, len(listing.Comments))
+}
+
+func TestIntegration_LabelRoundTrip(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter, err := NewJiraAdapter(integrationConfig(t))
+	if err != nil {
+		t.Fatalf("NewJiraAdapter: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	candidates, err := adapter.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	if len(candidates) == 0 {
+		t.Skip("no candidate issues in project; cannot run write test")
+	}
+	key := candidates[0].Identifier
+	probe := "sortie-label-probe"
+
+	if err := adapter.AddLabel(ctx, key, probe); err != nil {
+		t.Fatalf("AddLabel(%s, %q): %v", key, probe, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := adapter.RemoveLabel(cleanupCtx, key, probe); err != nil {
+			t.Errorf("cleanup RemoveLabel(%s, %q): %v", key, probe, err)
+		}
+	})
+
+	issue, err := adapter.FetchIssueByID(ctx, key)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s): %v", key, err)
+	}
+	if !slices.Contains(issue.Labels, probe) {
+		t.Fatalf("FetchIssueByID(%s) labels = %v, want %q after AddLabel", key, issue.Labels, probe)
+	}
+
+	if err := adapter.RemoveLabel(ctx, key, probe); err != nil {
+		t.Fatalf("RemoveLabel(%s, %q): %v", key, probe, err)
+	}
+	issue, err = adapter.FetchIssueByID(ctx, key)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s) after removal: %v", key, err)
+	}
+	if slices.Contains(issue.Labels, probe) {
+		t.Errorf("FetchIssueByID(%s) labels = %v, want %q gone immediately after RemoveLabel", key, issue.Labels, probe)
+	}
 }

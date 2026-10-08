@@ -39,6 +39,10 @@ func (t *recordingHandoffTracker) AddLabel(_ context.Context, issueID, label str
 	return t.addLabelErr
 }
 
+func (t *recordingHandoffTracker) RemoveLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func (t *recordingHandoffTracker) labels() []handoffLabelCall {
 	t.mu.Lock()
 	defer t.mu.Unlock()

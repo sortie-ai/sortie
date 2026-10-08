@@ -70,6 +70,8 @@ func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) err
 	return nil
 }
 
+func (m *mockTrackerAdapter) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // projIssue returns an issue with the given identifier in project PROJ.
 func projIssue(id, identifier string) domain.Issue {
 	return domain.Issue{

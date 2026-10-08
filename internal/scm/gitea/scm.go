@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -192,33 +193,23 @@ func (a *GiteaSCMAdapter) DeleteBranch(ctx context.Context, owner, repo, branch 
 // DELETE /repos/{owner}/{repo}/issues/{index}/labels/{id}.
 //
 // Gitea's label-remove route is id-based, so the name is first resolved against
-// the PR's own labels. A name absent from the PR issues no request and returns
-// nil, the already-absent no-op the [domain.SCMAdapter.RemoveLabel] contract
-// requires; a delete that races an external removal (HTTP 404) is likewise
-// mapped to nil. Any other failure returns a [*domain.SCMError].
+// the PR's own labels, trimmed and ignoring letter case. A blank name, a name
+// absent from the PR, a delete that races an external removal, and a pull
+// request that does not exist all issue no further request and return nil, the
+// already-absent no-op the [domain.SCMAdapter.RemoveLabel] contract requires.
+// Any other failure returns a [*domain.SCMError].
 func (a *GiteaSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error {
-	target := strings.ToLower(strings.TrimSpace(label))
-
-	labels, err := a.fetchIssueLabels(ctx, prNumber, owner, repo)
-	if err != nil {
-		return err
-	}
-
-	id, found := resolveLabelID(labels, target)
-	if !found {
+	name := strings.TrimSpace(label)
+	if name == "" {
 		return nil
 	}
 
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
-		url.PathEscape(owner), url.PathEscape(repo), prNumber, strconv.FormatInt(id, 10))
-	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := scmcore.ToSCMError(err)
-		if scm.Kind == domain.ErrSCMNotFound {
-			return nil
-		}
-		return scm
+	ops := giteaIssueLabelOps(a.client, owner, repo, strconv.Itoa(prNumber), nil)
+	err := issuekit.RemoveIssueLabel(ctx, name, ops)
+	if err == nil || domain.IsNotFound(err) {
+		return nil
 	}
-	return nil
+	return scmcore.ToSCMError(err)
 }
 
 // paginateSCM walks a page-number-paginated Gitea route through the shared

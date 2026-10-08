@@ -9,9 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1518,6 +1521,152 @@ func TestTransitionIssue_PartialFailure_AddLabel(t *testing.T) {
 	}
 }
 
+const labelFakeNumber = 42
+
+type labelRequest struct {
+	method string
+	path   string
+}
+
+type issueLabelFake struct {
+	mu           sync.Mutex
+	labels       []string
+	pageSize     int
+	deleteStatus int
+	applyDelete  bool
+	labelsStatus int
+	requests     []labelRequest
+	srv          *httptest.Server
+}
+
+func newIssueLabelFake(t *testing.T, labels ...string) *issueLabelFake {
+	t.Helper()
+
+	fake := &issueLabelFake{labels: labels}
+	fake.srv = httptest.NewServer(http.HandlerFunc(fake.serve))
+	t.Cleanup(fake.srv.Close)
+	return fake
+}
+
+func (f *issueLabelFake) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, labelRequest{method: r.Method, path: r.URL.EscapedPath()})
+
+	base := fmt.Sprintf("/repos/owner/repo/issues/%d", labelFakeNumber)
+	path := r.URL.Path
+	switch {
+	case path == base && r.Method == http.MethodGet:
+		body, _ := json.Marshal(map[string]any{
+			"id":         labelFakeNumber * 100,
+			"number":     labelFakeNumber,
+			"title":      "Label fake issue",
+			"state":      "open",
+			"html_url":   "https://github.com/owner/repo/issues/42",
+			"labels":     f.labelNodes(f.labels),
+			"assignees":  []any{},
+			"created_at": "2026-01-01T00:00:00Z",
+			"updated_at": "2026-01-01T00:00:00Z",
+		})
+		w.Write(body) //nolint:errcheck // test helper
+	case path == base+"/labels" && r.Method == http.MethodGet:
+		f.serveLabelList(w, r)
+	case path == base+"/labels" && r.Method == http.MethodPost:
+		var req struct {
+			Labels []string `json:"labels"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &req)
+		f.labels = append(f.labels, req.Labels...)
+		w.Write(f.labelList(f.labels)) //nolint:errcheck // test helper
+	case strings.HasPrefix(path, base+"/labels/") && r.Method == http.MethodDelete:
+		f.serveDelete(w, strings.TrimPrefix(path, base+"/labels/"))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (f *issueLabelFake) labelNodes(labels []string) []map[string]string {
+	nodes := make([]map[string]string, len(labels))
+	for i, name := range labels {
+		nodes[i] = map[string]string{"name": name}
+	}
+	return nodes
+}
+
+func (f *issueLabelFake) labelList(labels []string) []byte {
+	body, _ := json.Marshal(f.labelNodes(labels))
+	return body
+}
+
+func (f *issueLabelFake) serveLabelList(w http.ResponseWriter, r *http.Request) {
+	if f.labelsStatus != 0 {
+		w.WriteHeader(f.labelsStatus)
+		return
+	}
+	if f.pageSize == 0 || f.pageSize >= len(f.labels) {
+		w.Write(f.labelList(f.labels)) //nolint:errcheck // test helper
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	page = max(page, 1)
+	start := (page - 1) * f.pageSize
+	end := min(start+f.pageSize, len(f.labels))
+	if end < len(f.labels) {
+		next := fmt.Sprintf("%s%s?per_page=100&page=%d", f.srv.URL, r.URL.Path, page+1)
+		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
+	}
+	w.Write(f.labelList(f.labels[start:end])) //nolint:errcheck // test helper
+}
+
+func (f *issueLabelFake) serveDelete(w http.ResponseWriter, escaped string) {
+	name, err := url.PathUnescape(escaped)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	remove := func() {
+		f.labels = slices.DeleteFunc(f.labels, func(l string) bool { return l == name })
+	}
+
+	if f.deleteStatus != 0 {
+		if f.applyDelete {
+			remove()
+		}
+		w.WriteHeader(f.deleteStatus)
+		return
+	}
+	if !slices.Contains(f.labels, name) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	remove()
+	w.Write(f.labelList(f.labels)) //nolint:errcheck // test helper
+}
+
+func (f *issueLabelFake) stored() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.labels)
+}
+
+func (f *issueLabelFake) requestLog() []labelRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.requests)
+}
+
+func (f *issueLabelFake) paths(method string) []string {
+	var paths []string
+	for _, r := range f.requestLog() {
+		if r.method == method {
+			paths = append(paths, r.path)
+		}
+	}
+	return paths
+}
+
 func TestAddLabel_Additive(t *testing.T) {
 	t.Parallel()
 
@@ -1525,7 +1674,7 @@ func TestAddLabel_Additive(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("[]")) //nolint:errcheck // test helper
+		w.Write([]byte(`[{"name":"urgent"}]`)) //nolint:errcheck // test helper
 	}))
 	defer srv.Close()
 
@@ -1550,6 +1699,110 @@ func TestAddLabel_Additive(t *testing.T) {
 	before := []string{"existing"}
 	after := append(slices.Clone(before), body.Labels[0])
 	adaptertest.AssertLabelAddIsAdditive(t, before, after, body.Labels[0])
+}
+
+func TestRemoveLabel_DeletesEachStoredSpellingFromEveryPage(t *testing.T) {
+	t.Parallel()
+
+	fake := newIssueLabelFake(t, "backlog", "Needs Human", "ui", "needs human")
+	fake.pageSize = 2
+	a := mustAdapter(t, validConfig(fake.srv.URL))
+
+	err := a.RemoveLabel(context.Background(), "42", "NEEDS HUMAN")
+
+	if err != nil {
+		t.Fatalf("RemoveLabel = %v, want nil", err)
+	}
+	wantPaths := []string{
+		"/repos/owner/repo/issues/42/labels/Needs%20Human",
+		"/repos/owner/repo/issues/42/labels/needs%20human",
+	}
+	if got := fake.paths(http.MethodDelete); !slices.Equal(got, wantPaths) {
+		t.Errorf("DELETE paths = %v, want %v", got, wantPaths)
+	}
+	if got := fake.stored(); !slices.Equal(got, []string{"backlog", "ui"}) {
+		t.Errorf("stored labels = %v, want [backlog ui]", got)
+	}
+}
+
+func TestRemoveLabel_RejectedDeleteIsSettledByRead(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		deleteStatus int
+		labelsStatus int
+		applied      bool
+		wantKind     domain.TrackerErrorKind
+	}{
+		{"not found but label gone", http.StatusNotFound, 0, true, ""},
+		{"validation failed but label gone", http.StatusUnprocessableEntity, 0, true, ""},
+		{"not found and label kept", http.StatusNotFound, 0, false, domain.ErrTrackerNotFound},
+		{"label read not found", 0, http.StatusNotFound, false, domain.ErrTrackerNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newIssueLabelFake(t, "backlog", "urgent")
+			fake.deleteStatus = tt.deleteStatus
+			fake.applyDelete = tt.applied
+			fake.labelsStatus = tt.labelsStatus
+			a := mustAdapter(t, validConfig(fake.srv.URL))
+
+			err := a.RemoveLabel(context.Background(), "42", "urgent")
+
+			if tt.wantKind == "" {
+				if err != nil {
+					t.Fatalf("RemoveLabel = %v, want nil", err)
+				}
+				return
+			}
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
+	}
+}
+
+func TestTransitionIssue_RemovesStateLabelSpellingsAndStillAddsTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		labels       []string
+		deleteStatus int
+		wantDeleted  []string
+	}{
+		{"every case variant", []string{"In-Progress", "in-progress", "UI"}, 0, []string{
+			"/repos/owner/repo/issues/42/labels/In-Progress",
+			"/repos/owner/repo/issues/42/labels/in-progress",
+		}},
+		{"state label already gone", []string{"in-progress"}, http.StatusNotFound, []string{
+			"/repos/owner/repo/issues/42/labels/in-progress",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newIssueLabelFake(t, tt.labels...)
+			fake.deleteStatus = tt.deleteStatus
+			a := mustAdapter(t, validConfig(fake.srv.URL))
+
+			err := a.TransitionIssue(context.Background(), "42", "review")
+
+			if err != nil {
+				t.Fatalf("TransitionIssue = %v, want nil", err)
+			}
+			if got := fake.paths(http.MethodDelete); !slices.Equal(got, tt.wantDeleted) {
+				t.Errorf("DELETE paths = %v, want %v", got, tt.wantDeleted)
+			}
+			if got := fake.paths(http.MethodPost); len(got) != 1 {
+				t.Errorf("POST requests = %d, want 1 (the target label is still added)", len(got))
+			}
+		})
+	}
 }
 
 func TestTransitionIssue_InvalidTargetState(t *testing.T) {
@@ -1826,7 +2079,7 @@ func TestSetMetrics_RecordsAddLabelOperations(t *testing.T) {
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte("[]")) //nolint:errcheck // test helper
+				w.Write([]byte(`[{"name":"urgent"}]`)) //nolint:errcheck // test helper
 			}))
 			defer srv.Close()
 

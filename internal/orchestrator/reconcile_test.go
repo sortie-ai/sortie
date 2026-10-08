@@ -156,6 +156,8 @@ func (m *mockReconcileTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by ReconcileRunningIssues")
 }
 
+func (m *mockReconcileTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // sweepTracker is a test double for [SweepWorkspaces]. Its
 // FetchIssueStatesByIdentifiers records the identifiers it receives and
 // returns the configured statesByKey map and fetchErr. All other methods
@@ -210,6 +212,8 @@ func (s *sweepTracker) CommentIssueWithLiteral(context.Context, string, string, 
 func (s *sweepTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by SweepWorkspaces")
 }
+
+func (s *sweepTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
 
 // panicOnAnySCMAdapter panics on every domain.SCMAdapter method. Used to
 // prove that a terminal-issue release triggers no SCM call of any kind.
