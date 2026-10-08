@@ -168,28 +168,38 @@ func TestRunHistoryCapabilities(t *testing.T) {
 	})
 }
 
-func TestRunHistoryCapabilities_ModelBreakdown(t *testing.T) {
+func TestRunHistoryCapabilities_Breakdowns(t *testing.T) {
 	t.Parallel()
 
 	full := RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true, HasTokens: true, HasTokenMeasurement: true}
 	withSettings := full
 	withSettings.HasConfiguredSettings = true
+	withChains := withSettings
+	withChains.HasStageChains = true
+	chainsWithoutSettings := full
+	chainsWithoutSettings.HasStageChains = true
 	tests := []struct {
-		name string
-		caps RunHistoryCapabilities
-		want bool
+		name      string
+		caps      RunHistoryCapabilities
+		wantModel bool
+		wantChain bool
 	}{
-		{"full tier with configured settings", withSettings, true},
-		{"full tier without configured settings", full, false},
-		{"configured settings without the full tier", RunHistoryCapabilities{HasConfiguredSettings: true}, false},
+		{"full tier with configured settings and stage chains", withChains, true, true},
+		{"full tier with configured settings", withSettings, true, false},
+		{"full tier without configured settings", full, false, false},
+		{"stage chains without configured settings", chainsWithoutSettings, false, false},
+		{"configured settings without the full tier", RunHistoryCapabilities{HasConfiguredSettings: true, HasStageChains: true}, false, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := tt.caps.ModelBreakdown(); got != tt.want {
-				t.Errorf("%+v.ModelBreakdown() = %v, want %v", tt.caps, got, tt.want)
+			if got := tt.caps.ModelBreakdown(); got != tt.wantModel {
+				t.Errorf("%+v.ModelBreakdown() = %v, want %v", tt.caps, got, tt.wantModel)
+			}
+			if got := tt.caps.ChainBreakdown(); got != tt.wantChain {
+				t.Errorf("%+v.ChainBreakdown() = %v, want %v", tt.caps, got, tt.wantChain)
 			}
 		})
 	}
@@ -493,7 +503,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 	})
 }
 
-func TestScanRunHistoryRange_ConfiguredModel(t *testing.T) {
+func TestScanRunHistoryRange_OptionalColumns(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -504,14 +514,19 @@ func TestScanRunHistoryRange_ConfiguredModel(t *testing.T) {
 		{"filled when the model breakdown is available", func(t *testing.T, s *Store) {
 			migrateOrFatal(t, s)
 			row := runAt("with-model", "2026-01-01T00:00:00Z")
-			row.ConfiguredModel = "provider/cheap"
+			row.ConfiguredModel, row.DisplayID = "provider/cheap", "PROJ-1"
+			row.ChainID, row.StagePrevious, row.StageResult = "chain-1", "specify", "advanced"
 			appendOrFatal(t, s, row)
 			appendOrFatal(t, s, runAt("no-model", "2026-01-02T00:00:00Z"))
-		}, []string{"provider/cheap", ""}},
+		}, []string{"provider/cheap|with-model|PROJ-1|chain-1|specify|advanced", "|no-model||||"}},
 		{"left empty without error on a database before migration 021", func(t *testing.T, s *Store) {
 			migrateToVersion(t, s, 20)
 			insertBareRun(t, s, "old")
-		}, []string{""}},
+		}, []string{"|||||"}},
+		{"chain columns left empty without error on a database before migration 024", func(t *testing.T, s *Store) {
+			migrateToVersion(t, s, 23)
+			insertBareRun(t, s, "old")
+		}, []string{"|||||"}},
 		{"a legacy table with only the base columns still scans", createLegacyRunHistoryTable, nil},
 	}
 
@@ -529,12 +544,12 @@ func TestScanRunHistoryRange_ConfiguredModel(t *testing.T) {
 
 			var got []string
 			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
-				got = append(got, row.ConfiguredModel)
+				got = append(got, strings.Join([]string{row.ConfiguredModel, row.Identifier, row.DisplayID, row.ChainID, row.StagePrevious, row.StageResult}, "|"))
 				return nil
 			})
 
 			if err != nil || !slices.Equal(got, tt.want) {
-				t.Errorf("ScanRunHistoryRange ConfiguredModel values, error = %q, %v, want %q, nil", got, err, tt.want)
+				t.Errorf("ScanRunHistoryRange optional column values, error = %q, %v, want %q, nil", got, err, tt.want)
 			}
 		})
 	}

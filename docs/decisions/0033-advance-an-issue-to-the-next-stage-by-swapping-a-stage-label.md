@@ -177,7 +177,7 @@ Every prompt render receives a `stage` object with three fields, present on ever
 
 ### Recording
 
-Each run-history row carries the run's chain identifier, assigned at the first dispatch on a stage that no hop reached and inherited by every run the chain's hops lead to. A run that reached a hop decision also records the target rule and the write result: `advanced`, `partial`, `failed`, or `ceiling`. The orchestrator emits `stage.advanced` for a hop that was made and `stage.not_advanced` for a hop that was due and not made, each carrying the issue, the source rule, the target rule, the chain identifier, the hop count and, for the second, the reason. Both are ordinary events any notification destination may subscribe to; no destination receives them implicitly. `sortie stats` and the dashboard show a run's chain and stage beside its rule.
+Each run-history row carries the run's chain identifier, assigned at the first dispatch that no hop reached, whether or not its rule is a stage, and inherited by every run the chain's hops lead to. A run that reached a hop decision also records the target rule and the write result: `advanced`, `partial`, `failed`, or `ceiling`. The orchestrator emits `stage.advanced` for a hop that was made and `stage.not_advanced` for a hop that was due and not made, each carrying the issue, the source rule, the target rule, the chain identifier, the hop count and, for the second, the reason. Both are ordinary events any notification destination may subscribe to; no destination receives them implicitly. `sortie stats` and the dashboard show a run's chain and stage beside its rule.
 
 ### Examples
 

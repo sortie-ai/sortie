@@ -39,6 +39,8 @@ const (
 	EventEscalationMergeCompletion EventType = "escalation.merge_completion"
 	EventAutoMergeMerged           EventType = "auto_merge.merged"
 	EventBudgetHeld                EventType = "budget.held"
+	EventStageAdvanced             EventType = "stage.advanced"
+	EventStageNotAdvanced          EventType = "stage.not_advanced"
 	EventAgentMessage              EventType = "agent.message"
 )
 
@@ -59,6 +61,8 @@ var eventTypes = []EventType{
 	EventEscalationMergeCompletion,
 	EventAutoMergeMerged,
 	EventBudgetHeld,
+	EventStageAdvanced,
+	EventStageNotAdvanced,
 	EventAgentMessage,
 }
 
@@ -83,7 +87,7 @@ func (t EventType) FromOrchestrator() bool {
 // t, or "" for [EventAgentMessage] and for a value outside the catalog.
 func (t EventType) Severity() string {
 	switch t {
-	case EventTypeSessionStarted, EventSessionCompleted, EventAutoMergeMerged:
+	case EventTypeSessionStarted, EventSessionCompleted, EventAutoMergeMerged, EventStageAdvanced:
 		return "info"
 	case EventSessionStopped,
 		EventSessionFailed,
@@ -93,11 +97,25 @@ func (t EventType) Severity() string {
 		EventEscalationMergeConflicts,
 		EventEscalationAutoMerge,
 		EventEscalationMergeCompletion,
-		EventBudgetHeld:
+		EventBudgetHeld,
+		EventStageNotAdvanced:
 		return "warning"
 	default:
 		return ""
 	}
+}
+
+// StageTransition is the hop decision a stage event reports. The zero value
+// means the notification is not a stage event.
+type StageTransition struct {
+	SourceRule string
+	TargetRule string
+	ChainID    string
+	HopCount   int
+
+	// Reason is "failed" or "ceiling" on [EventStageNotAdvanced] and empty
+	// otherwise.
+	Reason string
 }
 
 // NotificationEnvelope carries system-owned session context.
@@ -135,6 +153,10 @@ type NotificationEnvelope struct {
 
 	// EventType is the catalog entry the notification belongs to.
 	EventType EventType
+
+	// Stage is the hop decision of a stage event and the zero value on
+	// every other event.
+	Stage StageTransition
 }
 
 // NotificationMessage carries the content of a notification: agent-supplied

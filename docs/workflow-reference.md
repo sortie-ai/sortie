@@ -1186,9 +1186,9 @@ A hop is made only where the handoff write would have been taken: not after a bl
 
 **When the hop is not made.** The exit takes the handoff write instead, so the issue lands on `tracker.handoff_state` (or `tracker.no_change_state`) and waits for a person, exactly as a rule without `next`. That happens when:
 
-- the label add fails; the log record `stage hop not made` carries `reason=add_failed`, the `error`, and `missing_stage_labels`, the stage labels the issue carried at dispatch and no longer carries;
-- the issue's hop count has reached `dispatch.max_consecutive_hops`; the record carries `reason=ceiling`;
-- a reload removed `next` from the rule, or removed the rule `next` named.
+- the label add fails; the log record `stage hop not made` carries `reason=add_failed`, the `error`, and `missing_stage_labels`, the stage labels the issue carried at dispatch and no longer carries, and Sortie sends `stage.not_advanced` with reason `failed`;
+- the issue's hop count has reached `dispatch.max_consecutive_hops`; the record carries `reason=ceiling`, and Sortie sends `stage.not_advanced` with reason `ceiling`;
+- a reload removed the run's rule, removed `next` from it, removed the rule `next` named, or removed that rule's `stage`. No hop is due in that case, so Sortie logs nothing and sends nothing, and the issue takes the handoff write.
 
 A failed label removal after a successful add still counts as a hop. The old label stays on the issue, the next stage runs, and Sortie logs a `Warn` record, `stage hop made, stage labels left on the issue`, that names the labels left. Step 1 of the selection picks the new stage over the old label.
 
@@ -1203,6 +1203,8 @@ The count is kept per issue in the database and resets when:
 - a park is placed on the issue, or released.
 
 Each reset logs `stage hop count reset` with the `trigger`. Moving a stage label while the issue stays active does not reset the count, and neither does a failed handoff write, a withheld verdict, a reload, or reaching the ceiling. Reconciliation reads every issue that holds a hop record on each tick, whether or not it is running.
+
+**Recording.** Every run carries a chain identifier, a random value that ties together the runs of one pass through a chain. A run that no hop led to starts a new chain. The run a hop leads to continues the chain of the run that made the hop, and a retry or a restart keeps the chain of the run it continues. The run that reaches a hop decision also records the rule the hop targeted and the result: `advanced`, `partial` (the label was added but an old stage label was not removed), `failed` (the label add failed), or `ceiling`. A run recorded before the upgrade has no chain and no result. Sortie sends `stage.advanced` when a hop is made, `advanced` or `partial`, and `stage.not_advanced` when a due hop is not made, with the reason; both reach only the notification entries that list them ([Event catalog](#event-catalog)). `sortie stats` groups the runs by stage chain, listing only the chains in which a hop was due or made, and the dashboard's run history shows the rule, chain, and stage path of the runs in those chains.
 
 **The `stage` object.** Every prompt render carries `stage` with `stage.current`, `stage.previous`, and `stage.previous_outcome`, so a template can tell what the earlier stage was and read what it left in the workspace. See [Section 5.2](#52-template-input-variables).
 
@@ -1334,7 +1336,7 @@ dispatch:
         effort: max           # model inherited from the top-level block
 ```
 
-Issues with neither label run on the top-level block. `sortie stats` groups the runs by rule and by configured model.
+Issues with neither label run on the top-level block. `sortie stats` groups the runs by rule, by configured model, and by stage chain.
 
 Two work profiles on two kinds fit in one workflow. A rule that introduces a kind other than `agent.kind` and carries that kind's block needs no top-level block for it:
 
@@ -1471,6 +1473,8 @@ The catalog is closed. Validation accepts exactly these names and rejects any ot
 | `escalation.ci_failure`, `escalation.review_comments`, `escalation.bot_review`, `escalation.merge_conflicts`, `escalation.auto_merge`, `escalation.merge_completion` | The matching reaction ([Section 2.9](#29-reactions--reaction-based-feedback-loops)) hands its subject to a person, under any `escalation` value. | `warning` |
 | `auto_merge.merged` | The auto-merge reaction merges a pull request. | `info` |
 | `budget.held` | An issue is held out of dispatch by `agent.max_sessions` or `agent.max_tokens`. | `warning` |
+| `stage.advanced` | A stage hop is made: the issue moves to the next stage, even when removing an old stage label failed ([Stage chains](#stage-chains)). | `info` |
+| `stage.not_advanced` | A stage hop is due and not made, because the label add failed or the hop ceiling is reached. The event carries the reason, `failed` or `ceiling`. | `warning` |
 | `agent.message` | The agent calls `notify_operator`. | Set by the agent. |
 
 A run cancelled by Sortie produces no session event. Sortie never counts its own events against `max_per_session`, and an agent that has used its cap never suppresses one.
@@ -1584,6 +1588,7 @@ The `webhook` backend posts a JSON object whose keys use the generic notifier vo
 | `category` | string | Optional: `decision_needed`, `progress`, `blocked`, `completed`, or `other`. Absent when the agent did not set it. |
 | `event_type` | string | The event type from the catalog above. Present only on an event Sortie produces. An `agent.message` payload carries exactly the keys above and no `event_type`, so an endpoint configured before this key existed receives the same JSON as before. |
 | `agent_text` | string | The agent's reason for stopping, after the cleanup described in [The agent's reason on a stop](#the-agents-reason-on-a-stop). Present only on a `session.stopped` event whose agent wrote a reason, and never inside `body`. |
+| `stage` | object | The hop decision, with the keys `source_rule`, `target_rule`, `chain_id`, `hop_count`, and, on `stage.not_advanced` only, `reason`. Present only on a `stage.advanced` or `stage.not_advanced` event. |
 
 **`SORTIE_`-prefixed secret rule:**
 

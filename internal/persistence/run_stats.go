@@ -22,6 +22,10 @@ type RunHistoryCapabilities struct {
 	// HasConfiguredSettings is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.ModelBreakdown] depends on it.
 	HasConfiguredSettings bool
+
+	// HasStageChains is outside [RunHistoryCapabilities.Full];
+	// [RunHistoryCapabilities.ChainBreakdown] depends on it.
+	HasStageChains bool
 }
 
 // Full reports whether the database carries every optional run_history
@@ -38,6 +42,12 @@ func (c RunHistoryCapabilities) Full() bool {
 // model: Full plus the configured-settings columns.
 func (c RunHistoryCapabilities) ModelBreakdown() bool {
 	return c.Full() && c.HasConfiguredSettings
+}
+
+// ChainBreakdown reports whether a read can group runs by stage chain:
+// ModelBreakdown plus the stage-chain columns.
+func (c RunHistoryCapabilities) ChainBreakdown() bool {
+	return c.ModelBreakdown() && c.HasStageChains
 }
 
 // RunStatsRow is the narrow run_history projection the aggregate read
@@ -61,6 +71,14 @@ type RunStatsRow struct {
 	// ConfiguredModel is empty when the run named none or
 	// [RunHistoryCapabilities.ModelBreakdown] reports false.
 	ConfiguredModel string
+
+	// Each is empty unless [RunHistoryCapabilities.ChainBreakdown] reports
+	// true.
+	Identifier    string
+	DisplayID     string
+	ChainID       string
+	StagePrevious string
+	StageResult   string
 }
 
 // runStatsColumnsFull is the column list when Full reports true and
@@ -122,6 +140,7 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 		HasCacheWriteTokens: columns["cache_write_tokens"],
 		HasConfiguredSettings: columns["configured_model"] && columns["configured_effort"] &&
 			columns["reported_model"],
+		HasStageChains: columns["chain_id"] && columns["stage_target"] && columns["stage_result"],
 	}, nil
 }
 
@@ -147,6 +166,7 @@ func (s *Store) ScanRunHistoryRange(
 ) error {
 	full := caps.Full()
 	breakdown := caps.ModelBreakdown()
+	chains := caps.ChainBreakdown()
 	query := runStatsColumnsBase
 	switch {
 	case full && caps.HasCacheWriteTokens:
@@ -156,6 +176,9 @@ func (s *Store) ScanRunHistoryRange(
 	}
 	if breakdown {
 		query += ", configured_model"
+	}
+	if chains {
+		query += ", identifier, display_identifier, chain_id, stage_previous, stage_result"
 	}
 	query += "\nFROM run_history"
 
@@ -183,7 +206,7 @@ func (s *Store) ScanRunHistoryRange(
 
 	for rows.Next() {
 		var row RunStatsRow
-		var reviewMeta sql.NullString
+		var reviewMeta, displayID sql.NullString
 		var dest []any
 		switch {
 		case full && caps.HasCacheWriteTokens:
@@ -205,12 +228,16 @@ func (s *Store) ScanRunHistoryRange(
 		if breakdown {
 			dest = append(dest, &row.ConfiguredModel)
 		}
+		if chains {
+			dest = append(dest, &row.Identifier, &displayID, &row.ChainID, &row.StagePrevious, &row.StageResult)
+		}
 		if err := rows.Scan(dest...); err != nil {
 			return fmt.Errorf("scan run history range: %w", err)
 		}
 		if reviewMeta.Valid {
 			row.ReviewMetadata = new(reviewMeta.String)
 		}
+		row.DisplayID = displayID.String
 
 		if err := visit(row); err != nil {
 			return err

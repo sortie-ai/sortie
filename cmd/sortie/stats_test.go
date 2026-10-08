@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -397,7 +398,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		if report.Summary.CostUSD == nil || *report.Summary.CostUSD != 30 {
 			t.Fatalf("Summary.CostUSD = %v, want 30", report.Summary.CostUSD)
 		}
-		if footnotes := statsFootnotes(report.Summary); len(footnotes) != 0 {
+		if footnotes := statsFootnotes(report.Summary, 0); len(footnotes) != 0 {
 			t.Errorf("statsFootnotes = %v, want none", footnotes)
 		}
 	})
@@ -419,7 +420,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		if report.Summary.CostUSD == nil || *report.Summary.CostUSD != 10 {
 			t.Fatalf("Summary.CostUSD = %v, want 10 (priced row only)", report.Summary.CostUSD)
 		}
-		footnotes := statsFootnotes(report.Summary)
+		footnotes := statsFootnotes(report.Summary, 0)
 		found := slices.ContainsFunc(footnotes, func(f string) bool {
 			return strings.Contains(f, "the cost figures skip 1 of these runs")
 		})
@@ -446,7 +447,7 @@ func TestStatsCostDerivation(t *testing.T) {
 			t.Errorf("Summary.CostUSD = %v, want nil (the only entry prices nothing)", *report.Summary.CostUSD)
 		}
 
-		footnotes := statsFootnotes(report.Summary)
+		footnotes := statsFootnotes(report.Summary, 0)
 		found := slices.ContainsFunc(footnotes, func(f string) bool {
 			return strings.Contains(f, "the cost figures skip 1 of these runs")
 		})
@@ -482,7 +483,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		if report.Summary.CostUnpricedRuns != 0 {
 			t.Errorf("Summary.CostUnpricedRuns = %d, want 0 even though the range holds rows", report.Summary.CostUnpricedRuns)
 		}
-		if footnotes := statsFootnotes(report.Summary); len(footnotes) != 0 {
+		if footnotes := statsFootnotes(report.Summary, 0); len(footnotes) != 0 {
 			t.Errorf("statsFootnotes = %v, want none (the cost column is already dropped)", footnotes)
 		}
 
@@ -705,7 +706,7 @@ func TestStatsTokenReporting(t *testing.T) {
 			CostUnpricedRuns:     1,
 		}
 
-		notes := statsFootnotes(summary)
+		notes := statsFootnotes(summary, 0)
 		if len(notes) != 4 {
 			t.Fatalf("statsFootnotes(%+v) = %v, want 4 lines", summary, notes)
 		}
@@ -917,9 +918,9 @@ func TestRunStatsJSON(t *testing.T) {
 	if report.Summary.Runs != 2 {
 		t.Errorf("Summary.Runs = %d, want 2", report.Summary.Runs)
 	}
-	if report.ByStatus == nil || report.ByAdapter == nil || report.ByRule == nil || report.ByTemplate == nil || report.Warnings == nil {
-		t.Errorf("report slices must never be nil: ByStatus=%v ByAdapter=%v ByRule=%v ByTemplate=%v Warnings=%v",
-			report.ByStatus, report.ByAdapter, report.ByRule, report.ByTemplate, report.Warnings)
+	if report.ByStatus == nil || report.ByAdapter == nil || report.ByRule == nil || report.ByTemplate == nil || report.ByChain == nil || report.Warnings == nil {
+		t.Errorf("report slices must never be nil: ByStatus=%v ByAdapter=%v ByRule=%v ByTemplate=%v ByChain=%v Warnings=%v",
+			report.ByStatus, report.ByAdapter, report.ByRule, report.ByTemplate, report.ByChain, report.Warnings)
 	}
 	if !strings.Contains(stdout1.String(), `"warnings":[]`) {
 		t.Errorf("stdout = %q, want %q", stdout1.String(), `"warnings":[]`)
@@ -1167,6 +1168,17 @@ func TestDegradedSchemaWarning(t *testing.T) {
 				"also leaves out turns, self-review results, dispatch-rule routing, tokens and cost, which this database does carry",
 			},
 			absent: []string{"tokens_measured", "run_history"},
+		},
+		{
+			name: "configured model group is listed as unrecorded when absent",
+			caps: persistence.RunHistoryCapabilities{},
+			want: []string{"before sortie recorded", "the model each run was configured with"},
+		},
+		{
+			name:   "configured model group is listed among the carried ones when present",
+			caps:   persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasConfiguredSettings: true},
+			want:   []string{"the model each run was configured with, which this database does carry"},
+			absent: []string{"before sortie recorded turns"},
 		},
 	}
 
@@ -1576,8 +1588,71 @@ func TestStatsByModel_WithoutTheBreakdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
-	if !strings.Contains(string(data), `"by_model":[]`) || strings.Contains(renderText(report), "by configured model") {
-		t.Errorf("JSON = %s, text = %s, want by_model as an empty list, never null, and no by configured model table", data, renderText(report))
+	if !strings.Contains(string(data), `"by_model":[]`) || !strings.Contains(string(data), `"by_chain":[]`) || strings.Contains(renderText(report), "by configured model") {
+		t.Errorf("JSON = %s, text = %s, want by_model and by_chain as empty lists, never null, and no by configured model table", data, renderText(report))
+	}
+}
+
+func chainRow(chain, rule, previous, result, status string) persistence.RunStatsRow {
+	row := modelRow("claude-code", "model-a", status, 1_000)
+	row.Identifier, row.ChainID, row.RuleName, row.StagePrevious, row.StageResult = "PROJ-"+chain, chain, rule, previous, result
+	row.TurnsCompleted = 2
+	return row
+}
+
+func TestStatsByChain(t *testing.T) {
+	t.Parallel()
+
+	caps := withModelBreakdown(fullCaps)
+	caps.HasStageChains = true
+	last := chainRow("chain-a", "", "plan", "ceiling", "failed")
+	last.DisplayID = "owner/repo#1"
+	agg := newStatsAggregator(caps, nil)
+	addRows(t, agg,
+		chainRow("chain-a", "specify", "", "advanced", "succeeded"),
+		chainRow("chain-b", "solo", "", "", "succeeded"),
+		chainRow("chain-a", "plan", "specify", "", "succeeded"),
+		chainRow("chain-c", "specify", "", "", "succeeded"),
+		chainRow("chain-a", "plan", "specify", "", "failed"),
+		chainRow("chain-b", "solo", "", "failed", "failed"),
+		chainRow("", "plan", "specify", "advanced", "succeeded"),
+		last,
+	)
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+	if len(report.ByChain) != 2 {
+		t.Fatalf("by_chain = %+v, want chain-a and chain-b only: a row without a chain and a chain without a hop stay out", report.ByChain)
+	}
+	a, b := report.ByChain[0], report.ByChain[1]
+	if a.Name != "chain-a" || a.Runs != 4 || a.Issue != "owner/repo#1" || !slices.Equal(a.Stages, []string{"specify", "plan"}) || a.LastHop != "ceiling" {
+		t.Errorf("by_chain[0] name, runs, issue, stages, last_hop = %q, %d, %q, %v, %q, want %q, 4, %q, [specify plan], %q", a.Name, a.Runs, a.Issue, a.Stages, a.LastHop, "chain-a", "owner/repo#1", "ceiling")
+	}
+	if b.Name != "chain-b" || b.Issue != "PROJ-chain-b" || b.LastHop != "failed" {
+		t.Errorf("by_chain[1] name, issue, last_hop = %q, %q, %q, want %q, %q, %q", b.Name, b.Issue, b.LastHop, "chain-b", "PROJ-chain-b", "failed")
+	}
+	solo := findGroup(t, report.ByRule, "solo")
+	solo.Name = "chain-b"
+	if !reflect.DeepEqual(b.statsGroup, solo) {
+		t.Errorf("by_chain[1] figures = %+v, want the by_rule figures of the same rows: %+v", b.statsGroup, solo)
+	}
+}
+
+func TestStatsByChain_TextListsTheBusiestChainsOnly(t *testing.T) {
+	t.Parallel()
+
+	caps := withModelBreakdown(fullCaps)
+	caps.HasStageChains = true
+	agg := newStatsAggregator(caps, nil)
+	for i := range statsChainTextRows + 1 {
+		addRows(t, agg, chainRow(fmt.Sprintf("chain-%02d", i), "specify", "", "advanced", "succeeded"))
+	}
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+	out := renderText(report)
+	if len(report.ByChain) != statsChainTextRows+1 || strings.Count(out, "\n  chain-") != statsChainTextRows || strings.Contains(out, "chain-20") || !strings.Contains(out, "21") {
+		t.Errorf("by_chain entries, text chain rows = %d, %d, want %d and %d, with the omitted chain-20 unprinted and the total 21 named in a note", len(report.ByChain), strings.Count(out, "\n  chain-"), statsChainTextRows+1, statsChainTextRows)
 	}
 }
 
@@ -1622,33 +1697,5 @@ func TestRunStatsByModelAgainstDatabases(t *testing.T) {
 				t.Errorf("ByModel, Warnings = %#v, %q, want %d groups (non-nil) and the configured-model warning present: %v", report.ByModel, report.Warnings, len(tt.wantRuns), tt.wantWarning)
 			}
 		})
-	}
-}
-
-func TestDegradedSchemaWarning_NamesTheConfiguredModelGroup(t *testing.T) {
-	t.Parallel()
-
-	const group = "the model each run was configured with"
-
-	without := degradedSchemaWarning(persistence.RunHistoryCapabilities{})
-	with := degradedSchemaWarning(persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasConfiguredSettings: true})
-
-	if !strings.Contains(without, "before sortie recorded") || !strings.Contains(without, group) {
-		t.Errorf("degradedSchemaWarning(no columns) = %q, want the group listed as unrecorded", without)
-	}
-	if strings.Contains(with, "before sortie recorded turns") || !strings.Contains(with, group+", which this database does carry") {
-		t.Errorf("degradedSchemaWarning(with configured settings) = %q, want the group listed among those the database does carry", with)
-	}
-}
-
-func TestPrintStatsHelp_NamesTheModelBreakdown(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-
-	printStatsHelp(&out)
-
-	if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), "by the model each run was configured with") {
-		t.Errorf("stats help = %q, want it to name the breakdown by configured model", out.String())
 	}
 }

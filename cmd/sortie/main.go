@@ -894,6 +894,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 						CompletedAt:    r.CompletedAt,
 						Error:          r.Error,
 						TurnsCompleted: r.TurnsCompleted,
+						RuleName:       r.RuleName,
+						ChainID:        r.ChainID,
+						StagePrevious:  r.StagePrevious,
+						StageTarget:    r.StageTarget,
+						StageResult:    r.StageResult,
 					}
 				}
 				return out, nil

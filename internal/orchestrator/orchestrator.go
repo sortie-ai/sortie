@@ -69,6 +69,7 @@ type OrchestratorStore interface {
 	MarkStageHopObserved(ctx context.Context, issueID string) error
 	DeleteStageHop(ctx context.Context, issueID string) error
 	ListStageHops(ctx context.Context) ([]persistence.StageHop, error)
+	RecordRunStageResult(ctx context.Context, runID int64, targetRule, result string) error
 }
 
 var _ OrchestratorStore = (*persistence.Store)(nil)
@@ -897,11 +898,11 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if seed != nil {
 			dispatchCtx = WithContinuationContext(ctx, seed)
 		}
-		previous := freshPrevious(o.state, issue.ID, resolution.RuleName)
+		lineage := withChainID(freshLineage(o.state, issue.ID, resolution.RuleName))
 		dispatchCtx = withStageRender(dispatchCtx, prompt.StageContext{
 			Current:         stageCurrent(cfg.Dispatch, resolution.RuleName),
-			Previous:        previous.Rule,
-			PreviousOutcome: previous.Outcome,
+			Previous:        lineage.PreviousRule,
+			PreviousOutcome: lineage.PreviousOutcome,
 		})
 		DispatchIssue(dispatchCtx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, attemptSettings))
 		if entry := o.state.Running[issue.ID]; entry != nil {
@@ -909,7 +910,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
-			entry.StagePrevious = previous
+			entry.StageLineage = lineage
 			entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 			entry.ConfiguredModel = attemptSettings.Settings.Model
 			entry.ConfiguredEffort = attemptSettings.Settings.Effort

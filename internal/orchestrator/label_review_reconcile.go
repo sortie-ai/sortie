@@ -187,7 +187,7 @@ func reconcileLabelReviewCommands(state *State, params ReconcileParams, log *slo
 				ReactionKind:        ReactionKindLabelReview,
 				AgentKind:           pending.AgentKind,
 				RuleName:            pending.RuleName,
-				StagePrevious:       pending.StagePrevious,
+				StageLineage:        pending.StageLineage,
 				RuleSettingsApplied: pending.RuleSettingsApplied,
 				TemplateID:          pending.TemplateID,
 				Logger:              entryLog,

@@ -3828,3 +3828,7 @@ func (s *reviewReconcileStore) DeleteStageHop(context.Context, string) error { r
 func (s *reviewReconcileStore) RecordStageHop(context.Context, persistence.StageHop) error {
 	return nil
 }
+
+func (s *reviewReconcileStore) RecordRunStageResult(context.Context, int64, string, string) error {
+	return nil
+}

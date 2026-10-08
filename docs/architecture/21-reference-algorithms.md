@@ -286,7 +286,10 @@ function dispatch_issue(issue, state, attempt):
     issue, state.dispatch_cfg, hop_route_of(state, issue.id),
     state.default_agent_kind, state.default_template_id
   )
-  stage_previous = fresh_previous(state, issue.id, rule_name)
+  // The lineage holds the stage.previous pair and the chain identifier. A
+  // dispatch no hop reached starts a chain; a retry passes the lineage it
+  // froze instead (Section 16.6).
+  stage_lineage = with_chain_id(fresh_lineage(state, issue.id, rule_name))
 
   // The selection is frozen per claim; the settings are resolved for every attempt.
   attempt_settings = resolve_attempt_settings(state.cfg, (agent_kind, rule_name), ssh_host)
@@ -313,7 +316,7 @@ function dispatch_issue(issue, state, attempt):
     agent_kind,
     template_id,
     rule_name,
-    stage_previous,
+    stage_lineage,
     rule_settings_applied: attempt_settings.settings.rule_name != "",
     configured_model: attempt_settings.settings.model,
     configured_effort: attempt_settings.settings.effort,
@@ -404,7 +407,7 @@ function mark_observed(state, issue_id):
   persist_stage_hop_observed(issue_id)                   // a failure is logged; the runtime value stands
 ```
 
-The hold reads at most once per hop and only when the listing lacks the target label. A held issue the listing omits is never read here; reconciliation reads it every tick (§16.3). The retry lane needs no hold, because a made hop leaves the issue with no queued retry. The dispatch records the frozen stage pair the render reads: `fresh_previous(state, issue_id, rule_name)` returns the hop's source rule and outcome when the issue holds a hop record whose target is `rule_name`, and an empty pair otherwise. A retry that keeps its frozen rule reuses the pair it froze; a retry routed afresh computes it as a poll tick does. Every worker prompt render passes the pair with `stage.current`, which is the rule name when the rule carries a stage label and empty otherwise (§12.1).
+The hold reads at most once per hop and only when the listing lacks the target label. A held issue the listing omits is never read here; reconciliation reads it every tick (§16.3). The retry lane needs no hold, because a made hop leaves the issue with no queued retry. The dispatch records the frozen stage lineage the render reads: `fresh_lineage(state, issue_id, rule_name)` returns the hop's source rule, outcome, and chain identifier when the issue holds a hop record whose target is `rule_name`, and an empty lineage otherwise, and `with_chain_id(lineage)` fills an empty chain identifier with a fresh random value that is never a dispatch or session identifier. A retry that keeps its frozen rule reuses the lineage it froze, an empty chain from a row written before chains were recorded included; a retry routed afresh computes it as a poll tick does. Every worker prompt render passes the pair with `stage.current`, which is the rule name when the rule carries a stage label and empty otherwise (§12.1).
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
@@ -796,7 +799,11 @@ on_worker_exit(issue_id, reason, worker_result, state):
       if verification.terminal:
         reset_stage_hop(state, issue_id, "terminal")
       else:
-        stage_hop_made = advance_stage(state, running_entry, worker_result, declared)
+        hop = advance_stage(state, running_entry, worker_result, declared)
+        if hop.result != "":
+          // run_id is the id of the row this exit appended; it is 0 when the append failed
+          report_stage_hop(state, running_entry, run_id, hop)
+        stage_hop_made = hop.made
 
       if stage_hop_made:
         # The hop released the retry, the reactions, and the claim, and
@@ -927,31 +934,32 @@ on_worker_exit(issue_id, reason, worker_result, state):
 A made hop replaces the handoff write. The hop runs on the event loop, synchronously, like the write it replaces:
 
 ```text
-function advance_stage(state, entry, result, declared) -> made:
+function advance_stage(state, entry, result, declared) -> decision:
   source = cfg.dispatch.rule_named(entry.rule_name)
   if source is absent or source.next is empty:
-    return false                                       // no next, or a reload removed it
+    return no_decision                                 // no next, or a reload removed it
   target = cfg.dispatch.rule_named(source.next)
   if target is absent or target.stage is empty:
-    return false
+    return no_decision                                 // no hop due: no warning, no result, no event
 
   count = state.stage_hops[issue_id].count, or 0
   ceiling = cfg.dispatch.max_consecutive_hops
   if count + 1 > ceiling:
     log_warn("stage hop not made", reason="ceiling")
-    return false                                       // the handoff write follows
+    return decision("ceiling", source, target, entry.stage_lineage.chain_id, hop_count=count)   // the handoff write follows
 
   err = tracker.add_label(issue_id, target.stage)
   if err:
     missing = stage_labels_the_dispatch_read_showed_and_a_fresh_read_lacks(entry)
     log_warn("stage hop not made", reason="add_failed", missing)
-    return false                                       // the handoff write follows
+    return decision("failed", source, target, entry.stage_lineage.chain_id, hop_count=count)    // the handoff write follows
 
   state.stage_hops[issue_id] = {
     count: count + 1, source_rule: source.name, target_rule: target.name,
     target_label: target.stage,
     previous_outcome: "no_change" if declared else "succeeded",
-    source_dispatch_id: entry.dispatch_id, target_observed: false
+    source_dispatch_id: entry.dispatch_id, target_observed: false,
+    chain_id: entry.stage_lineage.chain_id
   }
   persist_stage_hop(state.stage_hops[issue_id])        // a failure is logged; the runtime record stands
 
@@ -968,10 +976,19 @@ function advance_stage(state, entry, result, declared) -> made:
     if err: left.append(label)
   if left is empty:
     log_info("stage hop made")
-  else:
-    log_warn("stage hop made, stage labels left on the issue", left)
-  return true
+    return decision("advanced", source, target, entry.stage_lineage.chain_id, hop_count=count + 1)
+  log_warn("stage hop made, stage labels left on the issue", left)
+  return decision("partial", source, target, entry.stage_lineage.chain_id, hop_count=count + 1)
+
+function report_stage_hop(state, entry, run_id, hop):
+  if run_id > 0 and record_run_stage_result(run_id, hop.target_rule, hop.result) fails:
+    log_error("failed to persist stage hop result")    // the row keeps empty decision fields; the hop stands
+  type = "stage.advanced" if hop.made else "stage.not_advanced"
+  event = stage_event(type, entry, hop)                // reason is hop.result on stage.not_advanced only
+  deliver_detached(route(event))                       // on a failed tracker_comment send: log_warn("stage event comment failed")
 ```
+
+`advance_stage` returns a decision whose result is `advanced`, `partial`, `failed`, `ceiling`, or empty when no hop was due, and `made` holds for `advanced` and `partial`. The exit calls `report_stage_hop` for every non-empty result: for a hop not made it records the result and routes the event before the handoff write, and for a made hop after the label removals.
 
 The hop leaves the issue in its active tracker state with the target's stage label added and the source's label removed, does not increment `sortie_handoff_transitions_total`, and writes no state; the next dispatch performs the in-progress transition like any dispatch. A run that never reaches the handoff arm (a blocked soft stop, a terminal exit, a withheld verdict, an abnormal exit, a label-command dispatch, or an unset handoff state) never reaches `advance_stage`.
 
@@ -1005,6 +1022,10 @@ on_retry_timer(issue_id, state):
   selection = retry_selection(state.cfg, template_held, frozen, issue, hop_route_of(state, issue_id))
   if selection != frozen:
     log_info("retry dispatching on the selection the configuration in force gives it")
+  lineage = retry_entry.stage_lineage
+  if selection.rule_name != frozen.rule_name:
+    lineage = fresh_lineage(state, issue_id, selection.rule_name)
+  lineage = with_chain_id(lineage)                     // an empty carried chain is replaced
   resume_session_id = retry_entry.session_id
   if selection.agent_kind != frozen.agent_kind or selection.template_id != frozen.template_id:
     resume_session_id = null
@@ -1028,7 +1049,8 @@ on_retry_timer(issue_id, state):
     log_info("rule settings no longer present, attempt runs on the kind's top-level settings")
 
   return dispatch_issue(issue, state, attempt=retry_entry.attempt,
-    resume_session_id=resume_session_id, selection=selection, attempt_settings=attempt_settings)
+    resume_session_id=resume_session_id, selection=selection, attempt_settings=attempt_settings,
+    stage_lineage=lineage)
 ```
 
 A changed settings result never clears `resume_session_id`; only a changed kind or template does.

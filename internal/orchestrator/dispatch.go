@@ -555,9 +555,9 @@ type ScheduleRetryParams struct {
 	// into the new [RetryEntry].
 	RuleName string
 
-	// StagePrevious is the frozen stage.previous pair of the dispatch.
+	// StageLineage is the frozen stage lineage of the dispatch.
 	// Propagated verbatim into the new [RetryEntry].
-	StagePrevious StagePrevious
+	StageLineage StageLineage
 
 	// RuleSettingsApplied reports that the dispatch ran with its rule's
 	// settings block. Propagated into the new [RetryEntry].
@@ -632,7 +632,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		ContinuationContext: params.ContinuationContext,
 		ReactionKind:        params.ReactionKind,
 		RuleName:            params.RuleName,
-		StagePrevious:       params.StagePrevious,
+		StageLineage:        params.StageLineage,
 		RuleSettingsApplied: params.RuleSettingsApplied,
 		TemplateID:          params.TemplateID,
 		AgentKind:           params.AgentKind,

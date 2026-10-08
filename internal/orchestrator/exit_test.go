@@ -34,6 +34,7 @@ type mockExitStore struct {
 	deletedRetryIDs []string
 
 	recordedStageHops []persistence.StageHop
+	stageResults      []recordedStageResult
 
 	// absenceResetAt maps an issue ID to the run-history watermark at
 	// which its absence sequence was last reset.
@@ -54,6 +55,12 @@ type mockExitStore struct {
 	deleteRetryEntryErr       error
 	absenceCountErr           error
 	absenceResetErr           error
+}
+
+type recordedStageResult struct {
+	runID      int64
+	targetRule string
+	result     string
 }
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
@@ -10009,6 +10016,11 @@ func TestHandleWorkerExit_RecordsPresentedCommentsOnlyOnNormalExit(t *testing.T)
 
 func (m *mockExitStore) DeleteStageHop(context.Context, string) error { return nil }
 
+func (m *mockExitStore) RecordRunStageResult(_ context.Context, runID int64, targetRule, result string) error {
+	m.stageResults = append(m.stageResults, recordedStageResult{runID: runID, targetRule: targetRule, result: result})
+	return nil
+}
+
 func (m *mockExitStore) RecordStageHop(_ context.Context, hop persistence.StageHop) error {
 	m.recordedStageHops = append(m.recordedStageHops, hop)
 	return nil
@@ -10019,13 +10031,15 @@ const (
 	hopExitHandoff     = "Human Review"
 	hopExitSourceLabel = "stage-specify"
 	hopExitTargetLabel = "stage-implement"
+	hopExitChain       = "chain-1"
 )
 
 type hopExitTracker struct {
 	*mockTrackerAdapter
-	added   []string
-	removed []string
-	addErr  error
+	added     []string
+	removed   []string
+	addErr    error
+	removeErr error
 }
 
 func (h *hopExitTracker) AddLabel(_ context.Context, _, label string) error {
@@ -10035,7 +10049,7 @@ func (h *hopExitTracker) AddLabel(_ context.Context, _, label string) error {
 
 func (h *hopExitTracker) RemoveLabel(_ context.Context, _, label string) error {
 	h.removed = append(h.removed, label)
-	return nil
+	return h.removeErr
 }
 
 type hopExitFixture struct {
@@ -10044,6 +10058,14 @@ type hopExitFixture struct {
 	tracker *hopExitTracker
 	params  HandleWorkerExitParams
 	result  WorkerResult
+	slack   *notifierSpy
+
+	resultsAtHandoff int
+}
+
+type routedStage struct {
+	eventType domain.EventType
+	stage     domain.StageTransition
 }
 
 func newHopExitFixture(t *testing.T) *hopExitFixture {
@@ -10055,6 +10077,7 @@ func newHopExitFixture(t *testing.T) *hopExitFixture {
 	state := exitStateWithIssue(t, hopExitIssueID, "In Progress")
 	entry := state.Running[hopExitIssueID]
 	entry.RuleName = "specify"
+	entry.StageLineage.ChainID = hopExitChain
 	entry.Issue.Labels = []string{"feature", hopExitSourceLabel}
 	t.Cleanup(func() { stopRetryTimer(state, hopExitIssueID) })
 
@@ -10070,13 +10093,38 @@ func newHopExitFixture(t *testing.T) *hopExitFixture {
 		},
 		MaxConsecutiveHops: 3,
 	}
+	slack := &notifierSpy{}
+	params.Router = mustRouter(t, tracker, spyLookup(slack), route.Inputs{
+		Entries: []config.NotificationBackend{subscribe("slack", domain.EventStageAdvanced, domain.EventStageNotAdvanced)},
+	})
 
-	return &hopExitFixture{
+	f := &hopExitFixture{
 		state:   state,
 		store:   store,
 		tracker: tracker,
 		params:  params,
 		result:  WorkerResult{IssueID: hopExitIssueID, Identifier: "HOP-1-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock"},
+		slack:   slack,
+	}
+	tracker.transitionIssueFn = func(context.Context, string, string) error {
+		f.resultsAtHandoff = len(store.stageResults)
+		return nil
+	}
+	return f
+}
+
+func (f *hopExitFixture) assertDecision(t *testing.T, wantResults []recordedStageResult, wantRouted []routedStage) {
+	t.Helper()
+
+	if !slices.Equal(f.store.stageResults, wantResults) {
+		t.Errorf("RecordRunStageResult calls = %+v, want %+v", f.store.stageResults, wantResults)
+	}
+	var routed []routedStage
+	for _, n := range f.slack.notifications() {
+		routed = append(routed, routedStage{n.Envelope.EventType, n.Envelope.Stage})
+	}
+	if !slices.Equal(routed, wantRouted) {
+		t.Errorf("routed stage events = %+v, want %+v", routed, wantRouted)
 	}
 }
 
@@ -10088,12 +10136,28 @@ func (f *hopExitFixture) exit() {
 func TestHandleWorkerExit_StageHopOnlyForSuccessfulRun(t *testing.T) {
 	t.Parallel()
 
+	advanced := routedStage{domain.EventStageAdvanced, domain.StageTransition{SourceRule: "specify", TargetRule: "implement", ChainID: hopExitChain, HopCount: 1}}
 	tests := []struct {
-		name    string
-		setup   func(f *hopExitFixture)
-		wantHop bool
+		name        string
+		setup       func(f *hopExitFixture)
+		wantHop     bool
+		wantResults []recordedStageResult
+		wantRouted  []routedStage
 	}{
-		{name: "successful run", wantHop: true},
+		{
+			name: "successful run", wantHop: true,
+			wantResults: []recordedStageResult{{1, "implement", "advanced"}}, wantRouted: []routedStage{advanced},
+		},
+		{
+			name: "successful run whose label removal fails", wantHop: true,
+			setup:       func(f *hopExitFixture) { f.tracker.removeErr = errors.New("remove refused") },
+			wantResults: []recordedStageResult{{1, "implement", "partial"}}, wantRouted: []routedStage{advanced},
+		},
+		{
+			name: "successful run whose history append fails", wantHop: true,
+			setup:      func(f *hopExitFixture) { f.store.appendRunHistoryErr = errors.New("disk full") },
+			wantRouted: []routedStage{advanced},
+		},
 		{name: "failed run", setup: func(f *hopExitFixture) {
 			f.result.ExitKind = WorkerExitError
 			f.result.Error = errors.New("agent crashed")
@@ -10116,6 +10180,10 @@ func TestHandleWorkerExit_StageHopOnlyForSuccessfulRun(t *testing.T) {
 
 			f.exit()
 
+			f.assertDecision(t, tt.wantResults, tt.wantRouted)
+			if len(f.store.runHistories) != 1 || f.store.runHistories[0].ChainID != hopExitChain {
+				t.Errorf("AppendRunHistory rows = %+v, want one carrying ChainID %q", f.store.runHistories, hopExitChain)
+			}
 			if !tt.wantHop {
 				if len(f.tracker.added) != 0 || len(f.tracker.removed) != 0 || len(f.state.StageHops) != 0 {
 					t.Errorf("AddLabel, RemoveLabel, StageHops = %q, %q, %v, want no hop", f.tracker.added, f.tracker.removed, f.state.StageHops)
@@ -10131,11 +10199,11 @@ func TestHandleWorkerExit_StageHopOnlyForSuccessfulRun(t *testing.T) {
 			if len(f.tracker.transitionCalls) != 0 {
 				t.Errorf("TransitionIssue calls = %+v, want none after a made hop", f.tracker.transitionCalls)
 			}
-			if hop := f.state.StageHops[hopExitIssueID]; hop == nil || hop.Count != 1 {
-				t.Errorf("StageHops[%q] = %+v, want Count 1", hopExitIssueID, hop)
+			if hop := f.state.StageHops[hopExitIssueID]; hop == nil || hop.Count != 1 || hop.ChainID != hopExitChain {
+				t.Errorf("StageHops[%q] = %+v, want Count 1 and ChainID %q", hopExitIssueID, hop, hopExitChain)
 			}
-			if len(f.store.recordedStageHops) != 1 || f.store.recordedStageHops[0].HopCount != 1 {
-				t.Errorf("RecordStageHop rows = %+v, want one with HopCount 1", f.store.recordedStageHops)
+			if len(f.store.recordedStageHops) != 1 || f.store.recordedStageHops[0].HopCount != 1 || f.store.recordedStageHops[0].ChainID != hopExitChain {
+				t.Errorf("RecordStageHop rows = %+v, want one with HopCount 1 and ChainID %q", f.store.recordedStageHops, hopExitChain)
 			}
 		})
 	}
@@ -10149,17 +10217,26 @@ func TestHandleWorkerExit_StageHopFallsBackToHandoff(t *testing.T) {
 		HoppedAt: "2026-03-15T12:00:00Z",
 	}
 
+	notAdvanced := func(hopCount int, reason string) []routedStage {
+		return []routedStage{{domain.EventStageNotAdvanced, domain.StageTransition{SourceRule: "specify", TargetRule: "implement", ChainID: hopExitChain, HopCount: hopCount, Reason: reason}}}
+	}
+	ceiling := []recordedStageResult{{1, "implement", "ceiling"}}
 	tests := []struct {
-		name  string
-		setup func(f *hopExitFixture)
+		name        string
+		setup       func(f *hopExitFixture)
+		wantResults []recordedStageResult
+		wantRouted  []routedStage
 	}{
 		{"count at the ceiling", func(f *hopExitFixture) {
 			f.state.StageHops[hopExitIssueID] = &StageHopEntry{Count: 3, SourceRule: "specify", TargetRule: "implement", TargetLabel: hopExitTargetLabel}
-		}},
+		}, ceiling, notAdvanced(3, "ceiling")},
 		{"count restored from the store at the ceiling", func(f *hopExitFixture) {
 			PopulateStageHops(f.state, []persistence.StageHop{restoredRow}, discardLogger())
-		}},
-		{"label add fails", func(f *hopExitFixture) { f.tracker.addErr = errors.New("add refused") }},
+		}, ceiling, notAdvanced(3, "ceiling")},
+		{"label add fails", func(f *hopExitFixture) { f.tracker.addErr = errors.New("add refused") },
+			[]recordedStageResult{{1, "implement", "failed"}}, notAdvanced(0, "failed")},
+		{"reload removed the run's next", func(f *hopExitFixture) { f.params.Dispatch.Rules[0].Next = "" }, nil, nil},
+		{"reload removed the target's stage", func(f *hopExitFixture) { f.params.Dispatch.Rules[1].Stage = "" }, nil, nil},
 	}
 
 	for _, tt := range tests {
@@ -10171,6 +10248,10 @@ func TestHandleWorkerExit_StageHopFallsBackToHandoff(t *testing.T) {
 
 			f.exit()
 
+			f.assertDecision(t, tt.wantResults, tt.wantRouted)
+			if f.resultsAtHandoff != len(tt.wantResults) {
+				t.Errorf("RecordRunStageResult calls before the handoff transition = %d, want %d", f.resultsAtHandoff, len(tt.wantResults))
+			}
 			if len(f.tracker.transitionCalls) != 1 || f.tracker.transitionCalls[0].TargetState != hopExitHandoff {
 				t.Errorf("TransitionIssue calls = %+v, want one to %q", f.tracker.transitionCalls, hopExitHandoff)
 			}

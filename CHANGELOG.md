@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `sortie validate` now rejects a stage chain Sortie cannot run, such as a `next` that names a missing rule, a loop of `next` links, or `next` without `tracker.handoff_state`, and warns when `agent.max_sessions` would stop an issue before its chain ends. ([#1257](https://github.com/sortie-ai/sortie/issues/1257))
 
+- `sortie stats` now groups runs by stage chain, and the dashboard's run history shows the rule, chain, and stage of each run on either side of a stage move, so the path an issue took through its stages, and where it stopped, stays visible. ([#1258](https://github.com/sortie-ai/sortie/issues/1258))
+
+- Notification destinations can now subscribe to `stage.advanced`, sent when Sortie moves an issue to its next stage, and `stage.not_advanced`, sent with the reason when a due move is not made. ([#1258](https://github.com/sortie-ai/sortie/issues/1258))
+
 ### Removed
 
 - A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))
@@ -34,6 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add the `reaction_handoffs` table, recording the review comments each issue's runs were given. An upgrade starts with it empty, so a comment given before the upgrade can be given once more.
 
 - Add the `stage_hops` table, keeping each issue's count of consecutive automatic stage moves, and add `stage_previous` and `stage_previous_outcome` to `run_history` and `retry_entries`. An upgrade starts with no moves counted, and a run or retry recorded before the upgrade reads back with no previous stage. ([#1257](https://github.com/sortie-ai/sortie/issues/1257))
+
+- Add `chain_id`, `stage_target`, and `stage_result` to `run_history`, and `chain_id` to `retry_entries` and `stage_hops`. A run recorded before the upgrade reads back with no chain and is left out of the grouping by stage chain. ([#1258](https://github.com/sortie-ai/sortie/issues/1258))
 
 ## [1.26.0] - 2026-10-01
 

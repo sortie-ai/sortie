@@ -33,6 +33,8 @@ func TestPopulateRetries(t *testing.T) {
 					Attempt:    2,
 					DueAtMs:    10000,
 					Error:      &errMsg,
+
+					StagePrevious: "specify", StagePreviousOutcome: "succeeded", ChainID: "chain-1",
 				},
 				RemainingMs: 5000,
 			},
@@ -85,6 +87,9 @@ func TestPopulateRetries(t *testing.T) {
 			}
 			if got.DueAtMS != e.DueAtMs {
 				t.Errorf("DueAtMS = %d, want %d", got.DueAtMS, e.DueAtMs)
+			}
+			if want := (StageLineage{PreviousRule: e.StagePrevious, PreviousOutcome: e.StagePreviousOutcome, ChainID: e.ChainID}); got.StageLineage != want {
+				t.Errorf("StageLineage of %q = %+v, want %+v", e.IssueID, got.StageLineage, want)
 			}
 			if got.TimerHandle != nil {
 				t.Errorf("TimerHandle should be nil for %q", e.IssueID)
@@ -842,6 +847,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	run := freshRun("ISS-1", "PROJ-1", "owner/repo#42", 2)
 	run.RuleName = "cheap"
 	run.ConfiguredModel = "model-a"
+	run.StagePrevious, run.StagePreviousOutcome, run.ChainID = "specify", "no_change", "chain-1"
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
@@ -865,6 +871,9 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	}
 	if pr.RuleName != "cheap" || pr.RuleSettingsApplied {
 		t.Errorf("PendingReaction rule, flag = %q, %v, want %q, false: a restored claim starts without the flag", pr.RuleName, pr.RuleSettingsApplied, "cheap")
+	}
+	if want := (StageLineage{PreviousRule: "specify", PreviousOutcome: "no_change", ChainID: "chain-1"}); pr.StageLineage != want {
+		t.Errorf("PendingReaction.StageLineage = %+v, want %+v", pr.StageLineage, want)
 	}
 	if pr.DisplayID != "owner/repo#42" {
 		t.Errorf("PendingReaction.DisplayID = %q, want %q", pr.DisplayID, "owner/repo#42")

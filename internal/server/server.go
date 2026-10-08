@@ -61,6 +61,20 @@ type RunHistoryEntry struct {
 	Error *string
 	// TurnsCompleted is the number of agent turns completed before exit.
 	TurnsCompleted int
+	// RuleName is the dispatch rule that routed the run; empty when none did.
+	RuleName string
+	// ChainID is the stage chain the run belongs to; empty for a run
+	// recorded before chains existed.
+	ChainID string
+	// StagePrevious is the rule whose hop led to the run; empty when none
+	// did.
+	StagePrevious string
+	// StageTarget is the rule the run's hop decision targeted; empty when
+	// the run reached none.
+	StageTarget string
+	// StageResult is the result of the run's hop decision; empty when
+	// StageTarget is.
+	StageResult string
 }
 
 // DBPingFunc checks whether the SQLite database is accessible.

@@ -72,8 +72,8 @@ Each time an agent session finishes, sortie records the outcome. This
 command reads that history back and reports how many runs there were, how
 many succeeded, how long they took, and, when the workflow sets
 token_rates, what they cost. The same figures are broken down by outcome,
-by coding agent, by dispatch rule, by prompt template, and by the model
-each run was configured with.
+by coding agent, by dispatch rule, by prompt template, by the model each
+run was configured with, and by stage chain.
 
 The database is opened read-only, so this is safe to run while the
 orchestrator is working.

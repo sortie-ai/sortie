@@ -119,6 +119,20 @@ func ruleRow(name string) string {
 	return name
 }
 
+// stageRow renders the stage path of a run: the rule whose hop led to it,
+// the run's own rule, and the hop decision its exit reached.
+func stageRow(previous, rule, target, result string) string {
+	var path []string
+	if previous != "" {
+		path = append(path, previous)
+	}
+	path = append(path, rule)
+	if result != "" {
+		path = append(path, target+" ("+result+")")
+	}
+	return strings.Join(path, " -> ")
+}
+
 // usageReportingRow renders the Usage reporting row: the one place a
 // session's reason for reporting nothing is stated. The "not declared" arm
 // is unreachable in a shipped binary and exists only to keep the switch
@@ -279,6 +293,12 @@ type dashboardRunHistoryEntry struct {
 	StartedAt    string
 	Duration     string
 	Error        string
+
+	// Rule, Chain, and Stage are all empty unless the run has a chain and
+	// a hop led to it or its exit reached a hop decision.
+	Rule  string
+	Chain string
+	Stage string
 }
 
 // FormatInt formats an int64 with comma thousand separators.
@@ -625,6 +645,11 @@ func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
 			StartedAt:    r.StartedAt,
 			Duration:     dur,
 			Error:        errMsg,
+		}
+		if r.ChainID != "" && (r.StagePrevious != "" || r.StageResult != "") {
+			out[i].Rule = ruleRow(r.RuleName)
+			out[i].Chain = r.ChainID
+			out[i].Stage = stageRow(r.StagePrevious, r.RuleName, r.StageTarget, r.StageResult)
 		}
 	}
 	return out
