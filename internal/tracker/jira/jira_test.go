@@ -1850,13 +1850,11 @@ func TestJiraAdapterMetrics(t *testing.T) {
 
 	t.Run("AddLabel/success", func(t *testing.T) {
 		t.Parallel()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer srv.Close()
+		a, _ := newLabelFake(t)
+		spy := &spyMetrics{}
+		a.SetMetrics(spy)
 
-		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
-		if err := a.AddLabel(ctx, "PROJ-123", "urgent"); err != nil {
+		if err := a.AddLabel(ctx, labelFakeKey, "urgent"); err != nil {
 			t.Fatalf("AddLabel: %v", err)
 		}
 		requireSingleCall(t, spy, "add_label", "success")
@@ -2057,42 +2055,116 @@ func TestCommentIssue_ErrorCases(t *testing.T) {
 	}
 }
 
-func TestAddLabel_Additive(t *testing.T) {
-	t.Parallel()
+type labelFake struct {
+	mu       sync.Mutex
+	labels   []string
+	putBody  []string
+	getQuery []string
+}
 
-	var receivedBody []byte
+const labelFakeKey = "PROJ-1"
+
+func newLabelFake(t *testing.T, labels ...string) (*JiraAdapter, *labelFake) {
+	t.Helper()
+
+	fake := &labelFake{labels: labels}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedBody, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		switch {
+		case r.URL.Path == "/rest/api/3/issue/"+labelFakeKey && r.Method == http.MethodGet:
+			fake.getQuery = append(fake.getQuery, r.URL.Query().Get("fields"))
+			body, _ := json.Marshal(map[string]any{"id": "10001", "key": labelFakeKey, "fields": map[string]any{"labels": fake.labels}})
+			w.Write(body) //nolint:errcheck // test helper
+		case r.URL.Path == "/rest/api/3/issue/"+labelFakeKey && r.Method == http.MethodPut:
+			raw, _ := io.ReadAll(r.Body)
+			fake.putBody = append(fake.putBody, string(raw))
+			fake.apply(raw)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
-	a := mustAdapter(t, validConfig(srv.URL))
-	if err := a.AddLabel(context.Background(), "PROJ-123", "urgent"); err != nil {
-		t.Fatalf("AddLabel: %v", err)
-	}
+	return mustAdapter(t, validConfig(srv.URL)), fake
+}
 
-	var body struct {
+func (f *labelFake) apply(body []byte) {
+	var edits struct {
 		Update struct {
 			Labels []map[string]string `json:"labels"`
 		} `json:"update"`
 	}
-	if err := json.Unmarshal(receivedBody, &body); err != nil {
-		t.Fatalf("unmarshal request body: %v", err)
+	if err := json.Unmarshal(body, &edits); err != nil {
+		return
 	}
-	if len(body.Update.Labels) != 1 {
-		t.Fatalf("len(update.labels) = %d, want 1", len(body.Update.Labels))
+	for _, edit := range edits.Update.Labels {
+		if name, ok := edit["add"]; ok && !slices.Contains(f.labels, name) {
+			f.labels = append(f.labels, name)
+		}
+		if name, ok := edit["remove"]; ok {
+			f.labels = slices.DeleteFunc(f.labels, func(l string) bool { return l == name })
+		}
 	}
-	added, ok := body.Update.Labels[0]["add"]
-	if !ok {
-		t.Fatalf("update.labels[0] carries no \"add\" key, want an additive operation: %v", body.Update.Labels[0])
+}
+
+func TestLabelWrites_SendDeltaEdits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		seed       []string
+		write      func(*JiraAdapter) error
+		wantPut    string
+		wantLabels []string
+	}{
+		{
+			name:       "add",
+			seed:       []string{"bug"},
+			write:      func(a *JiraAdapter) error { return a.AddLabel(context.Background(), labelFakeKey, "urgent") },
+			wantPut:    `{"update":{"labels":[{"add":"urgent"}]}}`,
+			wantLabels: []string{"bug", "urgent"},
+		},
+		{
+			name:       "remove",
+			seed:       []string{"bug", "urgent"},
+			write:      func(a *JiraAdapter) error { return a.RemoveLabel(context.Background(), labelFakeKey, "urgent") },
+			wantPut:    `{"update":{"labels":[{"remove":"urgent"}]}}`,
+			wantLabels: []string{"bug"},
+		},
+		{
+			name:       "remove both spellings in one request",
+			seed:       []string{"Stage-Plan", "bug", "stage-plan"},
+			write:      func(a *JiraAdapter) error { return a.RemoveLabel(context.Background(), labelFakeKey, "stage-plan") },
+			wantPut:    `{"update":{"labels":[{"remove":"Stage-Plan"},{"remove":"stage-plan"}]}}`,
+			wantLabels: []string{"bug"},
+		},
 	}
 
-	// The wire payload names the label under "add" rather than "set", so
-	// AddLabel never touches labels already present on the issue.
-	before := []string{"existing"}
-	after := append(slices.Clone(before), added)
-	adaptertest.AssertLabelAddIsAdditive(t, before, after, added)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a, fake := newLabelFake(t, tt.seed...)
+
+			if err := tt.write(a); err != nil {
+				t.Fatalf("%s: %v", tt.name, err)
+			}
+
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if want := []string{tt.wantPut}; !slices.Equal(fake.putBody, want) {
+				t.Errorf("PUT bodies = %v, want %v", fake.putBody, want)
+			}
+			if !slices.Equal(fake.labels, tt.wantLabels) {
+				t.Errorf("labels = %v, want %v", fake.labels, tt.wantLabels)
+			}
+			if len(fake.getQuery) == 0 || fake.getQuery[0] != "labels" {
+				t.Errorf("confirming read fields = %v, want [labels]", fake.getQuery)
+			}
+		})
+	}
 }
 
 func TestNewJiraAdapter_UserAgentFromConfig(t *testing.T) {

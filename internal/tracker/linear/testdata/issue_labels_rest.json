@@ -1,0 +1,13 @@
+{
+  "data": {
+    "issue": {
+      "labels": {
+        "nodes": [
+          { "id": "label-id-04", "name": "Label-04", "parent": null },
+          { "id": "label-id-05", "name": "Label-05", "parent": null }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }
+    }
+  }
+}

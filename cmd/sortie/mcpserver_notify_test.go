@@ -98,6 +98,8 @@ func (tr *notifyE2ETracker) CommentIssueWithLiteral(_ context.Context, _, _, _ s
 }
 func (tr *notifyE2ETracker) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
+func (tr *notifyE2ETracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 type turnController struct {
 	sessionID   string
 	startParams domain.StartSessionParams

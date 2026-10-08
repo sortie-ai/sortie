@@ -383,6 +383,8 @@ func (f *dryRunFakeTracker) CommentIssueWithLiteral(_ context.Context, _, _, _ s
 }
 func (f *dryRunFakeTracker) AddLabel(context.Context, string, string) error { return nil }
 
+func (f *dryRunFakeTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // dryRunFakeResolver is a configurable orchestrator.BlockerResolver
 // double, recording every Resolve call in the order runDryRun makes
 // them.

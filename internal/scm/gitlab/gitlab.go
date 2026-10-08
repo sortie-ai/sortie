@@ -1025,9 +1025,9 @@ func (a *GitLabAdapter) TransitionIssue(ctx context.Context, issueID, targetStat
 			target := a.canonicalLabel(targetLower)
 			addLabels = []string{target}
 			if currentLower != "" {
-				removeLabels = append(removeLabels, labelVariants(gi.Labels, currentLower)...)
+				removeLabels = append(removeLabels, issuekit.LabelVariants(gi.Labels, currentLower)...)
 			}
-			for _, variant := range labelVariants(gi.Labels, targetLower) {
+			for _, variant := range issuekit.LabelVariants(gi.Labels, targetLower) {
 				if variant != target {
 					removeLabels = append(removeLabels, variant)
 				}
@@ -1144,12 +1144,13 @@ func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) e
 }
 
 // AddLabel attaches label to the issue, resolving its canonical stored
-// casing against the project label catalog first. issueID is guarded
-// through [parseIID] before any request; a rejected value or a missing
-// iid returns [domain.ErrTrackerNotFound]. An empty or whitespace-only
-// label attaches nothing, issues no request, returns nil, and logs a
-// WARN, so a caller reading nil as a successful escalation is not the
-// only record of the condition.
+// casing against the project label catalog first, and confirms it against the
+// issue's labels. issueID is guarded through [parseIID] before any request; a
+// rejected value or a missing iid returns [domain.ErrTrackerNotFound]. A
+// label with no character other than white space returns
+// [domain.ErrTrackerPayload] without a request. A label with surrounding
+// white space attaches its trimmed spelling and fails the confirmation, which
+// compares the label as given.
 //
 // The catalog is read fresh on every call, never from the
 // construction-time casing map, because an escalation label is not a
@@ -1160,46 +1161,41 @@ func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) e
 // mismatches through the catalog, and lowercasing here would itself
 // create the case-variant duplicate the catalog resolution exists to
 // prevent. The attach is additive and may create the label as a
-// server-side side effect when it does not already exist.
+// server-side side effect when it does not already exist. GitLab answers a
+// label edit the token may not make with success, so a label the issue does
+// not carry afterwards returns [domain.ErrTrackerPayload].
 func (a *GitLabAdapter) AddLabel(ctx context.Context, issueID, label string) error {
 	return trackermetrics.Track(a.metrics, "add_label", func() error {
-		n, ok := parseIID(issueID)
-		if !ok {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerNotFound,
-				Message: fmt.Sprintf("issue not found: %s", issueID),
-			}
-		}
-
-		name := strings.TrimSpace(label)
-		if name == "" {
-			a.log.Warn("gitlab add_label received an empty label; nothing attached",
-				slog.String("iid", strconv.Itoa(n)))
-			return nil
-		}
-
-		catalog, err := fetchProjectLabels(ctx, a.client, a.projectPath, a.log)
-		if err != nil {
-			a.log.Warn("gitlab label catalog unavailable; attaching the configured spelling",
-				slog.Any("error", err))
-		} else {
-			casing := resolveCasing(catalog, []string{name})
-			if stored, ok := casing[strings.ToLower(name)]; ok {
-				name = stored
-			}
-		}
-
-		path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n)
-		payload, err := json.Marshal(gitlabIssueUpdate{AddLabels: []string{name}})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal add-label payload",
-				Err:     err,
-			}
-		}
-
-		_, err = a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload))
-		return err
+		return a.withLabelOps(issueID, func(ops issuekit.IssueLabelOps) error {
+			return issuekit.AddIssueLabel(ctx, label, ops)
+		})
 	})
+}
+
+// RemoveLabel removes every label of the issue that names label, ignoring
+// letter case, in one request, and confirms the removal against the issue's
+// labels. issueID is guarded through [parseIID] before any request; a
+// rejected value, a missing iid, or an entity whose issue_type is set and is
+// not "issue" returns [domain.ErrTrackerNotFound]. An issue that carries no
+// such label receives no write. A label with no character other than white
+// space returns [domain.ErrTrackerPayload] without a request, as does a label
+// the issue still carries after the write.
+func (a *GitLabAdapter) RemoveLabel(ctx context.Context, issueID, label string) error {
+	return trackermetrics.Track(a.metrics, "remove_label", func() error {
+		return a.withLabelOps(issueID, func(ops issuekit.IssueLabelOps) error {
+			return issuekit.RemoveIssueLabel(ctx, label, ops)
+		})
+	})
+}
+
+func (a *GitLabAdapter) withLabelOps(issueID string, run func(issuekit.IssueLabelOps) error) error {
+	n, ok := parseIID(issueID)
+	if !ok {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+	path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n)
+	return run(gitlabLabelOps(a.client, a.log, a.projectPath, path, true))
 }

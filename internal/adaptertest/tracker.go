@@ -128,6 +128,29 @@ func AssertLabelAddIsAdditive(t *testing.T, before, after []string, added string
 	}
 }
 
+// AssertLabelVisible pins the visibility clause of a label write: issue,
+// as FetchIssueByID returned it, carries label exactly when present is
+// true, and so does the element of candidates with the same ID. The label
+// is compared exactly, not ignoring case, because adapters normalize it to
+// lowercase. The assertion fails when candidates holds no element for the
+// issue, since that listing asserts nothing.
+func AssertLabelVisible(t *testing.T, label string, present bool, issue domain.Issue, candidates []domain.Issue) {
+	t.Helper()
+
+	if got := slices.Contains(issue.Labels, label); got != present {
+		t.Errorf("AssertLabelVisible: issue %q labels %v: label %q present = %t, want %t", issue.ID, issue.Labels, label, got, present)
+	}
+
+	idx := slices.IndexFunc(candidates, func(c domain.Issue) bool { return c.ID == issue.ID })
+	if idx < 0 {
+		t.Errorf("AssertLabelVisible: candidates hold no issue with ID %q, want the issue in the listing", issue.ID)
+		return
+	}
+	if got := slices.Contains(candidates[idx].Labels, label); got != present {
+		t.Errorf("AssertLabelVisible: candidate %q labels %v: label %q present = %t, want %t", issue.ID, candidates[idx].Labels, label, got, present)
+	}
+}
+
 // AssertCandidateBlockerSource pins the clause that a candidate issue's
 // blocker fields agree with the blocker source its adapter declared.
 // wantBlockers is the number of blockers the caller's fixture defines

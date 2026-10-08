@@ -94,6 +94,8 @@ func (tr *budgetE2ETracker) CommentIssueWithLiteral(_ context.Context, _, _, _ s
 }
 func (tr *budgetE2ETracker) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
+func (tr *budgetE2ETracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // budgetE2EAgent is a domain.AgentAdapter fixture whose single turn
 // holds open until the test tells it to emit a usage-bearing event and,
 // separately, to complete: the test reads the tool's response between

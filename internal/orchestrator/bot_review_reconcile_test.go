@@ -1099,6 +1099,10 @@ func (s *botReviewErrTrackerStub) AddLabel(_ context.Context, _, label string) e
 	return s.addLabelErr
 }
 
+func (s *botReviewErrTrackerStub) RemoveLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // TestReconcileBotReviewComments_TTLDrop verifies that a bot-review pending
 // entry older than BotReviewPendingTTL is dropped without dispatch or fetch.
 func TestReconcileBotReviewComments_TTLDrop(t *testing.T) {

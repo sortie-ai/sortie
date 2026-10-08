@@ -96,6 +96,16 @@ The job log is one stream. Nothing in a line names its step, so the step has to 
 
 **The log can start with a byte order mark, and Windows runners end lines with CRLF.** Strip the mark from the first line only and one trailing carriage return from every line before parsing the timestamp.
 
+## Label writes
+
+**Removal is one delete per stored spelling, after a read.** The issue-label delete route removes one label per call and is addressed by name, so the adapter reads the issue's labels first, selects every spelling that names the requested label regardless of letter case, and deletes each by the spelling it read. It then trusts the label list of the last delete response if that list lacks the label, and otherwise re-reads the issue. The same constructor serves the tracker role and the pull request label command, so a pull request's label removal and an issue's use one request path. The replace route (`PUT` on the labels collection) is never sent: it overwrites the whole set and drops a label a person adds between the read and the write.
+
+**The 404 of the delete route is ambiguous.** It answers 404 both when the label is already gone from the issue and when the issue is missing or the token lost access to the repository, and the body does not separate the two reliably. The adapter never reads the body to decide. A 404 is settled by the re-read: the label gone is a successful removal, and a missing issue makes the re-read itself return not-found.
+
+**Two behaviors are unobserved.** Whether the delete route resolves the name case-insensitively was probed only on the labels collection, which is why the adapter sends the stored spelling and not the caller's. Whether the add and delete responses list every label of an issue or stop at a page like the list route is unknown, so a response that satisfies the check is trusted and one that does not triggers a re-read before any failure is reported.
+
+**The list route is paginated.** The confirming read walks the link header at the route's maximum page size, because an issue carrying more labels than one page would otherwise hide the label from the check.
+
 ## The merge write path
 
 **A repeated merge is not an error.** Merging a pull request that the first call already merged returns success with the existing merge commit. GitHub short-circuits once merged and stops evaluating the head-SHA precondition, so even a stale expected head still succeeds. The reconcile loop records the duplicate as success through its normal path. Do not add an "already merged" guard in front of the call; it would be redundant and would introduce its own race.

@@ -249,6 +249,8 @@ func (s *ciTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	return s.addLabelErr
 }
 
+func (s *ciTrackerStub) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // ciMetricsSpy records calls to CI-specific metric methods while delegating
 // all other methods to NoopMetrics.
 type ciMetricsSpy struct {
@@ -1205,6 +1207,8 @@ func (b *blockingCITracker) AddLabel(ctx context.Context, _ string, _ string) er
 	}
 	return nil
 }
+
+func (b *blockingCITracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
 func (b *blockingCITracker) CommentIssue(ctx context.Context, _ string, _ string) error {
 	if b.commentGate != nil {
 		select {

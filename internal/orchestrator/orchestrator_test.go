@@ -7926,6 +7926,8 @@ func (s *sweepThrottleTracker) CommentIssueWithLiteral(_ context.Context, _, _, 
 
 func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error { return nil }
 
+func (s *sweepThrottleTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 func TestHandleTickSweepThrottle(t *testing.T) {
 	t.Parallel()
 

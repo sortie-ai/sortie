@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1130,6 +1129,16 @@ func TestFileAdapterMetrics(t *testing.T) {
 		requireSingleCall(t, spy, "add_label", "success")
 	})
 
+	t.Run("RemoveLabel/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		err := a.RemoveLabel(ctx, "10001", "feature")
+		if err != nil {
+			t.Fatalf("RemoveLabel: %v", err)
+		}
+		requireSingleCall(t, spy, "remove_label", "success")
+	})
+
 	t.Run("nil_metrics", func(t *testing.T) {
 		t.Parallel()
 		a := newAdapter(t, fixture("basic.json"), nil)
@@ -1143,69 +1152,71 @@ func TestFileAdapterMetrics(t *testing.T) {
 		a.TransitionIssue(ctx, "10001", "Done")                  //nolint:errcheck // verifying no panic
 		a.CommentIssue(ctx, "10001", "ping")                     //nolint:errcheck // verifying no panic
 		a.AddLabel(ctx, "10001", "urgent")                       //nolint:errcheck // verifying no panic
+		a.RemoveLabel(ctx, "10001", "urgent")                    //nolint:errcheck // verifying no panic
 	})
 }
 
-// TestAddLabel_IsANoOp documents the file adapter's stated contract: its
-// AddLabel neither reads nor stores label state, so the additive-write
-// invariant [adaptertest.AssertLabelAddIsAdditive] pins for a tracker that
-// manages labels does not apply here. The only observable behavior is a
-// nil return and a recorded metric, both asserted by TestFileAdapterMetrics.
-func TestAddLabel_IsANoOp(t *testing.T) {
+func fetchIssueAndCandidates(t *testing.T, a *FileAdapter, id string) (domain.Issue, []domain.Issue) {
+	t.Helper()
+
+	issue, err := a.FetchIssueByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%q): %v", id, err)
+	}
+	candidates, err := a.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	return issue, candidates
+}
+
+func TestLabelWrites_OverlayKeepsEveryLabelAndHidesFixtureLabels(t *testing.T) {
 	t.Parallel()
 
 	a := newAdapter(t, fixture("basic.json"), nil)
-	if err := a.AddLabel(context.Background(), "10001", "urgent"); err != nil {
-		t.Fatalf("AddLabel: %v", err)
-	}
-}
-
-// TestAddLabel_VisibleOnSubsequentReads verifies that a label recorded
-// through AddLabel is visible on a later FetchCandidateIssues call (the
-// load-bearing read, since it is the one the orchestrator's park release
-// rule evaluates) and on a later FetchIssueByID call.
-func TestAddLabel_VisibleOnSubsequentReads(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 
-	t.Run("visible via FetchCandidateIssues", func(t *testing.T) {
-		t.Parallel()
+	for _, label := range []string{"needs-human", "urgent"} {
+		if err := a.AddLabel(ctx, "10001", label); err != nil {
+			t.Fatalf("AddLabel(%q): %v", label, err)
+		}
+	}
+	if err := a.RemoveLabel(ctx, "10001", "feature"); err != nil {
+		t.Fatalf("RemoveLabel(%q): %v", "feature", err)
+	}
+	if err := a.RemoveLabel(ctx, "10001", "needs-human"); err != nil {
+		t.Fatalf("RemoveLabel(%q): %v", "needs-human", err)
+	}
 
-		a := newAdapter(t, fixture("basic.json"), nil)
-		if err := a.AddLabel(ctx, "10001", "needs-human"); err != nil {
-			t.Fatalf("AddLabel: %v", err)
-		}
+	issue, candidates := fetchIssueAndCandidates(t, a, "10001")
+	adaptertest.AssertLabelVisible(t, "urgent", true, issue, candidates)
+	adaptertest.AssertLabelVisible(t, "auth", true, issue, candidates)
+	adaptertest.AssertLabelVisible(t, "feature", false, issue, candidates)
+	adaptertest.AssertLabelVisible(t, "needs-human", false, issue, candidates)
+}
 
-		issues, err := a.FetchCandidateIssues(ctx)
-		if err != nil {
-			t.Fatalf("FetchCandidateIssues: %v", err)
-		}
-		idx := slices.IndexFunc(issues, func(issue domain.Issue) bool { return issue.ID == "10001" })
-		if idx == -1 {
-			t.Fatal("issue 10001 not found in FetchCandidateIssues result")
-		}
-		if !slices.ContainsFunc(issues[idx].Labels, func(l string) bool { return strings.EqualFold(l, "needs-human") }) {
-			t.Errorf("FetchCandidateIssues labels = %v, want to include %q", issues[idx].Labels, "needs-human")
-		}
-	})
+func TestLabelWrites_UnknownIssueIsNotFound(t *testing.T) {
+	t.Parallel()
 
-	t.Run("visible via FetchIssueByID", func(t *testing.T) {
-		t.Parallel()
+	tests := []struct {
+		name  string
+		write func(*FileAdapter) error
+	}{
+		{"AddLabel", func(a *FileAdapter) error { return a.AddLabel(context.Background(), "nonexistent", "urgent") }},
+		{"RemoveLabel", func(a *FileAdapter) error { return a.RemoveLabel(context.Background(), "nonexistent", "urgent") }},
+	}
 
-		a := newAdapter(t, fixture("basic.json"), nil)
-		if err := a.AddLabel(ctx, "10001", "needs-human"); err != nil {
-			t.Fatalf("AddLabel: %v", err)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		issue, err := a.FetchIssueByID(ctx, "10001")
-		if err != nil {
-			t.Fatalf("FetchIssueByID: %v", err)
-		}
-		if !slices.ContainsFunc(issue.Labels, func(l string) bool { return strings.EqualFold(l, "needs-human") }) {
-			t.Errorf("FetchIssueByID labels = %v, want to include %q", issue.Labels, "needs-human")
-		}
-	})
+			a := newAdapter(t, fixture("basic.json"), nil)
+
+			err := tt.write(a)
+
+			requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+		})
+	}
 }
 
 func TestCommentIssueWithLiteral(t *testing.T) {

@@ -85,6 +85,27 @@ func decodeIssuesPage(body []byte) ([]linearIssue, linearPageInfo, error) {
 	return resp.Data.Issues.Nodes, resp.Data.Issues.PageInfo, nil
 }
 
+// decodeIssueLabelsPage decodes an issue labels page. It runs the body-first
+// classifier on every page because the query re-selects the parent issue, so a
+// missing issue surfaces as [domain.ErrTrackerNotFound]. A caller continues a
+// capped list by seeding variables["after"].
+func decodeIssueLabelsPage(body []byte) ([]linearIssueLabel, linearPageInfo, error) {
+	var resp graphQLResponse[issueLabelsData]
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, linearPageInfo{}, payloadError(err)
+	}
+	if classified := classifyGraphQLErrors(resp.Errors); classified != nil {
+		return nil, linearPageInfo{}, classified
+	}
+	if resp.Data.Issue == nil {
+		return nil, linearPageInfo{}, &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: "linear graphql: issue not found",
+		}
+	}
+	return resp.Data.Issue.Labels.Nodes, resp.Data.Issue.Labels.PageInfo, nil
+}
+
 // decodeCommentsPage decodes a comment continuation page. It runs the body-first
 // classifier on every page because the continuation re-selects the parent
 // issue, so a not-found mid-pagination surfaces as [domain.ErrTrackerNotFound].

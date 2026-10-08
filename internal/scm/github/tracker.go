@@ -776,9 +776,8 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 		currentNative := gi.State
 
 		if currentLabel != "" && currentLabel != targetLower {
-			labelPath := basePath + "/labels/" + url.PathEscape(currentLabel)
-			err := a.client.SendNoBody(ctx, "DELETE", labelPath)
-			if err != nil && !domain.IsNotFound(err) {
+			stale := issuekit.LabelVariants(githubLabelNames(gi.Labels), currentLabel)
+			if err := a.removeStoredLabels(ctx, issueID, stale); err != nil && !domain.IsNotFound(err) {
 				return err
 			}
 		}
@@ -868,21 +867,36 @@ func (a *GitHubAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
-// AddLabel adds a label to the specified issue via the GitHub Labels API.
+// AddLabel adds a label to the specified issue via the GitHub Labels API and
+// confirms it against the issue's labels. Returns [domain.ErrTrackerPayload]
+// when the label is blank or the issue does not carry it afterwards.
 func (a *GitHubAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
 	return trackermetrics.Track(a.metrics, "add_label", func() error {
-		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
-
-		payload, err := json.Marshal(map[string][]string{"labels": {label}})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal label payload",
-				Err:     err,
-			}
-		}
-
-		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-		return err
+		return issuekit.AddIssueLabel(ctx, label, a.labelOps(issueID))
 	})
+}
+
+// RemoveLabel removes every label of the issue that names label, ignoring
+// letter case, and confirms the removal against the issue's labels. An issue
+// that carries none receives no write. Returns [domain.ErrTrackerPayload]
+// when the label is blank or the issue still carries it afterwards.
+func (a *GitHubAdapter) RemoveLabel(ctx context.Context, issueID string, label string) error {
+	return trackermetrics.Track(a.metrics, "remove_label", func() error {
+		return issuekit.RemoveIssueLabel(ctx, label, a.labelOps(issueID))
+	})
+}
+
+func (a *GitHubAdapter) labelOps(issueID string) issuekit.IssueLabelOps {
+	return githubIssueLabelOps(a.client, a.owner, a.repo, issueID)
+}
+
+// removeStoredLabels deletes the given stored spellings from the issue
+// without a confirming read.
+func (a *GitHubAdapter) removeStoredLabels(ctx context.Context, issueID string, spellings []string) error {
+	labels := make([]issuekit.IssueLabel, len(spellings))
+	for i, name := range spellings {
+		labels[i] = issuekit.IssueLabel{Name: name}
+	}
+	_, err := a.labelOps(issueID).Remove(ctx, labels)
+	return err
 }

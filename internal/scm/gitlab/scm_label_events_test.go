@@ -204,9 +204,10 @@ func TestRemoveLabel_CaseVariantResolution(t *testing.T) {
 
 	const storedLabel = "Sortie:Review"
 	mrFixture := mergeRequestFixture(t, map[string]any{"labels": []string{storedLabel, "unrelated-label"}})
+	afterRemoval := mergeRequestFixture(t, map[string]any{"labels": []string{"unrelated-label"}})
 
 	var gotMethod, gotPath string
-	var gotBody gitlabMergeRequestUpdate
+	var gotBody gitlabIssueUpdate
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
@@ -216,7 +217,7 @@ func TestRemoveLabel_CaseVariantResolution(t *testing.T) {
 			gotMethod = r.Method
 			gotPath = r.URL.EscapedPath()
 			decodeRequestBody(t, r, &gotBody)
-			_, _ = w.Write(mrFixture)
+			_, _ = w.Write(afterRemoval)
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -632,31 +633,86 @@ func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
-// AddLabel adds a label to the specified issue via the Jira REST API.
-// Returns an error if the request fails; the orchestrator treats AddLabel
-// errors as non-fatal.
+// AddLabel adds a label to the specified issue and confirms it with a
+// read of the issue. Returns [domain.ErrTrackerPayload] when the label is
+// blank or the issue does not carry it afterwards.
 func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
 	return trackermetrics.Track(a.metrics, "add_label", func() error {
-		path := a.basePath + "/issue/" + url.PathEscape(issueID)
-
-		payload, err := json.Marshal(map[string]any{
-			"update": map[string]any{
-				"labels": []map[string]any{
-					{"add": label},
-				},
-			},
-		})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal label payload",
-				Err:     err,
-			}
-		}
-
-		_, err = a.client.Send(ctx, "PUT", path, bytes.NewReader(payload))
-		return err
+		return issuekit.AddIssueLabel(ctx, label, a.labelOps(issueID))
 	})
+}
+
+// RemoveLabel removes every label of the issue that names label, ignoring
+// letter case, and confirms the removal with a read of the issue. An issue
+// that carries none receives no write. Returns [domain.ErrTrackerPayload]
+// when the label is blank or the issue still carries it afterwards.
+func (a *JiraAdapter) RemoveLabel(ctx context.Context, issueID string, label string) error {
+	return trackermetrics.Track(a.metrics, "remove_label", func() error {
+		return issuekit.RemoveIssueLabel(ctx, label, a.labelOps(issueID))
+	})
+}
+
+// labelOps returns the Jira calls behind the shared label drivers. Jira
+// answers a label edit with an empty body, so neither write reports the
+// label set and every outcome is confirmed by a read.
+func (a *JiraAdapter) labelOps(issueID string) issuekit.IssueLabelOps {
+	path := a.basePath + "/issue/" + url.PathEscape(issueID)
+	return issuekit.IssueLabelOps{
+		Read: func(ctx context.Context) ([]issuekit.IssueLabel, error) {
+			return a.readLabels(ctx, path)
+		},
+		Add: func(ctx context.Context, label string) (issuekit.LabelWrite, error) {
+			return issuekit.LabelWrite{}, a.editLabels(ctx, path, []map[string]any{{"add": label}})
+		},
+		Remove: func(ctx context.Context, labels []issuekit.IssueLabel) (issuekit.LabelWrite, error) {
+			edits := make([]map[string]any, len(labels))
+			for i, l := range labels {
+				edits[i] = map[string]any{"remove": l.Name}
+			}
+			return issuekit.LabelWrite{}, a.editLabels(ctx, path, edits)
+		},
+	}
+}
+
+func (a *JiraAdapter) readLabels(ctx context.Context, path string) ([]issuekit.IssueLabel, error) {
+	body, _, err := a.client.Get(ctx, path, url.Values{"fields": {"labels"}})
+	if err != nil {
+		return nil, err
+	}
+
+	var ji jiraIssue
+	if err := json.Unmarshal(body, &ji); err != nil {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse issue labels response",
+			Err:     err,
+		}
+	}
+
+	labels := make([]issuekit.IssueLabel, len(ji.Fields.Labels))
+	for i, name := range ji.Fields.Labels {
+		labels[i] = issuekit.IssueLabel{Name: name}
+	}
+	return labels, nil
+}
+
+// editLabels sends one delta edit of the issue's labels. The replace form
+// fields.labels is never used, because it drops a label a person adds
+// between the read and the write.
+func (a *JiraAdapter) editLabels(ctx context.Context, path string, edits []map[string]any) error {
+	payload, err := json.Marshal(map[string]any{
+		"update": map[string]any{"labels": edits},
+	})
+	if err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal label payload",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.Send(ctx, "PUT", path, bytes.NewReader(payload))
+	return err
 }
 
 // paginatedSearch executes a paginated JQL search and returns all

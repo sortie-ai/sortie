@@ -113,6 +113,8 @@ func (f *mgcTrackerFake) AddLabel(ctx context.Context, issueID, label string) er
 	return f.addLabelErr
 }
 
+func (f *mgcTrackerFake) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // mgcSCMFake is a controllable domain.SCMAdapter whose GetMergeability
 // return value is supplied by a function field, so tests can vary the
 // observed merge state per call.

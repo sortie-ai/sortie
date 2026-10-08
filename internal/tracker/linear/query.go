@@ -15,7 +15,7 @@ const queryCandidateIssues = `query CandidateIssues($filter: IssueFilter!, $firs
       state { name }
       assignee { displayName name email }
       parent { id identifier }
-      labels(first: 25) { nodes { name } pageInfo { hasNextPage } }
+      labels(first: 25) { nodes { name } pageInfo { hasNextPage endCursor } }
       inverseRelations(first: 25) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage } }
     }
     pageInfo { hasNextPage endCursor }
@@ -35,7 +35,7 @@ const queryIssuesByStates = `query IssuesByStates($filter: IssueFilter!, $first:
       state { name }
       assignee { displayName name email }
       parent { id identifier }
-      labels(first: 25) { nodes { name } pageInfo { hasNextPage } }
+      labels(first: 25) { nodes { name } pageInfo { hasNextPage endCursor } }
       inverseRelations(first: 25) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage } }
     }
     pageInfo { hasNextPage endCursor }
@@ -50,7 +50,7 @@ const queryIssueByID = `query IssueByID($id: String!) {
     state { name }
     assignee { displayName name email }
     parent { id identifier }
-    labels(first: 25) { nodes { name } pageInfo { hasNextPage } }
+    labels(first: 25) { nodes { name } pageInfo { hasNextPage endCursor } }
     inverseRelations(first: 25) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage } }
     comments(first: 50, orderBy: createdAt) {
       nodes {
@@ -73,6 +73,18 @@ const queryIssueComments = `query IssueComments($id: String!, $first: Int!, $aft
         user { displayName name email }
         botActor { name }
       }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+// queryIssueLabels fetches a page of an issue's labels with the handles a
+// removal and a label-group swap need. It re-selects the parent issue so a
+// not-found mid-pagination surfaces through the classifier.
+const queryIssueLabels = `query IssueLabels($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    labels(first: $first, after: $after) {
+      nodes { id name parent { id } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -167,9 +179,10 @@ const queryCommentCreate = `mutation CommentCreate($issueId: String!, $body: Str
 // queryResolveLabel resolves a label name to its UUID, case-insensitively. Each
 // node carries its team key so the resolver can prefer a team-scoped label over
 // a workspace-scoped one; the configured project is a team key, not a team UUID.
+// The parent selection tells whether the label sits in a single-select group.
 const queryResolveLabel = `query ResolveLabel($name: String!) {
   issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
-    nodes { id name team { id key } }
+    nodes { id name parent { id groupType } team { id key } }
   }
 }`
 
@@ -183,11 +196,27 @@ const queryLabelCreate = `mutation LabelCreate($teamId: String!, $name: String!)
 }`
 
 // queryIssueAddLabel attaches labels through addedLabelIds (append), so the
-// issue's existing labels are preserved and no read-before-write of the label
-// set is required. The IssueAddLabel operation name distinguishes it from the
-// transition issueUpdate mutation under a query-substring match.
+// issue's existing labels are preserved. A plain add reads nothing before the
+// write; the payload carries the issue's label set so the caller can confirm
+// the write without a read, and a label in a single-select group that the
+// write leaves off the issue is followed by a read and a sibling removal. The
+// IssueAddLabel operation name distinguishes it from the transition
+// issueUpdate mutation under a query-substring match.
 const queryIssueAddLabel = `mutation IssueAddLabel($id: String!, $labelIds: [String!]!) {
   issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
     success
+    issue { labels(first: 50) { nodes { id name } pageInfo { hasNextPage } } }
+  }
+}`
+
+// queryIssueRemoveLabels detaches labels through removedLabelIds, so the
+// issue's other labels are untouched. The payload carries the issue's label
+// set so the caller can confirm the removal without a read. The
+// IssueRemoveLabels operation name distinguishes it from the other issueUpdate
+// mutations under a query-substring match.
+const queryIssueRemoveLabels = `mutation IssueRemoveLabels($id: String!, $labelIds: [String!]!) {
+  issueUpdate(id: $id, input: { removedLabelIds: $labelIds }) {
+    success
+    issue { labels(first: 50) { nodes { id name } pageInfo { hasNextPage } } }
   }
 }`

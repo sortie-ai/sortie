@@ -102,6 +102,8 @@ func (o *opsTracker) AddLabel(_ context.Context, _, label string) error {
 	return o.labelErr
 }
 
+func (o *opsTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 type escalationCounters struct {
 	domain.NoopMetrics
 

@@ -1,17 +1,16 @@
 package gitlab
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
@@ -91,17 +90,10 @@ func (a *GitLabSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 	return events, nil
 }
 
-// gitlabMergeRequestUpdate is the JSON body of PUT
-// /projects/{project}/merge_requests/{iid}, carrying only the label
-// removal [GitLabSCMAdapter.RemoveLabel] performs.
-type gitlabMergeRequestUpdate struct {
-	RemoveLabels []string `json:"remove_labels,omitempty"`
-}
-
 // RemoveLabel removes every case variant of label from the given merge
 // request via PUT /projects/{project}/merge_requests/{iid}.
 //
-// label is matched against the merge request's stored labels
+// label is trimmed and matched against the merge request's stored labels
 // case-insensitively, and every matching variant is sent in
 // remove_labels, so a stored "Sortie:Review" is removed even when label
 // is configured in lowercase; GitLab matches label names
@@ -111,33 +103,15 @@ type gitlabMergeRequestUpdate struct {
 // mean the merge request or the project is gone or invisible, never an
 // absent label.
 func (a *GitLabSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error {
-	target := strings.ToLower(strings.TrimSpace(label))
-	if target == "" {
+	name := strings.TrimSpace(label)
+	if name == "" {
 		return nil
 	}
 
-	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
-	if err != nil {
+	project := projectPath(owner, repo)
+	path := "/projects/" + project + "/merge_requests/" + strconv.Itoa(prNumber)
+	if err := issuekit.RemoveIssueLabel(ctx, name, gitlabLabelOps(a.client, a.log, project, path, false)); err != nil {
 		return a.labelNotFoundToNil(err, prNumber)
-	}
-
-	variants := labelVariants(mr.Labels, target)
-	if len(variants) == 0 {
-		return nil
-	}
-
-	payload, marshalErr := json.Marshal(gitlabMergeRequestUpdate{RemoveLabels: variants})
-	if marshalErr != nil {
-		return &domain.SCMError{
-			Kind:    domain.ErrSCMPayload,
-			Message: "failed to encode merge request update body",
-			Err:     marshalErr,
-		}
-	}
-
-	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber)
-	if _, sendErr := a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload)); sendErr != nil {
-		return a.labelNotFoundToNil(sendErr, prNumber)
 	}
 	return nil
 }

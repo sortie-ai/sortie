@@ -27,6 +27,10 @@ const contractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registr
 // caught regardless of the local import alias.
 const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/trackermetrics"
 
+// contractDomainImportPath is resolved per file so the assertion naming the
+// tracker adapter type is found regardless of the local import alias.
+const contractDomainImportPath = "github.com/sortie-ai/sortie/internal/domain"
+
 // contractProcutilImportPath is resolved per file so an aliased import
 // cannot evade rule STOPGRACE.
 const contractProcutilImportPath = "github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -58,6 +62,7 @@ var contractBanTable = map[string]string{
 	"asSCMError":             "scmcore.AsSCMError",
 	"toCIError":              "scmcore.ToCIError",
 	"giteaToCIError":         "scmcore.ToCIError",
+	"labelVariants":          "issuekit.LabelVariants",
 	"deriveState":            "issuekit.DeriveLabelState",
 	"extractState":           "issuekit.DeriveLabelState",
 	"findCurrentStateLabel":  "issuekit.CurrentLabelState",
@@ -103,6 +108,7 @@ var contractTrackerAdapterMethods = map[string]bool{
 	"CommentIssue":                  true,
 	"CommentIssueWithLiteral":       true,
 	"AddLabel":                      true,
+	"RemoveLabel":                   true,
 }
 
 // contractRule names one of the syntactic rules the checker enforces.
@@ -1354,11 +1360,86 @@ func bodyCallsTrackermetricsTrack(file *ast.File, body *ast.BlockStmt) bool {
 	return found
 }
 
+// contractTrackerAdapterType returns the type a non-test file names in
+// "var _ domain.TrackerAdapter = (*T)(nil)", with the domain qualifier
+// resolved from the file's own imports, or "" when no file asserts one.
+// A package that also holds a source-control adapter declares its tracker
+// adapter this way, which is how rule METRICS tells the two apart.
+func contractTrackerAdapterType(files []*ast.File) string {
+	for _, file := range files {
+		domainIdent := resolveContractImportName(file, contractDomainImportPath)
+		if domainIdent == "" {
+			continue
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				if name := contractTrackerAssertionType(spec, domainIdent); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func contractTrackerAssertionType(spec ast.Spec, domainIdent string) string {
+	value, ok := spec.(*ast.ValueSpec)
+	if !ok || len(value.Names) != 1 || value.Names[0].Name != "_" || len(value.Values) != 1 {
+		return ""
+	}
+	typ, ok := value.Type.(*ast.SelectorExpr)
+	if !ok || typ.Sel.Name != "TrackerAdapter" {
+		return ""
+	}
+	if qualifier, ok := typ.X.(*ast.Ident); !ok || qualifier.Name != domainIdent {
+		return ""
+	}
+	conversion, ok := value.Values[0].(*ast.CallExpr)
+	if !ok {
+		return ""
+	}
+	paren, ok := conversion.Fun.(*ast.ParenExpr)
+	if !ok {
+		return ""
+	}
+	star, ok := paren.X.(*ast.StarExpr)
+	if !ok {
+		return ""
+	}
+	if ident, ok := star.X.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
+// contractReceiverBaseType returns the receiver's type name with any
+// pointer stripped, or "" for a receiver that is not a plain named type.
+func contractReceiverBaseType(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	expr := fn.Recv.List[0].Type
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
 // checkContractMetrics reports a violation for every domain.TrackerAdapter
 // method in file, declared in a tracker-registering package, whose body
 // carries no trackermetrics.Track call, and for every call expression
-// selecting IncTrackerRequests anywhere in file.
-func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker bool) []contractViolation {
+// selecting IncTrackerRequests anywhere in file. A non-empty trackerType
+// limits the method check to that receiver type, so a source-control
+// adapter's method of the same name is not taken for a tracker operation;
+// an empty one checks every receiver.
+func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker bool, trackerType string) []contractViolation {
 	var violations []contractViolation
 
 	if registersTracker {
@@ -1368,6 +1449,9 @@ func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker 
 				continue
 			}
 			if !contractTrackerAdapterMethods[fn.Name.Name] {
+				continue
+			}
+			if trackerType != "" && contractReceiverBaseType(fn) != trackerType {
 				continue
 			}
 			if fn.Body == nil || !bodyCallsTrackermetricsTrack(file, fn.Body) {
@@ -2383,8 +2467,9 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, factsPos := contractRegistrationFacts(fset, pkg.files)
 
 	if !contractExempt(pkg.dirName, ruleMETRICS) {
+		trackerType := contractTrackerAdapterType(pkg.files)
 		for _, file := range pkg.files {
-			violations = append(violations, checkContractMetrics(fset, file, registers)...)
+			violations = append(violations, checkContractMetrics(fset, file, registers, trackerType)...)
 		}
 	}
 
@@ -3414,6 +3499,48 @@ func (a *fixtureAdapter) FetchIssueByID(ctx int, id string) (int, error) {
 }
 `,
 			wantCount: 0,
+		},
+		{
+			name:       "only the tracker adapter type's RemoveLabel must be recorded by trackermetrics.Track",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
+		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersFromCandidates,
+	})
+}
+
+var _ domain.TrackerAdapter = (*fixtureAdapter)(nil)
+
+type fixtureAdapter struct{}
+
+func (a *fixtureAdapter) RemoveLabel(ctx int, id, label string) error { return nil }
+
+type fixtureSCMAdapter struct{}
+
+func (a *fixtureSCMAdapter) RemoveLabel(ctx int, pr int, label string) error { return nil }
+`,
+			wantCount:  1,
+			wantSubstr: "RemoveLabel is not recorded by trackermetrics.Track",
+		},
+		{
+			name:       "a private labelVariants function is rejected in favor of issuekit.LabelVariants",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/fixture",
+			src: `package fixture
+
+func labelVariants(stored []string, label string) []string { return nil }
+`,
+			wantCount:  1,
+			wantSubstr: "issuekit.LabelVariants",
 		},
 		{
 			// Plain Register carries no meta literal, so BLOCKER also

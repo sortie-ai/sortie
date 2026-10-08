@@ -848,10 +848,11 @@ func (a *GiteaAdapter) ensureLabelID(ctx context.Context, index map[string]int64
 // [domain.ErrTrackerNotFound].
 //
 // Gitea has no transition API, so the move is composed from label and state
-// edits: the current state label is removed by id, the target label is resolved
-// or created and attached by id, and a terminal or active target patches the
-// native state. Every step is idempotent, so a partial failure converges on
-// retry, and a no-op transition performs no label work.
+// edits: every spelling of the current state label the issue carries is removed
+// by the id the issue reports, the target label is resolved or created and
+// attached by id, and a terminal or active target patches the native state.
+// Every step is idempotent, so a partial failure converges on retry, and a
+// no-op transition performs no label work.
 func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState string) error {
 	targetLower := strings.ToLower(targetState)
 
@@ -904,11 +905,9 @@ func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState
 			}
 
 			if currentLabel != "" {
-				if currentID, ok := index[currentLabel]; ok {
-					labelPath := basePath + "/labels/" + strconv.FormatInt(currentID, 10)
-					if err := a.client.SendNoBody(ctx, "DELETE", labelPath); err != nil && !domain.IsNotFound(err) {
-						return err
-					}
+				stale := issueLabelsNaming(gi.Labels, currentLabel)
+				if _, err := a.labelOps(issueID).Remove(ctx, stale); err != nil && !domain.IsNotFound(err) && !isPayloadRejection(err) {
+					return err
 				}
 			}
 
@@ -993,39 +992,51 @@ func (a *GiteaAdapter) postComment(ctx context.Context, issueID, body string) er
 }
 
 // AddLabel attaches label to the issue, resolving or creating the label id
-// first. The label name is lowercased to match the read path, and the attach is
-// additive, so existing labels are preserved and no read-modify-write occurs.
+// first, and confirms it against the issue's labels. The label name is
+// lowercased to match the read path, and the attach is additive, so existing
+// labels are preserved and no read-modify-write occurs. Returns
+// [domain.ErrTrackerPayload] when the label is blank or the issue does not
+// carry it afterwards.
 //
 // The label is attached by id, never by name: Gitea silently ignores an unknown
 // name on the attach route, so an unresolved label would otherwise be a silent
 // no-op instead of a created-then-attached label.
 func (a *GiteaAdapter) AddLabel(ctx context.Context, issueID, label string) error {
 	return trackermetrics.Track(a.metrics, "add_label", func() error {
-		lowered := strings.ToLower(label)
+		return issuekit.AddIssueLabel(ctx, label, a.labelOps(issueID))
+	})
+}
 
+// RemoveLabel removes every label of the issue that names label, ignoring
+// letter case, by the ids the issue reports, so an organization label that the
+// repository catalog lacks is removed too. The removal is confirmed against the
+// issue's labels, and an issue that carries no such label receives no write.
+// Returns [domain.ErrTrackerPayload] when the label is blank or the issue still
+// carries it afterwards.
+func (a *GiteaAdapter) RemoveLabel(ctx context.Context, issueID, label string) error {
+	return trackermetrics.Track(a.metrics, "remove_label", func() error {
+		return issuekit.RemoveIssueLabel(ctx, label, a.labelOps(issueID))
+	})
+}
+
+func (a *GiteaAdapter) labelOps(issueID string) issuekit.IssueLabelOps {
+	return giteaIssueLabelOps(a.client, a.owner, a.repo, issueID, func(ctx context.Context, lowered string) (int64, error) {
 		index, err := a.resolveLabelIndex(ctx)
 		if err != nil {
-			return err
+			return 0, err
 		}
-
-		labelID, err := a.ensureLabelID(ctx, index, lowered)
-		if err != nil {
-			return err
-		}
-
-		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
-		payload, err := json.Marshal(map[string][]int64{"labels": {labelID}})
-		if err != nil {
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal label payload",
-				Err:     err,
-			}
-		}
-
-		if _, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
-			return err
-		}
-		return nil
+		return a.ensureLabelID(ctx, index, lowered)
 	})
+}
+
+// issueLabelsNaming returns the issue's own labels that name label, with the
+// ids the issue reports for them.
+func issueLabelsNaming(labels []giteaLabel, label string) []issuekit.IssueLabel {
+	var named []issuekit.IssueLabel
+	for _, l := range labels {
+		if issuekit.SameLabel(l.Name, label) {
+			named = append(named, issuekit.IssueLabel{Name: l.Name, ID: strconv.FormatInt(l.ID, 10)})
+		}
+	}
+	return named
 }

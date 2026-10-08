@@ -1,12 +1,15 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -333,5 +336,71 @@ func TestIntegration_CommentIssueWithLiteral_RendersInert(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "@sortie-literal-probe") {
 		t.Errorf("body_html does not show the statement:\n%s", rendered)
+	}
+}
+
+func ensureProbeLabel(t *testing.T, ctx context.Context, a *GitHubAdapter, name string) {
+	t.Helper()
+
+	labelPath := "/repos/" + a.owner + "/" + a.repo + "/labels/" + url.PathEscape(name)
+	_, _, err := a.client.Get(ctx, labelPath, nil)
+	if err == nil {
+		return
+	}
+	if !domain.IsNotFound(err) {
+		t.Fatalf("GET %s: %v", labelPath, err)
+	}
+
+	payload, err := json.Marshal(map[string]string{"name": name, "color": "ededed"})
+	if err != nil {
+		t.Fatalf("marshal label payload: %v", err)
+	}
+	if _, err := a.client.Send(ctx, "POST", "/repos/"+a.owner+"/"+a.repo+"/labels", bytes.NewReader(payload)); err != nil {
+		t.Fatalf("create probe label %q: %v", name, err)
+	}
+}
+
+func TestIntegration_LabelRoundTrip(t *testing.T) {
+	skipUnlessGitHubIntegration(t)
+
+	issueID := os.Getenv("SORTIE_GITHUB_ISSUE_ID")
+	if issueID == "" {
+		t.Skip("skipping: SORTIE_GITHUB_ISSUE_ID not set; set to a valid issue number")
+	}
+
+	a := integrationAdapter(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	const probe = "sortie-label-probe"
+	ensureProbeLabel(t, ctx, a, probe)
+
+	if err := a.AddLabel(ctx, issueID, probe); err != nil {
+		t.Fatalf("AddLabel(%s, %q): %v", issueID, probe, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := a.RemoveLabel(cleanupCtx, issueID, probe); err != nil {
+			t.Errorf("cleanup RemoveLabel(%s, %q): %v", issueID, probe, err)
+		}
+	})
+
+	fetched, err := a.FetchIssueByID(ctx, issueID)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s): %v", issueID, err)
+	}
+	if !slices.Contains(fetched.Labels, probe) {
+		t.Fatalf("FetchIssueByID(%s) labels = %v, want %q after AddLabel", issueID, fetched.Labels, probe)
+	}
+
+	if err := a.RemoveLabel(ctx, issueID, probe); err != nil {
+		t.Fatalf("RemoveLabel(%s, %q): %v", issueID, probe, err)
+	}
+	fetched, err = a.FetchIssueByID(ctx, issueID)
+	if err != nil {
+		t.Fatalf("FetchIssueByID(%s) after removal: %v", issueID, err)
+	}
+	if slices.Contains(fetched.Labels, probe) {
+		t.Errorf("FetchIssueByID(%s) labels = %v, want %q gone immediately after RemoveLabel", issueID, fetched.Labels, probe)
 	}
 }

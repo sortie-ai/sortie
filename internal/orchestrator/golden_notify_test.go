@@ -92,6 +92,8 @@ func (r *goldenRecorder) AddLabel(_ context.Context, issueID, label string) erro
 	return r.record("label", issueID, label)
 }
 
+func (r *goldenRecorder) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 func (r *goldenRecorder) MarkReactionObservationDispatched(_ context.Context, issueID, kind, _ string) error {
 	return r.record("observation_dispatched", issueID, kind)
 }

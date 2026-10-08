@@ -328,9 +328,9 @@ func TestNormalizeNestedOverflowWarn(t *testing.T) {
 		relationsNext  bool
 		wantConnection []string
 	}{
-		{"labels overflow", true, false, []string{"labels"}},
+		{"labels overflow is completed by the reader and does not warn", true, false, nil},
 		{"inverseRelations overflow", false, true, []string{"inverseRelations"}},
-		{"both overflow", true, true, []string{"labels", "inverseRelations"}},
+		{"both overflow warns for inverseRelations only", true, true, []string{"inverseRelations"}},
 		{"no overflow", false, false, nil},
 	}
 

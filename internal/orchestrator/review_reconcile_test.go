@@ -184,6 +184,8 @@ func (s *reviewTrackerStub) AddLabel(_ context.Context, _ string, _ string) erro
 	return nil
 }
 
+func (s *reviewTrackerStub) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
+
 // reviewMetricsSpy records review-specific metric calls.
 type reviewMetricsSpy struct {
 	domain.NoopMetrics
