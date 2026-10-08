@@ -906,7 +906,7 @@ func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState
 
 			if currentLabel != "" {
 				stale := issueLabelsNaming(gi.Labels, currentLabel)
-				if _, err := a.labelOps(issueID).Remove(ctx, stale); err != nil && !domain.IsNotFound(err) {
+				if _, err := a.labelOps(issueID).Remove(ctx, stale); err != nil && !domain.IsNotFound(err) && !isPayloadRejection(err) {
 					return err
 				}
 			}
