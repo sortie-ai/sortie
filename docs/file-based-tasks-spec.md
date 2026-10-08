@@ -235,7 +235,7 @@ If `path` is missing or empty, the adapter constructor returns a `TrackerError` 
 
 ## 9. Adapter Operations
 
-The file adapter implements all five `TrackerAdapter` operations. The file is re-read from disk on each operation call to support test scenarios that modify the fixture between operations.
+The file adapter implements the five read operations of Sections 9.1 to 9.5 and the label writes of Section 9.6. Its state transitions and comments are kept in memory like the label writes, so the file stays unmodified. The file is re-read from disk on each operation call to support test scenarios that modify the fixture between operations.
 
 ### 9.1 FetchCandidateIssues
 
@@ -247,7 +247,7 @@ Returns issues whose state matches the configured `active_states` (case-insensit
 
 Returns a single fully-populated issue including comments, located by exact `id` match. If the issue's comments are `null` in the file, they are coerced to a non-nil empty slice.
 
-**Returns:** `(Issue, nil)` on success; `(zero Issue, *TrackerError{Kind: tracker_payload_error})` if not found.
+**Returns:** `(Issue, nil)` on success; `(zero Issue, *TrackerError{Kind: tracker_not_found})` if not found.
 
 ### 9.3 FetchIssuesByStates
 
@@ -263,9 +263,21 @@ Returns a map of issue ID to current state for each requested ID. Issues not fou
 
 ### 9.5 FetchIssueComments
 
-Returns comments for the specified issue. If the issue exists but has `null` comments in the file, returns a non-nil empty slice. If the issue exists with an empty array `[]`, returns a non-nil empty slice. If the issue is not found, returns a `TrackerError` with kind `tracker_payload_error`.
+Returns comments for the specified issue. If the issue exists but has `null` comments in the file, returns a non-nil empty slice. If the issue exists with an empty array `[]`, returns a non-nil empty slice. If the issue is not found, returns a `TrackerError` with kind `tracker_not_found`.
 
 **Returns:** `([]Comment, nil)` on success; `(nil, *TrackerError)` if not found.
+
+### 9.6 AddLabel and RemoveLabel
+
+`AddLabel(issueID, label)` and `RemoveLabel(issueID, label)` change the labels an issue shows on later reads without modifying the file. The adapter keeps an in-memory overlay per issue: an ordered list of entries, each holding a label and whether the issue carries it, with at most one entry per label. Two labels are the same label when they compare equal ignoring letter case.
+
+- A write sets the entry's spelling and state and keeps the entry's position, or appends a new entry.
+- A read of an issue (`FetchCandidateIssues`, `FetchIssueByID`, and `FetchIssuesByStates`) drops every file label that an entry marks removed, then appends, in entry order, each present entry that no remaining label names.
+- Every label `AddLabel` applies stays visible, so two calls leave both labels on the issue. `RemoveLabel` hides every label of the issue that names the requested label, a file label included, until a later `AddLabel` shows it again. Removing a label the issue lacks changes nothing.
+- An entry outlives edits to the file. The overlay lasts as long as the adapter instance and is never persisted.
+- A label with no character other than white space returns `tracker_payload_error`. An issue the file does not hold returns `tracker_not_found`.
+
+**Returns:** `nil` on success; `*TrackerError` otherwise.
 
 ## 10. Error Handling
 
@@ -273,13 +285,13 @@ All adapter errors are returned as `*TrackerError` values with the following str
 
 ```
 TrackerError {
-    Kind:    TrackerErrorKind  // always "tracker_payload_error" for the file adapter
+    Kind:    TrackerErrorKind  // "tracker_not_found" for an issue the file lacks, "tracker_payload_error" otherwise
     Message: string            // operator-friendly description
     Err:     error             // underlying OS or JSON error, may be nil
 }
 ```
 
-The file adapter only produces errors of kind `tracker_payload_error`. It does not produce `tracker_transport_error`, `tracker_auth_error`, or `tracker_api_error` because there is no network or authentication involved.
+An issue the file does not hold is `tracker_not_found`. Every other failure, a blank label included, is `tracker_payload_error`. The file adapter does not produce `tracker_transport_error`, `tracker_auth_error`, or `tracker_api_error` because there is no network or authentication involved.
 
 Error conditions:
 
@@ -288,6 +300,7 @@ Error conditions:
 | File cannot be read (missing, permission denied) | `"failed to read file: <path>"`       |
 | File contains invalid JSON                       | `"failed to parse file: <path>"`      |
 | Issue not found by ID                            | `"issue not found: <id>"`             |
+| Label with only white space                      | `"label <label> is blank"`            |
 | Missing `path` config key                        | `"missing required config key: path"` |
 | `path` config key holds a non-string YAML value  | `"path: expected string, got <type>"` |
 
@@ -598,7 +611,7 @@ An implementation conforms to this specification if it:
 1. Accepts any file that passes the validation checklist (Section 11).
 2. Rejects files that are not valid JSON or are not top-level arrays.
 3. Applies all normalization rules from Section 7 identically.
-4. Implements all five operations from Section 9 with the specified return-value contracts.
+4. Implements the operations from Section 9 with the specified return-value contracts.
 5. Produces `TrackerError` values as described in Section 10.
 6. Treats `comments: null` and absent `comments` as "not fetched" (`nil`), distinct from `comments: []` ("fetched, none exist").
 7. Never writes to or modifies the issue file.

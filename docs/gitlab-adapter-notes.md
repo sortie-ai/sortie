@@ -88,6 +88,12 @@ The mitigation is normative and lives at construction: **resolve the canonical s
 
 **GitLab performs no concurrency control on issue updates.** Two simultaneous writers with opposing label deltas both succeed, with no conflict signal, and interleave nondeterministically. Two writers against one project silently corrupt each other's state; there is no server-side remedy to reach for.
 
+**An update the token may not make still answers 200.** A token without the permission to edit an issue's labels gets a successful response from the update route, with the labels unchanged. The status therefore proves nothing, so both label writes read the label list from the response and treat a list that contradicts the write as `tracker_payload_error`. The response carries the full list, so no second read follows an accepted write.
+
+**`remove_labels` matches names exactly.** A stored `Sortie:Review` is not removed by `sortie:review`, and a project holding both spellings needs both named. Removal reads the issue's labels, selects every spelling that names the requested label regardless of letter case, and sends them together in one `remove_labels` update. The merge request label command uses the same constructor and the merge request route, and trims its label first, as it always did.
+
+**A label with only white space is refused.** The add trims the label before it looks up the stored casing, so a label with surrounding white space attaches its trimmed spelling and then fails the confirmation, which compares the label as given. A label with nothing but white space returns `tracker_payload_error` with no request, where the add used to log a warning and report success.
+
 ## Blockers are structurally unavailable on the floor
 
 The blocking relation type does not exist on Community Edition; only an undirected "relates to" edge does. The blocked-by list is therefore always empty, and it must not be populated from the undirected relation: that edge carries no direction and no blocking semantics, and a blocker whose state is unknown is treated as non-terminal, so inventing blockers suppresses dispatch for merely cross-referenced issues. Inventing is the more harmful error here.
