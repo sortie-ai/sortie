@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +30,33 @@ const (
 	stageOutcomeNoChange  = "no_change"
 )
 
+// Results of a hop decision, recorded on the run that reached it.
+const (
+	stageResultAdvanced = "advanced"
+	stageResultPartial  = "partial"
+	stageResultFailed   = "failed"
+	stageResultCeiling  = "ceiling"
+)
+
 const stageChainSeparator = " -> "
+
+// stageHopDecision is the outcome of one exit's hop decision. The zero
+// value means no hop was due.
+type stageHopDecision struct {
+	Result     string
+	SourceRule string
+	TargetRule string
+	ChainID    string
+
+	// HopCount is the issue's consecutive hop count once the decision
+	// applies.
+	HopCount int
+}
+
+// made reports whether the decision added the target's stage label.
+func (d stageHopDecision) made() bool {
+	return d.Result == stageResultAdvanced || d.Result == stageResultPartial
+}
 
 // stageHopDeleter is the one store method [resetStageHop] needs.
 type stageHopDeleter interface {
@@ -45,15 +73,25 @@ func hopRouteOf(state *State, id string) HopRoute {
 	return HopRoute{TargetRule: hop.TargetRule, TargetLabel: hop.TargetLabel}
 }
 
-// freshPrevious returns the pair a dispatch of ruleName renders when it
-// selects the target of the issue's latest hop, and the zero pair for any
-// other rule or an issue without a hop record.
-func freshPrevious(state *State, id, ruleName string) StagePrevious {
+// freshLineage returns the lineage a dispatch of ruleName inherits when it
+// selects the target of the issue's latest hop, and the zero lineage for
+// any other rule or an issue without a hop record.
+func freshLineage(state *State, id, ruleName string) StageLineage {
 	hop := state.StageHops[id]
 	if hop == nil || hop.TargetRule != ruleName {
-		return StagePrevious{}
+		return StageLineage{}
 	}
-	return StagePrevious{Rule: hop.SourceRule, Outcome: hop.PreviousOutcome}
+	return StageLineage{PreviousRule: hop.SourceRule, PreviousOutcome: hop.PreviousOutcome, ChainID: hop.ChainID}
+}
+
+// withChainID starts a chain for a lineage that carries none.
+func withChainID(lineage StageLineage) StageLineage {
+	if lineage.ChainID == "" {
+		// Independent of the dispatch ID, so a public comment that carries
+		// the chain never carries session identity.
+		lineage.ChainID = rand.Text()
+	}
+	return lineage
 }
 
 // stageCurrent returns ruleName when the rule carries a stage label, and
@@ -87,19 +125,19 @@ func resetStageHop(ctx context.Context, state *State, store stageHopDeleter, iss
 
 // advanceStage makes the automatic hop of a successful run: it adds the
 // next rule's stage label, records the hop, releases the issue's runtime
-// state, and removes the other stage labels the dispatch read showed. It
-// reports true exactly when the label add succeeded and the hop is made,
-// in which case the caller skips the handoff write. Any other outcome
-// leaves the issue for the handoff write to move. log must already carry
-// issue_id and issue_identifier.
-func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result WorkerResult, params HandleWorkerExitParams, declared bool, log *slog.Logger) bool {
+// state, and removes the other stage labels the dispatch read showed. The
+// returned decision is made exactly when the label add succeeded, in which
+// case the caller skips the handoff write. Any other outcome leaves the
+// issue for the handoff write to move, and the zero decision means no hop
+// was due. log must already carry issue_id and issue_identifier.
+func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result WorkerResult, params HandleWorkerExitParams, declared bool, log *slog.Logger) stageHopDecision {
 	source, ok := params.Dispatch.RuleByName(entry.RuleName)
 	if !ok || source.Next == "" {
-		return false
+		return stageHopDecision{}
 	}
 	target, ok := params.Dispatch.RuleByName(source.Next)
 	if !ok || target.Stage == "" {
-		return false
+		return stageHopDecision{}
 	}
 
 	issueID := result.IssueID
@@ -108,6 +146,15 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 		count = hop.Count
 	}
 	ceiling := params.Dispatch.HopCeiling()
+	decide := func(result string, hopCount int) stageHopDecision {
+		return stageHopDecision{
+			Result:     result,
+			SourceRule: source.Name,
+			TargetRule: target.Name,
+			ChainID:    entry.StageLineage.ChainID,
+			HopCount:   hopCount,
+		}
+	}
 	chainPath := strings.Join(params.Dispatch.ChainPath(source.Name), stageChainSeparator)
 	notMade := func(reason string, extra ...slog.Attr) {
 		attrs := []slog.Attr{
@@ -124,7 +171,7 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 
 	if count+1 > ceiling {
 		notMade("ceiling")
-		return false
+		return decide(stageResultCeiling, count)
 	}
 
 	if err := params.TrackerAdapter.AddLabel(ctx, issueID, target.Stage); err != nil {
@@ -136,7 +183,7 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 			extra = append(extra, slog.Any("missing_stage_labels", missing))
 		}
 		notMade("add_failed", extra...)
-		return false
+		return decide(stageResultFailed, count)
 	}
 
 	now := time.Now().UTC()
@@ -156,6 +203,7 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 		PreviousOutcome:  previousOutcome,
 		SourceDispatchID: entry.DispatchID,
 		HoppedAt:         now,
+		ChainID:          entry.StageLineage.ChainID,
 	}
 	row := persistence.StageHop{
 		IssueID:          issueID,
@@ -167,6 +215,7 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 		PreviousOutcome:  previousOutcome,
 		SourceDispatchID: entry.DispatchID,
 		HoppedAt:         now.Format(time.RFC3339),
+		ChainID:          entry.StageLineage.ChainID,
 	}
 	if err := params.Store.RecordStageHop(ctx, row); err != nil {
 		log.Error("failed to persist stage hop", slog.Any("error", err))
@@ -198,11 +247,67 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 	}
 	if len(left) == 0 {
 		log.LogAttrs(ctx, slog.LevelInfo, "stage hop made", madeAttrs...)
-		return true
+		return decide(stageResultAdvanced, count+1)
 	}
 	madeAttrs = append(madeAttrs, slog.Any("stage_labels_left", left), slog.Any("error", firstErr))
 	log.LogAttrs(ctx, slog.LevelWarn, "stage hop made, stage labels left on the issue", madeAttrs...)
-	return true
+	return decide(stageResultPartial, count+1)
+}
+
+// reportStageHop records the decision on the run's history row and routes
+// the stage event it produced. A zero runID means the row was never
+// appended, so nothing is recorded and the event is still published. log
+// must already carry issue_id and issue_identifier.
+func reportStageHop(ctx context.Context, state *State, params HandleWorkerExitParams, runID int64, identity sessionEvent, hop stageHopDecision, log *slog.Logger) {
+	if runID > 0 {
+		if err := params.Store.RecordRunStageResult(ctx, runID, hop.TargetRule, hop.Result); err != nil {
+			log.Error("failed to persist stage hop result", slog.Any("error", err))
+		}
+	}
+
+	eventType := domain.EventStageNotAdvanced
+	reason := hop.Result
+	if hop.made() {
+		eventType = domain.EventStageAdvanced
+		reason = ""
+	}
+	notification := identity.notification(eventType, "", buildStageHopComment(hop))
+	notification.Envelope.Stage = domain.StageTransition{
+		SourceRule: hop.SourceRule,
+		TargetRule: hop.TargetRule,
+		ChainID:    hop.ChainID,
+		HopCount:   hop.HopCount,
+		Reason:     reason,
+	}
+
+	deliverDetached(ctx, &state.TrackerOpsWg, params.Router.Route(notification), log, func(received bool, err error) {
+		if received && err != nil {
+			log.Warn("stage event comment failed",
+				slog.String("event_type", string(eventType)),
+				slog.Any("error", err),
+			)
+		}
+	})
+}
+
+// buildStageHopComment returns the public text of a stage event. It names
+// no error, session, or agent, so a tracker comment may post it.
+func buildStageHopComment(d stageHopDecision) string {
+	headline := "Sortie advanced the issue to the next stage."
+	lines := []string{"From: " + d.SourceRule, "To: " + d.TargetRule}
+	if !d.made() {
+		headline = "Sortie did not advance the issue to the next stage."
+		lines = append(lines, "Reason: "+stageNotAdvancedPhrase(d.Result))
+	}
+	lines = append(lines, "Hop count: "+strconv.Itoa(d.HopCount), "Chain: "+d.ChainID)
+	return strings.Join(append([]string{headline}, lines...), "\n")
+}
+
+func stageNotAdvancedPhrase(result string) string {
+	if result == stageResultCeiling {
+		return "the issue reached its limit of consecutive stage moves (dispatch.max_consecutive_hops)"
+	}
+	return "the next stage's label could not be added to the issue"
 }
 
 // missingStageLabels returns the configured stage labels the snapshot
@@ -327,6 +432,7 @@ func PopulateStageHops(state *State, rows []persistence.StageHop, log *slog.Logg
 			SourceDispatchID: row.SourceDispatchID,
 			TargetObserved:   row.TargetObserved,
 			HoppedAt:         hoppedAt,
+			ChainID:          row.ChainID,
 		}
 	}
 }

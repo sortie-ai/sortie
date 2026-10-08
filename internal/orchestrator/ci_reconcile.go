@@ -400,6 +400,7 @@ func handleCIFailure(
 		Status:         "ci_failed",
 		Error:          stringPtr("CI checks failed on ref " + ref),
 		TokensMeasured: true,
+		ChainID:        pending.StageLineage.ChainID,
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, ciRunHistory); err != nil {
 		log.Error("failed to persist CI failure run history",
@@ -436,7 +437,7 @@ func handleCIFailure(
 		ReactionKind:        ReactionKindCI,
 		AgentKind:           pending.AgentKind,
 		RuleName:            pending.RuleName,
-		StagePrevious:       pending.StagePrevious,
+		StageLineage:        pending.StageLineage,
 		RuleSettingsApplied: pending.RuleSettingsApplied,
 		TemplateID:          pending.TemplateID,
 		Logger:              log,

@@ -105,6 +105,7 @@ func TestRunHistoryConfiguredSettingsColumns_RoundTrip(t *testing.T) {
 
 	run := newTestRun(1)
 	run.ConfiguredModel, run.ConfiguredEffort, run.ReportedModel = "provider/cheap", "low", "provider/cheap-20260101"
+	run.ChainID, run.StagePrevious, run.StageTarget, run.StageResult = "chain-1", "specify", "plan", "advanced"
 	inserted := appendOrFatal(t, s, run)
 
 	readers := map[string]func() ([]RunHistory, error){
@@ -127,6 +128,51 @@ func TestRunHistoryConfiguredSettingsColumns_RoundTrip(t *testing.T) {
 	for name, rows := range got {
 		if len(rows) != 1 || rows[0].ConfiguredModel != "provider/cheap" || rows[0].ConfiguredEffort != "low" || rows[0].ReportedModel != "provider/cheap-20260101" {
 			t.Errorf("%s = %+v, want one row with ConfiguredModel, ConfiguredEffort, ReportedModel %q, %q, %q", name, rows, "provider/cheap", "low", "provider/cheap-20260101")
+		}
+	}
+
+	type stageCols struct{ chain, previous, target, result string }
+	full := stageCols{"chain-1", "specify", "plan", "advanced"}
+	wantStage := map[string]stageCols{
+		"AppendRunHistory":                            full,
+		"QueryRecentRunHistory":                       full,
+		"QueryRecentRunHistory(afterID)":              full,
+		"LoadLatestSuccessfulRunsForReactionRecovery": {chain: "chain-1", previous: "specify"},
+	}
+	for name, want := range wantStage {
+		r := got[name][0]
+		if gotCols := (stageCols{r.ChainID, r.StagePrevious, r.StageTarget, r.StageResult}); gotCols != want {
+			t.Errorf("%s chain, previous, target, result = %+v, want %+v", name, gotCols, want)
+		}
+	}
+}
+
+func TestRecordRunStageResult(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	first, second := appendOrFatal(t, s, newTestRun(1)), appendOrFatal(t, s, newTestRun(2))
+
+	if err := s.RecordRunStageResult(ctx, second.ID, "plan", "ceiling"); err != nil {
+		t.Fatalf("RecordRunStageResult(%d): %v", second.ID, err)
+	}
+	if err := s.RecordRunStageResult(ctx, second.ID+100, "plan", "failed"); err != nil {
+		t.Errorf("RecordRunStageResult(missing id) = %v, want nil", err)
+	}
+
+	rows, err := s.QueryRecentRunHistory(ctx, 2, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("QueryRecentRunHistory = %+v, %v, want two rows", rows, err)
+	}
+	for _, r := range rows {
+		want := [2]string{}
+		if r.ID == second.ID {
+			want = [2]string{"plan", "ceiling"}
+		}
+		if got := [2]string{r.StageTarget, r.StageResult}; got != want {
+			t.Errorf("row %d (the untouched one is %d) target, result = %q, want %q", r.ID, first.ID, got, want)
 		}
 	}
 }

@@ -230,7 +230,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			ReactionKind:        ReactionKindBotReview,
 			AgentKind:           pending.AgentKind,
 			RuleName:            pending.RuleName,
-			StagePrevious:       pending.StagePrevious,
+			StageLineage:        pending.StageLineage,
 			RuleSettingsApplied: pending.RuleSettingsApplied,
 			TemplateID:          pending.TemplateID,
 			Logger:              entryLog,

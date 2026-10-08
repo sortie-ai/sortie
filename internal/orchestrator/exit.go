@@ -48,6 +48,7 @@ type WorkerExitStore interface {
 	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
 	RecordStageHop(ctx context.Context, hop persistence.StageHop) error
 	DeleteStageHop(ctx context.Context, issueID string) error
+	RecordRunStageResult(ctx context.Context, runID int64, targetRule, result string) error
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -416,8 +417,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TokensMeasured:   measured,
 		UnaccountedTurns: workerResult.UnaccountedTurns,
 
-		StagePrevious:        entry.StagePrevious.Rule,
-		StagePreviousOutcome: entry.StagePrevious.Outcome,
+		StagePrevious:        entry.StageLineage.PreviousRule,
+		StagePreviousOutcome: entry.StageLineage.PreviousOutcome,
+		ChainID:              entry.StageLineage.ChainID,
 	}
 	// A row recording no measurement must carry zero in all five token
 	// columns. The reconciliation above can populate them from a worker
@@ -486,11 +488,24 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	runHistoryPersisted := true
-	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
+	var runID int64
+	if row, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		runHistoryPersisted = false
 		log.Error("failed to persist run history",
 			slog.Any("error", err),
 		)
+	} else {
+		runID = row.ID
+	}
+
+	identity := sessionEvent{
+		IssueID:    workerResult.IssueID,
+		Identifier: cmp.Or(workerResult.Identifier, entry.Identifier),
+		DisplayID:  entry.Issue.DisplayID,
+		DispatchID: entry.DispatchID,
+		SessionID:  cmp.Or(workerResult.SessionID, entry.SessionID),
+		Attempt:    workerResult.Attempt,
+		Agent:      workerResult.AgentAdapter,
 	}
 
 	if evidenceWorkObserved {
@@ -669,7 +684,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
-					StagePrevious:       entry.StagePrevious,
+					StageLineage:        entry.StageLineage,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -717,7 +732,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						SessionID:           sessionID,
 						AgentKind:           entry.AgentKind,
 						RuleName:            entry.RuleName,
-						StagePrevious:       entry.StagePrevious,
+						StageLineage:        entry.StageLineage,
 						RuleSettingsApplied: entry.RuleSettingsApplied,
 						TemplateID:          entry.TemplateID,
 						Logger:              log,
@@ -755,11 +770,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					}
 				}
 
+				var hop stageHopDecision
+				if !verifiedTerminal {
+					hop = advanceStage(ctx, state, entry, workerResult, params, noChangeDeclared, log)
+					if hop.Result != "" {
+						reportStageHop(ctx, state, params, runID, identity, hop, log)
+					}
+				}
+
 				if verifiedTerminal {
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
 					resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetTerminal, log)
-				} else if advanceStage(ctx, state, entry, workerResult, params, noChangeDeclared, log) {
+				} else if hop.made() {
 					hopMade = true
 				} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, resolvedTarget); err != nil {
 					metrics.IncHandoffTransitions(handoffError)
@@ -793,7 +816,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							SessionID:           sessionID,
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 							Logger:              log,
@@ -862,7 +885,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					SessionID:           sessionID,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
-					StagePrevious:       entry.StagePrevious,
+					StageLineage:        entry.StageLineage,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -931,7 +954,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						},
 						AgentKind:           entry.AgentKind,
 						RuleName:            entry.RuleName,
-						StagePrevious:       entry.StagePrevious,
+						StageLineage:        entry.StageLineage,
 						RuleSettingsApplied: entry.RuleSettingsApplied,
 						TemplateID:          entry.TemplateID,
 					}
@@ -975,7 +998,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1014,7 +1037,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1052,7 +1075,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1091,7 +1114,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1131,7 +1154,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1171,7 +1194,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1208,7 +1231,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
-							StagePrevious:       entry.StagePrevious,
+							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1259,7 +1282,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
-					StagePrevious:       entry.StagePrevious,
+					StageLineage:        entry.StageLineage,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -1289,8 +1312,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					TemplateID: retryEntry.TemplateID,
 					AgentKind:  retryEntry.AgentKind,
 
-					StagePrevious:        retryEntry.StagePrevious.Rule,
-					StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
+					StagePrevious:        retryEntry.StageLineage.PreviousRule,
+					StagePreviousOutcome: retryEntry.StageLineage.PreviousOutcome,
+					ChainID:              retryEntry.StageLineage.ChainID,
 				}
 				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 					log.Error("failed to persist retry entry",
@@ -1333,16 +1357,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		body = buildFailureComment(runDuration, retryPending, nextAttempt)
 	}
 
-	delivery := params.Router.Route(sessionEvent{
-		IssueID:    workerResult.IssueID,
-		Identifier: cmp.Or(workerResult.Identifier, entry.Identifier),
-		DisplayID:  entry.Issue.DisplayID,
-		DispatchID: entry.DispatchID,
-		SessionID:  cmp.Or(workerResult.SessionID, entry.SessionID),
-		Attempt:    workerResult.Attempt,
-		Agent:      workerResult.AgentAdapter,
-		AgentText:  agentText,
-	}.notification(eventType, severity, body))
+	exitEvent := identity
+	exitEvent.AgentText = agentText
+	delivery := params.Router.Route(exitEvent.notification(eventType, severity, body))
 
 	deliverDetached(ctx, &state.TrackerOpsWg, delivery, log, func(received bool, err error) {
 		if !received {

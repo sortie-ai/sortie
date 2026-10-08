@@ -1006,6 +1006,14 @@ func TestHandleDashboard_ExtendedFieldsRendered(t *testing.T) {
 	}
 }
 
+func stageEntry(chain, previous, rule, target, result string) RunHistoryEntry {
+	return RunHistoryEntry{
+		Identifier: "MT-9", Attempt: 1, Status: "succeeded", WorkflowFile: "WORKFLOW.md",
+		StartedAt: "2026-03-24T10:00:00Z", CompletedAt: "2026-03-24T10:00:30Z",
+		ChainID: chain, StagePrevious: previous, RuleName: rule, StageTarget: target, StageResult: result,
+	}
+}
+
 func TestMapRunHistoryEntries(t *testing.T) {
 	t.Parallel()
 
@@ -1013,10 +1021,14 @@ func TestMapRunHistoryEntries(t *testing.T) {
 	tests := []struct {
 		name         string
 		input        RunHistoryEntry
+		wantID       string
 		wantWF       string
 		wantDuration string
 		wantError    string
 		wantTurns    int
+		wantRule     string
+		wantChain    string
+		wantStage    string
 	}{
 		{
 			name: "non-empty workflow file passed through",
@@ -1095,6 +1107,53 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			wantError:    "",
 			wantTurns:    8,
 		},
+		{
+			name:         "DisplayID set is used as Identifier",
+			input:        RunHistoryEntry{Identifier: "42", DisplayID: "owner/repo#42", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T10:00:00Z", CompletedAt: "2026-03-24T10:05:00Z"},
+			wantID:       "owner/repo#42",
+			wantWF:       "\u2014",
+			wantDuration: "5m 0s",
+		},
+		{
+			name:         "empty DisplayID falls back to Identifier",
+			input:        RunHistoryEntry{Identifier: "PROJ-99", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T10:00:00Z", CompletedAt: "2026-03-24T10:05:00Z"},
+			wantID:       "PROJ-99",
+			wantWF:       "\u2014",
+			wantDuration: "5m 0s",
+		},
+		{
+			name:         "a row without a chain renders no stage items even with a previous stage",
+			input:        stageEntry("", "specify", "plan", "", ""),
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+		},
+		{
+			name:         "a chain row that is not hop-involved renders no stage items",
+			input:        stageEntry("chain-1", "", "specify", "", ""),
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+		},
+		{
+			name:         "a run that advanced shows its decision",
+			input:        stageEntry("chain-1", "", "specify", "plan", "advanced"),
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+			wantRule:     "specify", wantChain: "chain-1", wantStage: "specify -> plan (advanced)",
+		},
+		{
+			name:         "a run a hop reached shows where it came from",
+			input:        stageEntry("chain-1", "specify", "plan", "", ""),
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+			wantRule:     "plan", wantChain: "chain-1", wantStage: "specify -> plan",
+		},
+		{
+			name:         "a middle run stopped at the ceiling shows both ends",
+			input:        stageEntry("chain-1", "specify", "plan", "implement", "ceiling"),
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+			wantRule:     "plan", wantChain: "chain-1", wantStage: "specify -> plan -> implement (ceiling)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1107,6 +1166,9 @@ func TestMapRunHistoryEntries(t *testing.T) {
 				t.Fatalf("len = %d, want 1", len(got))
 			}
 			e := got[0]
+			if tt.wantID != "" && e.Identifier != tt.wantID {
+				t.Errorf("Identifier = %q, want %q", e.Identifier, tt.wantID)
+			}
 			if e.WorkflowFile != tt.wantWF {
 				t.Errorf("WorkflowFile = %q, want %q", e.WorkflowFile, tt.wantWF)
 			}
@@ -1118,6 +1180,9 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			}
 			if e.Turns != tt.wantTurns {
 				t.Errorf("Turns = %d, want %d", e.Turns, tt.wantTurns)
+			}
+			if e.Rule != tt.wantRule || e.Chain != tt.wantChain || e.Stage != tt.wantStage {
+				t.Errorf("Rule, Chain, Stage = %q, %q, %q, want %q, %q, %q", e.Rule, e.Chain, e.Stage, tt.wantRule, tt.wantChain, tt.wantStage)
 			}
 		})
 	}
@@ -1384,56 +1449,6 @@ func TestHandleDashboard_SessionsCachedTokensTooltip(t *testing.T) {
 				if !strings.Contains(dr.Body, formatted) {
 					t.Errorf("body missing formatted cache token count %q", formatted)
 				}
-			}
-		})
-	}
-}
-
-func TestMapRunHistoryEntries_DisplayID(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		identifier string
-		displayID  string
-		wantID     string
-	}{
-		{
-			name:       "DisplayID set — used as Identifier",
-			identifier: "42",
-			displayID:  "owner/repo#42",
-			wantID:     "owner/repo#42",
-		},
-		{
-			name:       "DisplayID empty — falls back to Identifier",
-			identifier: "PROJ-99",
-			displayID:  "",
-			wantID:     "PROJ-99",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			runs := []RunHistoryEntry{
-				{
-					Identifier:  tt.identifier,
-					DisplayID:   tt.displayID,
-					Attempt:     1,
-					Status:      "succeeded",
-					StartedAt:   "2026-03-24T10:00:00Z",
-					CompletedAt: "2026-03-24T10:05:00Z",
-				},
-			}
-
-			got := mapRunHistoryEntries(runs)
-
-			if len(got) != 1 {
-				t.Fatalf("len = %d, want 1", len(got))
-			}
-			if got[0].Identifier != tt.wantID {
-				t.Errorf("Identifier = %q, want %q", got[0].Identifier, tt.wantID)
 			}
 		})
 	}

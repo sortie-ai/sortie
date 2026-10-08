@@ -67,6 +67,16 @@ type RunHistory struct {
 	// dispatch and for pre-migration rows.
 	StagePrevious        string
 	StagePreviousOutcome string
+
+	// ChainID groups the runs of one pass through a chain of stages; it is
+	// empty only for rows written before migration 024.
+	ChainID string
+
+	// StageTarget and StageResult record the hop decision the attempt's
+	// exit reached; both are empty when it reached none. StageResult is
+	// "advanced", "partial", "failed", or "ceiling".
+	StageTarget string
+	StageResult string
 }
 
 // AppendRunHistory inserts a completed run attempt. The input ID is
@@ -94,14 +104,14 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
 		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens, run.CacheWriteTokens, run.TokensMeasured,
 		run.UnaccountedTurns, run.ConfiguredModel, run.ConfiguredEffort, run.ReportedModel,
-		run.StagePrevious, run.StagePreviousOutcome,
+		run.StagePrevious, run.StagePreviousOutcome, run.ChainID, run.StageTarget, run.StageResult,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -196,7 +206,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			r.turns_completed, r.review_metadata, r.rule_name, r.template_id,
 			r.input_tokens, r.output_tokens, r.total_tokens, r.cache_read_tokens, r.cache_write_tokens, r.tokens_measured,
 			r.unaccounted_turns, r.configured_model, r.configured_effort, r.reported_model,
-			r.stage_previous, r.stage_previous_outcome
+			r.stage_previous, r.stage_previous_outcome, r.chain_id
 		FROM run_history AS r
 		JOIN bounded ON bounded.latest_id = r.id
 		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
@@ -215,7 +225,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName, &run.TemplateID,
 			&run.InputTokens, &run.OutputTokens, &run.TotalTokens, &run.CacheReadTokens, &run.CacheWriteTokens, &run.TokensMeasured,
 			&run.UnaccountedTurns, &run.ConfiguredModel, &run.ConfiguredEffort, &run.ReportedModel,
-			&run.StagePrevious, &run.StagePreviousOutcome,
+			&run.StagePrevious, &run.StagePreviousOutcome, &run.ChainID,
 		); err != nil {
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}
@@ -255,7 +265,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
 				input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns,
-				configured_model, configured_effort, reported_model
+				configured_model, configured_effort, reported_model,
+				chain_id, stage_previous, stage_target, stage_result
 			FROM run_history
 			WHERE id < ?
 			ORDER BY id DESC
@@ -265,7 +276,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
 				input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns,
-				configured_model, configured_effort, reported_model
+				configured_model, configured_effort, reported_model,
+				chain_id, stage_previous, stage_target, stage_result
 			FROM run_history
 			ORDER BY id DESC
 			LIMIT ?`, limit)
@@ -285,6 +297,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
 			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens, &r.CacheWriteTokens, &r.TokensMeasured,
 			&r.UnaccountedTurns, &r.ConfiguredModel, &r.ConfiguredEffort, &r.ReportedModel,
+			&r.ChainID, &r.StagePrevious, &r.StageTarget, &r.StageResult,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -306,6 +319,18 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		return nil, fmt.Errorf("query recent run history: %w", err)
 	}
 	return entries, nil
+}
+
+// RecordRunStageResult sets the hop decision on the run_history row with the
+// given id. It is a no-op, not an error, when no row has that id.
+func (s *Store) RecordRunStageResult(ctx context.Context, runID int64, targetRule, result string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE run_history SET stage_target = ?, stage_result = ? WHERE id = ?`,
+		targetRule, result, runID)
+	if err != nil {
+		return fmt.Errorf("record run stage result %d: %w", runID, err)
+	}
+	return nil
 }
 
 // CountRunHistoryByIssue returns the number of entries for the issue, or

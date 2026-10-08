@@ -157,6 +157,7 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 		Attempt:    1,
 		DueAtMs:    1000,
 		Error:      nil,
+		ChainID:    "chain-1",
 	}
 	if err := s.SaveRetryEntry(ctx, entry1); err != nil {
 		t.Fatalf("SaveRetryEntry (first): %v", err)
@@ -168,6 +169,7 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 		Attempt:    2,
 		DueAtMs:    2000,
 		Error:      new("retry failed"),
+		ChainID:    "chain-2",
 	}
 	if err := s.SaveRetryEntry(ctx, entry2); err != nil {
 		t.Fatalf("SaveRetryEntry (upsert): %v", err)
@@ -192,6 +194,29 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 	}
 	if *got.Error != "retry failed" {
 		t.Errorf("Error = %q, want %q", *got.Error, "retry failed")
+	}
+	if got.ChainID != "chain-2" {
+		t.Errorf("ChainID = %q, want %q", got.ChainID, "chain-2")
+	}
+}
+
+func TestRecordStageHop_ChainFollowsLatestHop(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	hop := StageHop{IssueID: "ISS-1", Identifier: "PROJ-1", HopCount: 1, SourceRule: "specify", TargetRule: "plan", SourceDispatchID: "d1", ChainID: "chain-1"}
+	for _, next := range []struct{ dispatchID, chainID string }{{"d1", "chain-1"}, {"d2", "chain-2"}} {
+		hop.SourceDispatchID, hop.ChainID = next.dispatchID, next.chainID
+		if err := s.RecordStageHop(ctx, hop); err != nil {
+			t.Fatalf("RecordStageHop(%+v): %v", next, err)
+		}
+	}
+
+	hops, err := s.ListStageHops(ctx)
+	if err != nil || len(hops) != 1 || hops[0].ChainID != "chain-2" {
+		t.Errorf("ListStageHops = %+v, %v, want one record with ChainID %q", hops, err, "chain-2")
 	}
 }
 

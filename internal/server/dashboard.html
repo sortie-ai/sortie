@@ -601,6 +601,20 @@
                         $e.WorkflowFile}}{{$e.WorkflowFile}}{{else}}&mdash;{{end}}
                       </dd>
                     </div>
+                    {{if $e.Chain}}
+                    <div class="detail-item">
+                      <dt>Rule</dt>
+                      <dd>{{$e.Rule}}</dd>
+                    </div>
+                    <div class="detail-item">
+                      <dt>Chain</dt>
+                      <dd>{{$e.Chain}}</dd>
+                    </div>
+                    <div class="detail-item">
+                      <dt>Stage</dt>
+                      <dd>{{$e.Stage}}</dd>
+                    </div>
+                    {{end}}
                     <div class="detail-item detail-error">
                       <dt>Error</dt>
                       <dd>{{if $e.Error}}{{$e.Error}}{{else}}&mdash;{{end}}</dd>

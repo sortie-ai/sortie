@@ -84,6 +84,19 @@ type wirePayload struct {
 	// an agent message payload keeps its original field set.
 	EventType string `json:"event_type,omitempty"`
 	AgentText string `json:"agent_text,omitempty"`
+
+	// Stage is set only for a stage event, so every other payload keeps
+	// its field set.
+	Stage *wireStage `json:"stage,omitempty"`
+}
+
+// wireStage is the hop decision a stage event reports.
+type wireStage struct {
+	SourceRule string `json:"source_rule"`
+	TargetRule string `json:"target_rule"`
+	ChainID    string `json:"chain_id"`
+	HopCount   int    `json:"hop_count"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // Send posts the notification as a JSON object and returns nil on any
@@ -108,6 +121,15 @@ func (n *notifier) Send(ctx context.Context, notification domain.Notification) e
 	if notification.Envelope.EventType.FromOrchestrator() {
 		payload.EventType = string(notification.Envelope.EventType)
 		payload.AgentText = notification.Message.AgentText
+	}
+	if stage := notification.Envelope.Stage; stage != (domain.StageTransition{}) {
+		payload.Stage = &wireStage{
+			SourceRule: stage.SourceRule,
+			TargetRule: stage.TargetRule,
+			ChainID:    stage.ChainID,
+			HopCount:   stage.HopCount,
+			Reason:     stage.Reason,
+		}
 	}
 
 	encoded, err := json.Marshal(payload)

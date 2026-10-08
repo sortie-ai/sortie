@@ -220,8 +220,9 @@ type RunningEntry struct {
 	// block matched.
 	RuleName string
 
-	// StagePrevious is the frozen stage.previous pair this run rendered.
-	StagePrevious StagePrevious
+	// StageLineage is the frozen stage.previous pair and chain this run
+	// was dispatched with; its ChainID is never empty.
+	StageLineage StageLineage
 
 	// RuleSettingsApplied reports that the rule's settings block applied
 	// to this attempt.
@@ -323,9 +324,9 @@ type RetryEntry struct {
 	// RuleName is the dispatch rule of the run this retry follows.
 	RuleName string
 
-	// StagePrevious is the frozen stage.previous pair of the run this
-	// retry follows.
-	StagePrevious StagePrevious
+	// StageLineage is the frozen stage lineage of the run this retry
+	// follows.
+	StageLineage StageLineage
 
 	// RuleSettingsApplied reports that the run this retry follows ran
 	// with its rule's settings block.
@@ -497,9 +498,8 @@ type PendingReaction struct {
 	// RuleName is the rule name of the completed worker.
 	RuleName string
 
-	// StagePrevious is the frozen stage.previous pair of the completed
-	// worker.
-	StagePrevious StagePrevious
+	// StageLineage is the frozen stage lineage of the completed worker.
+	StageLineage StageLineage
 
 	// RuleSettingsApplied reports that the completed worker ran with its
 	// rule's settings block.
@@ -753,13 +753,21 @@ type ParkedEntry struct {
 	ParkedAt     time.Time
 }
 
-// StagePrevious is the frozen stage.previous pair of a selection.
-type StagePrevious struct {
-	// Rule is the rule whose hop led to the dispatch; empty when none did.
-	Rule string
+// StageLineage is the frozen stage.previous pair and chain identifier of a
+// selection.
+type StageLineage struct {
+	// PreviousRule is the rule whose hop led to the dispatch; empty when
+	// none did.
+	PreviousRule string
 
-	// Outcome is "succeeded" or "no_change"; empty when Rule is empty.
-	Outcome string
+	// PreviousOutcome is "succeeded" or "no_change"; empty when
+	// PreviousRule is empty.
+	PreviousOutcome string
+
+	// ChainID groups the runs of one pass through a chain of stages. It is
+	// empty only on a value read from a row written before chains were
+	// recorded, and never on a [RunningEntry].
+	ChainID string
 }
 
 // StageHopEntry is the runtime view of one issue's stage_hops row.
@@ -777,6 +785,9 @@ type StageHopEntry struct {
 	TargetObserved bool
 
 	HoppedAt time.Time
+
+	// ChainID is the chain of the run whose exit made the hop.
+	ChainID string
 }
 
 // State is the single authoritative runtime state owned by the

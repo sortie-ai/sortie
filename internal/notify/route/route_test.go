@@ -188,6 +188,12 @@ func TestRouter_Route_Targets(t *testing.T) {
 			want:    []string{"tracker_comment"},
 		},
 		{
+			name:    "no explicit entry and every deprecated flag still never posts stage.advanced",
+			tracker: true,
+			in:      route.Inputs{Comments: config.TrackerCommentsConfig{OnDispatch: true, OnCompletion: true, OnFailure: true}},
+			event:   domain.EventStageAdvanced,
+		},
+		{
 			name:    "session started is not posted by default",
 			tracker: true,
 			event:   domain.EventTypeSessionStarted,
@@ -284,6 +290,17 @@ func TestRouter_Route_Targets(t *testing.T) {
 			in:    route.Inputs{Entries: []config.NotificationBackend{entry("webhook", domain.EventSessionFailed)}},
 			event: domain.EventSessionFailed,
 			want:  []string{"notifications[0]"},
+		},
+		{
+			name:  "entry receives a stage event it lists",
+			in:    route.Inputs{Entries: []config.NotificationBackend{entry("webhook", domain.EventStageAdvanced)}},
+			event: domain.EventStageAdvanced,
+			want:  []string{"notifications[0]"},
+		},
+		{
+			name:  "entry listing stage.advanced does not receive stage.not_advanced",
+			in:    route.Inputs{Entries: []config.NotificationBackend{entry("webhook", domain.EventStageAdvanced)}},
+			event: domain.EventStageNotAdvanced,
 		},
 		{
 			name:  "entry does not receive an event it omits",

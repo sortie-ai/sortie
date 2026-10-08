@@ -320,7 +320,7 @@ func dispatchMergeConflictContinuation(
 		ReactionKind:        ReactionKindMergeConflict,
 		AgentKind:           pending.AgentKind,
 		RuleName:            pending.RuleName,
-		StagePrevious:       pending.StagePrevious,
+		StageLineage:        pending.StageLineage,
 		RuleSettingsApplied: pending.RuleSettingsApplied,
 		TemplateID:          pending.TemplateID,
 		Logger:              log,

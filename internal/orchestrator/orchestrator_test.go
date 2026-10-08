@@ -8668,6 +8668,60 @@ func TestHandleTick_WarnsOnceWhenAnIssueCarriesSeveralStageLabels(t *testing.T) 
 	}
 }
 
+func TestHandleTick_StageLineageChain(t *testing.T) {
+	t.Parallel()
+
+	const fresh = "<fresh>"
+	hopReachedPlan := persistence.StageHop{
+		IssueID: "id-1", Identifier: "S-1", HopCount: 1, SourceRule: "specify", TargetRule: "plan", TargetLabel: "Stage-Plan",
+		PreviousOutcome: "succeeded", SourceDispatchID: "d0", HoppedAt: "2026-03-19T10:00:00Z", ChainID: "chain-hop",
+	}
+	tests := []struct {
+		name string
+		hops []persistence.StageHop
+		want map[string]StageLineage
+	}{
+		{"dispatches no hop reached each start a chain", nil, map[string]StageLineage{"id-1": {ChainID: fresh}, "id-2": {ChainID: fresh}}},
+		{"a restored hop record hands its chain to the dispatch it reached and to no other", []persistence.StageHop{hopReachedPlan},
+			map[string]StageLineage{"id-1": {PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-hop"}, "id-2": {ChainID: fresh}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newRunHarness(t, runConfig(t, stagedRulesRaw()), "kind-a", "kind-b", "kind-c")
+			PopulateStageHops(h.state, tt.hops, nil)
+			h.tracker.candidates = []domain.Issue{candidate("id-1", "S-1", "Stage-Plan"), candidate("id-2", "S-2", "Stage-Plan")}
+			h.build()
+
+			h.o.handleTick(context.Background())
+			h.o.state.WorkerWg.Wait()
+
+			seen := map[string]bool{}
+			for id, want := range tt.want {
+				entry := h.o.state.Running[id]
+				if entry == nil {
+					t.Fatalf("Running[%q] missing after handleTick", id)
+				}
+				got := entry.StageLineage
+				if want.ChainID == fresh {
+					if got.ChainID == entry.DispatchID || seen[got.ChainID] {
+						t.Errorf("Running[%q] chain = %q, want a value that is neither the dispatch ID %q nor another entry's chain", id, got.ChainID, entry.DispatchID)
+					}
+					seen[got.ChainID] = true
+					if got.ChainID != "" {
+						got.ChainID = fresh
+					}
+				}
+				if got != want {
+					t.Errorf("Running[%q].StageLineage = %+v, want %+v", id, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestHandleTick_CandidateHoldReasons(t *testing.T) {
 	t.Parallel()
 
@@ -10690,6 +10744,8 @@ func TestHandleTick_FreshDispatchIsGivenPullRequestComments(t *testing.T) {
 func (s *stubStore) DeleteStageHop(context.Context, string) error { return nil }
 
 func (s *stubStore) RecordStageHop(context.Context, persistence.StageHop) error { return nil }
+
+func (s *stubStore) RecordRunStageResult(context.Context, int64, string, string) error { return nil }
 
 func (s *stubStore) MarkStageHopObserved(context.Context, string) error { return nil }
 

@@ -185,6 +185,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"agent_kind", "TEXT", true, 0},
 				{"stage_previous", "TEXT", true, 0},
 				{"stage_previous_outcome", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
 			},
 		},
 		{
@@ -218,6 +219,9 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"reported_model", "TEXT", true, 0},
 				{"stage_previous", "TEXT", true, 0},
 				{"stage_previous_outcome", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
+				{"stage_target", "TEXT", true, 0},
+				{"stage_result", "TEXT", true, 0},
 			},
 		},
 		{
@@ -233,6 +237,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"source_dispatch_id", "TEXT", true, 0},
 				{"target_observed", "INTEGER", true, 0},
 				{"hopped_at", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
 			},
 		},
 		{
@@ -458,6 +463,48 @@ func TestMigrate_Migration021_ConfiguredSettingsDefaultToEmpty(t *testing.T) {
 	}
 	if model != "" || effort != "" || reported != "" {
 		t.Errorf("configured_model, configured_effort, reported_model for a pre-migration-021 row = %q, %q, %q, want all empty", model, effort, reported)
+	}
+}
+
+func TestMigrate_Migration024_ExistingRowsKeepValuesAndGetEmptyChainColumns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, insert, query, want string }{
+		{
+			"run_history",
+			`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, stage_previous)
+				VALUES ('i', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded', 'specify')`,
+			`SELECT stage_previous || '|' || chain_id || '|' || stage_target || '|' || stage_result FROM run_history`, "specify|||",
+		},
+		{
+			"retry_entries",
+			`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, rule_name, template_id, agent_kind, stage_previous)
+				VALUES ('i', 'MT-1', 2, 1000, 'plan', 'plan', 'mock', 'specify')`,
+			`SELECT stage_previous || '|' || chain_id FROM retry_entries`, "specify|",
+		},
+		{
+			"stage_hops",
+			`INSERT INTO stage_hops (issue_id, identifier, hop_count, source_rule, target_rule, target_label, previous_outcome, source_dispatch_id, hopped_at)
+				VALUES ('i', 'MT-1', 1, 'specify', 'plan', 'plan', 'succeeded', 'd1', '2026-01-01T00:00:00Z')`,
+			`SELECT target_rule || '|' || chain_id FROM stage_hops`, "plan|",
+		},
+	}
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 23)
+	for _, tt := range tests {
+		if _, err := s.db.ExecContext(context.Background(), tt.insert); err != nil {
+			t.Fatalf("insert pre-migration-024 %s row: %v", tt.name, err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	for _, tt := range tests {
+		var got string
+		if err := s.db.QueryRowContext(context.Background(), tt.query).Scan(&got); err != nil || got != tt.want {
+			t.Errorf("%s row after upgrade = %q, %v, want %q, nil", tt.name, got, err, tt.want)
+		}
 	}
 }
 

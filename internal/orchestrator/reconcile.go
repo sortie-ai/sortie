@@ -342,7 +342,7 @@ func reconcileOverdueRetries(state *State, params ReconcileParams, log *slog.Log
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
-			StagePrevious:       entry.StagePrevious,
+			StageLineage:        entry.StageLineage,
 			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
@@ -412,7 +412,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
-			StagePrevious:       entry.StagePrevious,
+			StageLineage:        entry.StageLineage,
 			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
@@ -439,8 +439,9 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				TemplateID: retryEntry.TemplateID,
 				AgentKind:  retryEntry.AgentKind,
 
-				StagePrevious:        retryEntry.StagePrevious.Rule,
-				StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
+				StagePrevious:        retryEntry.StageLineage.PreviousRule,
+				StagePreviousOutcome: retryEntry.StageLineage.PreviousOutcome,
+				ChainID:              retryEntry.StageLineage.ChainID,
 			}
 			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				entryLog.Error("failed to persist stall retry entry",

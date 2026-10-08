@@ -403,6 +403,10 @@ func loadFixture(t *testing.T, name string) []byte {
 	return data
 }
 
+func eventPayload(recorded string, eventType domain.EventType, suffix string) string {
+	return strings.TrimSuffix(recorded, "}") + `,"event_type":"` + string(eventType) + `"` + suffix + `}`
+}
+
 func TestWebhook_Send_EventType(t *testing.T) {
 	t.Parallel()
 
@@ -411,12 +415,25 @@ func TestWebhook_Send_EventType(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType domain.EventType
+		stage     domain.StageTransition
 		want      string
 	}{
 		{
 			name:      "agent message keeps the recorded payload",
 			eventType: domain.EventAgentMessage,
 			want:      recorded,
+		},
+		{
+			name:      "stage.advanced carries the decision without a reason",
+			eventType: domain.EventStageAdvanced,
+			stage:     domain.StageTransition{SourceRule: "specify", TargetRule: "plan", ChainID: "chain-1", HopCount: 2},
+			want:      eventPayload(recorded, domain.EventStageAdvanced, `,"stage":{"source_rule":"specify","target_rule":"plan","chain_id":"chain-1","hop_count":2}`),
+		},
+		{
+			name:      "stage.not_advanced carries the decision with its reason",
+			eventType: domain.EventStageNotAdvanced,
+			stage:     domain.StageTransition{SourceRule: "specify", TargetRule: "plan", ChainID: "chain-1", HopCount: 3, Reason: "ceiling"},
+			want:      eventPayload(recorded, domain.EventStageNotAdvanced, `,"stage":{"source_rule":"specify","target_rule":"plan","chain_id":"chain-1","hop_count":3,"reason":"ceiling"}`),
 		},
 		{
 			name: "a notification without an event type keeps the recorded payload",
@@ -428,11 +445,12 @@ func TestWebhook_Send_EventType(t *testing.T) {
 			tests = append(tests, struct {
 				name      string
 				eventType domain.EventType
+				stage     domain.StageTransition
 				want      string
 			}{
 				name:      "orchestrator event " + string(eventType) + " appends event_type after category",
 				eventType: eventType,
-				want:      strings.TrimSuffix(recorded, "}") + `,"event_type":"` + string(eventType) + `"}`,
+				want:      eventPayload(recorded, eventType, ""),
 			})
 		}
 	}
@@ -448,6 +466,7 @@ func TestWebhook_Send_EventType(t *testing.T) {
 			}
 			notification := makeNotification()
 			notification.Envelope.EventType = tt.eventType
+			notification.Envelope.Stage = tt.stage
 
 			if err := n.Send(context.Background(), notification); err != nil {
 				t.Fatalf("Send(%s): %v", tt.eventType, err)

@@ -185,7 +185,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ReactionKind:        popped.ReactionKind,
 			AgentKind:           popped.AgentKind,
 			RuleName:            popped.RuleName,
-			StagePrevious:       popped.StagePrevious,
+			StageLineage:        popped.StageLineage,
 			RuleSettingsApplied: popped.RuleSettingsApplied,
 			TemplateID:          popped.TemplateID,
 			Logger:              log,
@@ -672,21 +672,22 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
-	previous := popped.StagePrevious
+	lineage := popped.StageLineage
 	if ruleName != popped.RuleName {
-		previous = freshPrevious(state, issueID, ruleName)
+		lineage = freshLineage(state, issueID, ruleName)
 	}
+	lineage = withChainID(lineage)
 	dispatchCtx = withStageRender(dispatchCtx, prompt.StageContext{
 		Current:         stageCurrent(params.Dispatch, ruleName),
-		Previous:        previous.Rule,
-		PreviousOutcome: previous.Outcome,
+		Previous:        lineage.PreviousRule,
+		PreviousOutcome: lineage.PreviousOutcome,
 	})
 	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host, agentKind, templateID, popped.ReactionKind, adapter, attemptSettings))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = agentKind
 		entry.RuleName = ruleName
-		entry.StagePrevious = previous
+		entry.StageLineage = lineage
 		entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 		entry.ConfiguredModel = attemptSettings.Settings.Model
 		entry.ConfiguredEffort = attemptSettings.Settings.Effort
@@ -757,8 +758,9 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 		TemplateID: retryEntry.TemplateID,
 		AgentKind:  retryEntry.AgentKind,
 
-		StagePrevious:        retryEntry.StagePrevious.Rule,
-		StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
+		StagePrevious:        retryEntry.StageLineage.PreviousRule,
+		StagePreviousOutcome: retryEntry.StageLineage.PreviousOutcome,
+		ChainID:              retryEntry.StageLineage.ChainID,
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",

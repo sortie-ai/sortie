@@ -3162,6 +3162,8 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 		AgentKind:  wantAgentKind,
 		RuleName:   wantRuleName,
 		TemplateID: wantTemplateID,
+
+		StageLineage: StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-1"},
 	}
 	state.Claimed[id] = struct{}{}
 	state.Running["OTHER"] = &RunningEntry{Identifier: "OTHER"}
@@ -3186,6 +3188,9 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	}
 	if saved.TemplateID != wantTemplateID {
 		t.Errorf("saved RetryEntry.TemplateID = %q, want %q", saved.TemplateID, wantTemplateID)
+	}
+	if saved.StagePrevious != "specify" || saved.StagePreviousOutcome != "succeeded" || saved.ChainID != "chain-1" {
+		t.Errorf("saved RetryEntry previous, outcome, chain = %q, %q, %q, want %q, %q, %q", saved.StagePrevious, saved.StagePreviousOutcome, saved.ChainID, "specify", "succeeded", "chain-1")
 	}
 	if entry, ok := state.RetryAttempts[id]; ok && entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()
@@ -3242,6 +3247,61 @@ func frozenRetryState(id string, entry RetryEntry) *State {
 	state.RetryAttempts[id] = &entry
 	state.Claimed[id] = struct{}{}
 	return state
+}
+
+func TestHandleRetryTimer_StageLineage(t *testing.T) {
+	t.Parallel()
+
+	const fresh = "<fresh>"
+	carried := StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-1"}
+	hop := &StageHopEntry{SourceRule: "plan", TargetRule: "implement", PreviousOutcome: "no_change", ChainID: "chain-hop"}
+	tests := []struct {
+		name        string
+		lineage     StageLineage
+		hop         *StageHopEntry
+		resolveRule string
+		want        StageLineage
+	}{
+		{"a retry keeping its rule carries the chain it was frozen with", carried, nil, "", carried},
+		{"an empty carried chain is replaced and the pair is kept", StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded"}, nil, "",
+			StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: fresh}},
+		{"a retry routed afresh to a rule no hop targeted starts a chain", carried, nil, "implement", StageLineage{ChainID: fresh}},
+		{"a retry routed afresh to the rule a hop targeted inherits the hop's chain", carried, hop, "implement",
+			StageLineage{PreviousRule: "plan", PreviousOutcome: "no_change", ChainID: "chain-hop"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "ISS-LINEAGE"
+			state := frozenRetryState(id, RetryEntry{Attempt: 1, AgentKind: "kind-a", RuleName: "plan", StageLineage: tt.lineage})
+			if tt.hop != nil {
+				state.StageHops[id] = tt.hop
+			}
+			params := capturingRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}, new([]dispatchedWorker))
+			if tt.resolveRule != "" {
+				params.ResolveSelection = func(frozen DispatchResolution, _ domain.Issue) DispatchResolution {
+					frozen.RuleName = tt.resolveRule
+					return frozen
+				}
+			}
+
+			HandleRetryTimer(state, id, params)
+
+			running := state.Running[id]
+			if running == nil {
+				t.Fatal("Running[id] missing after dispatch")
+			}
+			got := running.StageLineage
+			if tt.want.ChainID == fresh && got.ChainID != "" && got.ChainID != tt.lineage.ChainID {
+				got.ChainID = fresh
+			}
+			if got != tt.want {
+				t.Errorf("RunningEntry.StageLineage = %+v, want %+v (a fresh chain differs from %q)", got, tt.want, tt.lineage.ChainID)
+			}
+		})
+	}
 }
 
 func TestHandleRetryTimer_AdapterLookupFailureReschedulesWithBackoff(t *testing.T) {
