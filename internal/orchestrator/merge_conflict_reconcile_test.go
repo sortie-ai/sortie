@@ -1825,3 +1825,5 @@ func (s *statefulFingerprintStore) AddReactionHandedOffComments(_ context.Contex
 func (s *statefulFingerprintStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *statefulFingerprintStore) DeleteStageHop(context.Context, string) error { return nil }

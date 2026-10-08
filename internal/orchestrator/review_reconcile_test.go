@@ -3455,7 +3455,7 @@ func TestReactionPass_RowsSettleARecoveredEntry(t *testing.T) {
 			c.state.PendingReactions[c.rkey()] = c.newPending()
 		}},
 		{"terminal release", func(c *reactionCycle) {
-			releaseTerminalIssueState(context.Background(), c.state, c.store, c.issueID, c.log)
+			releaseIssueRuntimeState(context.Background(), c.state, c.store, c.issueID, c.log)
 			c.state.Claimed[c.issueID] = struct{}{}
 			c.state.PendingReactions[c.rkey()] = c.newPending()
 		}},
@@ -3821,4 +3821,10 @@ func TestSettleHandedOffCommentSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *reviewReconcileStore) DeleteStageHop(context.Context, string) error { return nil }
+
+func (s *reviewReconcileStore) RecordStageHop(context.Context, persistence.StageHop) error {
+	return nil
 }

@@ -120,6 +120,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 	"dispatch": {
 		Fields: []FieldDef{
 			{Name: "rules", Type: FieldSequence},
+			{Name: "max_consecutive_hops", Type: FieldInt},
 			{Name: "default", Type: FieldMap, Nested: []FieldDef{
 				{Name: "agent", Type: FieldString},
 				{Name: "template", Type: FieldString},

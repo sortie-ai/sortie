@@ -1159,3 +1159,5 @@ func (s *labelReviewFingerprintStore) AddReactionHandedOffComments(_ context.Con
 func (s *labelReviewFingerprintStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *labelReviewFingerprintStore) DeleteStageHop(context.Context, string) error { return nil }

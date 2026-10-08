@@ -10686,3 +10686,13 @@ func TestHandleTick_FreshDispatchIsGivenPullRequestComments(t *testing.T) {
 		})
 	}
 }
+
+func (s *stubStore) DeleteStageHop(context.Context, string) error { return nil }
+
+func (s *stubStore) RecordStageHop(context.Context, persistence.StageHop) error { return nil }
+
+func (s *stubStore) MarkStageHopObserved(context.Context, string) error { return nil }
+
+func (s *stubStore) ListStageHops(context.Context) ([]persistence.StageHop, error) {
+	return nil, nil
+}

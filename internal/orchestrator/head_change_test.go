@@ -198,3 +198,5 @@ func (s *headChangeStore) AddReactionHandedOffComments(_ context.Context, _, _ s
 func (s *headChangeStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *headChangeStore) DeleteStageHop(context.Context, string) error { return nil }

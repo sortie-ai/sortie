@@ -28,6 +28,7 @@ type ParkStore interface {
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
+	DeleteStageHop(ctx context.Context, issueID string) error
 }
 
 // parkObserverStore widens [ParkStore] with the one method the release pass
@@ -58,7 +59,8 @@ type parkIssueParams struct {
 }
 
 // parkIssue records the park, releases the claim, cancels and deletes any
-// pending retry, and starts the detached parking-label write.
+// pending retry, resets the issue's stage hop count, and starts the detached
+// parking-label write.
 func parkIssue(state *State, params parkIssueParams) {
 	ctx := params.Ctx
 	if ctx == nil {
@@ -90,6 +92,7 @@ func parkIssue(state *State, params parkIssueParams) {
 	if err := params.Store.DeleteRetryEntry(ctx, params.IssueID); err != nil {
 		log.Error("failed to delete retry entry after park", slog.Any("error", err))
 	}
+	resetStageHop(ctx, state, params.Store, params.IssueID, stageResetParked, log)
 
 	params.Metrics.IncIssueParks(params.Reason)
 
@@ -126,8 +129,9 @@ func parkIssue(state *State, params parkIssueParams) {
 	})
 }
 
-// unparkIssue lifts the park and deletes the persisted row. It is a no-op
-// when issueID is absent from state.Parked.
+// unparkIssue lifts the park, deletes the persisted row, and resets the
+// issue's stage hop count. It is a no-op when issueID is absent from
+// state.Parked.
 func unparkIssue(ctx context.Context, state *State, issueID, trigger string, store ParkStore, log *slog.Logger) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -148,6 +152,7 @@ func unparkIssue(ctx context.Context, state *State, issueID, trigger string, sto
 	if err := store.ResetHandoffAbsenceSequence(ctx, issueID); err != nil {
 		log.Error("failed to reset handoff absence sequence after unpark", slog.Any("error", err))
 	}
+	resetStageHop(ctx, state, store, issueID, stageResetUnparked, log)
 
 	log.Info("issue unparked",
 		slog.String("trigger", trigger),

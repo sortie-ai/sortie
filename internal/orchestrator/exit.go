@@ -46,6 +46,8 @@ type WorkerExitStore interface {
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
 	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
+	RecordStageHop(ctx context.Context, hop persistence.StageHop) error
+	DeleteStageHop(ctx context.Context, issueID string) error
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -91,6 +93,10 @@ type HandleWorkerExitParams struct {
 	// NoChangeState is the target for a run that declared no change was
 	// needed. Empty falls back to HandoffState.
 	NoChangeState string
+
+	// Dispatch is the dispatch configuration in force, which holds the
+	// rule's next link and the hop ceiling read at this exit.
+	Dispatch config.DispatchConfig
 
 	// ActiveStates determines whether the issue is still active at exit
 	// (case-insensitive).
@@ -409,6 +415,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		CacheWriteTokens: entry.CacheWriteTokens,
 		TokensMeasured:   measured,
 		UnaccountedTurns: workerResult.UnaccountedTurns,
+
+		StagePrevious:        entry.StagePrevious.Rule,
+		StagePreviousOutcome: entry.StagePrevious.Outcome,
 	}
 	// A row recording no measurement must carry zero in all five token
 	// columns. The reconciliation above can populate them from a worker
@@ -584,6 +593,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
 		terminalSuppressed := false
+		hopMade := false
 
 		switch {
 		case blockedSoftStop:
@@ -625,6 +635,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			terminalSuppressed = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
+			resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetTerminal, log)
 
 		case handoffPath && evidenceWithheld && absenceParked:
 			// Parking already cancelled the sequence, deleted any persisted
@@ -658,6 +669,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
+					StagePrevious:       entry.StagePrevious,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -705,6 +717,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						SessionID:           sessionID,
 						AgentKind:           entry.AgentKind,
 						RuleName:            entry.RuleName,
+						StagePrevious:       entry.StagePrevious,
 						RuleSettingsApplied: entry.RuleSettingsApplied,
 						TemplateID:          entry.TemplateID,
 						Logger:              log,
@@ -745,6 +758,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				if verifiedTerminal {
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
+					resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetTerminal, log)
+				} else if advanceStage(ctx, state, entry, workerResult, params, noChangeDeclared, log) {
+					hopMade = true
 				} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, resolvedTarget); err != nil {
 					metrics.IncHandoffTransitions(handoffError)
 					if workerResult.SoftStop {
@@ -777,6 +793,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							SessionID:           sessionID,
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 							Logger:              log,
@@ -795,6 +812,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						slog.String("target_state", resolvedTarget),
 						slog.Bool("no_change_declared", noChangeDeclared),
 					)
+					resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetHandoff, log)
 					retryDeferred = true
 					claimRetainedForIncumbent = true
 				} else {
@@ -806,6 +824,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					metrics.IncHandoffTransitions(handoffSuccess)
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
+					resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetHandoff, log)
 				}
 			}
 
@@ -843,6 +862,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					SessionID:           sessionID,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
+					StagePrevious:       entry.StagePrevious,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -857,6 +877,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			// exactly the population this arm would otherwise strand.
 			if params.HandoffState != "" {
 				metrics.IncHandoffTransitions(handoffSkipped)
+			}
+			if !issueIsActive {
+				resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetNotActive, log)
 			}
 			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
 				logRetrySlotDeferral(log, triggerContinuation, incumbent)
@@ -874,7 +897,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		if claimRetainedForIncumbent {
 			stillClaimed = false
 		}
-		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed
+		// A made hop leaves the issue active on its next stage, which owns any
+		// reaction from here on, so the run that hopped seeds none.
+		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed && !hopMade
 
 		// Seed a pending CI check when CI provider and SCM adapter are both
 		// configured and the workspace carries PR identity: the reaction
@@ -906,6 +931,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						},
 						AgentKind:           entry.AgentKind,
 						RuleName:            entry.RuleName,
+						StagePrevious:       entry.StagePrevious,
 						RuleSettingsApplied: entry.RuleSettingsApplied,
 						TemplateID:          entry.TemplateID,
 					}
@@ -949,6 +975,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -987,6 +1014,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1024,6 +1052,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1062,6 +1091,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1101,6 +1131,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1140,6 +1171,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1176,6 +1208,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							},
 							AgentKind:           entry.AgentKind,
 							RuleName:            entry.RuleName,
+							StagePrevious:       entry.StagePrevious,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
 						}
@@ -1226,6 +1259,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
+					StagePrevious:       entry.StagePrevious,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
@@ -1254,6 +1288,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					RuleName:   retryEntry.RuleName,
 					TemplateID: retryEntry.TemplateID,
 					AgentKind:  retryEntry.AgentKind,
+
+					StagePrevious:        retryEntry.StagePrevious.Rule,
+					StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
 				}
 				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 					log.Error("failed to persist retry entry",

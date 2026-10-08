@@ -12,6 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/prompt"
 )
 
 // pausedRetryMaxDwell bounds how long a known-reaction retry may be
@@ -33,6 +34,7 @@ type RetryTimerStore interface {
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
 	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
+	DeleteStageHop(ctx context.Context, issueID string) error
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -50,6 +52,10 @@ type HandleRetryTimerParams struct {
 	ActiveStates []string
 
 	TerminalStates []string
+
+	// Dispatch is the dispatch configuration in force, read to compute the
+	// stage render of a dispatch.
+	Dispatch config.DispatchConfig
 
 	// HandoffState is the configured tracker handoff state. Known reaction
 	// retries may dispatch while the fetched issue equals it. Empty means
@@ -179,6 +185,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ReactionKind:        popped.ReactionKind,
 			AgentKind:           popped.AgentKind,
 			RuleName:            popped.RuleName,
+			StagePrevious:       popped.StagePrevious,
 			RuleSettingsApplied: popped.RuleSettingsApplied,
 			TemplateID:          popped.TemplateID,
 			Logger:              log,
@@ -461,6 +468,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	switch {
+	case isTerminal:
+		resetStageHop(ctx, state, params.Store, issueID, stageResetTerminal, log)
+	case !isActive:
+		resetStageHop(ctx, state, params.Store, issueID, stageResetNotActive, log)
+	}
+
 	if isTerminal {
 		log.Info("issue in terminal state, releasing claim",
 			slog.String("issue_state", issue.State),
@@ -658,11 +672,21 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
+	previous := popped.StagePrevious
+	if ruleName != popped.RuleName {
+		previous = freshPrevious(state, issueID, ruleName)
+	}
+	dispatchCtx = withStageRender(dispatchCtx, prompt.StageContext{
+		Current:         stageCurrent(params.Dispatch, ruleName),
+		Previous:        previous.Rule,
+		PreviousOutcome: previous.Outcome,
+	})
 	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host, agentKind, templateID, popped.ReactionKind, adapter, attemptSettings))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = agentKind
 		entry.RuleName = ruleName
+		entry.StagePrevious = previous
 		entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 		entry.ConfiguredModel = attemptSettings.Settings.Model
 		entry.ConfiguredEffort = attemptSettings.Settings.Effort
@@ -732,6 +756,9 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 		RuleName:   retryEntry.RuleName,
 		TemplateID: retryEntry.TemplateID,
 		AgentKind:  retryEntry.AgentKind,
+
+		StagePrevious:        retryEntry.StagePrevious.Rule,
+		StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",

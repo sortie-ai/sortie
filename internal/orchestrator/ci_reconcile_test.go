@@ -3022,3 +3022,5 @@ func (s *ciReconcileStore) AddReactionHandedOffComments(_ context.Context, _, _ 
 func (s *ciReconcileStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (s *ciReconcileStore) DeleteStageHop(context.Context, string) error { return nil }

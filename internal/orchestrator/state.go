@@ -14,6 +14,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -219,6 +220,9 @@ type RunningEntry struct {
 	// block matched.
 	RuleName string
 
+	// StagePrevious is the frozen stage.previous pair this run rendered.
+	StagePrevious StagePrevious
+
 	// RuleSettingsApplied reports that the rule's settings block applied
 	// to this attempt.
 	RuleSettingsApplied bool
@@ -318,6 +322,10 @@ type RetryEntry struct {
 
 	// RuleName is the dispatch rule of the run this retry follows.
 	RuleName string
+
+	// StagePrevious is the frozen stage.previous pair of the run this
+	// retry follows.
+	StagePrevious StagePrevious
 
 	// RuleSettingsApplied reports that the run this retry follows ran
 	// with its rule's settings block.
@@ -488,6 +496,10 @@ type PendingReaction struct {
 
 	// RuleName is the rule name of the completed worker.
 	RuleName string
+
+	// StagePrevious is the frozen stage.previous pair of the completed
+	// worker.
+	StagePrevious StagePrevious
 
 	// RuleSettingsApplied reports that the completed worker ran with its
 	// rule's settings block.
@@ -741,6 +753,32 @@ type ParkedEntry struct {
 	ParkedAt     time.Time
 }
 
+// StagePrevious is the frozen stage.previous pair of a selection.
+type StagePrevious struct {
+	// Rule is the rule whose hop led to the dispatch; empty when none did.
+	Rule string
+
+	// Outcome is "succeeded" or "no_change"; empty when Rule is empty.
+	Outcome string
+}
+
+// StageHopEntry is the runtime view of one issue's stage_hops row.
+type StageHopEntry struct {
+	Identifier       string
+	Count            int
+	SourceRule       string
+	TargetRule       string
+	TargetLabel      string
+	PreviousOutcome  string
+	SourceDispatchID string
+
+	// TargetObserved reports that a tracker read has shown TargetLabel on
+	// the issue since the hop, which releases the dispatch hold.
+	TargetObserved bool
+
+	HoppedAt time.Time
+}
+
 // State is the single authoritative runtime state owned by the
 // orchestrator. Not safe for concurrent access: all mutations are
 // serialized through the event loop goroutine, except WorkerWg and
@@ -838,6 +876,11 @@ type State struct {
 	// person acts on it. The durable mirror is the parked_issues table.
 	Parked map[string]*ParkedEntry
 
+	// StageHops maps issue ID to the issue's consecutive automatic stage
+	// hops since the last reset. The durable mirror is the stage_hops
+	// table. Only the event loop may mutate this map.
+	StageHops map[string]*StageHopEntry
+
 	// AgentTotals holds aggregate token counts and cumulative runtime
 	// seconds across all ended sessions. Active-session elapsed time is
 	// computed at snapshot time.
@@ -925,6 +968,21 @@ func ContinuationFromContext(ctx context.Context) map[string]any {
 	return v
 }
 
+type stageRenderCtxKey struct{}
+
+// withStageRender returns a child context carrying the stage render
+// context a worker passes to every prompt render.
+func withStageRender(ctx context.Context, render prompt.StageContext) context.Context {
+	return context.WithValue(ctx, stageRenderCtxKey{}, render)
+}
+
+// stageRenderFrom extracts the value injected by [withStageRender], or the
+// zero [prompt.StageContext] when absent.
+func stageRenderFrom(ctx context.Context) prompt.StageContext {
+	render, _ := ctx.Value(stageRenderCtxKey{}).(prompt.StageContext)
+	return render
+}
+
 // NewState creates an initialized [State] with empty collections and the
 // provided config values. maxConcurrentByState keys must be pre-normalized
 // to lowercase by the caller.
@@ -945,6 +1003,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentB
 		BudgetAnnounced:           make(map[string]BudgetAnnouncement),
 		BudgetHoldNoticed:         make(map[string]string),
 		Parked:                    make(map[string]*ParkedEntry),
+		StageHops:                 make(map[string]*StageHopEntry),
 		AgentTotals:               totals,
 		ReactionAttempts:          make(map[string]int),
 		ReactionHandedOffComments: make(map[string]map[string]struct{}),

@@ -757,7 +757,7 @@ func TestResolveRule(t *testing.T) {
 			}
 			tmpl := tt.defaultTmpl
 
-			got := ResolveRule(tt.issue, tt.dispatch, kind, tmpl)
+			got := ResolveRule(tt.issue, tt.dispatch, HopRoute{}, kind, tmpl)
 
 			if got.AgentKind != tt.wantAgent {
 				t.Errorf("ResolveRule(%q).AgentKind = %q, want %q", tt.issue.Identifier, got.AgentKind, tt.wantAgent)
@@ -1042,7 +1042,7 @@ func TestRetrySelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, fresh := retrySelection(tt.cfg, templateHeld, tt.frozen, tt.issue)
+			got, fresh := retrySelection(tt.cfg, templateHeld, tt.frozen, tt.issue, HopRoute{})
 
 			if got.AgentKind != tt.want.AgentKind || got.TemplateID != tt.want.TemplateID || got.RuleName != tt.want.RuleName {
 				t.Errorf("retrySelection(frozen %+v) = {%q, %q, %q}, want {%q, %q, %q}", tt.frozen,
@@ -1163,7 +1163,7 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ResolveRule(issueWithTitle(tt.title), titleOnlyConfig(tt.phrases...), "fallback", "")
+			got := ResolveRule(issueWithTitle(tt.title), titleOnlyConfig(tt.phrases...), HopRoute{}, "fallback", "")
 
 			if matched := got.RuleName == "titled"; matched != tt.want {
 				t.Errorf("ResolveRule(title %q, phrases %q) matched = %v, want %v", tt.title, tt.phrases, matched, tt.want)
@@ -1180,8 +1180,8 @@ func TestResolveRule_TitleMatching(t *testing.T) {
 		issue := issueWithTitle(title)
 		dispatch := titleOnlyConfig(phrases...)
 
-		first := ResolveRule(issue, dispatch, "fallback", "")
-		second := ResolveRule(issue, dispatch, "fallback", "")
+		first := ResolveRule(issue, dispatch, HopRoute{}, "fallback", "")
+		second := ResolveRule(issue, dispatch, HopRoute{}, "fallback", "")
 
 		if first != second {
 			t.Errorf("ResolveRule() twice = %+v, then %+v, want equal", first, second)
@@ -1235,7 +1235,7 @@ func TestResolveRule_TitleWithOtherKeys(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ResolveRule(tt.issue, tt.dispatch, "fallback", "")
+			got := ResolveRule(tt.issue, tt.dispatch, HopRoute{}, "fallback", "")
 
 			if got.RuleName != tt.wantRuleName || got.MatchedAt != tt.wantLayer {
 				t.Errorf("ResolveRule(title %q).{RuleName, MatchedAt} = {%q, %v}, want {%q, %v}", tt.issue.Title, got.RuleName, got.MatchedAt, tt.wantRuleName, tt.wantLayer)

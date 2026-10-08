@@ -70,18 +70,34 @@ type DispatchResolution struct {
 	MatchedAt ResolutionLayer
 }
 
+// HopRoute names the rule and stage label of an issue's latest automatic
+// stage hop. The zero value means the issue has no hop record.
+type HopRoute struct {
+	TargetRule  string
+	TargetLabel string
+}
+
 // ResolveRule selects the dispatch agent kind, template ID, and rule
-// name for an issue against a [config.DispatchConfig]. A rule whose
-// stage label the issue carries is selected first, the one lowest in
-// the list when the issue carries several. Otherwise the rules without
-// a stage label are tried in order. It is pure: no I/O, no logging, no
-// time dependence, no goroutine. defaultAgentKind is the workflow-wide
-// agent kind (typically cfg.Agent.Kind); defaultTemplateID is the
-// body-template sentinel (typically the empty string). The same inputs
-// always produce the same output.
-func ResolveRule(issue domain.Issue, dispatch config.DispatchConfig, defaultAgentKind, defaultTemplateID string) DispatchResolution {
+// name for an issue against a [config.DispatchConfig]. The target of the
+// issue's latest hop is selected first while the issue carries the stage
+// label that hop added and a rule of that name exists. Otherwise a rule
+// whose stage label the issue carries is selected, the most downstream one
+// along next links when the issue carries several, the one lowest in the
+// list among equals. Otherwise the rules without a stage label are tried
+// in order. It is pure: no I/O, no logging, no time dependence, no
+// goroutine. defaultAgentKind is the workflow-wide agent kind (typically
+// cfg.Agent.Kind); defaultTemplateID is the body-template sentinel
+// (typically the empty string). The same inputs always produce the same
+// output.
+func ResolveRule(issue domain.Issue, dispatch config.DispatchConfig, hop HopRoute, defaultAgentKind, defaultTemplateID string) DispatchResolution {
+	if hop.TargetRule != "" && carriesLabel(issue.Labels, hop.TargetLabel) {
+		if rule, ok := dispatch.RuleByName(hop.TargetRule); ok {
+			return ruleResolution(rule, dispatch, defaultAgentKind, defaultTemplateID)
+		}
+	}
+
 	if staged := stageCandidates(issue, dispatch.Rules); len(staged) > 0 {
-		return ruleResolution(dispatch.Rules[staged[0]], dispatch, defaultAgentKind, defaultTemplateID)
+		return ruleResolution(dispatch.Rules[pickStageCandidate(staged, dispatch.Rules)], dispatch, defaultAgentKind, defaultTemplateID)
 	}
 
 	for _, rule := range dispatch.Rules {
@@ -120,6 +136,12 @@ func ruleResolution(rule config.DispatchRule, dispatch config.DispatchConfig, de
 	}
 }
 
+// carriesLabel reports whether labels holds a label equal to stageLabel
+// under [config.StageLabelsEqual].
+func carriesLabel(labels []string, stageLabel string) bool {
+	return slices.ContainsFunc(labels, func(label string) bool { return config.StageLabelsEqual(stageLabel, label) })
+}
+
 // stageCandidates returns the indices, in list order, of the rules whose
 // stage label the issue carries.
 func stageCandidates(issue domain.Issue, rules []config.DispatchRule) []int {
@@ -128,11 +150,46 @@ func stageCandidates(issue domain.Issue, rules []config.DispatchRule) []int {
 		if rule.Stage == "" {
 			continue
 		}
-		if slices.ContainsFunc(issue.Labels, func(label string) bool { return config.StageLabelsEqual(rule.Stage, label) }) {
+		if carriesLabel(issue.Labels, rule.Stage) {
 			indices = append(indices, i)
 		}
 	}
 	return indices
+}
+
+// pickStageCandidate returns the index among staged of the rule that no
+// other staged rule is downstream of, the lowest index when several
+// qualify, so an issue carrying the labels of several stages of one chain
+// takes the furthest. staged must be non-empty.
+func pickStageCandidate(staged []int, rules []config.DispatchRule) int {
+	for _, i := range staged {
+		if !slices.ContainsFunc(staged, func(j int) bool { return j != i && reachesByNext(rules, i, j) }) {
+			return i
+		}
+	}
+	return staged[0]
+}
+
+// reachesByNext reports whether following next links from rules[from]
+// arrives at rules[to]. The walk stops at a repeated rule, so a loop in a
+// configuration that skipped validation cannot spin.
+func reachesByNext(rules []config.DispatchRule, from, to int) bool {
+	visited := map[int]struct{}{from: {}}
+	for current := from; rules[current].Next != ""; {
+		following := slices.IndexFunc(rules, func(r config.DispatchRule) bool { return r.Name == rules[current].Next })
+		if following < 0 {
+			return false
+		}
+		if following == to {
+			return true
+		}
+		if _, seen := visited[following]; seen {
+			return false
+		}
+		visited[following] = struct{}{}
+		current = following
+	}
+	return false
 }
 
 // warnSeveralStageLabels logs one warning naming every stage label the
@@ -162,9 +219,9 @@ func warnSeveralStageLabels(log *slog.Logger, issue domain.Issue, dispatch confi
 // stands, with a retired kind replaced by its replacement, while its
 // kind is still reachable and its template is still held; otherwise the
 // issue is routed afresh. The second result is true only when the
-// issue was routed afresh. templateHeld reports whether the workflow
-// holds a template for an ID.
-func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool, frozen DispatchResolution, issue domain.Issue) (DispatchResolution, bool) {
+// issue was routed afresh, by hop and the issue's labels. templateHeld
+// reports whether the workflow holds a template for an ID.
+func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool, frozen DispatchResolution, issue domain.Issue, hop HopRoute) (DispatchResolution, bool) {
 	target := frozen.AgentKind
 	for _, conversion := range cfg.AgentKindConversions() {
 		if conversion.Kind == target {
@@ -177,7 +234,7 @@ func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool,
 	if reachable && templateHeld(frozen.TemplateID) {
 		return DispatchResolution{AgentKind: target, TemplateID: frozen.TemplateID, RuleName: frozen.RuleName, MatchedAt: frozen.MatchedAt}, false
 	}
-	return ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, ""), true
+	return ResolveRule(issue, cfg.Dispatch, hop, cfg.Agent.Kind, ""), true
 }
 
 // coalesce returns the first non-empty string from the arguments. An

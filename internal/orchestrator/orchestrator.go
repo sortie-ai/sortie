@@ -65,6 +65,10 @@ type OrchestratorStore interface {
 	DeleteBudgetHoldNotice(ctx context.Context, issueID string) error
 	DeleteAllBudgetHoldNotices(ctx context.Context) error
 	ListBudgetHoldNotices(ctx context.Context) ([]persistence.BudgetHoldNotice, error)
+	RecordStageHop(ctx context.Context, hop persistence.StageHop) error
+	MarkStageHopObserved(ctx context.Context, issueID string) error
+	DeleteStageHop(ctx context.Context, issueID string) error
+	ListStageHops(ctx context.Context) ([]persistence.StageHop, error)
 }
 
 var _ OrchestratorStore = (*persistence.Store)(nil)
@@ -518,6 +522,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 			TrackerAdapter:                    o.trackerAdapter,
 			HandoffState:                      cfg.Tracker.HandoffState,
 			NoChangeState:                     cfg.Tracker.NoChangeState,
+			Dispatch:                          cfg.Dispatch,
 			ActiveStates:                      cfg.Tracker.ActiveStates,
 			TerminalStates:                    cfg.Tracker.TerminalStates,
 			Metrics:                           o.metrics,
@@ -574,7 +579,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			cfg := o.workflowManager.Config()
 			templateHeld := func(id string) bool { return o.workflowManager.PromptTemplateByID(id) != nil }
 			resolveSelection := func(frozen DispatchResolution, issue domain.Issue) DispatchResolution {
-				selection, routedAfresh := retrySelection(cfg, templateHeld, frozen, issue)
+				selection, routedAfresh := retrySelection(cfg, templateHeld, frozen, issue, hopRouteOf(o.state, issue.ID))
 				if routedAfresh {
 					warnSeveralStageLabels(o.logger, issue, cfg.Dispatch, selection.RuleName)
 				}
@@ -589,6 +594,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Router:                 o.router,
 				ActiveStates:           cfg.Tracker.ActiveStates,
 				TerminalStates:         cfg.Tracker.TerminalStates,
+				Dispatch:               cfg.Dispatch,
 				HandoffState:           cfg.Tracker.HandoffState,
 				MaxRetryBackoffMS:      cfg.Agent.MaxRetryBackoffMS,
 				MakeWorkerFn:           o.makeWorkerFn,
@@ -831,9 +837,12 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			}
 			continue
 		}
-		issue = decision.Issue
+		issue, dispatchable := o.holdForStageHop(ctx, decision.Issue, activeSet, terminalSet)
+		if !dispatchable {
+			continue
+		}
 
-		resolution := ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
+		resolution := ResolveRule(issue, cfg.Dispatch, hopRouteOf(o.state, issue.ID), cfg.Agent.Kind, "")
 		warnSeveralStageLabels(o.logger, issue, cfg.Dispatch, resolution.RuleName)
 		adapter, adapterErr := o.agentAdapterByKind(resolution.AgentKind)
 		if adapterErr != nil {
@@ -888,12 +897,19 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if seed != nil {
 			dispatchCtx = WithContinuationContext(ctx, seed)
 		}
+		previous := freshPrevious(o.state, issue.ID, resolution.RuleName)
+		dispatchCtx = withStageRender(dispatchCtx, prompt.StageContext{
+			Current:         stageCurrent(cfg.Dispatch, resolution.RuleName),
+			Previous:        previous.Rule,
+			PreviousOutcome: previous.Outcome,
+		})
 		DispatchIssue(dispatchCtx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, attemptSettings))
 		if entry := o.state.Running[issue.ID]; entry != nil {
 			entry.ContinuationContext = seed
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
+			entry.StagePrevious = previous
 			entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 			entry.ConfiguredModel = attemptSettings.Settings.Model
 			entry.ConfiguredEffort = attemptSettings.Settings.Effort
@@ -1575,6 +1591,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				TrackerAdapter:                    o.trackerAdapter,
 				HandoffState:                      cfg.Tracker.HandoffState,
 				NoChangeState:                     cfg.Tracker.NoChangeState,
+				Dispatch:                          cfg.Dispatch,
 				ActiveStates:                      cfg.Tracker.ActiveStates,
 				TerminalStates:                    cfg.Tracker.TerminalStates,
 				Metrics:                           o.metrics,

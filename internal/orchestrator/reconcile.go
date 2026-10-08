@@ -34,6 +34,7 @@ type ReconcileStore interface {
 	) (persistence.ReactionObservation, error)
 	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
 	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
+	DeleteStageHop(ctx context.Context, issueID string) error
 }
 
 var _ ReconcileStore = (*persistence.Store)(nil)
@@ -341,6 +342,7 @@ func reconcileOverdueRetries(state *State, params ReconcileParams, log *slog.Log
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			StagePrevious:       entry.StagePrevious,
 			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
@@ -410,6 +412,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			StagePrevious:       entry.StagePrevious,
 			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
@@ -435,6 +438,9 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				RuleName:   retryEntry.RuleName,
 				TemplateID: retryEntry.TemplateID,
 				AgentKind:  retryEntry.AgentKind,
+
+				StagePrevious:        retryEntry.StagePrevious.Rule,
+				StagePreviousOutcome: retryEntry.StagePrevious.Outcome,
 			}
 			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				entryLog.Error("failed to persist stall retry entry",
@@ -446,18 +452,22 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 }
 
 // trackerObservationIDs returns the deduplicated issue ids whose tracker
-// state [reconcileTrackerState] must refresh: every id in state.Running
-// plus every issue id carried by an entry in state.PendingReactions.
+// state [reconcileTrackerState] must refresh: every id in state.Running,
+// every issue id carried by an entry in state.PendingReactions, and every
+// id holding a stage hop record.
 //
-// Returns an empty slice when both inputs are empty; callers must treat
+// Returns an empty slice when all inputs are empty; callers must treat
 // that as "make no tracker call".
 func trackerObservationIDs(state *State) []string {
-	seen := make(map[string]struct{}, len(state.Running)+len(state.PendingReactions))
+	seen := make(map[string]struct{}, len(state.Running)+len(state.PendingReactions)+len(state.StageHops))
 	for id := range state.Running {
 		seen[id] = struct{}{}
 	}
 	for _, entry := range state.PendingReactions {
 		seen[entry.IssueID] = struct{}{}
+	}
+	for id := range state.StageHops {
+		seen[id] = struct{}{}
 	}
 
 	ids := make([]string, 0, len(seen))
@@ -480,17 +490,23 @@ func pendingReactionIdentifier(state *State, issueID string) string {
 	return ""
 }
 
-// terminalReleaseCounts reports one [releaseTerminalIssueState] call's
+// issueReleaseCounts reports one [releaseIssueRuntimeState] call's
 // outcome, so the caller can log a single record and suppress it when
 // nothing was released.
-type terminalReleaseCounts struct {
+type issueReleaseCounts struct {
 	PendingReleased  int
 	AttemptsReleased int
 	ClaimReleased    bool
 	RetryCancelled   bool
 }
 
-// releaseTerminalIssueState drops one issue's runtime reaction bookkeeping
+// retryEntryDeleter is the one store method [releaseIssueRuntimeState]
+// needs.
+type retryEntryDeleter interface {
+	DeleteRetryEntry(ctx context.Context, issueID string) error
+}
+
+// releaseIssueRuntimeState drops one issue's runtime reaction bookkeeping
 // and its dispatch claim: every pending reaction entry, every reaction
 // attempt counter, every cached handed-off and reported comment set, the
 // pending retry, and the claim. The stored handed-off rows stay. It
@@ -499,12 +515,12 @@ type terminalReleaseCounts struct {
 //
 // entryLog must already carry issue_id and issue_identifier, derived by
 // the caller before this function deletes the entries that hold the
-// identifier. Calling releaseTerminalIssueState twice for the same issue
-// is safe: the second call returns a zero-valued [terminalReleaseCounts].
-func releaseTerminalIssueState(ctx context.Context, state *State, store ReconcileStore, issueID string, entryLog *slog.Logger) terminalReleaseCounts {
+// identifier. Calling releaseIssueRuntimeState twice for the same issue
+// is safe: the second call returns a zero-valued [issueReleaseCounts].
+func releaseIssueRuntimeState(ctx context.Context, state *State, store retryEntryDeleter, issueID string, entryLog *slog.Logger) issueReleaseCounts {
 	prefix := issueID + ":"
 
-	var counts terminalReleaseCounts
+	var counts issueReleaseCounts
 	for key, entry := range state.PendingReactions {
 		if !strings.HasPrefix(key, prefix) {
 			continue
@@ -539,7 +555,7 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 	// Deleted unconditionally: a persisted row can outlive its in-memory
 	// entry across a restart.
 	if err := store.DeleteRetryEntry(ctx, issueID); err != nil {
-		entryLog.Error("failed to delete retry entry for terminal issue",
+		entryLog.Error("failed to delete retry entry from store",
 			slog.Any("error", err),
 		)
 	}
@@ -552,10 +568,12 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 }
 
 // reconcileTrackerState fetches current issue states for every running
-// issue and every issue holding a pending reaction entry, cancels workers
-// whose issues are terminal or no longer active, and releases the runtime
-// reaction bookkeeping of any issue the tracker reports terminal, whether
-// or not that issue has a running worker.
+// issue, every issue holding a pending reaction entry, and every issue
+// holding a stage hop record, cancels workers whose issues are terminal or
+// no longer active, and releases the runtime reaction bookkeeping of any
+// issue the tracker reports terminal, whether or not that issue has a
+// running worker. An issue the tracker reports outside the active states
+// loses its stage hop record.
 func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
 	if params.TrackerAdapter == nil {
 		return
@@ -581,8 +599,20 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 		entry := state.Running[issueID]
 
 		normalized := strings.ToLower(stateName)
+		_, isTerminal := terminalSet[normalized]
+		_, isActive := activeSet[normalized]
 
-		if _, terminal := terminalSet[normalized]; terminal {
+		if hop := state.StageHops[issueID]; hop != nil {
+			hopLog := logging.WithIssue(log, issueID, hop.Identifier)
+			switch {
+			case isTerminal:
+				resetStageHop(ctx, state, params.Store, issueID, stageResetTerminal, hopLog)
+			case !isActive:
+				resetStageHop(ctx, state, params.Store, issueID, stageResetNotActive, hopLog)
+			}
+		}
+
+		if isTerminal {
 			identifier := pendingReactionIdentifier(state, issueID)
 			if entry != nil {
 				identifier = entry.Identifier
@@ -593,12 +623,12 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				continue
 			}
 
-			var counts terminalReleaseCounts
+			var counts issueReleaseCounts
 			if entry != nil {
 				if entry.CancelFunc != nil {
 					entry.CancelFunc()
 				}
-				counts = releaseTerminalIssueState(ctx, state, params.Store, issueID, entryLog)
+				counts = releaseIssueRuntimeState(ctx, state, params.Store, issueID, entryLog)
 				entry.PendingCleanup = true
 				entry.ObservedTerminalState = stateName
 				metrics.IncReconciliationActions(actionCleanup)
@@ -606,7 +636,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 					slog.String("state", stateName),
 				)
 			} else {
-				counts = releaseTerminalIssueState(ctx, state, params.Store, issueID, entryLog)
+				counts = releaseIssueRuntimeState(ctx, state, params.Store, issueID, entryLog)
 			}
 
 			if counts.PendingReleased > 0 || counts.AttemptsReleased > 0 || counts.ClaimReleased || counts.RetryCancelled {
@@ -627,7 +657,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 
 		entryLog := logging.WithIssue(log, issueID, entry.Identifier)
 
-		if _, active := activeSet[normalized]; active {
+		if isActive {
 			entry.Issue.State = stateName
 			metrics.IncReconciliationActions(actionKeep)
 			entryLog.Debug("refreshed issue state",

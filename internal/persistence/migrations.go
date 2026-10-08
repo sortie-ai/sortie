@@ -77,6 +77,9 @@ var migration021SQL string
 //go:embed sql/022_reaction_handoffs.sql
 var migration022SQL string
 
+//go:embed sql/023_stage_hops.sql
+var migration023SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -100,4 +103,5 @@ var migrations = []Migration{
 	{Version: 20, Description: "cache_write_tokens column on run_history, session_metadata, and aggregate_metrics", SQL: migration020SQL},
 	{Version: 21, Description: "configured model, configured effort, and reported model on run_history", SQL: migration021SQL},
 	{Version: 22, Description: "review comments each issue's runs were given", SQL: migration022SQL},
+	{Version: 23, Description: "stage hop counts and the previous stage on retry entries and run history", SQL: migration023SQL},
 }

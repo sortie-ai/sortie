@@ -19,6 +19,12 @@ type RetryEntry struct {
 	RuleName   string  // Dispatch rule name; empty for legacy rows and fallback dispatches.
 	TemplateID string  // Resolved template path; empty selects the WORKFLOW.md body template.
 	AgentKind  string  // Agent adapter kind; empty for legacy rows.
+
+	// StagePrevious and StagePreviousOutcome are the frozen stage.previous
+	// pair of the dispatch this retry continues; both are empty when no hop
+	// led to it and for legacy rows.
+	StagePrevious        string
+	StagePreviousOutcome string
 }
 
 // PendingRetry pairs a persisted [RetryEntry] with the computed delay
@@ -44,19 +50,22 @@ func (s *Store) SaveRetryEntry(ctx context.Context, entry RetryEntry) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error, session_id, rule_name, template_id, agent_kind)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error, session_id, rule_name, template_id, agent_kind, stage_previous, stage_previous_outcome)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (issue_id) DO UPDATE SET
-			identifier  = excluded.identifier,
-			attempt     = excluded.attempt,
-			due_at_ms   = excluded.due_at_ms,
-			error       = excluded.error,
-			session_id  = excluded.session_id,
-			rule_name   = excluded.rule_name,
-			template_id = excluded.template_id,
-			agent_kind  = excluded.agent_kind`,
+			identifier             = excluded.identifier,
+			attempt                = excluded.attempt,
+			due_at_ms              = excluded.due_at_ms,
+			error                  = excluded.error,
+			session_id             = excluded.session_id,
+			rule_name              = excluded.rule_name,
+			template_id            = excluded.template_id,
+			agent_kind             = excluded.agent_kind,
+			stage_previous         = excluded.stage_previous,
+			stage_previous_outcome = excluded.stage_previous_outcome`,
 		entry.IssueID, entry.Identifier, entry.Attempt, entry.DueAtMs, errVal, ssnVal,
 		entry.RuleName, entry.TemplateID, entry.AgentKind,
+		entry.StagePrevious, entry.StagePreviousOutcome,
 	)
 	if err != nil {
 		return fmt.Errorf("save retry entry %q: %w", entry.IssueID, err)
@@ -69,7 +78,8 @@ func (s *Store) SaveRetryEntry(ctx context.Context, entry RetryEntry) error {
 // (not nil) when no entries exist.
 func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT issue_id, identifier, attempt, due_at_ms, error, session_id, rule_name, template_id, agent_kind
+		`SELECT issue_id, identifier, attempt, due_at_ms, error, session_id, rule_name, template_id, agent_kind,
+			stage_previous, stage_previous_outcome
 		FROM retry_entries
 		ORDER BY due_at_ms ASC, issue_id ASC`)
 	if err != nil {
@@ -83,7 +93,7 @@ func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 		var errVal sql.NullString
 		var ssnVal sql.NullString
 		if err := rows.Scan(&e.IssueID, &e.Identifier, &e.Attempt, &e.DueAtMs, &errVal, &ssnVal,
-			&e.RuleName, &e.TemplateID, &e.AgentKind); err != nil {
+			&e.RuleName, &e.TemplateID, &e.AgentKind, &e.StagePrevious, &e.StagePreviousOutcome); err != nil {
 			return nil, fmt.Errorf("scan retry entry: %w", err)
 		}
 		if errVal.Valid {

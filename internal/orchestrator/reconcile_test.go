@@ -1163,7 +1163,7 @@ func TestReleaseTerminalIssueState_IssueIsolation(t *testing.T) {
 	state.Claimed["I2"] = struct{}{}
 
 	store := &mockReconcileStore{}
-	releaseTerminalIssueState(context.Background(), state, store, "I", discardLogger())
+	releaseIssueRuntimeState(context.Background(), state, store, "I", discardLogger())
 
 	if _, ok := state.PendingReactions[keyI]; ok {
 		t.Error("PendingReactions[I] present after its own release; want removed")
@@ -3168,3 +3168,5 @@ func (m *mockReconcileStore) AddReactionHandedOffComments(_ context.Context, _, 
 func (m *mockReconcileStore) ListReactionHandedOffComments(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+func (m *mockReconcileStore) DeleteStageHop(context.Context, string) error { return nil }
