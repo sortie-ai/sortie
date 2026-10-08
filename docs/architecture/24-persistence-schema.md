@@ -21,6 +21,7 @@ Sortie uses an embedded SQLite database for durable state. The database file pat
 | `agent_kind`  | TEXT   | Agent adapter the rule selected; empty on a pre-migration entry (migration 010) |
 | `stage_previous` | TEXT | Source rule of the stage hop the frozen selection carries into its `stage.previous`; empty when none (migration 023) |
 | `stage_previous_outcome` | TEXT | Outcome of that hop, `succeeded` or `no_change`; empty when `stage_previous` is empty (migration 023) |
+| `chain_id` | TEXT | Stage chain identifier frozen with the selection; empty on an entry written before migration 024 (migration 024) |
 
 Note: `timer_handle` is runtime-only and is not stored.
 
@@ -56,6 +57,11 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `reported_model`    | TEXT    | The model the runtime reported running, from the last token-usage event that named one; empty when it reported none. The `ci_failed` row leaves all three columns empty (migration 021) |
 | `stage_previous`    | TEXT    | Source rule of the stage hop the run's selection carried into its `stage.previous`; empty when none. Reaction recovery restores it (migration 023) |
 | `stage_previous_outcome` | TEXT | Outcome of that hop, `succeeded` or `no_change`; empty when `stage_previous` is empty (migration 023) |
+| `chain_id` | TEXT | Stage chain identifier of the run; empty on a row written before migration 024, or on a `ci_failed` row whose pending reaction was recovered from such a row (migration 024) |
+| `stage_target` | TEXT | Dispatch rule the run's hop decision targeted; empty when the run reached no hop decision (migration 024) |
+| `stage_result` | TEXT | Result of that decision: `advanced`, `partial`, `failed`, or `ceiling`; empty exactly when `stage_target` is empty (migration 024) |
+
+A stage chain is the set of runs that share a `chain_id`. Every dispatch freezes a chain identifier with its selection, beside the previous-stage pair. A dispatch that no hop reached starts a chain with a fresh random value that is never a dispatch or session identifier, so a public comment cannot expose session identity. A dispatch a hop reached inherits the chain of the hop record, and a retry or reaction continuation that keeps its rule carries the chain of the run it continues, across restarts. An empty carried chain, from a row written before migration 024, is replaced by a fresh identifier at dispatch. After its hop decision, the exit writes the decision's target rule and result onto the row of the run that reached it. Rows written before migration 024 keep `''` in the new columns and are not backfilled. `sortie stats` groups runs by `chain_id`, leaves out rows without a chain, and lists only chains in which a hop was due or made.
 
 The configured and reported model columns record what the operator asked for beside what ran, which differ under routing aliases and runtime-side fallbacks. A reported value never overwrites a configured one and nothing compares them. `sortie stats` groups runs by `configured_model` when the database carries the migration and otherwise reports no such breakdown. No metric carries a model or effort label, because the cardinality of model names is unbounded.
 
@@ -192,6 +198,7 @@ One row per issue whose current budget hold has been announced to at least one d
 | `source_dispatch_id` | TEXT    | Dispatch ID of the run that made the latest hop                    |
 | `target_observed`    | INTEGER | `1` once a read has shown `target_label` on the issue; `0` while the hold is open |
 | `hopped_at`          | TEXT    | RFC 3339 timestamp of the latest hop                               |
+| `chain_id`           | TEXT    | Stage chain identifier of the run whose exit made the latest hop; empty on a row written before migration 024 (migration 024) |
 
 One row per issue, holding current state since the last reset rather than history: the row is deleted when the count resets (a handoff write succeeds, the issue turns terminal or non-active, or the issue is parked or released from a park). The row serves the per-issue ceiling on consecutive hops, the hold that keeps a lagging candidate listing from sending the issue back to the stage it left, and the `stage.previous` pair of the target's dispatch. Recording a hop upserts the row and deletes the issue's `retry_entries` row in one transaction, so a restart cannot restore the retry of the stage the hop left. Recording a second hop with the `source_dispatch_id` already stored keeps the stored `hop_count`, so one source run is counted once. Startup loads every row before the event loop starts, after `parked_issues`.
 
