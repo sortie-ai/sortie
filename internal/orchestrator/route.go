@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 )
 
 // ResolutionLayer identifies the layer that produced a dispatch
@@ -69,22 +71,27 @@ type DispatchResolution struct {
 }
 
 // ResolveRule selects the dispatch agent kind, template ID, and rule
-// name for an issue against a [config.DispatchConfig]. It is pure: no
-// I/O, no time dependence, no goroutine. defaultAgentKind is the
-// workflow-wide agent kind (typically cfg.Agent.Kind);
-// defaultTemplateID is the body-template sentinel (typically the
-// empty string). The same inputs always produce the same output.
+// name for an issue against a [config.DispatchConfig]. A rule whose
+// stage label the issue carries is selected first, the one lowest in
+// the list when the issue carries several. Otherwise the rules without
+// a stage label are tried in order. It is pure: no I/O, no logging, no
+// time dependence, no goroutine. defaultAgentKind is the workflow-wide
+// agent kind (typically cfg.Agent.Kind); defaultTemplateID is the
+// body-template sentinel (typically the empty string). The same inputs
+// always produce the same output.
 func ResolveRule(issue domain.Issue, dispatch config.DispatchConfig, defaultAgentKind, defaultTemplateID string) DispatchResolution {
+	if staged := stageCandidates(issue, dispatch.Rules); len(staged) > 0 {
+		return ruleResolution(dispatch.Rules[staged[0]], dispatch, defaultAgentKind, defaultTemplateID)
+	}
+
 	for _, rule := range dispatch.Rules {
+		if rule.Stage != "" {
+			continue
+		}
 		if !rule.IsCatchAll && !matchRule(rule.Match, issue) {
 			continue
 		}
-		return DispatchResolution{
-			AgentKind:  coalesce(rule.Selection.AgentKind, dispatch.Default.AgentKind, defaultAgentKind),
-			TemplateID: coalesce(rule.Selection.TemplateID, dispatch.Default.TemplateID, defaultTemplateID),
-			RuleName:   rule.Name,
-			MatchedAt:  ResolvedFromRule,
-		}
+		return ruleResolution(rule, dispatch, defaultAgentKind, defaultTemplateID)
 	}
 
 	if dispatch.Default.AgentKind != "" || dispatch.Default.TemplateID != "" {
@@ -104,14 +111,60 @@ func ResolveRule(issue domain.Issue, dispatch config.DispatchConfig, defaultAgen
 	}
 }
 
+func ruleResolution(rule config.DispatchRule, dispatch config.DispatchConfig, defaultAgentKind, defaultTemplateID string) DispatchResolution {
+	return DispatchResolution{
+		AgentKind:  coalesce(rule.Selection.AgentKind, dispatch.Default.AgentKind, defaultAgentKind),
+		TemplateID: coalesce(rule.Selection.TemplateID, dispatch.Default.TemplateID, defaultTemplateID),
+		RuleName:   rule.Name,
+		MatchedAt:  ResolvedFromRule,
+	}
+}
+
+// stageCandidates returns the indices, in list order, of the rules whose
+// stage label the issue carries.
+func stageCandidates(issue domain.Issue, rules []config.DispatchRule) []int {
+	var indices []int
+	for i, rule := range rules {
+		if rule.Stage == "" {
+			continue
+		}
+		if slices.ContainsFunc(issue.Labels, func(label string) bool { return config.StageLabelsEqual(rule.Stage, label) }) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// warnSeveralStageLabels logs one warning naming every stage label the
+// issue carries when it carries two or more. ruleName is the rule the
+// evaluation selected. [ResolveRule] stays silent so each lane that
+// evaluates the rules logs once per evaluation.
+func warnSeveralStageLabels(log *slog.Logger, issue domain.Issue, dispatch config.DispatchConfig, ruleName string) {
+	staged := stageCandidates(issue, dispatch.Rules)
+	if len(staged) < 2 {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	labels := make([]string, len(staged))
+	for i, index := range staged {
+		labels[i] = dispatch.Rules[index].Stage
+	}
+	logging.WithIssue(log, issue.ID, issue.Identifier).Warn("several stage labels found",
+		slog.Any("stage_labels", labels),
+		slog.String("rule_name", ruleName))
+}
+
 // retrySelection selects the agent kind, template ID, and rule name a
 // waiting retry dispatches on under cfg, the configuration in force.
 // frozen is the selection the retry entry carries. The frozen selection
 // stands, with a retired kind replaced by its replacement, while its
 // kind is still reachable and its template is still held; otherwise the
-// issue is routed afresh. templateHeld reports whether the workflow
+// issue is routed afresh. The second result is true only when the
+// issue was routed afresh. templateHeld reports whether the workflow
 // holds a template for an ID.
-func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool, frozen DispatchResolution, issue domain.Issue) DispatchResolution {
+func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool, frozen DispatchResolution, issue domain.Issue) (DispatchResolution, bool) {
 	target := frozen.AgentKind
 	for _, conversion := range cfg.AgentKindConversions() {
 		if conversion.Kind == target {
@@ -122,9 +175,9 @@ func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool,
 
 	reachable := slices.ContainsFunc(orderedUniqueAgentKinds(cfg), func(ref agentKindRef) bool { return ref.Kind == target })
 	if reachable && templateHeld(frozen.TemplateID) {
-		return DispatchResolution{AgentKind: target, TemplateID: frozen.TemplateID, RuleName: frozen.RuleName, MatchedAt: frozen.MatchedAt}
+		return DispatchResolution{AgentKind: target, TemplateID: frozen.TemplateID, RuleName: frozen.RuleName, MatchedAt: frozen.MatchedAt}, false
 	}
-	return ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
+	return ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, ""), true
 }
 
 // coalesce returns the first non-empty string from the arguments. An

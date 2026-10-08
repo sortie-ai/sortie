@@ -1041,9 +1041,10 @@ reactions:
 
 ```yaml
 dispatch:
-  rules: # ordered list; first-match-wins; optional
-    - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; required with a settings block; never "default"
-      match: # optional; absent or empty match block matches every issue (catch-all)
+  rules: # ordered list; optional; a rule with a stage label is selected by that label, the others first-match-wins
+    - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; required with a settings block or a stage label; never "default" with a settings block
+      stage: <label> # optional; selects the rule by an issue label; excludes match; taken literally
+      match: # optional; absent or empty match block matches every issue (catch-all) on a rule without stage
         labels: ["bug", "p0-*"]  # string or list; glob; OR within key
         issue_type: ["Bug"]      # string or list; case-insensitive equality
         priority: { lte: 2 }    # predicate object; exactly one of eq, in, lt, lte, gt, gte
@@ -1064,15 +1065,16 @@ dispatch:
 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
-| `rules` | list of rule objects | No | _(none)_ | Ordered dispatch rules; first-match-wins. Evaluated in YAML order. |
+| `rules` | list of rule objects | No | _(none)_ | Dispatch rules. A rule with `stage` is selected by its label first; the other rules are evaluated in YAML order and the first match wins. |
 | `default` | map | No | _(none)_ | Fallback selection when no rule matches. Keys: `agent`, `template`. |
 
-Each rule in `dispatch.rules` is a map with the following keys. A rule must carry at least one of `match`, `agent`, `template`, or a settings block. A key that names a registered agent kind is the rule's settings block; any other key is unrecognized and fails the load.
+Each rule in `dispatch.rules` is a map with the following keys. A rule must carry at least one of `match`, `stage`, `agent`, `template`, or a settings block. A key that names a registered agent kind is the rule's settings block; any other key is unrecognized and fails the load.
 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
-| `name` | string | With a settings block | _(absent)_ | Operator-supplied identifier used in logs, in run history, and to find the rule again after a reload. Must match `^[a-z][a-z0-9_-]*$` when present, and must not be `default`, the name run history and statistics give the `dispatch.default` selection, when the rule carries a settings block. Names are unique. |
-| `match` | map | No | _(absent)_ | Predicate block. An absent or empty block matches every issue (catch-all). |
+| `name` | string | With a settings block or `stage` | _(absent)_ | Operator-supplied identifier used in logs, in run history, and to find the rule again after a reload. Must match `^[a-z][a-z0-9_-]*$` when present, and must not be `default`, the name run history and statistics give the `dispatch.default` selection, when the rule carries a settings block. Names are unique. |
+| `stage` | string | No | _(absent)_ | Label that selects this rule. An issue that carries the label runs on the rule wherever it sits in the list. Compared case-insensitively against the adapter-normalized label set; no glob characters and no `$VAR` resolution. A rule with `stage` cannot carry `match` and must have a `name`. See [Stage labels](#stage-labels). |
+| `match` | map | No | _(absent)_ | Predicate block. On a rule without `stage`, an absent or empty block matches every issue (catch-all). |
 | `agent` | string | No | _(fallback)_ | Agent adapter kind for matching issues. Falls through to `dispatch.default.agent`, then to `agent.kind`. |
 | `template` | string | No | _(fallback)_ | Prompt template path (relative to `WORKFLOW.md` directory). Falls through to `dispatch.default.template`, then to the Markdown body. |
 | `<kind>` | map | No | _(absent)_ | Settings block named for the agent kind the rule runs: the rule's `agent`, else `dispatch.default.agent`, else `agent.kind`. Holds the keys that kind's top-level block accepts. See [Rule settings blocks](#rule-settings-blocks). |
@@ -1090,13 +1092,59 @@ The `match` block accepts only these keys:
 
 The `dispatch.default` block accepts only `agent` and `template`, with the same types and fallback behavior as the per-rule fields. It carries no settings block: a key that names an agent kind fails the load, and the top-level block of each kind holds the default settings.
 
+#### Stage labels
+
+A rule that carries `stage` is selected by a label on the issue instead of by a `match` block, so a person puts an issue on that rule by applying one label. Stage labels are checked before the ordered rules: an issue that carries the label of a staged rule runs on that rule wherever it sits in the list, and an earlier rule or a catch-all cannot capture it. An issue that carries no stage label is routed by the rules without `stage`, in order, exactly as it is without stage labels, and a staged rule never matches it.
+
+```yaml
+dispatch:
+  rules:
+    - name: everything
+      template: ./prompts/default.md
+    - name: plan
+      stage: Stage-Plan
+      template: ./prompts/plan.md
+    - name: implement
+      stage: stage-implement
+      template: ./prompts/implement.md
+```
+
+In this workflow:
+
+| Issue labels | Rule that runs | Warning |
+| ------------ | -------------- | ------- |
+| `bug` | `everything` | none |
+| `stage-plan` | `plan` | none |
+| `stage-implement`, `bug` | `implement` | none |
+| `stage-plan`, `stage-implement` | `plan` | one `several stage labels found` record |
+| `stage-review` | `everything` | none |
+
+The label is taken literally. It is compared case-insensitively with the labels the tracker adapter reports, which are lowercase, so `Stage-Plan` and `stage-plan` are one label. It has no glob characters and no `$VAR` resolution. Surrounding white space is part of the label and tracker labels carry none, so a label written with edge white space in quoted YAML loads and never selects its rule.
+
+A rule with `stage` must have a `name` and cannot carry `match`. The `stage` value must be a label with at least one character other than white space. Two rules cannot share a label, and labels that differ only in case count as the same label. A catch-all rule may precede staged rules, because the stage label selects them first. A rule without `stage` after a catch-all is still an error.
+
+An issue that carries the labels of several staged rules runs on the one listed first. Sortie logs one `Warn` record, `several stage labels found`, that names every stage label the issue carries in list order and the rule it selected. The record appears on a poll tick that evaluates the issue and on a retry that is routed afresh, once per evaluation, and never for a retry whose recorded selection stands.
+
+A stage label must not equal a state name or a label that Sortie applies to issues, so that placing an issue on a stage never doubles as a state change or an escalation. `sortie validate`, startup, and the check before each tick reject a stage label that equals, ignoring case:
+
+- an entry of `tracker.active_states` or `tracker.terminal_states`, or an entry of the tracker adapter's own list when the workflow leaves that list empty;
+- `tracker.handoff_state`, `tracker.in_progress_state`, or `tracker.no_change_state`, when set;
+- the `escalation_label` of a reaction;
+- the parking label, which is the `escalation_label` of `reactions.review_comments` and `needs-human` when that reaction does not write one.
+
+A label that equals several of these draws one error for each. Every reaction block present carries an escalation label, `needs-human` unless the block writes another, and each one is compared; a `ci_failure` block without a `provider` is not compared. A stage label of `needs-human` therefore collides once with each reaction block present and once with the parking label.
+
+The escalation labels and the parking label are compared as the workflow writes them. Reaction settings other than `ci_failure` take effect only after a restart, so a label that a reload renames is compared at once while the running process keeps applying the old one until it restarts.
+
+As for every rule, the selected rule is recorded for the claim. Moving a stage label on an issue whose claim is held re-routes nothing until the claim is released. See [Freeze-on-dispatch](#freeze-on-dispatch).
+
 #### Matching semantics
 
-Evaluation applies AND logic across keys and OR logic within a single key:
+Stage labels are checked first (see [Stage labels](#stage-labels)). For an issue that carries none, evaluation of the rules without `stage` applies AND logic across keys and OR logic within a single key:
 
 - A `match` block succeeds only when every present key is satisfied.
 - A key whose value is a list succeeds when any element matches. A `labels`, `issue_type`, `identifier`, or `assignee` key whose value is null or an empty list is left out of the match instead, while for `title` it fails the load.
-- An absent or empty `match` block always succeeds (catch-all).
+- An absent or empty `match` block on a rule without `stage` always succeeds (catch-all). A rule with `stage` has no `match` block and is never part of this evaluation.
 
 String-valued keys (`labels`, `issue_type`, `identifier`, `assignee`, `title`) accept either a single string or a list of strings. A scalar is treated as a one-element list.
 
@@ -1165,7 +1213,7 @@ Whoever can edit an issue's title can change which rule it matches, and on many 
 
 #### Fallback resolution chain
 
-Rules evaluate in YAML order. The first rule whose `match` block succeeds is selected; later rules are not consulted. For each selected rule, `agent` and `template` may each be omitted independently. Missing fields fall through in order:
+Stage labels are checked first: an issue that carries the stage label of a rule is selected by that rule, the one listed first when it carries several. Otherwise the rules without `stage` evaluate in YAML order, and the first rule whose `match` block succeeds is selected; later rules are not consulted. For each selected rule, `agent` and `template` may each be omitted independently. Missing fields fall through in order:
 
 1. The matched rule's `agent` / `template`.
 2. `dispatch.default.agent` / `dispatch.default.template`.
@@ -1253,7 +1301,7 @@ Changing `agent.kind` or `dispatch.default.agent` is rejected when a rule withou
 
 #### Freeze-on-dispatch
 
-An issue keeps its agent kind, template, and rule until its claim is released. The resolved `(agent_kind, template_id, rule_name)` is recorded at dispatch and reused by retries and reaction-driven continuations for the same claim. Rules are re-evaluated only after the claim is released, with one exception: a waiting retry checks its recorded selection against the configuration in force when its timer fires. Moving a label on, or renaming, an issue whose claim is still held does not re-route it; the next claim does.
+An issue keeps its agent kind, template, and rule until its claim is released. The resolved `(agent_kind, template_id, rule_name)` is recorded at dispatch and reused by retries and reaction-driven continuations for the same claim. Rules are re-evaluated only after the claim is released, with one exception: a waiting retry checks its recorded selection against the configuration in force when its timer fires. Moving a label on, or renaming, an issue whose claim is still held does not re-route it, and that includes moving a stage label; the next claim does.
 
 What the selection contains is read from `WORKFLOW.md` at the start of every attempt: the agent settings (`model`, `effort`, and the rest of the kind's block, from the rule and from the top-level block), the template text, and the `agent.*` timeouts. A reload therefore reaches the next attempt of a claim that is already held, while a running session keeps the settings it started with. A retry or continuation that resumes a session resumes it with the settings it resolved, and a change of `model` or `effort` between attempts does not end the session.
 
@@ -1261,7 +1309,7 @@ When the rule named in a held claim no longer exists, or no longer carries a blo
 
 An attempt whose resolved block fails an error-severity check (see [Section 8](#8-dispatch-preflight-validation)) starts no session. The first dispatch skips the issue for that tick; a retry or continuation is rescheduled with backoff and keeps its claim, its continuation data, and its session to resume.
 
-A changed rule set from a `WORKFLOW.md` reload applies to future claims only. In-flight issues keep their frozen selection, and a waiting retry keeps its own too, as long as the configuration still names its agent kind and still holds its template. When it does not, for example after `agent.kind` moved to another kind or a rule's prompt file was renamed, the retry is routed again by the rules and starts without resuming the earlier session. Sortie logs one `Info` record when a retry dispatches on a different selection. A retry whose agent adapter is unavailable, because it failed to start with Sortie, is rescheduled with backoff and keeps its claim until Sortie is restarted.
+A changed rule set from a `WORKFLOW.md` reload applies to future claims only. In-flight issues keep their frozen selection, and a waiting retry keeps its own too, as long as the configuration still names its agent kind and still holds its template. When it does not, for example after `agent.kind` moved to another kind or a rule's prompt file was renamed, the retry is routed again by the rules, stage labels first, and starts without resuming the earlier session. Sortie logs one `Info` record when a retry dispatches on a different selection. A retry whose agent adapter is unavailable, because it failed to start with Sortie, is rescheduled with backoff and keeps its claim until Sortie is restarted.
 
 #### Per-rule template paths
 
@@ -2922,7 +2970,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `reactions.label_commands.*`                    | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.merge_completion.*`                  | **No effect.** Requires restart. The reaction config, `target_state` included, is built once at construction. |
 | `claude-code.*`, `codex.*`, `copilot-cli.*`, `opencode.*`, `agent-client-protocol.*` | Future worker attempts, not in-flight sessions. Each attempt resolves its kind's block when it starts. |
-| `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, agent, template) reaches future claims only. |
+| `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, stage, agent, template) reaches future claims only. |
 | `notifications` (agent messages)       | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `notifications` (events Sortie produces) | The next event. Sortie routes each event against the configuration in force when it decides to send it, so a change to `events` or to a destination applies to the next event and never to one already routed. A reload whose destinations for these events cannot be built, such as an unknown `kind` or a required secret that resolved to an empty string, is rejected and the previous configuration stays in force. The `escalation: comment` of a reaction other than `ci_failure` keeps the value read at startup. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
@@ -2955,16 +3003,20 @@ Before dispatching work, the orchestrator validates the workflow configuration. 
 | Agent adapter registered and available         | No adapter registered for the configured `agent.kind`.      |
 | `workspace.root` writable                      | The resolved root cannot be created, or a probe file cannot be written inside it. Reported under check `workspace.root_writable`. |
 | `dispatch` is a map; `dispatch.rules` is a sequence; `dispatch.default` is a map | Wrong YAML node type for `dispatch`, `dispatch.rules`, or `dispatch.default`. |
-| Each rule has at least one of `match`, `agent`, `template`, or a settings block | A rule map carries none of them. |
+| Each rule has at least one of `match`, `stage`, `agent`, `template`, or a settings block | A rule map carries none of them. |
+| Every `stage` value is a label | A `stage` value is not a string, or is null, empty, or only white space. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
+| A rule with `stage` has no `match` and has a `name` | A rule carries `stage` beside `match`, or carries `stage` and no `name`. |
+| No duplicate stage label | Two rules carry stage labels that differ at most in case. |
 | Rule `name`, when present, matches `^[a-z][a-z0-9_-]*$` | Malformed rule name. |
 | No duplicate rule name | Two rules share the same non-empty `name`. |
-| No non-final catch-all (`unreachable_rules`) | A rule with no `match` block precedes another rule. |
+| No non-final catch-all (`unreachable_rules`) | A rule with no `match` block and no `stage` precedes a rule without `stage`. A rule with `stage` may follow a catch-all. |
 | Every `match` key recognized | A `match` key is not one of `labels`, `issue_type`, `priority`, `identifier`, `assignee`, `title`. |
 | Every `title` key lists phrases | A `title` key is null, bare, or an empty list; its value is not a string or a list; a list element is not a string; or a phrase is empty or only white space. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
 | `priority` predicate has exactly one operator | Zero or more than one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`. |
 | Glob patterns syntactically valid | A `labels` or `identifier` pattern fails `path.Match`. |
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
 | Every rule settings block well formed | A block is named for a kind other than the one the rule runs, is not a map, writes `kind`, `command`, or one of the four `agent` timeouts, belongs to a rule with no `name` or named `default`, or a key of `dispatch.default` names an agent kind. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
+| `dispatch.stage.collision` | A rule's stage label equals, ignoring case, a state or a label Sortie applies to issues: an active or terminal state (the tracker adapter's own list when the workflow leaves one empty), `tracker.handoff_state`, `tracker.in_progress_state`, `tracker.no_change_state`, a reaction's `escalation_label`, or the parking label. The message names the rule, the stage label, and what it collides with, and one error is reported for each rule and each collision. |
 | `dispatch.agent.missing_block` | A kind other than `agent.kind` that `dispatch.default.agent` or a rule's `agent` names has a top-level block that is not a map, or has no top-level block while some selector of the kind is not a rule carrying the kind's block. The message names the first such selector. |
 | Every rule's resolved settings block passes the adapter checks | The top-level block of the rule's kind with the rule's block laid over it fails a check the top-level block would fail: key types, the adapter's own checks, `agent.kind.session_resume`, and conflicts between keys such as `opencode.allowed_tools.overlap` and `opencode.effort.conflict`. The message opens with `dispatch rule "<name>" (dispatch.rules[<i>].<kind>): `, and the check key is the one the top-level block draws. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
@@ -3054,7 +3106,12 @@ These errors are raised during typed config construction from the parsed front m
 | `config: <field>: agent kinds "<kind>" and "<kind>" were removed and convert to agent kind "<replacement>" with different commands` | Two removed kinds in one workflow convert onto the same replacement kind and would launch different commands. | Name the replacement kind in the workflow file with one `agent.command`.                    |
 | `config: dispatch.rules[<i>].<kind>.<key>: agent kind "<kind>" was removed and this configuration cannot be converted to agent kind "<replacement>": <reason>` | A rule runs a removed agent kind and its settings block for that kind has a value the replacement kind cannot carry. | Fix the setting as the reason states, or name the replacement kind in the rule. |
 | `config: dispatch.rules[<i>].<kind>: agent kind "<kind>" was removed and this rule's settings cannot be converted to agent kind "<replacement>": they change the command the replacement kind launches, which a dispatch rule cannot set` | A rule's block for a removed kind converts to a launch command other than the one the kind's own conversion produces. | Remove the setting that changes the command, or name the replacement kind in the workflow file with the launch you want in `agent.command`. |
-| `config: dispatch.rules[<i>]: rule must specify at least one of match, agent, template, or a settings block` | A rule map carries none of those keys. | Add one of them. |
+| `config: dispatch.rules[<i>]: rule must specify at least one of match, stage, agent, template, or a settings block` | A rule map carries none of those keys. | Add one of them. |
+| `config: dispatch.rules[<i>].stage: expected a label, got <shape>` | The `stage` value is not text. `<shape>` is `a number`, `a true/false value`, `a list`, `a map`, or `a value of an unexpected type`. | Write the label as text, quoted if necessary. |
+| `config: dispatch.rules[<i>].stage: needs a label with a character other than white space` | The `stage` value is null, a bare `stage:` line, empty, or only white space. | Write a label, or remove the key. |
+| `config: dispatch.rules[<i>]: a rule with a stage label is selected by that label and cannot also carry match` | A rule carries `stage` and a `match` block, an empty one included. | Remove `match`, or remove `stage` and select the rule by `match`. |
+| `config: dispatch.rules[<i>]: a rule that carries a stage label must have a name` | A rule carries `stage` and no `name`. | Give the rule a `name`. |
+| `config: dispatch.rules[<j>].stage: duplicate stage label "<label>" (first at index <i>)` | Rule `<j>` carries a stage label equal, ignoring case, to the label of rule `<i>`. | Give each rule its own label. |
 | `config: dispatch.rules[<i>].<key>: settings block for agent kind "<key>", but this rule runs agent kind "<kind>"` | A rule carries a block named for a kind other than the one it runs. The message ends with `, taken from dispatch.default.agent` or `, taken from agent.kind` when the rule has no `agent`. It also appears after `agent.kind`, `dispatch.default.agent`, or a rule's `agent` changed under an existing block. | Name the block for the rule's kind, or set the rule's `agent` to the block's kind. |
 | `config: dispatch.rules[<i>].<kind>: a rule's settings block must hold the kind's settings as keys, got <shape>; write {} for an empty block` | A rule's block is not a map. `<shape>` is `no value` for a bare `<kind>:` line. | Write the settings as keys under the block, or `{}` for an empty block. |
 | `config: dispatch.rules[<i>].<kind>.kind: a rule chooses its agent kind with its agent key` | A rule's block writes `kind`. | Remove the key and set the rule's `agent`. |

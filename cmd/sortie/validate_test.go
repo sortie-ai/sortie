@@ -3008,6 +3008,186 @@ func TestValidateDispatch_TitleAccepted(t *testing.T) {
 	}
 }
 
+const stageWorkflowRules = `dispatch:
+  rules:
+    - name: everything
+      agent: mock
+    - name: plan
+      stage: Stage-Plan
+      agent: mock
+    - name: implement
+      stage: stage-implement
+      agent: mock
+`
+
+func makeStageCollisionWorkflow(t *testing.T, trackerExtra, rulesYAML string) string {
+	t.Helper()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n" + trackerExtra +
+		"agent:\n  kind: mock\n" +
+		"file:\n  path: issues.json\n" +
+		rulesYAML +
+		"---\nDo {{ .issue.title }}.\n")
+	return writeCustomWorkflowFile(t, t.TempDir(), content)
+}
+
+func TestValidateDispatch_StageLabelsAccepted(t *testing.T) {
+	t.Parallel()
+
+	code, out := validateJSON(t, makeDispatchWorkflow(t, t.TempDir(), stageWorkflowRules))
+
+	if code != 0 {
+		t.Errorf("run(validate) = %d, want 0; errors: %+v", code, out.Errors)
+	}
+	if !out.Valid || len(out.Errors) != 0 {
+		t.Errorf("validateOutput = {Valid:%v Errors:%+v}, want valid with no errors", out.Valid, out.Errors)
+	}
+	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
+		t.Errorf("validateOutput.Warnings = %+v, want only agent.kind.no_tool_channel and no unknown_sub_key for stage", out.Warnings)
+	}
+}
+
+func TestValidateDispatch_StageFaults(t *testing.T) {
+	t.Parallel()
+
+	const (
+		needsLabel = "needs a label with a character other than white space"
+		withMatch  = "a rule with a stage label is selected by that label and cannot also carry match"
+	)
+	tests := []struct {
+		name      string
+		dispatch  string
+		wantCheck string
+		wantMsg   string
+	}{
+		{
+			name:      "duplicate label differing in case",
+			dispatch:  stageWorkflowRules + "    - name: plan2\n      stage: STAGE-PLAN\n      agent: mock\n",
+			wantCheck: "config.dispatch.rules[3].stage",
+			wantMsg:   `duplicate stage label "STAGE-PLAN" (first at index 1)`,
+		},
+		{
+			name:      "rule without a stage after the catch-all",
+			dispatch:  stageWorkflowRules + "    - name: tail\n      agent: mock\n",
+			wantCheck: "config.dispatch.rules[0]",
+			wantMsg:   "unreachable_rules: catch-all rule at index 0 precedes rule at index 3",
+		},
+		{
+			name:      "match beside stage",
+			dispatch:  strings.Replace(stageWorkflowRules, "      stage: Stage-Plan\n", "      stage: Stage-Plan\n      match:\n        labels: [p]\n", 1),
+			wantCheck: "config.dispatch.rules[1]",
+			wantMsg:   withMatch,
+		},
+		{
+			name:      "empty stage",
+			dispatch:  strings.Replace(stageWorkflowRules, "stage: Stage-Plan", `stage: ""`, 1),
+			wantCheck: "config.dispatch.rules[1].stage",
+			wantMsg:   needsLabel,
+		},
+		{
+			name:      "stage that is a number",
+			dispatch:  strings.Replace(stageWorkflowRules, "stage: Stage-Plan", "stage: 5", 1),
+			wantCheck: "config.dispatch.rules[1].stage",
+			wantMsg:   "expected a label, got a number",
+		},
+		{
+			name:      "staged rule without a name",
+			dispatch:  strings.Replace(stageWorkflowRules, "    - name: plan\n", "    -\n", 1),
+			wantCheck: "config.dispatch.rules[1]",
+			wantMsg:   "a rule that carries a stage label must have a name",
+		},
+		{
+			name:      "stage under dispatch.default",
+			dispatch:  "dispatch:\n  default:\n    stage: stage-plan\n",
+			wantCheck: "config.dispatch.default.stage",
+			wantMsg:   "unknown key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, out := validateJSON(t, makeDispatchWorkflow(t, t.TempDir(), tt.dispatch))
+
+			if code != 1 {
+				t.Errorf("run(validate) = %d, want 1", code)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+			if !slices.ContainsFunc(out.Errors, func(d validateDiag) bool {
+				return d.Check == tt.wantCheck && d.Message == tt.wantMsg
+			}) {
+				t.Errorf("validateOutput.Errors = %+v, want one with check %q and message %q", out.Errors, tt.wantCheck, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestValidateDispatch_StageCollisions(t *testing.T) {
+	t.Parallel()
+
+	const (
+		suffix        = "; a stage label must not equal a tracker state or a label Sortie applies to issues"
+		plainTracker  = "  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n"
+		parkingRules  = "dispatch:\n  rules:\n    - name: everything\n      agent: mock\n    - name: implement\n      stage: Needs-Human\n      agent: mock\n"
+		collisionName = "dispatch.stage.collision"
+	)
+	tests := []struct {
+		name         string
+		trackerExtra string
+		rules        string
+		want         []validateDiag
+	}{
+		{
+			name:         "stage label equal to an active state",
+			trackerExtra: "  active_states: [\"To Do\", \"stage-plan\"]\n  terminal_states: [\"Done\"]\n",
+			rules:        stageWorkflowRules,
+			want: []validateDiag{
+				{Severity: "error", Check: collisionName, Message: `dispatch rule "plan" (dispatch.rules[1].stage): stage label "Stage-Plan" collides with active state "stage-plan"` + suffix},
+			},
+		},
+		{
+			name:         "stage label equal to the parking label with no reactions block",
+			trackerExtra: plainTracker,
+			rules:        parkingRules,
+			want: []validateDiag{
+				{Severity: "error", Check: collisionName, Message: `dispatch rule "implement" (dispatch.rules[1].stage): stage label "Needs-Human" collides with the parking label "needs-human"` + suffix},
+			},
+		},
+		{
+			name:         "one line per staged rule and source in rule order",
+			trackerExtra: "  active_states: [\"To Do\"]\n  terminal_states: [\"STAGE-IMPLEMENT\"]\n  handoff_state: Stage-Plan\n",
+			rules:        stageWorkflowRules,
+			want: []validateDiag{
+				{Severity: "error", Check: collisionName, Message: `dispatch rule "plan" (dispatch.rules[1].stage): stage label "Stage-Plan" collides with tracker.handoff_state "Stage-Plan"` + suffix},
+				{Severity: "error", Check: collisionName, Message: `dispatch rule "implement" (dispatch.rules[2].stage): stage label "stage-implement" collides with terminal state "STAGE-IMPLEMENT"` + suffix},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, out := validateJSON(t, makeStageCollisionWorkflow(t, tt.trackerExtra, tt.rules))
+
+			if code != 1 {
+				t.Errorf("run(validate) = %d, want 1", code)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+			got := slices.DeleteFunc(slices.Clone(out.Errors), func(d validateDiag) bool { return d.Check != collisionName })
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("validateOutput.Errors %s = %+v, want %+v", collisionName, got, tt.want)
+			}
+		})
+	}
+}
+
 // unresolvedExtVarWorkflow returns a workflow YAML containing an extension block
 // whose api_key references varName, which must be unset when the test runs.
 func unresolvedExtVarWorkflow(varName string) []byte {

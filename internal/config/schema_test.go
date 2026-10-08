@@ -97,6 +97,25 @@ func TestValidateFrontMatterDispatchRulesSequence(t *testing.T) {
 			wantChecks: []string{"unknown_sub_key"},
 			wantFields: []string{"dispatch.rules[0].codex"},
 		},
+		{
+			name:      "a rule carrying stage draws no warning",
+			raw:       dispatchRaw("", map[string]any{"name": "plan", "stage": "stage-plan", "agent": "mock"}),
+			wantCount: 0,
+		},
+		{
+			name:       "an unrecognized key beside stage still warns",
+			raw:        dispatchRaw("", map[string]any{"name": "plan", "stage": "stage-plan", "typo_field": "value"}),
+			wantCount:  1,
+			wantChecks: []string{"unknown_sub_key"},
+			wantFields: []string{"dispatch.rules[0].typo_field"},
+		},
+		{
+			name:       "stage under dispatch.default is not a recognized key",
+			raw:        map[string]any{"dispatch": map[string]any{"default": map[string]any{"stage": "stage-plan"}}},
+			wantCount:  1,
+			wantChecks: []string{"unknown_sub_key"},
+			wantFields: []string{"dispatch.default.stage"},
+		},
 	}
 
 	for _, tt := range tests {

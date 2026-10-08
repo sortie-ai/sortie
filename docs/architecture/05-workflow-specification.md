@@ -415,22 +415,23 @@ The kind carries no `watch_window_ms`: a pull request may remain unmerged for an
 
 #### 5.3.9 `dispatch` (object, optional)
 
-Routes the initial dispatch to an `(agent_kind, template_id)` selection per first-match-wins rules. When absent, the orchestrator behaves identically to today: the resolver returns the top-level defaults (`agent.kind` and the Markdown body template).
+Routes the initial dispatch to an `(agent_kind, template_id)` selection. A rule that carries a stage label is selected by that label; the other rules are first-match-wins. When absent, the orchestrator behaves identically to today: the resolver returns the top-level defaults (`agent.kind` and the Markdown body template).
 
 Fields:
 
-- `rules` (list of `DispatchRule`, optional): ordered list of dispatch rules; first-match-wins.
+- `rules` (list of `DispatchRule`, optional): list of dispatch rules. Rules without a stage label are evaluated in order and the first match wins; a rule with a stage label is selected by that label before they are evaluated.
 - `default` (object, optional): carries `agent` and `template` overrides applied when no rule matches.
 
-Each `DispatchRule` has four keys and an optional settings block:
+Each `DispatchRule` has five keys and an optional settings block:
 
-- `name` (optional unless the rule carries a settings block): operator-supplied rule identifier used in metrics labels, in run history, and to find the rule again after a reload. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`. A rule that carries a settings block MUST have a name, and the name MUST NOT be `default`, which run history and statistics give the `dispatch.default` selection.
+- `name` (optional unless the rule carries a settings block or a stage label): operator-supplied rule identifier used in metrics labels, in run history, and to find the rule again after a reload. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`. A rule that carries a settings block MUST have a name, and the name MUST NOT be `default`, which run history and statistics give the `dispatch.default` selection. A rule that carries a stage label MUST have a name.
+- `stage`: a label that selects the rule. A rule that carries it is selected by that label instead of by a `match` block, so `stage` and `match` are mutually exclusive on one rule.
 - `match`: a block whose keys define the predicate evaluated against the issue.
 - `agent`: optional override of the agent kind for matching issues.
 - `template`: optional override of the prompt template path for matching issues.
 - `<kind>`: an optional settings block named for the agent kind the rule runs.
 
-A rule MUST carry at least one of `match`, `agent`, `template`, or a settings block. A rule key that names a registered agent kind, or equals the rule's own `agent` value, is its settings block; any other unrecognized key is a configuration error. `dispatch.default` carries no settings block: a key in it that names an agent kind is a configuration error, because the top-level block of each kind holds the default settings.
+A rule MUST carry at least one of `match`, `stage`, `agent`, `template`, or a settings block. A rule key that names a registered agent kind, or equals the rule's own `agent` value, is its settings block; any other unrecognized key is a configuration error. `dispatch.default` carries no settings block: a key in it that names an agent kind is a configuration error, because the top-level block of each kind holds the default settings.
 
 **Rule settings blocks**
 
@@ -445,6 +446,16 @@ The block an attempt runs with is the top-level block of the rule's kind with th
 - A block is laid only over the top-level block of its own kind.
 
 No key is defaulted or coerced before the overlay. `$VAR` references in a rule's block resolve as they do in a top-level block. A block for a removed agent kind converts together with the kind; a conversion that would change the command the replacement kind launches fails the load, because a rule cannot set a command.
+
+**Stage labels**
+
+A stage label is taken literally: it has no glob characters and no `$VAR` resolution, and white space around it is part of it. It MUST be a string with at least one character other than white space. Two rules MUST NOT carry stage labels that differ at most in case. A rule that carries a stage label is not a catch-all, because only its label selects it.
+
+Stage labels compare case-insensitively against the label set the tracker adapter reports, which is lowercase. Selection, the duplicate check, and the collision check below all use this one comparison.
+
+A stage label MUST NOT equal, under that comparison, a state name the workflow configures (an active or terminal state, where an empty list takes the tracker adapter's own fallback list, and the handoff, in-progress, and no-change states) or a label the orchestrator applies to issues (a reaction's escalation label or the parking label). The check reads configuration and adapter metadata only and makes no tracker call. A reaction block for `ci_failure` that names no provider is disabled and its escalation label is not compared.
+
+An issue that carries the stage labels of several rules is selected by the rule listed first, and the dispatch logs one warning naming every stage label it found.
 
 **Match-block keys and semantics**
 
@@ -464,7 +475,9 @@ Match keys are evaluated with AND semantics across keys and OR semantics within 
 
 **Resolution semantics and freeze-on-dispatch invariant**
 
-First-match wins: evaluation stops at the first rule whose `match` block succeeds. Absent rule fields fall through to `dispatch.default`, then to the top-level `agent.kind` and the Markdown-body template (the pre-dispatch top-level defaults).
+Stage labels are evaluated before the ordered rules. An issue that carries the stage label of a rule is selected by that rule, whatever its position in the list; when it carries several, the rule listed first is selected and the warning above is logged. An issue that carries none is routed by the rules without a stage label, and a rule with a stage label never matches it. A catch-all is a rule with neither a stage label nor a `match` key; only the last rule without a stage label may be one, while a rule with a stage label may follow it.
+
+Among the rules without a stage label, first-match wins: evaluation stops at the first rule whose `match` block succeeds. Absent rule fields fall through to `dispatch.default`, then to the top-level `agent.kind` and the Markdown-body template (the pre-dispatch top-level defaults).
 
 The default agent kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. It is the kind every selection without an agent of its own runs, and the only kind that launches `agent.command` as written.
 
@@ -472,7 +485,7 @@ The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry
 
 - The frozen selection stands, with its session identifier, when its kind is still named by `agent.kind`, `dispatch.default.agent`, or a rule, and its template is still held. The kind launches its own command as the configuration now states it.
 - A frozen kind that a conversion record retired is replaced by its replacement kind, keeping the frozen template and rule name.
-- Otherwise the issue is routed afresh by first-match rule evaluation. This covers a kind the configuration no longer names, a kind this binary does not register, and a template the workflow no longer holds.
+- Otherwise the issue is routed afresh by rule evaluation, stage labels first. This covers a kind the configuration no longer names, a kind this binary does not register, and a template the workflow no longer holds.
 - A selection that differs from the frozen one in kind or template starts without a resume session identifier, because session identifiers are adapter-specific. The continuation context, reaction kind, attempt number, and last SSH host carry over.
 - When the selected kind's adapter is unavailable because its construction failed at startup, the retry is rescheduled with backoff and keeps its claim and continuation (§8.4).
 

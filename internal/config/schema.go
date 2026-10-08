@@ -128,17 +128,6 @@ var knownFieldsRegistry = map[string]SectionSchema{
 	},
 }
 
-// dispatchRuleAllowedKeys lists the recognized per-rule keys for
-// front-matter static analysis. Mirrors [ruleKeyAllowed] in
-// dispatch.go; kept here so schema descent does not import dispatch
-// helpers directly.
-var dispatchRuleAllowedKeys = map[string]bool{
-	"name":     true,
-	"match":    true,
-	"agent":    true,
-	"template": true,
-}
-
 // staticKnownExtensionKeys lists extension top-level keys defined by
 // the architecture spec. These are not core schema keys but are
 // recognized by Sortie's optional modules.
@@ -753,7 +742,7 @@ func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any, defaultKi
 		}
 		keys := maputil.SortedKeys(ruleMap)
 		for _, key := range keys {
-			if !dispatchRuleAllowedKeys[key] && key != ruleKind {
+			if !ruleKeyAllowed[key] && key != ruleKind {
 				warnings = append(warnings, FrontMatterWarning{
 					Check:   "unknown_sub_key",
 					Field:   rulePath + "." + key,

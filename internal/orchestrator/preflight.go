@@ -10,6 +10,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/maputil"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -20,7 +21,8 @@ type PreflightError struct {
 	// "tracker.project", "tracker_adapter", "tracker.handoff_state",
 	// "tracker.in_progress_state", "agent.kind", "agent.command",
 	// "agent_adapter", "workspace.root_writable",
-	// "agent.kind.session_resume", "dispatch.agent.missing_block".
+	// "agent.kind.session_resume", "dispatch.agent.missing_block",
+	// "dispatch.stage.collision".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -126,8 +128,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 
 	// Tracker-specific validations share a single Meta() lookup.
 	var warns []PreflightWarning
+	var trackerMeta registry.TrackerMeta
 	if cfg.Tracker.Kind != "" {
-		trackerMeta, _ := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
+		trackerMeta, _ = params.TrackerRegistry.Meta(cfg.Tracker.Kind)
 
 		// API key is mandatory for adapters that declare it required.
 		if trackerMeta.RequiresAPIKey && cfg.Tracker.APIKey == "" {
@@ -288,6 +291,8 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
+	errs = append(errs, stageCollisions(cfg, trackerMeta)...)
+
 	// Workspace root must exist and be writable.
 	if cfg.Workspace.Root != "" {
 		if err := checkWorkspaceRootWritable(cfg.Workspace.Root); err != nil {
@@ -355,6 +360,94 @@ func orderedUniqueAgentKinds(cfg config.ServiceConfig) []agentKindRef {
 // rules[index].
 func ruleSettingsPrefix(index int, rule config.DispatchRule) string {
 	return "dispatch rule " + strconv.Quote(rule.Name) + " (dispatch.rules[" + strconv.Itoa(index) + "]." + rule.SettingsKind + "): "
+}
+
+// stageCollisionSource is one value a stage label must not equal, with
+// the words that name it in a diagnostic.
+type stageCollisionSource struct {
+	value     string
+	rendering string
+}
+
+// stageCollisions returns one error per staged rule and per source value
+// that equals its stage label, rules in list order and sources in the
+// order stageCollisionSources lists them. It reads configuration and
+// registry metadata only, so it runs without a tracker call.
+func stageCollisions(cfg config.ServiceConfig, trackerMeta registry.TrackerMeta) []PreflightError {
+	var sources []stageCollisionSource
+	var errs []PreflightError
+	for i, rule := range cfg.Dispatch.Rules {
+		if rule.Stage == "" {
+			continue
+		}
+		if sources == nil {
+			sources = stageCollisionSources(cfg, trackerMeta)
+		}
+		for _, source := range sources {
+			if !config.StageLabelsEqual(rule.Stage, source.value) {
+				continue
+			}
+			errs = append(errs, PreflightError{
+				Check: "dispatch.stage.collision",
+				Message: "dispatch rule " + strconv.Quote(rule.Name) + " (dispatch.rules[" + strconv.Itoa(i) + "].stage): stage label " +
+					strconv.Quote(rule.Stage) + " collides with " + source.rendering +
+					"; a stage label must not equal a tracker state or a label Sortie applies to issues",
+			})
+		}
+	}
+	return errs
+}
+
+// stageCollisionSources lists every value a stage label must not equal:
+// the tracker states, then the labels Sortie applies to issues. A state
+// list the workflow leaves empty is replaced by the tracker adapter's
+// fallback list.
+func stageCollisionSources(cfg config.ServiceConfig, trackerMeta registry.TrackerMeta) []stageCollisionSource {
+	tc := cfg.Tracker
+	var sources []stageCollisionSource
+	sources = append(sources, stateListSources("active", "tracker.active_states", tc.ActiveStates, trackerMeta.DefaultActiveStates, tc.Kind)...)
+	sources = append(sources, stateListSources("terminal", "tracker.terminal_states", tc.TerminalStates, trackerMeta.DefaultTerminalStates, tc.Kind)...)
+	for _, named := range []struct{ key, value string }{
+		{"tracker.handoff_state", tc.HandoffState},
+		{"tracker.in_progress_state", tc.InProgressState},
+		{"tracker.no_change_state", tc.NoChangeState},
+	} {
+		if named.value != "" {
+			sources = append(sources, stageCollisionSource{value: named.value, rendering: named.key + " " + strconv.Quote(named.value)})
+		}
+	}
+
+	escalationLabels := make(map[string]string, len(cfg.Reactions)+1)
+	for key, reaction := range cfg.Reactions {
+		escalationLabels[key] = reaction.EscalationLabel
+	}
+	if cfg.CIFeedback.EscalationLabel != "" {
+		escalationLabels["ci_failure"] = cfg.CIFeedback.EscalationLabel
+	}
+	for _, key := range maputil.SortedKeys(escalationLabels) {
+		if label := escalationLabels[key]; label != "" {
+			sources = append(sources, stageCollisionSource{value: label, rendering: "reactions." + key + ".escalation_label " + strconv.Quote(label)})
+		}
+	}
+
+	parking := resolveHandoffParkingLabel(cfg.Reactions)
+	return append(sources, stageCollisionSource{value: parking, rendering: "the parking label " + strconv.Quote(parking)})
+}
+
+// stateListSources names each state of the written list, or of the
+// adapter's fallback list when the written list is empty. noun is
+// "active" or "terminal" and key the front-matter key of the list.
+func stateListSources(noun, key string, written, fallback []string, kind string) []stageCollisionSource {
+	states, suffix := written, ""
+	if len(written) == 0 {
+		states = fallback
+		suffix = ", which the " + strconv.Quote(kind) + " adapter falls back to because " + key + " is empty"
+	}
+	sources := make([]stageCollisionSource, len(states))
+	for i, state := range states {
+		sources[i] = stageCollisionSource{value: state, rendering: noun + " state " + strconv.Quote(state) + suffix}
+	}
+	return sources
 }
 
 // agentKindSelector is a dispatch.default.agent or rule agent selection;

@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -28,6 +31,15 @@ func titleOnlyConfig(phrases ...string) config.DispatchConfig {
 	return config.DispatchConfig{Rules: []config.DispatchRule{
 		{Name: "titled", Match: config.DispatchMatch{Title: phrases}, Selection: config.DispatchSelection{AgentKind: "title-agent"}},
 	}}
+}
+
+func stageWorkflow(leading ...config.DispatchRule) config.DispatchConfig {
+	rules := append(slices.Clone(leading),
+		config.DispatchRule{Name: "everything", IsCatchAll: true, Selection: config.DispatchSelection{TemplateID: "/prompts/default.md"}},
+		config.DispatchRule{Name: "plan", Stage: "Stage-Plan", Selection: config.DispatchSelection{TemplateID: "/prompts/plan.md"}},
+		config.DispatchRule{Name: "implement", Stage: "stage-implement", Selection: config.DispatchSelection{TemplateID: "/prompts/implement.md"}},
+	)
+	return config.DispatchConfig{Rules: rules}
 }
 
 func TestResolveRule(t *testing.T) {
@@ -554,6 +566,185 @@ func TestResolveRule(t *testing.T) {
 			wantRuleName: "bug-agent-only",
 			wantLayer:    ResolvedFromRule,
 		},
+
+		{
+			name:         "a bug issue takes the catch-all that precedes the staged rules",
+			issue:        issueWithLabels("bug"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/default.md",
+			wantRuleName: "everything",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:         "a stage label runs its rule after a catch-all, case-insensitively",
+			issue:        issueWithLabels("stage-plan"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/plan.md",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:         "a stage label beside other labels runs its rule",
+			issue:        issueWithLabels("stage-implement", "bug"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/implement.md",
+			wantRuleName: "implement",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:         "several stage labels run the rule listed first",
+			issue:        issueWithLabels("stage-plan", "stage-implement"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/plan.md",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:         "several stage labels run the rule listed first whatever the label order",
+			issue:        issueWithLabels("stage-implement", "stage-plan"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/plan.md",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:         "a label no rule owns is routed by the ordered rules",
+			issue:        issueWithLabels("stage-review"),
+			dispatch:     stageWorkflow(),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/default.md",
+			wantRuleName: "everything",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a stage label beats an ordered rule that globs it, whatever its position",
+			issue: issueWithLabels("stage-implement"),
+			dispatch: stageWorkflow(config.DispatchRule{
+				Name:      "by-label",
+				Match:     config.DispatchMatch{Labels: []string{"stage-*"}},
+				Selection: config.DispatchSelection{TemplateID: "/prompts/by-label.md"},
+			}),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/implement.md",
+			wantRuleName: "implement",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a label the ordered rule globs but no stage rule owns still takes the ordered rule",
+			issue: issueWithLabels("stage-x"),
+			dispatch: stageWorkflow(config.DispatchRule{
+				Name:      "by-label",
+				Match:     config.DispatchMatch{Labels: []string{"stage-*"}},
+				Selection: config.DispatchSelection{TemplateID: "/prompts/by-label.md"},
+			}),
+			wantAgent:    defaultKind,
+			wantTemplate: "/prompts/by-label.md",
+			wantRuleName: "by-label",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a staged rule with an empty match never matches an issue without its label",
+			issue: issueWithLabels("bug"),
+			dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+				{Name: "plan", Stage: "stage-plan", Selection: config.DispatchSelection{AgentKind: "planner"}},
+			}},
+			wantAgent:    defaultKind,
+			wantLayer:    ResolvedFromFallback,
+			wantRuleName: "",
+		},
+		{
+			name:  "a staged rule listed first never captures an issue the catch-all after it should take",
+			issue: issueWithLabels("bug"),
+			dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+				{Name: "plan", Stage: "stage-plan", Selection: config.DispatchSelection{AgentKind: "planner"}},
+				{Name: "rest", IsCatchAll: true, Selection: config.DispatchSelection{AgentKind: "generalist"}},
+			}},
+			wantAgent:    "generalist",
+			wantRuleName: "rest",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a staged rule listed first never captures an issue without labels",
+			issue: issueWithLabels(),
+			dispatch: config.DispatchConfig{
+				Rules: []config.DispatchRule{
+					{Name: "plan", Stage: "stage-plan", Selection: config.DispatchSelection{AgentKind: "planner"}},
+				},
+				Default: config.DispatchSelection{AgentKind: "default-agent"},
+			},
+			wantAgent:    "default-agent",
+			wantRuleName: "default",
+			wantLayer:    ResolvedFromDefault,
+		},
+		{
+			name:  "a glob character in a stage label is literal",
+			issue: issueWithLabels("stage-plan"),
+			dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+				{Name: "any-stage", Stage: "stage-*", Selection: config.DispatchSelection{AgentKind: "planner"}},
+			}},
+			wantAgent: defaultKind,
+			wantLayer: ResolvedFromFallback,
+		},
+		{
+			name:  "a stage label holding a glob character selects the issue that carries it as written",
+			issue: issueWithLabels("stage-*"),
+			dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+				{Name: "any-stage", Stage: "stage-*", Selection: config.DispatchSelection{AgentKind: "planner"}},
+			}},
+			wantAgent:    "planner",
+			wantRuleName: "any-stage",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "edge white space is part of the stage label",
+			issue: issueWithLabels("stage-plan"),
+			dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+				{Name: "plan", Stage: " stage-plan", Selection: config.DispatchSelection{AgentKind: "planner"}},
+			}},
+			wantAgent: defaultKind,
+			wantLayer: ResolvedFromFallback,
+		},
+		{
+			name:  "a staged rule without agent or template takes the dispatch default",
+			issue: issueWithLabels("stage-plan"),
+			dispatch: config.DispatchConfig{
+				Rules:   []config.DispatchRule{{Name: "plan", Stage: "stage-plan"}},
+				Default: config.DispatchSelection{AgentKind: "default-agent", TemplateID: "/tmpl/default.md"},
+			},
+			wantAgent:    "default-agent",
+			wantTemplate: "/tmpl/default.md",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a staged rule without agent or template takes the workflow defaults",
+			issue: issueWithLabels("stage-plan"),
+			dispatch: config.DispatchConfig{
+				Rules: []config.DispatchRule{{Name: "plan", Stage: "stage-plan"}},
+			},
+			defaultKind:  "workflow-kind",
+			defaultTmpl:  "/tmpl/body.md",
+			wantAgent:    "workflow-kind",
+			wantTemplate: "/tmpl/body.md",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
+		{
+			name:  "a staged rule agent beats the dispatch default",
+			issue: issueWithLabels("stage-plan"),
+			dispatch: config.DispatchConfig{
+				Rules:   []config.DispatchRule{{Name: "plan", Stage: "stage-plan", Selection: config.DispatchSelection{AgentKind: "planner"}}},
+				Default: config.DispatchSelection{AgentKind: "default-agent"},
+			},
+			wantAgent:    "planner",
+			wantRuleName: "plan",
+			wantLayer:    ResolvedFromRule,
+		},
 	}
 
 	for _, tt := range tests {
@@ -688,6 +879,10 @@ func TestRetrySelection(t *testing.T) {
 	titleRules := config.DispatchConfig{Rules: []config.DispatchRule{
 		{Name: "infra", Match: config.DispatchMatch{Title: []string{"[infra]"}}, Selection: config.DispatchSelection{AgentKind: "kind-b"}},
 	}}
+	stagedRetryRules := config.DispatchConfig{Rules: []config.DispatchRule{
+		{Name: "plan", Stage: "stage-plan", Selection: config.DispatchSelection{AgentKind: "kind-b"}},
+		{Name: "implement", Stage: "stage-implement", Selection: config.DispatchSelection{AgentKind: "kind-c"}},
+	}}
 
 	tests := []struct {
 		name   string
@@ -695,6 +890,8 @@ func TestRetrySelection(t *testing.T) {
 		frozen DispatchResolution
 		issue  domain.Issue
 		want   DispatchResolution
+
+		wantFresh bool
 	}{
 		{
 			name:   "reachable rule kind with a held template keeps the frozen selection",
@@ -723,25 +920,28 @@ func TestRetrySelection(t *testing.T) {
 			want:   DispatchResolution{AgentKind: "kind-a", RuleName: "old-work"},
 		},
 		{
-			name:   "kind the configuration does not name routes the issue afresh",
-			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
-			frozen: DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
-			issue:  issueWithLabels("docs"),
-			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+			name:      "kind the configuration does not name routes the issue afresh",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen:    DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
+			issue:     issueWithLabels("docs"),
+			want:      DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+			wantFresh: true,
 		},
 		{
-			name:   "kind the configuration does not name falls back to the default kind when no rule matches",
-			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
-			frozen: DispatchResolution{AgentKind: "kind-gone", TemplateID: held, RuleName: "old-work"},
-			issue:  issueWithLabels("unrelated"),
-			want:   DispatchResolution{AgentKind: "kind-a"},
+			name:      "kind the configuration does not name falls back to the default kind when no rule matches",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen:    DispatchResolution{AgentKind: "kind-gone", TemplateID: held, RuleName: "old-work"},
+			issue:     issueWithLabels("unrelated"),
+			want:      DispatchResolution{AgentKind: "kind-a"},
+			wantFresh: true,
 		},
 		{
-			name:   "template that is not held routes the issue afresh",
-			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
-			frozen: DispatchResolution{AgentKind: "kind-b", TemplateID: "/prompts/renamed.md", RuleName: "held"},
-			issue:  issueWithLabels("docs"),
-			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+			name:      "template that is not held routes the issue afresh",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen:    DispatchResolution{AgentKind: "kind-b", TemplateID: "/prompts/renamed.md", RuleName: "held"},
+			issue:     issueWithLabels("docs"),
+			want:      DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+			wantFresh: true,
 		},
 		{
 			name: "retired kind with a conversion record moves to its replacement with the frozen template and rule",
@@ -768,18 +968,20 @@ func TestRetrySelection(t *testing.T) {
 				"agent":    map[string]any{"kind": "kind-a"},
 				"dispatch": map[string]any{"rules": []any{backendRuleRaw("legacy")}},
 			}),
-			frozen: DispatchResolution{AgentKind: "legacy", TemplateID: "/prompts/renamed.md", RuleName: "backend"},
-			issue:  issueWithLabels("backend"),
-			want:   DispatchResolution{AgentKind: "modern", RuleName: "backend"},
+			frozen:    DispatchResolution{AgentKind: "legacy", TemplateID: "/prompts/renamed.md", RuleName: "backend"},
+			issue:     issueWithLabels("backend"),
+			want:      DispatchResolution{AgentKind: "modern", RuleName: "backend"},
+			wantFresh: true,
 		},
 		{
 			name: "retired kind hand-migrated away routes the issue afresh",
 			cfg: config.ServiceConfig{
 				Agent: config.AgentConfig{Kind: "kind-a"},
 			},
-			frozen: DispatchResolution{AgentKind: "legacy", RuleName: "backend"},
-			issue:  issueWithLabels("backend"),
-			want:   DispatchResolution{AgentKind: "kind-a"},
+			frozen:    DispatchResolution{AgentKind: "legacy", RuleName: "backend"},
+			issue:     issueWithLabels("backend"),
+			want:      DispatchResolution{AgentKind: "kind-a"},
+			wantFresh: true,
 		},
 		{
 			name:   "reachable kind keeps the frozen selection after the title stops matching the frozen rule",
@@ -789,18 +991,50 @@ func TestRetrySelection(t *testing.T) {
 			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "infra"},
 		},
 		{
-			name:   "kind the configuration does not name evaluates the title of the issue it was handed",
-			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: titleRules},
-			frozen: DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
-			issue:  issueWithTitle("[INFRA] rotate keys"),
-			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "infra"},
+			name:      "kind the configuration does not name evaluates the title of the issue it was handed",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: titleRules},
+			frozen:    DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
+			issue:     issueWithTitle("[INFRA] rotate keys"),
+			want:      DispatchResolution{AgentKind: "kind-b", RuleName: "infra"},
+			wantFresh: true,
 		},
 		{
-			name:   "kind the configuration does not name falls back when the new title matches no rule",
-			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: titleRules},
-			frozen: DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
-			issue:  issueWithTitle("Improve infra docs"),
-			want:   DispatchResolution{AgentKind: "kind-a"},
+			name:      "kind the configuration does not name falls back when the new title matches no rule",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: titleRules},
+			frozen:    DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
+			issue:     issueWithTitle("Improve infra docs"),
+			want:      DispatchResolution{AgentKind: "kind-a"},
+			wantFresh: true,
+		},
+		{
+			name:   "frozen staged selection stands after the stage label on the issue moved",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: stagedRetryRules},
+			frozen: DispatchResolution{AgentKind: "kind-b", RuleName: "plan", MatchedAt: ResolvedFromRule},
+			issue:  issueWithLabels("stage-implement"),
+			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "plan"},
+		},
+		{
+			name:   "kind only a staged rule reaches counts as reachable",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: stagedRetryRules},
+			frozen: DispatchResolution{AgentKind: "kind-c", RuleName: "implement", MatchedAt: ResolvedFromRule},
+			issue:  issueWithLabels("stage-plan"),
+			want:   DispatchResolution{AgentKind: "kind-c", RuleName: "implement"},
+		},
+		{
+			name:      "kind the configuration does not name routes afresh through the stage step",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: stagedRetryRules},
+			frozen:    DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
+			issue:     issueWithLabels("docs", "stage-implement"),
+			want:      DispatchResolution{AgentKind: "kind-c", RuleName: "implement"},
+			wantFresh: true,
+		},
+		{
+			name:      "template that is not held routes afresh through the stage step",
+			cfg:       config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: stagedRetryRules},
+			frozen:    DispatchResolution{AgentKind: "kind-b", TemplateID: "/prompts/renamed.md", RuleName: "plan"},
+			issue:     issueWithLabels("stage-implement"),
+			want:      DispatchResolution{AgentKind: "kind-c", RuleName: "implement"},
+			wantFresh: true,
 		},
 	}
 
@@ -808,11 +1042,14 @@ func TestRetrySelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := retrySelection(tt.cfg, templateHeld, tt.frozen, tt.issue)
+			got, fresh := retrySelection(tt.cfg, templateHeld, tt.frozen, tt.issue)
 
 			if got.AgentKind != tt.want.AgentKind || got.TemplateID != tt.want.TemplateID || got.RuleName != tt.want.RuleName {
 				t.Errorf("retrySelection(frozen %+v) = {%q, %q, %q}, want {%q, %q, %q}", tt.frozen,
 					got.AgentKind, got.TemplateID, got.RuleName, tt.want.AgentKind, tt.want.TemplateID, tt.want.RuleName)
+			}
+			if fresh != tt.wantFresh {
+				t.Errorf("retrySelection(frozen %+v) routed afresh = %v, want %v", tt.frozen, fresh, tt.wantFresh)
 			}
 		})
 	}
@@ -1002,6 +1239,105 @@ func TestResolveRule_TitleWithOtherKeys(t *testing.T) {
 
 			if got.RuleName != tt.wantRuleName || got.MatchedAt != tt.wantLayer {
 				t.Errorf("ResolveRule(title %q).{RuleName, MatchedAt} = {%q, %v}, want {%q, %v}", tt.issue.Title, got.RuleName, got.MatchedAt, tt.wantRuleName, tt.wantLayer)
+			}
+		})
+	}
+}
+
+func TestStageCandidates(t *testing.T) {
+	t.Parallel()
+
+	rules := stageWorkflow().Rules
+
+	tests := []struct {
+		name  string
+		issue domain.Issue
+		rules []config.DispatchRule
+		want  []int
+	}{
+		{name: "no carried stage label", issue: issueWithLabels("bug"), rules: rules, want: nil},
+		{name: "no labels", issue: issueWithLabels(), rules: rules, want: nil},
+		{name: "one carried stage label", issue: issueWithLabels("stage-implement"), rules: rules, want: []int{2}},
+		{name: "two carried labels come back in rule order", issue: issueWithLabels("stage-implement", "stage-plan"), rules: rules, want: []int{1, 2}},
+		{name: "label case does not matter", issue: issueWithLabels("STAGE-PLAN"), rules: rules, want: []int{1}},
+		{name: "no rules", issue: issueWithLabels("stage-plan"), rules: nil, want: nil},
+		{name: "a rule without a stage never counts", issue: issueWithLabels(""), rules: []config.DispatchRule{{Name: "rest", IsCatchAll: true}}, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := stageCandidates(tt.issue, tt.rules)
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("stageCandidates(labels %v) = %v, want %v", tt.issue.Labels, got, tt.want)
+			}
+		})
+	}
+}
+
+func decodeLogRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("decoding log line %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func TestWarnSeveralStageLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		issue      domain.Issue
+		wantLabels []any
+	}{
+		{name: "two stage labels draw one record in list order as written", issue: issueWithLabels("stage-implement", "stage-plan"), wantLabels: []any{"Stage-Plan", "stage-implement"}},
+		{name: "two stage labels beside other labels draw one record", issue: issueWithLabels("bug", "stage-plan", "stage-implement"), wantLabels: []any{"Stage-Plan", "stage-implement"}},
+		{name: "one stage label draws none", issue: issueWithLabels("stage-plan", "bug")},
+		{name: "no stage label draws none", issue: issueWithLabels("bug")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+			warnSeveralStageLabels(log, tt.issue, stageWorkflow(), "plan")
+
+			records := decodeLogRecords(t, &buf)
+			if tt.wantLabels == nil {
+				if len(records) != 0 {
+					t.Fatalf("warnSeveralStageLabels(labels %v) logged %d records, want 0: %v", tt.issue.Labels, len(records), records)
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("warnSeveralStageLabels(labels %v) logged %d records, want 1: %v", tt.issue.Labels, len(records), records)
+			}
+			record := records[0]
+			if record["level"] != "WARN" || record["msg"] != "several stage labels found" {
+				t.Errorf("record level, msg = %v, %v, want WARN, %q", record["level"], record["msg"], "several stage labels found")
+			}
+			if got, _ := record["stage_labels"].([]any); !slices.Equal(got, tt.wantLabels) {
+				t.Errorf("record stage_labels = %v, want %v", record["stage_labels"], tt.wantLabels)
+			}
+			if record["rule_name"] != "plan" {
+				t.Errorf("record rule_name = %v, want %q", record["rule_name"], "plan")
+			}
+			if record["issue_id"] != tt.issue.ID || record["issue_identifier"] != tt.issue.Identifier {
+				t.Errorf("record issue_id, issue_identifier = %v, %v, want %q, %q", record["issue_id"], record["issue_identifier"], tt.issue.ID, tt.issue.Identifier)
 			}
 		})
 	}

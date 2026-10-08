@@ -574,7 +574,11 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			cfg := o.workflowManager.Config()
 			templateHeld := func(id string) bool { return o.workflowManager.PromptTemplateByID(id) != nil }
 			resolveSelection := func(frozen DispatchResolution, issue domain.Issue) DispatchResolution {
-				return retrySelection(cfg, templateHeld, frozen, issue)
+				selection, routedAfresh := retrySelection(cfg, templateHeld, frozen, issue)
+				if routedAfresh {
+					warnSeveralStageLabels(o.logger, issue, cfg.Dispatch, selection.RuleName)
+				}
+				return selection
 			}
 			resolveAttemptSettings := func(selection DispatchResolution, sshHost string) AttemptSettings {
 				return o.resolveAttemptSettings(cfg, selection, sshHost)
@@ -830,6 +834,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		issue = decision.Issue
 
 		resolution := ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
+		warnSeveralStageLabels(o.logger, issue, cfg.Dispatch, resolution.RuleName)
 		adapter, adapterErr := o.agentAdapterByKind(resolution.AgentKind)
 		if adapterErr != nil {
 			o.logger.Error("agent kind unavailable",

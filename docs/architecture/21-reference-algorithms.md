@@ -331,7 +331,25 @@ function dispatch_issue(issue, state, attempt):
   return state
 ```
 
-The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see §5.3.9 for match semantics and the `ResolveRule` function for the full algorithm. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
+The `resolve_rule` call checks stage labels first and then evaluates the rules without a stage label in order, returning the first match:
+
+```text
+function resolve_rule(issue, dispatch_cfg, default_agent_kind, default_template_id):
+  staged = [rule for rule in dispatch_cfg.rules
+            if rule.stage is set and issue.labels contains rule.stage (case-insensitive)]
+  if staged is not empty:
+    return selection_of(staged[0])                  // list order when several labels are carried
+
+  for rule in dispatch_cfg.rules:
+    if rule.stage is set:
+      continue                                      // a staged rule never matches here
+    if rule is catch_all or rule.match succeeds for issue:
+      return selection_of(rule)
+
+  return dispatch_cfg.default, then the workflow-wide defaults
+```
+
+See §5.3.9 for match semantics and stage labels. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
 `resolve_attempt_settings` lays the frozen rule's settings block over the top-level block of the frozen kind (§5.3.9) and returns the resolved block, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
 
