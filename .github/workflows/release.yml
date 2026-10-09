@@ -13,18 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-      # Off by default. The free-trial certificate is self-signed, so a signed
-      # binary is no more trusted on Windows than an unsigned one, and the
-      # trial's yearly artifact-volume quota is spent. Enabling this needs a
-      # certificate chained to a CA in the Microsoft Trusted Root Program, plus
-      # a `!inputs.dry_run` gate on the signing hook: a dry run submits the same
-      # two Windows binaries as a real release and spends half the quota on
-      # artifacts it discards.
-      sign_windows:
-        description: "Authenticode-sign the Windows binaries with SignPath"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -575,13 +563,14 @@ jobs:
       - test-integration-acp-gemini
       - test-integration-acp-kiro
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # The Create and push tag step below runs git push origin to
-          # publish the tag, so this checkout keeps the credential.
           persist-credentials: true
 
       - name: Set up Go
@@ -593,14 +582,18 @@ jobs:
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
       - name: Verify SignPath config
-        if: ${{ inputs.sign_windows && !inputs.dry_run }}
+        if: ${{ !inputs.dry_run }}
         env:
           SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         run: |
           missing=()
-          [ -z "$SIGNPATH_ORG_ID" ]    && missing+=("SIGNPATH_ORG_ID (variable)")
-          [ -z "$SIGNPATH_API_TOKEN" ] && missing+=("SIGNPATH_API_TOKEN (secret)")
+          [ -z "$SIGNPATH_ORG_ID" ]       && missing+=("SIGNPATH_ORG_ID (variable)")
+          [ -z "$SIGNPATH_PROJECT_SLUG" ] && missing+=("SIGNPATH_PROJECT_SLUG (variable)")
+          [ -z "$SIGNPATH_POLICY_SLUG" ]  && missing+=("SIGNPATH_POLICY_SLUG (variable)")
+          [ -z "$SIGNPATH_API_TOKEN" ]    && missing+=("SIGNPATH_API_TOKEN (secret)")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required SignPath config: ${missing[*]}"
             echo "Configure these in Settings → Secrets and variables → Actions"
@@ -608,49 +601,89 @@ jobs:
           fi
           echo "✓ SignPath configuration is present"
 
-      - name: Install SignPath module
-        if: ${{ inputs.sign_windows && vars.SIGNPATH_ORG_ID != '' }}
-        shell: pwsh
-        run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name SignPath -RequiredVersion 4.3.1 -Force -Scope CurrentUser -AcceptLicense
-
       - name: Collect release contributors
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/release-contributors.sh '${{ needs.validate.outputs.tag }}'
 
+      - name: Create tag
+        run: |
+          TAG='${{ needs.validate.outputs.tag }}'
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "${{ inputs.dry_run && 'Dry run' || 'Release' }} ${TAG}"
+
+      - name: Build binaries for signing
+        if: ${{ !inputs.dry_run }}
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: build --clean
+
+      - name: Stage Windows binaries for signing
+        if: ${{ !inputs.dry_run }}
+        run: |
+          staging="${RUNNER_TEMP}/unsigned"
+          jq -r '.[] | select(.type == "Binary" and .goos == "windows") | "\(.goarch) \(.path)"' dist/artifacts.json |
+            while read -r arch path; do
+              mkdir -p "${staging}/windows_${arch}"
+              cp "$path" "${staging}/windows_${arch}/sortie.exe"
+            done
+          test -f "${staging}/windows_amd64/sortie.exe"
+          test -f "${staging}/windows_arm64/sortie.exe"
+
+      - name: Upload unsigned Windows binaries
+        id: upload-unsigned
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-unsigned
+          path: ${{ runner.temp }}/unsigned
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows binaries
+        if: ${{ !inputs.dry_run }}
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: windows-zip
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed
+          parameters: |
+            version: ${{ toJSON(needs.validate.outputs.version) }}
+
+      # GoReleaser runs after the tag is published, so a signed file missing
+      # from the expected path must fail here, while the tag is still local.
+      - name: Verify signed binaries
+        if: ${{ !inputs.dry_run }}
+        run: |
+          test -f "${RUNNER_TEMP}/signed/windows_amd64/sortie.exe"
+          test -f "${RUNNER_TEMP}/signed/windows_arm64/sortie.exe"
+
       - name: Push tag
         if: ${{ !inputs.dry_run }}
         run: |
           TAG='${{ needs.validate.outputs.tag }}'
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release ${TAG}"
           git push origin "$TAG"
           echo "### Tagged \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create local tag
-        if: ${{ inputs.dry_run }}
-        run: |
-          TAG='${{ needs.validate.outputs.tag }}'
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Dry run ${TAG}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release ${{ inputs.dry_run && '--skip=publish --skip=announce' || '' }}
+          args: release --clean ${{ inputs.dry_run && '--skip=publish --skip=announce' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          SIGNPATH_ORG_ID: ${{ inputs.sign_windows && vars.SIGNPATH_ORG_ID || '' }}
-          SIGNPATH_API_TOKEN: ${{ inputs.sign_windows && secrets.SIGNPATH_API_TOKEN || '' }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          SIGNED_WINDOWS_DIR: ${{ !inputs.dry_run && format('{0}/signed', runner.temp) || '' }}
 
       - name: Release summary
         if: ${{ !inputs.dry_run }}

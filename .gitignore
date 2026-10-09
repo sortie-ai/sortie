@@ -27,6 +27,7 @@ go.work.sum
 /sortie.exe
 /schemagen
 /dist
+/cmd/sortie/*.syso
 
 .sortie.db
 .sortie.db-shm

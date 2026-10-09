@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `sortie validate` now checks the templates of dispatch rules and the shared blocks they call, names the file and line of each template warning, and warns about a shared block that no template calls. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))
 
+- The Windows `sortie.exe` now shows its product name and version under Properties -> Details.
+
 ### Changed
 
 - A template that calls a block nothing defines now stops the workflow from loading, instead of failing the run that reaches the call, so correct such a call before upgrading. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))

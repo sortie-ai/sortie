@@ -85,6 +85,7 @@ Full configuration reference, CLI usage, and getting started guide: [docs.sortie
 - [Guides](https://docs.sortie-ai.com/guides/)
 - [Architecture](https://docs.sortie-ai.com/concepts/architecture/)
 - [Roadmap](https://github.com/orgs/sortie-ai/projects/1)
+- [Code signing policy](https://docs.sortie-ai.com/code-signing-policy/)
 
 ## Prior Art
 

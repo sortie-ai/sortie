@@ -7,6 +7,16 @@ report_sizes: true
 before:
   hooks:
     - go mod verify
+    - >-
+      go run github.com/tc-hib/go-winres@v0.3.3 simply
+      --arch amd64,arm64
+      --out cmd/sortie/rsrc
+      --manifest none
+      --product-name Sortie
+      --file-description Sortie
+      --original-filename sortie.exe
+      --product-version {{ .Version }}
+      --file-version {{ .Version }}
 
 builds:
   - id: sortie
@@ -35,11 +45,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     hooks:
       post:
-        # Authenticode-sign Windows binaries with SignPath before archiving, so
-        # the published archive and checksums cover the signed binary. The
-        # script no-ops on non-Windows targets and when SignPath credentials are
-        # absent (snapshots, pull requests, local builds).
-        - cmd: ./scripts/signpath-sign.sh "{{ .Path }}"
+        - cmd: ./scripts/swap-signed.sh "{{ .Path }}" "{{ .Os }}_{{ .Arch }}"
           output: true
 
 archives:
@@ -127,6 +133,8 @@ release:
     **Full changelog**: https://github.com/sortie-ai/sortie/blob/{{ .Tag }}/CHANGELOG.md
 
     **Diff**: https://github.com/sortie-ai/sortie/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    **Code signing policy**: https://docs.sortie-ai.com/code-signing-policy/
   draft: false
   prerelease: auto
   make_latest: true
