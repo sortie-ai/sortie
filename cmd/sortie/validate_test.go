@@ -824,11 +824,6 @@ func TestValidateErrorAndWarningsTogether(t *testing.T) {
 	}
 }
 
-// dotContextWorkflow returns a workflow whose prompt triggers WarnDotContext:
-// .issue.title referenced inside {{ range }} where dot is the element.
-
-// dotContextWorkflow returns a workflow whose prompt triggers WarnDotContext:
-// .issue.title referenced inside {{ range }} where dot is the element.
 func dotContextWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -844,11 +839,6 @@ agent:
 `)
 }
 
-// unknownVarWorkflow returns a workflow whose prompt triggers WarnUnknownVar:
-// .config is not in the template data contract.
-
-// unknownVarWorkflow returns a workflow whose prompt triggers WarnUnknownVar:
-// .config is not in the template data contract.
 func unknownVarWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -864,11 +854,6 @@ agent:
 `)
 }
 
-// unknownFieldWorkflow returns a workflow whose prompt triggers WarnUnknownField:
-// .run.nonexistent is not a valid sub-field of run.
-
-// unknownFieldWorkflow returns a workflow whose prompt triggers WarnUnknownField:
-// .run.nonexistent is not a valid sub-field of run.
 func unknownFieldWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -907,191 +892,38 @@ agent:
 // TestValidateTemplateDotContextText verifies that a dot-context misuse
 // produces exit 0, empty stdout, and a "dot_context" warning on stderr.
 
-// TestValidateTemplateDotContextText verifies that a dot-context misuse
-// produces exit 0, empty stdout, and a "dot_context" warning on stderr.
-func TestValidateTemplateDotContextText(t *testing.T) {
+func TestValidateTemplateWarnings(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, dotContextWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
-	}
-	if stdout.Len() != 0 {
-		t.Errorf("stdout = %q, want empty (text mode, warnings only)", stdout.String())
-	}
-	got := stderr.String()
-	if !strings.Contains(got, "warning:") {
-		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
-	}
-	if !strings.Contains(got, "dot_context") {
-		t.Errorf("stderr = %q, want to contain %q", got, "dot_context")
-	}
-}
-
-// TestValidateTemplateDotContextJSON verifies that a dot-context misuse
-// produces valid=true, empty errors, and a warning with check="dot_context"
-// in JSON output.
-
-// TestValidateTemplateDotContextJSON verifies that a dot-context misuse
-// produces valid=true, empty errors, and a warning with check="dot_context"
-// in JSON output.
-func TestValidateTemplateDotContextJSON(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, dotContextWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	tests := []struct {
+		name     string
+		workflow []byte
+		check    string
+	}{
+		{"dot context", dotContextWorkflow(), "dot_context"},
+		{"unknown var", unknownVarWorkflow(), "unknown_var"},
+		{"unknown field", unknownFieldWorkflow(), "unknown_field"},
 	}
 
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
-	}
-	if !out.Valid {
-		t.Errorf("validateOutput.Valid = false, want true")
-	}
-	if len(out.Errors) != 0 {
-		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
-	}
-	found := false
-	for _, w := range out.Warnings {
-		if w.Check == "dot_context" {
-			found = true
-			if w.Severity != "warning" {
-				t.Errorf("warnings[dot_context].Severity = %q, want %q", w.Severity, "warning")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wfPath := writeCustomWorkflowFile(t, t.TempDir(), tt.workflow)
+
+			code, out := runValidateJSON(t, wfPath)
+			textCode, stderr := runValidateWorkflow(t, tt.workflow)
+
+			if code != 0 || !out.Valid || len(out.Errors) != 0 {
+				t.Errorf("validate --format json = exit %d, valid %v, errors %v, want exit 0, valid true, no errors", code, out.Valid, out.Errors)
 			}
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "dot_context")
-	}
-}
-
-// TestValidateTemplateUnknownVarText verifies that an unknown top-level
-// variable produces exit 0 and an "unknown_var" warning on stderr.
-
-// TestValidateTemplateUnknownVarText verifies that an unknown top-level
-// variable produces exit 0 and an "unknown_var" warning on stderr.
-func TestValidateTemplateUnknownVarText(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, unknownVarWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
-	}
-	got := stderr.String()
-	if !strings.Contains(got, "warning:") {
-		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
-	}
-	if !strings.Contains(got, "unknown_var") {
-		t.Errorf("stderr = %q, want to contain %q", got, "unknown_var")
-	}
-}
-
-// TestValidateTemplateUnknownVarJSON verifies that an unknown top-level
-// variable produces valid=true and a warning with check="unknown_var" in JSON.
-
-// TestValidateTemplateUnknownVarJSON verifies that an unknown top-level
-// variable produces valid=true and a warning with check="unknown_var" in JSON.
-func TestValidateTemplateUnknownVarJSON(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, unknownVarWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
-	}
-
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
-	}
-	if !out.Valid {
-		t.Errorf("validateOutput.Valid = false, want true")
-	}
-	found := false
-	for _, w := range out.Warnings {
-		if w.Check == "unknown_var" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "unknown_var")
-	}
-}
-
-// TestValidateTemplateUnknownFieldText verifies that an unknown sub-field
-// produces exit 0 and an "unknown_field" warning on stderr.
-
-// TestValidateTemplateUnknownFieldText verifies that an unknown sub-field
-// produces exit 0 and an "unknown_field" warning on stderr.
-func TestValidateTemplateUnknownFieldText(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, unknownFieldWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
-	}
-	got := stderr.String()
-	if !strings.Contains(got, "warning:") {
-		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
-	}
-	if !strings.Contains(got, "unknown_field") {
-		t.Errorf("stderr = %q, want to contain %q", got, "unknown_field")
-	}
-}
-
-// TestValidateTemplateUnknownFieldJSON verifies that an unknown sub-field
-// produces valid=true and a warning with check="unknown_field" in JSON.
-
-// TestValidateTemplateUnknownFieldJSON verifies that an unknown sub-field
-// produces valid=true and a warning with check="unknown_field" in JSON.
-func TestValidateTemplateUnknownFieldJSON(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, unknownFieldWorkflow())
-
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
-	}
-
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
-	}
-	if !out.Valid {
-		t.Errorf("validateOutput.Valid = false, want true")
-	}
-	found := false
-	for _, w := range out.Warnings {
-		if w.Check == "unknown_field" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "unknown_field")
+			if !slices.ContainsFunc(out.Warnings, func(d validateDiag) bool { return d.Check == tt.check && d.Severity == "warning" }) {
+				t.Errorf("validateOutput.Warnings = %v, want a warning with check %q", out.Warnings, tt.check)
+			}
+			if textCode != 0 || !strings.Contains(stderr, "warning:") || !strings.Contains(stderr, tt.check) {
+				t.Errorf("validate = exit %d, stderr %q, want exit 0 and a %q warning", textCode, stderr, tt.check)
+			}
+		})
 	}
 }
 
@@ -1199,11 +1031,6 @@ agent:
 `)
 }
 
-// TestValidateTemplateContinuationKeysCleanJSON verifies that sortie
-// validate reports no unknown_var, unknown_field, or dot_context warning
-// for any of the six reaction continuation keys or their documented
-// fields, while an unrelated unrecognized name still produces exactly one
-// unknown_var warning naming the full enumerated set of recognized names.
 func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
 	t.Parallel()
 
@@ -1224,8 +1051,6 @@ func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
 		t.Errorf("validateOutput.Valid = false, want true")
 	}
 
-	const wantMessage = `unknown template variable ".not_a_reaction"; valid top-level variables are: .issue, .attempt, .run, .stage, .ci_failure, .review_comments, .bot_review_comments, .merge_conflict, .label_review, .label_fix`
-
 	var unknownVarWarnings []validateDiag
 	for _, w := range out.Warnings {
 		switch w.Check {
@@ -1243,8 +1068,8 @@ func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
 	if !strings.Contains(got.Message, ".not_a_reaction") {
 		t.Errorf("unknown_var warning message = %q, want to contain %q", got.Message, ".not_a_reaction")
 	}
-	if got.Message != wantMessage {
-		t.Errorf("unknown_var warning message = %q, want %q", got.Message, wantMessage)
+	if !strings.HasPrefix(got.Message, wfPath+" (line ") {
+		t.Errorf("unknown_var warning message = %q, want prefix %q", got.Message, wfPath+" (line ")
 	}
 }
 
@@ -2393,157 +2218,71 @@ func TestValidateDispatch_UnreachableRule(t *testing.T) {
 	}
 }
 
-func TestValidateDispatch_AbsoluteTemplatePath(t *testing.T) {
+func TestValidateTemplateAndPartialFaults(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
-  rules:
-    - name: abs-rule
-      match:
-        labels: ["bug"]
-      template: /etc/hosts
-`)
-
-	var stdout, stderr bytes.Buffer
-	ctx := context.Background()
-
-	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	rule := func(template string) string {
+		return "  rules:\n    - name: r\n      match:\n        labels: [\"bug\"]\n      template: " + template + "\n"
+	}
+	partials := "  partials: [\"p/*.md\"]\n"
+	tests := []struct {
+		name      string
+		dispatch  string
+		files     map[string]string
+		wantCheck string
+		wantWarn  map[string]string
+	}{
+		{"rule template absolute path", rule("/etc/hosts"), nil, "config.dispatch.rules[0].template", nil},
+		{"rule template tilde path", rule("~/templates/custom.md"), nil, "config.dispatch.rules[0].template", nil},
+		{"rule template missing file", rule("nonexistent/file.md"), nil, "config.dispatch.rules[0].template", nil},
+		{"rule template front matter", rule("r.md"), map[string]string{"r.md": "---\nkey: value\n---\nBody."}, "template_parse", nil},
+		{"rule template undefined call", rule("r.md"), map[string]string{"r.md": `{{ template "nope" . }}`}, "template_parse", nil},
+		{"partial absolute path", "  partials: [\"/etc/hosts\"]\n", nil, "config.dispatch.partials[0]", nil},
+		{"partial syntax error", partials, map[string]string{"p/a.md": `{{ define "a" }}{{ if }}{{ end }}`}, "template_parse", nil},
+		{"partial name defined twice", partials, map[string]string{"p/a.md": `{{ define "x" }}a{{ end }}`, "p/b.md": `{{ define "x" }}b{{ end }}`}, "template_parse", nil},
+		{
+			"clean workflow warns inside partial", partials + rule("r.md"),
+			map[string]string{"r.md": `{{ template "intro" . }}`, "p/a.md": "{{ define \"intro\" }}x\n{{ .nope }}{{ end }}\n{{ define \"spare\" }}x{{ end }}\n"},
+			"", map[string]string{"unknown_var": "p/a.md (line 2): ", "unused_partial": "p/a.md (line 3): "},
+		},
 	}
 
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
-	}
-	if out.Valid {
-		t.Errorf("validateOutput.Valid = true, want false")
-	}
-	found := false
-	for _, d := range out.Errors {
-		if strings.Contains(d.Message, "relative") || strings.Contains(d.Check, "dispatch.rules") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Errors = %v, want a diagnostic about relative template path", out.Errors)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestValidateDispatch_TildeTemplatePath(t *testing.T) {
-	t.Parallel()
+			// Diagnostics carry symlink-resolved paths; on Windows that also
+			// expands 8.3 short names such as RUNNER~1.
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
+			}
+			for name, content := range tt.files {
+				path := filepath.Join(dir, name)
+				if err := errors.Join(os.MkdirAll(filepath.Dir(path), 0o755), os.WriteFile(path, []byte(content), 0o644)); err != nil {
+					t.Fatalf("writing %q: %v", path, err)
+				}
+			}
 
-	dir := t.TempDir()
-	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
-  rules:
-    - name: tilde-rule
-      match:
-        labels: ["bug"]
-      template: ~/templates/custom.md
-`)
+			code, out := runValidateJSON(t, makeDispatchWorkflow(t, dir, "dispatch:\n"+tt.dispatch))
 
-	var stdout, stderr bytes.Buffer
-	ctx := context.Background()
-
-	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
-	}
-
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
-	}
-	if out.Valid {
-		t.Errorf("validateOutput.Valid = true, want false")
-	}
-}
-
-func TestValidateDispatch_MissingTemplateFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
-  rules:
-    - name: missing-tmpl
-      match:
-        labels: ["bug"]
-      template: nonexistent/file.md
-`)
-
-	var stdout, stderr bytes.Buffer
-	ctx := context.Background()
-
-	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
-	}
-
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
-	}
-	if out.Valid {
-		t.Errorf("validateOutput.Valid = true, want false")
-	}
-	found := false
-	for _, d := range out.Errors {
-		if strings.Contains(d.Message, "cannot read template") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Errors = %v, want a diagnostic with 'cannot read template'", out.Errors)
-	}
-}
-
-func TestValidateDispatch_FrontMatterInTemplate(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	tmplDir := filepath.Join(dir, "prompts")
-	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmplDir, "fm.md"), []byte("---\nkey: value\n---\nBody."), 0o644); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
-  rules:
-    - name: fm-rule
-      match:
-        labels: ["bug"]
-      template: prompts/fm.md
-`)
-
-	var stdout, stderr bytes.Buffer
-	ctx := context.Background()
-
-	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
-	}
-
-	var out validateOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
-	}
-	if out.Valid {
-		t.Errorf("validateOutput.Valid = true, want false")
-	}
-
-	found := false
-	for _, d := range out.Errors {
-		if d.Check == "template_parse" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "template_parse")
+			wantCode := 0
+			if tt.wantCheck != "" {
+				wantCode = 1
+			}
+			if code != wantCode || out.Valid != (wantCode == 0) {
+				t.Fatalf("validate = exit %d, valid %v, errors %v, want exit %d", code, out.Valid, out.Errors, wantCode)
+			}
+			if tt.wantCheck != "" && !slices.Contains(diagChecks(out.Errors), tt.wantCheck) {
+				t.Errorf("validate error checks = %v, want to contain %q", diagChecks(out.Errors), tt.wantCheck)
+			}
+			for check, at := range tt.wantWarn {
+				prefix := filepath.Join(dir, at)
+				if !slices.ContainsFunc(out.Warnings, func(d validateDiag) bool { return d.Check == check && strings.HasPrefix(d.Message, prefix) }) {
+					t.Errorf("validate warnings = %v, want a %q warning starting with %q", out.Warnings, check, prefix)
+				}
+			}
+		})
 	}
 }
 

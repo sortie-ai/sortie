@@ -85,18 +85,6 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		})
 	}
 
-	// Template static analysis.
-	tmpl, parseErr := prompt.Parse(wf.PromptTemplate, path, wf.FrontMatterLines)
-	if parseErr == nil {
-		for _, w := range prompt.AnalyzeTemplate(tmpl) {
-			warningDiags = append(warningDiags, validateDiag{
-				Severity: "warning",
-				Check:    templateWarnCheck(w.Kind),
-				Message:  w.Message,
-			})
-		}
-	}
-
 	logger := slog.New(slog.DiscardHandler)
 
 	mgr, err := workflow.NewManager(path, logger,
@@ -107,6 +95,14 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	if err != nil {
 		emitDiags(stdout, stderr, *format, mapManagerError(err), warningDiags)
 		return 1
+	}
+
+	for _, w := range prompt.AnalyzeTemplates(promptTemplates(mgr)) {
+		warningDiags = append(warningDiags, validateDiag{
+			Severity: "warning",
+			Check:    templateWarnCheck(w.Kind),
+			Message:  fmt.Sprintf("%s (line %d): %s", w.Source, w.Line, w.Message),
+		})
 	}
 
 	preflightParams := orchestrator.PreflightParams{
@@ -273,6 +269,26 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 	return diags
 }
 
+// promptTemplates returns the body template, then the default template and
+// the rule templates in rule order, each distinct template once.
+func promptTemplates(mgr *workflow.Manager) []*prompt.Template {
+	dispatch := mgr.Config().Dispatch
+	ids := []string{"", dispatch.Default.TemplateID}
+	for _, rule := range dispatch.Rules {
+		ids = append(ids, rule.Selection.TemplateID)
+	}
+	var templates []*prompt.Template
+	seen := make(map[string]struct{})
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		templates = append(templates, mgr.PromptTemplateByID(id))
+	}
+	return templates
+}
+
 func templateWarnCheck(k prompt.WarnKind) string {
 	switch k {
 	case prompt.WarnDotContext:
@@ -281,6 +297,8 @@ func templateWarnCheck(k prompt.WarnKind) string {
 		return "unknown_var"
 	case prompt.WarnUnknownField:
 		return "unknown_field"
+	case prompt.WarnUnusedPartial:
+		return "unused_partial"
 	default:
 		return "template_warning"
 	}

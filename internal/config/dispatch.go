@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -33,6 +34,21 @@ type DispatchConfig struct {
 	// and the hop count of the longest chain when the key is absent or
 	// null. Zero when the workflow has no dispatch section.
 	MaxConsecutiveHops int
+
+	// Partials lists the files dispatch.partials selects, in load order,
+	// each file once. Empty when the key is absent.
+	Partials []DispatchPartial
+}
+
+// DispatchPartial is one file that dispatch.partials selects.
+type DispatchPartial struct {
+	// Path is the resolved absolute path after symlink evaluation. It
+	// identifies the file.
+	Path string
+
+	// Name is "./" plus Path relative to the resolved workflow directory,
+	// with forward slashes.
+	Name string
 }
 
 // DispatchRule pairs a match block with the selection it produces.
@@ -399,10 +415,16 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 	}
 	defaultSel.TemplateID = resolvedDefaultTemplate
 
+	partials, err := resolveDispatchPartials(dispatchMap["partials"], resolvedWorkflowDir)
+	if err != nil {
+		return DispatchConfig{}, err
+	}
+
 	return DispatchConfig{
 		Rules:              rules,
 		Default:            defaultSel,
 		MaxConsecutiveHops: maxHops,
+		Partials:           partials,
 	}, nil
 }
 
@@ -1242,6 +1264,120 @@ func resolveTemplatePath(raw, workflowDir, field string) (string, error) {
 	}
 
 	return resolved, nil
+}
+
+// resolveDispatchPartials expands every dispatch.partials entry below root
+// and returns the selected files in load order, each once. An entry that
+// leaves the tree fails before any directory is read, and a file whose
+// symlink target leaves it fails the load rather than being skipped.
+func resolveDispatchPartials(raw any, root string) ([]DispatchPartial, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	entries, ok := raw.([]any)
+	if !ok {
+		return nil, &ConfigError{
+			Field:   "dispatch.partials",
+			Message: "expected a list of paths, got " + describeExtensionValue(raw),
+		}
+	}
+
+	var partials []DispatchPartial
+	seen := make(map[string]bool, len(entries))
+	for i, elem := range entries {
+		field := fmt.Sprintf("dispatch.partials[%d]", i)
+		entry, ok := elem.(string)
+		if !ok {
+			shape := "no value"
+			if elem != nil {
+				shape = describeExtensionValue(elem)
+			}
+			return nil, &ConfigError{Field: field, Message: "expected a path, got " + shape}
+		}
+		if strings.TrimFunc(entry, unicode.IsSpace) == "" {
+			return nil, &ConfigError{Field: field, Message: "needs a path"}
+		}
+		if filepath.IsAbs(entry) || strings.HasPrefix(entry, "~") {
+			return nil, &ConfigError{Field: field, Message: "partial path must be relative to WORKFLOW.md"}
+		}
+
+		files, fault := expandPartialEntry(root, entry, field)
+		if fault != nil {
+			return nil, fault
+		}
+		for _, file := range files {
+			partial, fault := resolvePartialFile(root, file, field)
+			if fault != nil {
+				return nil, fault
+			}
+			if seen[partial.Path] {
+				continue
+			}
+			seen[partial.Path] = true
+			partials = append(partials, partial)
+		}
+	}
+	return partials, nil
+}
+
+// expandPartialEntry returns the slash paths, relative to root, that one
+// dispatch.partials entry selects. Matching runs on the entry alone below
+// root, so a glob metacharacter in the workflow directory's own path cannot
+// change what an entry selects.
+func expandPartialEntry(root, entry, field string) ([]string, *ConfigError) {
+	inner, err := filepath.Rel(root, filepath.Join(root, entry))
+	if err != nil || !filepath.IsLocal(inner) {
+		return nil, &ConfigError{Field: field, Message: "partial path escapes the workflow directory tree"}
+	}
+
+	pattern := filepath.ToSlash(inner)
+	if !strings.ContainsAny(pattern, `*?[\`) {
+		return []string{pattern}, nil
+	}
+
+	files, err := fs.Glob(os.DirFS(root), pattern)
+	if err != nil {
+		return nil, &ConfigError{Field: field, Message: fmt.Sprintf("malformed glob pattern: %v", err)}
+	}
+
+	// Editors leave lock and backup files such as .#a.md beside the file
+	// being edited; a wildcard must not pull them in.
+	if !strings.HasPrefix(path.Base(pattern), ".") {
+		files = slices.DeleteFunc(files, func(file string) bool {
+			return strings.HasPrefix(path.Base(file), ".")
+		})
+	}
+	if len(files) == 0 {
+		return nil, &ConfigError{Field: field, Message: "matches no file"}
+	}
+	return files, nil
+}
+
+// resolvePartialFile checks one expanded file, named by its slash path
+// relative to root, and returns it with its symlinks evaluated. Messages
+// name the in-tree path so a symlink target outside the tree never appears.
+func resolvePartialFile(root, file, field string) (DispatchPartial, *ConfigError) {
+	shown := "./" + file
+	target, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(file)))
+	if err != nil {
+		return DispatchPartial{}, &ConfigError{Field: field, Message: fmt.Sprintf("cannot read partial %s: %v", shown, err)}
+	}
+	if !isUnderDirectory(target, root) {
+		return DispatchPartial{}, &ConfigError{Field: field, Message: fmt.Sprintf("partial %s escapes the workflow directory tree", shown)}
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return DispatchPartial{}, &ConfigError{Field: field, Message: fmt.Sprintf("cannot read partial %s: %v", shown, err)}
+	}
+	if !info.Mode().IsRegular() {
+		return DispatchPartial{}, &ConfigError{Field: field, Message: fmt.Sprintf("partial %s must be a regular file", shown)}
+	}
+
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return DispatchPartial{}, &ConfigError{Field: field, Message: fmt.Sprintf("cannot read partial %s: %v", shown, err)}
+	}
+	return DispatchPartial{Path: target, Name: "./" + filepath.ToSlash(rel)}, nil
 }
 
 // resolveWorkflowDir evaluates symlinks for the workflow directory so

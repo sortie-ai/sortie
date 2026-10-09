@@ -46,6 +46,7 @@
   - [5.5 First-Turn vs Continuation Semantics](#55-first-turn-vs-continuation-semantics)
   - [5.6 Fallback Prompt Behavior](#56-fallback-prompt-behavior)
   - [5.7 Common Patterns and Pitfalls](#57-common-patterns-and-pitfalls)
+  - [5.8 Define Blocks and Calls](#58-define-blocks-and-calls)
 - [6. Hook Lifecycle Reference](#6-hook-lifecycle-reference)
   - [6.1 Execution Contract](#61-execution-contract)
   - [6.2 Hook Environment Variables](#62-hook-environment-variables)
@@ -1044,6 +1045,8 @@ reactions:
 ```yaml
 dispatch:
   max_consecutive_hops: 10 # optional; positive integer; per-issue ceiling on automatic stage hops; at least the hops of the longest chain
+  partials: # optional; paths or glob patterns relative to the WORKFLOW.md directory; files whose define blocks every prompt template can call
+    - ./partials/*.md
   rules: # ordered list; optional; a rule with a stage label is selected by that label, the others first-match-wins
     - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; required with a settings block, a stage label, or next; never "default" with a settings block
       stage: <label> # optional; selects the rule by an issue label; excludes match; taken literally
@@ -1070,6 +1073,7 @@ dispatch:
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
 | `max_consecutive_hops` | integer | No | the larger of `10` and the hops of the longest chain | Per-issue ceiling on consecutive automatic stage hops. Must be greater than `0` and at least the number of hops in the longest chain. Absent or null takes the default. See [Stage chains](#stage-chains). |
+| `partials` | list of strings | No | _(none)_ | Files whose define blocks every prompt template can call with `{{ template "name" . }}`. Each entry is a path or a glob pattern relative to the `WORKFLOW.md` directory. Absent, null, and an empty list select no file. See [Partials](#partials). |
 | `rules` | list of rule objects | No | _(none)_ | Dispatch rules. A rule with `stage` is selected by its label first; the other rules are evaluated in YAML order and the first match wins. |
 | `default` | map | No | _(none)_ | Fallback selection when no rule matches. Keys: `agent`, `template`. |
 
@@ -1392,6 +1396,73 @@ Template paths for rules and `dispatch.default` resolve relative to the director
 - Paths that resolve, after symlink evaluation, outside the workflow directory tree.
 
 An empty `template` field falls through to the Markdown body (the same behavior as omitting the field).
+
+#### Partials
+
+A partial is a file that holds shared text for your prompt templates. It contains only `define` blocks, named pieces of template text, and every prompt template of the workflow can call them with `{{ template "name" . }}`. The Markdown body of `WORKFLOW.md`, the default template, and each rule template are all prompt templates. Without partials, each template file compiles alone, so shared text is copied into every file.
+
+```yaml
+dispatch:
+  partials:
+    - ./partials/*.md
+  rules:
+    - name: bug-fix
+      match:
+        issue_type: ["Bug"]
+      template: ./prompts/bug.md
+    - name: feature
+      match:
+        issue_type: ["Feature"]
+      template: ./prompts/feature.md
+```
+
+```text
+partials/shared.md
+  {{ define "context" -}}
+  Resolve {{ .issue.identifier }}: {{ .issue.title }}
+  {{- end }}
+  {{ define "layout" -}}
+  {{ template "context" . }}
+  {{ template "first_run_steps" . }}
+  {{- end }}
+
+prompts/bug.md
+  {{ define "first_run_steps" }}Reproduce the bug first.{{ end }}
+  {{- template "layout" . }}
+
+prompts/feature.md
+  {{ define "first_run_steps" }}Write the specification first.{{ end }}
+  {{- template "layout" . }}
+```
+
+Both rule templates load, and each renders its own `first_run_steps` through the shared `layout`. The Markdown body of the same workflow is a prompt template too, so it loads only if it does not call `layout`, or defines `first_run_steps` itself.
+
+To give prompt templates a shared default for a block they would otherwise each define, define the default in a partial under another name, and let a prompt template forward to it:
+
+```text
+partials/shared.md
+  {{ define "default_first_run_steps" }}Read the issue, then plan before you edit.{{ end }}
+
+prompts/docs.md
+  {{ define "first_run_steps" }}{{ template "default_first_run_steps" . }}{{ end }}
+  {{- template "layout" . }}
+```
+
+The rules:
+
+- **Paths.** An entry follows the rules of a rule template path: relative to the `WORKFLOW.md` directory, with no `$VAR` and no `~` expansion. An absolute entry, a `~`-prefixed entry, an entry that leaves the workflow directory tree, and a file that resolves outside it after symlink evaluation fail the load. A selected file must be a regular file.
+- **Patterns.** An entry that contains `*`, `?`, or `[` is a glob pattern and expands to the matching files in lexical order. Only the entry is a pattern: the path of the workflow directory never takes part in the match, so a `[` in its name does no harm. `*` and `?` do not match `/`, and `**` is not recursive. Write `/` between path elements on every OS; on Windows `\` also separates elements, and elsewhere `\` escapes the next character. Write `[[]` to match a literal `[` on every OS.
+- **Dot files.** A pattern skips files whose name starts with `.`, such as an editor lock file (`.#shared.md`) or a macOS `._shared.md`, unless the last element of the entry starts with `.`.
+- **Empty and missing.** An entry that matches no file fails the load. An entry without a pattern character that names a missing file fails with the cause the filesystem reports.
+- **Once per file.** Files load in list order, in lexical order within an entry. A file that several entries select loads once, at its first position.
+- **Content.** A partial carries no front matter. It holds only `define` blocks: white space and comments may stand outside them, and any other text or action outside a block fails the load, because the text of a partial is never callable.
+- **Names.** A block name has one source. Within a prompt template, a name is defined by one partial or by the template itself, never by two files. That includes a `{{ block }}` and an empty block. The name `prompt` is reserved. Two prompt templates may define the same name, since each compiles on its own.
+- **Calls.** A call to a name that nothing defines fails the load for every prompt template, also in a workflow without partials, and also when the call sits in a branch no issue takes.
+- **Location.** Every error names the file and the line in that file that hold the fault.
+
+Keep partials in a directory of their own and select them with a `*.md` pattern inside it, as in the example. A pattern that selects a prompt template or `WORKFLOW.md` makes the load fail, because their text sits outside a `define` block.
+
+Sortie reads every partial again on every load, and the file watcher does not watch partials. See [Section 7.2](#72-per-field-reload-behavior) for when an edit applies, and [Section 8](#8-dispatch-preflight-validation) for what `sortie validate` checks.
 
 #### Example
 
@@ -2786,6 +2857,9 @@ Go `text/template` provides these built-in actions, all available in workflow te
 | `{{ index MAP KEY }}`                                          | Index into a map or slice.      |
 | `{{ print A }}`, `{{ printf FMT A }}`, `{{ println A }}`       | Formatted output.               |
 | `{{ call FUNC ARGS }}`                                         | Call a function value.          |
+| `{{ define "NAME" }}...{{ end }}`                              | Define a named block (see [5.8](#58-define-blocks-and-calls)). |
+| `{{ template "NAME" . }}`                                      | Call a define block, passing dot. |
+| `{{ block "NAME" . }}...{{ end }}`                             | Define a block and call it in place. |
 
 ### 5.5 First-Turn vs Continuation Semantics
 
@@ -2843,6 +2917,14 @@ Inside `{{ range .issue.labels }}`, the dot (`.`) refers to the **current list e
 
 > **Common mistake:** Writing `{{ .issue.identifier }}` inside `{{ range }}` produces an error because `.issue` does not exist on a string element. Use `{{ $.issue.identifier }}` instead.
 
+#### A call without a dot
+
+`{{ template "context" }}` passes nothing, so the block runs with nil data and any field reference inside it fails the render. Pass the data explicitly: `{{ template "context" . }}`.
+
+#### `$` and dot inside a define block
+
+Inside a define block, `.` and `$` are the value the call passed, not the root data map. A block reached through `{{ template "context" . }}` outside every `range` and `with` body sees the whole data map, so `.issue.identifier` and `$.issue.identifier` both work. A call inside a `{{ range }}` body that passes `.` hands over the current element. Pass `$` to hand over the root data from there: `{{ template "context" $ }}`.
+
 #### Nil-safe conditionals
 
 Fields that may be empty (`description`, `url`, `assignee`, etc.) should be guarded to avoid rendering blank sections. Empty string evaluates to `false` in `{{ if }}`, making this pattern safe whether the field is empty or absent:
@@ -2871,6 +2953,17 @@ When the agent needs structured data, use `toJSON` instead of verbose range loop
 ```
 Blockers: {{ .issue.blocked_by | toJSON }}
 ```
+
+### 5.8 Define Blocks and Calls
+
+A define block is a named piece of template text: `{{ define "name" }}...{{ end }}`. A call runs it: `{{ template "name" . }}`. The last argument is the value the block receives as dot; pass `.` outside `range` and `with` bodies to hand over the whole data map described in [Section 5.2](#52-template-input-variables).
+
+- Every prompt template (the Markdown body, the default template, and each rule template) can call the define blocks of every partial listed in `dispatch.partials` and the define blocks it holds itself. See [Partials](#partials) for how to list partials.
+- A name is a string literal, and a call cannot compute it. A file is not callable by its name.
+- A `{{ block "name" . }}...{{ end }}` defines its name as `define` does, and runs it in place. A partial that defines the same name is an error, so `block` is not a way to override a partial.
+- Every block runs under the strict rules of [Section 5.1](#51-template-engine) and with the same functions as the template that calls it.
+- A call to a name that nothing defines fails the workflow load, so a typo never reaches a run. A call cycle loads, and an endless one fails at render when the engine reaches its depth limit.
+- Trim white space around a block with `{{-` and `-}}` so that a call does not add blank lines.
 
 ---
 
@@ -3063,6 +3156,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `claude-code.*`, `codex.*`, `copilot-cli.*`, `opencode.*`, `agent-client-protocol.*` | Future worker attempts, not in-flight sessions. Each attempt resolves its kind's block when it starts. |
 | `dispatch.rules[].next`                | Future worker exits, not in-flight sessions. A reload that removes `next`, or the rule it names, makes the next exit take the handoff write. |
 | `dispatch.max_consecutive_hops`        | Future worker exits, not in-flight sessions. The count already kept for an issue is unchanged. |
+| `dispatch.partials`                    | Future worker attempts, not in-flight sessions. Sortie reads every partial again on every load and does not watch the files, so an edit to a partial applies at the next tick's defensive reload, or at once when `WORKFLOW.md` is touched. |
 | `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, stage, agent, template) reaches future claims only. |
 | `notifications` (agent messages)       | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `notifications` (events Sortie produces) | The next event. Sortie routes each event against the configuration in force when it decides to send it, so a change to `events` or to a destination applies to the next event and never to one already routed. A reload whose destinations for these events cannot be built, such as an unknown `kind` or a required secret that resolved to an empty string, is rejected and the previous configuration stays in force. The `escalation: comment` of a reaction other than `ci_failure` keeps the value read at startup. |
@@ -3119,13 +3213,18 @@ Before dispatching work, the orchestrator validates the workflow configuration. 
 | `dispatch.agent.missing_block` | A kind other than `agent.kind` that `dispatch.default.agent` or a rule's `agent` names has a top-level block that is not a map, or has no top-level block while some selector of the kind is not a rule carrying the kind's block. The message names the first such selector. |
 | Every rule's resolved settings block passes the adapter checks | The top-level block of the rule's kind with the rule's block laid over it fails a check the top-level block would fail: key types, the adapter's own checks, `agent.kind.session_resume`, and conflicts between keys such as `opencode.allowed_tools.overlap` and `opencode.effort.conflict`. The message opens with `dispatch rule "<name>" (dispatch.rules[<i>].<kind>): `, and the check key is the one the top-level block draws. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
+| Every `dispatch.partials` entry resolvable | `dispatch.partials` is not a list; an entry is not a string, is only white space, is absolute, is `~`-prefixed, or leaves the workflow tree; a pattern is malformed or matches no file; an explicit entry names a missing file; a selected file resolves outside the tree after symlink evaluation or is not a regular file. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
+| Every partial loadable | A partial is unreadable, carries front matter, has a syntax error, holds text or an action outside a `define` block, defines the reserved name `prompt`, or defines a name another partial already defines. The message names the partial file and the line. |
+| Every prompt template free of name clashes and undefined calls | A prompt template defines a name a partial also defines, or calls a name that its partials and the template itself do not define, in any branch of an `{{ if }}`, `{{ range }}`, or `{{ with }}`. The message names the file and the line of the call, and the template that reaches it when the call sits in a partial. |
 | `tracker.handoff_state` and `tracker.in_progress_state` free of collisions against the effective state lists | The state collides with the effective `active_states` or `terminal_states`, where an empty workflow list takes the tracker adapter's own fallback list. |
 | `tracker.no_change_state` requires `tracker.handoff_state` | `no_change_state` is set while `handoff_state` is empty. Checked entirely offline, with no tracker call and no adapter fallback. |
 | `tracker.no_change_state` names a permitted value | `no_change_state` is neither equal to `handoff_state` nor a member of `terminal_states` exactly as written in front matter. Checked entirely offline, with no tracker call and no adapter fallback. |
 
 **Rule settings blocks in preflight.** Every adapter check that reads a settings block runs once for the top-level block of each kind the configuration reaches and again for each rule's resolved block, so a fault a rule inherits from the top-level block is reported for the top-level block and again for each rule that inherits it. A kind other than `agent.kind` whose every selector is a rule carrying that kind's block needs no top-level block, and its top-level block alone is not checked, because no attempt reads it alone. The same checks run for each attempt when it starts: an attempt whose resolved block fails an error-severity check starts no session (see [Freeze-on-dispatch](#freeze-on-dispatch)), which keeps a reload from carrying a bad block into a retry or a continuation that never passes the per-tick preflight.
 
-**Advisory warnings vs. configuration errors:** An unknown key placed directly under `dispatch` (alongside `rules`, `default`, and `max_consecutive_hops`) produces an `unknown_sub_key` advisory warning and does not block startup. Unknown keys nested deeper are rejected as configuration errors that fail the load: an unrecognized key inside a rule map (`dispatch.rules[*]`) that does not name a registered agent kind, inside `dispatch.default`, or inside a `match` block. The key that names a rule's own agent kind is its settings block and draws no `unknown_sub_key` warning. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key on a rule, is caught as an error so it cannot silently disable a rule, while a typo at the top `dispatch` level is flagged as a warning without preventing startup.
+**Advisory warnings vs. configuration errors:** An unknown key placed directly under `dispatch` (alongside `partials`, `rules`, `default`, and `max_consecutive_hops`) produces an `unknown_sub_key` advisory warning and does not block startup. Unknown keys nested deeper are rejected as configuration errors that fail the load: an unrecognized key inside a rule map (`dispatch.rules[*]`) that does not name a registered agent kind, inside `dispatch.default`, or inside a `match` block. The key that names a rule's own agent kind is its settings block and draws no `unknown_sub_key` warning. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key on a rule, is caught as an error so it cannot silently disable a rule, while a typo at the top `dispatch` level is flagged as a warning without preventing startup.
+
+**Template analysis in `sortie validate`.** `sortie validate` analyzes every prompt template of the workflow: the Markdown body, the default template, and each rule template. The analysis follows a call into a define block when the call passes the root data (`.` outside every `range` and `with` body, or `$`), so a variable that a partial reads and the data does not hold is reported as `unknown_var`. Each template warning starts with the file and the line that hold it, in the form `<file> (line <n>): <message>`, and a warning that sits in a partial names the partial. A define block of a partial that no prompt template calls draws an `unused_partial` warning, one for each such block. Template warnings never change the result or the exit status. A workflow that fails to load reports the load error and no template warnings. The `reactions.label_commands.review_branch_missing` and `reactions.label_commands.fix_branch_missing` advisories read the text of the partials the body template calls, so a `label_review` or `label_fix` branch inside such a partial counts.
 
 **Adapter-specific tracker diagnostics.** A tracker adapter may contribute its own offline checks, which run during the same preflight without any network call. An `error`-severity diagnostic blocks dispatch like any other preflight error; a `warning`-severity diagnostic is advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
 
@@ -3302,12 +3401,17 @@ These errors are raised when `SORTIE_*` environment variables or `.env` file val
 | --------------------------- | --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`template_parse_error`**  | Parse (workflow load) | **Blocks all dispatch** until corrected. | Syntax error in the prompt template: unclosed action, mismatched delimiters, undefined function in pipeline. | Check `{{ }}` balance. Verify function names match the FuncMap (`toJSON`, `join`, `lower`). Look for unclosed `{{ if }}`, `{{ range }}`, or `{{ with }}` blocks.                                                      |
 | **`template_render_error`** | Render (per issue)    | **Fails the current run attempt** only.  | Runtime error: missing variable (`missingkey=error`), type mismatch in pipeline, FuncMap function error.     | Check variable names against the data contract (`.issue.*`, `.attempt`, `.run.*`). Verify that fields accessed inside `{{ range }}` use `$` prefix for top-level access. Ensure `join` receives a list, not a scalar. |
+| **`template_parse_error`**: undefined call | Parse (workflow load) | **Blocks all dispatch** until corrected. | A prompt template calls a name that nothing defines. The message reads `calls template "<name>", which is not defined`, and ends with `, reached from <file>` when the call sits in a partial. | Define the block in a partial or in the template, or correct the name in the call. Check every branch of the template, because a call in a branch no issue takes also fails. |
+| **`template_parse_error`**: name defined twice | Parse (workflow load) | **Blocks all dispatch** until corrected. | Two files define one name for the same prompt template, a partial and the template or two partials, or a partial defines `prompt`. The message reads `template "<name>" is already defined in <file>`. | Keep one definition. To vary a block per template, define it in each prompt template and call it from the partial. |
+| **`template_parse_error`**: text outside a define block | Parse (workflow load) | **Blocks all dispatch** until corrected. | A partial holds text or an action outside its `define` blocks. The message reads `only define blocks, white space, and comments may appear outside a define block`. A `dispatch.partials` pattern that selects a prompt template or `WORKFLOW.md` causes this too. | Move the text into a `define` block, or narrow the pattern to a directory that holds only partials. |
+| **`template_render_error`** in a partial | Render (per issue) | **Fails the current run attempt** only. | A define block of a partial fails at run time, for example on a missing variable. The error names the partial file and the line within it, with no front matter offset. | Open the named file at the named line, and check that the call passed the data the block reads (`{{ template "name" . }}`). |
 
-**Line number adjustment:** Template error messages include line numbers adjusted to `WORKFLOW.md`-relative positions (front matter line count is added to the template-relative line number). The error message format:
+**Line number adjustment:** Template error messages name the file that holds the fault. For the Markdown body of `WORKFLOW.md` the line is adjusted to a `WORKFLOW.md`-relative position (the front matter line count is added to the template-relative line number). A fault in a partial or in a rule template file names that file, and its line counts from the top of that file. The error message format:
 
 ```
 template parse error in WORKFLOW.md (line 47): template: prompt:4:15: ...
 template render error in WORKFLOW.md (line 52): template: prompt:9: ...
+template parse error in /srv/wf/partials/shared.md (line 3): template: ./partials/shared.md:3: ...
 ```
 
 ### 9.5 Agent Errors
@@ -3394,6 +3498,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `self_review.verification_timeout_ms`   | integer          | `120000`                     | —                                        | Per-command timeout                                                                    |
 | `self_review.max_diff_bytes`            | integer          | `102400`                     | —                                        | Diff truncation limit                                                                  |
 | `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
+| `dispatch.partials`                     | `[string]`       | `[]` (empty)                 | —                                        | Paths or glob patterns relative to the `WORKFLOW.md` directory; files whose define blocks every prompt template can call; read again on every load |
 | `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Destination list; `notify_operator` is registered only when an entry receives `agent.message` |
 | `notifications[].kind`                  | string           | _(required)_                 | —                                        | Destination discriminator; v1: `webhook`, `slack`, and the built-in `tracker_comment`  |
 | `notifications[].events`                | `[string]`       | `[agent.message]` for `webhook` and `slack`; _(required)_ for `tracker_comment` | — | Event types the entry receives; names from the closed catalog, none repeated; omitting it on `webhook` or `slack` is deprecated; `agent.message` is rejected on `tracker_comment` |

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -359,7 +358,7 @@ func (m *Manager) reload() {
 }
 
 // loadPipeline runs the full Load -> NewServiceConfig -> dispatch
-// build -> Parse pipeline. Returns the parsed service config, the
+// build -> partials -> Parse pipeline. Returns the parsed service config, the
 // body template, and the per-template index keyed by resolved
 // absolute path (empty key holds the body template). On any error
 // the caller retains the previous values and surfaces the error via
@@ -373,37 +372,6 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 	cfg, err := config.NewServiceConfig(wf.Config, config.WithRetiredAgents(m.retiredAgents))
 	if err != nil {
 		return config.ServiceConfig{}, nil, nil, err
-	}
-
-	// Advisory: a label-review dispatch renders the frozen work template, so
-	// without a {{ if .label_review }} branch it posts no review. This scan
-	// is best-effort and never fails the load.
-	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != "" && !strings.Contains(wf.PromptTemplate, "label_review") {
-		cfg.AddAdvisories(config.Advisory{
-			Check:   "reactions.label_commands.review_branch_missing",
-			Text:    "reactions.label_commands is active with a review label, but the prompt template has no {{ if .label_review }} branch; a label-review dispatch posts no review",
-			Message: "label_commands active but prompt template has no label_review branch",
-			Attrs: []slog.Attr{
-				slog.String("workflow", m.path),
-				slog.String("hint", "add a {{ if .label_review }} branch so label-review dispatches post a review"),
-			},
-		})
-	}
-
-	// Advisory: a label-fix dispatch clones the workspace and carries
-	// content-write scope, so without a {{ if .label_fix }} branch it runs
-	// the normal work prompt against a real checkout with push capability.
-	// This scan is best-effort and never fails the load.
-	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != "" && !strings.Contains(wf.PromptTemplate, "label_fix") {
-		cfg.AddAdvisories(config.Advisory{
-			Check:   "reactions.label_commands.fix_branch_missing",
-			Text:    "reactions.label_commands is active with a fix label, but the prompt template has no {{ if .label_fix }} branch; a label-fix dispatch runs the normal work prompt against a checkout that can push",
-			Message: "label_commands active but prompt template has no label_fix branch",
-			Attrs: []slog.Attr{
-				slog.String("workflow", m.path),
-				slog.String("hint", "add a {{ if .label_fix }} branch so label-fix dispatches check out the branch, push fixes, and post a summary"),
-			},
-		})
 	}
 
 	probe := m.agentKindProbe
@@ -423,28 +391,96 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		return config.ServiceConfig{}, nil, nil, err
 	}
 
+	partials, err := loadPartials(dispatchCfg.Partials)
+	if err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
+
+	tmpl, err := prompt.ParseWithPartials(wf.PromptTemplate, m.path, wf.FrontMatterLines, partials)
+	if err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
+
+	index, err := loadPerRuleTemplates(dispatchCfg, tmpl, partials)
+	if err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
+
+	// Advisory: a label-review dispatch renders the frozen work template, so
+	// without a {{ if .label_review }} branch it posts no review. This scan
+	// is best-effort and never fails the load.
+	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != "" && !tmpl.Mentions("label_review") {
+		cfg.AddAdvisories(config.Advisory{
+			Check:   "reactions.label_commands.review_branch_missing",
+			Text:    "reactions.label_commands is active with a review label, but the prompt template has no {{ if .label_review }} branch; a label-review dispatch posts no review",
+			Message: "label_commands active but prompt template has no label_review branch",
+			Attrs: []slog.Attr{
+				slog.String("workflow", m.path),
+				slog.String("hint", "add a {{ if .label_review }} branch so label-review dispatches post a review"),
+			},
+		})
+	}
+
+	// Advisory: a label-fix dispatch clones the workspace and carries
+	// content-write scope, so without a {{ if .label_fix }} branch it runs
+	// the normal work prompt against a real checkout with push capability.
+	// This scan is best-effort and never fails the load.
+	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != "" && !tmpl.Mentions("label_fix") {
+		cfg.AddAdvisories(config.Advisory{
+			Check:   "reactions.label_commands.fix_branch_missing",
+			Text:    "reactions.label_commands is active with a fix label, but the prompt template has no {{ if .label_fix }} branch; a label-fix dispatch runs the normal work prompt against a checkout that can push",
+			Message: "label_commands active but prompt template has no label_fix branch",
+			Attrs: []slog.Attr{
+				slog.String("workflow", m.path),
+				slog.String("hint", "add a {{ if .label_fix }} branch so label-fix dispatches check out the branch, push fixes, and post a summary"),
+			},
+		})
+	}
+
 	if m.advisoryFunc != nil {
 		cfg.AddAdvisories(m.advisoryFunc(cfg)...)
-	}
-
-	tmpl, err := prompt.Parse(wf.PromptTemplate, m.path, wf.FrontMatterLines)
-	if err != nil {
-		return config.ServiceConfig{}, nil, nil, err
-	}
-
-	index, err := loadPerRuleTemplates(dispatchCfg, tmpl)
-	if err != nil {
-		return config.ServiceConfig{}, nil, nil, err
 	}
 
 	return cfg, tmpl, index, nil
 }
 
+// loadPartials reads and compiles every partial of the dispatch config.
+// It returns a nil [*prompt.Partials] when the config selects none.
+func loadPartials(selected []config.DispatchPartial) (*prompt.Partials, error) {
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	files := make([]prompt.PartialFile, 0, len(selected))
+	for _, p := range selected {
+		raw, err := os.ReadFile(p.Path) //nolint:gosec // path was resolved and validated by BuildDispatchConfig
+		if err != nil {
+			return nil, &prompt.TemplateError{
+				Kind:   prompt.ErrTemplateParse,
+				Source: p.Path,
+				Err:    fmt.Errorf("read partial: %w", err),
+			}
+		}
+		if hasFrontMatterMarker(raw) {
+			return nil, &prompt.TemplateError{
+				Kind:   prompt.ErrTemplateParse,
+				Source: p.Path,
+				Err:    fmt.Errorf("partials must not carry front matter"),
+			}
+		}
+		files = append(files, prompt.PartialFile{
+			Path: p.Path,
+			Name: p.Name,
+			Body: string(bytes.TrimPrefix(raw, []byte(utf8BOM))),
+		})
+	}
+	return prompt.ParsePartials(files)
+}
+
 // loadPerRuleTemplates reads and parses every unique per-rule
 // template referenced by the dispatch config. The returned index is
 // keyed by resolved absolute path; the empty-string key holds the
-// already-parsed body template.
-func loadPerRuleTemplates(dispatchCfg config.DispatchConfig, body *prompt.Template) (map[string]*prompt.Template, error) {
+// already-parsed body template. Every template compiles against partials.
+func loadPerRuleTemplates(dispatchCfg config.DispatchConfig, body *prompt.Template, partials *prompt.Partials) (map[string]*prompt.Template, error) {
 	index := map[string]*prompt.Template{"": body}
 
 	unique := make(map[string]struct{})
@@ -474,7 +510,7 @@ func loadPerRuleTemplates(dispatchCfg config.DispatchConfig, body *prompt.Templa
 				Err:    fmt.Errorf("per-rule templates must not carry front matter"),
 			}
 		}
-		parsed, err := prompt.Parse(string(bodyBytes), absPath, 0)
+		parsed, err := prompt.ParseWithPartials(string(bodyBytes), absPath, 0, partials)
 		if err != nil {
 			return nil, err
 		}

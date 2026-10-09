@@ -30,7 +30,6 @@ func mkDispatchDir(t *testing.T) string {
 	return dir
 }
 
-// writeFile creates a file at the given absolute path with content.
 func writeFile(t *testing.T, absPath string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
@@ -127,6 +126,29 @@ func TestBuildDispatchConfig_HappyPath(t *testing.T) {
 	}
 	if got.Default.AgentKind != "claude-code" {
 		t.Errorf("Default.AgentKind = %q, want %q", got.Default.AgentKind, "claude-code")
+	}
+}
+
+func TestBuildDispatchConfig_PartialsExpansion(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(mkDispatchDir(t), "wf[prod]")
+	for _, name := range []string{"a.md", "b.md", ".#a.md"} {
+		writeFile(t, filepath.Join(dir, "partials", name), "x")
+	}
+	entries := []any{filepath.Join("partials", "b.md"), "partials/*.md"}
+
+	got, err := BuildDispatchConfig(partialsRaw(entries), dir, alwaysRegistered, "")
+
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig(%v) error = %v, want nil", entries, err)
+	}
+	want := []DispatchPartial{
+		{Path: filepath.Join(dir, "partials", "b.md"), Name: "./partials/b.md"},
+		{Path: filepath.Join(dir, "partials", "a.md"), Name: "./partials/a.md"},
+	}
+	if !reflect.DeepEqual(got.Partials, want) {
+		t.Errorf("BuildDispatchConfig(%v) Partials = %+v, want %+v", entries, got.Partials, want)
 	}
 }
 
@@ -403,13 +425,17 @@ func TestBuildDispatchConfig_PriorityPredicateRange(t *testing.T) {
 	})
 }
 
+func partialsRaw(entries any) map[string]any {
+	return map[string]any{"dispatch": map[string]any{"partials": entries}}
+}
+
 func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name      string
 		raw       map[string]any
-		setup     func(dir string)
+		setup     func(t *testing.T, dir string)
 		wantField string
 		wantMsg   string
 	}{
@@ -605,7 +631,7 @@ func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 					},
 				},
 			},
-			setup: func(dir string) {
+			setup: func(t *testing.T, dir string) {
 				// Create the target outside the workflow dir so EvalSymlinks resolves
 				// it but the containment check then rejects it.
 				parent := filepath.Dir(dir)
@@ -630,6 +656,55 @@ func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 			wantField: "dispatch.rules[0].unknown",
 			wantMsg:   "unknown key",
 		},
+		{
+			name:      "partials entry absolute",
+			raw:       partialsRaw([]any{filepath.Join(os.TempDir(), "p.md")}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials entry tilde",
+			raw:       partialsRaw([]any{"~/p.md"}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials entry leaves the tree",
+			raw:       partialsRaw([]any{"../p.md"}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials entry not a string",
+			raw:       partialsRaw([]any{42}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials malformed pattern",
+			raw:       partialsRaw([]any{"partials/["}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials pattern matches nothing",
+			raw:       partialsRaw([]any{"partials/*.md"}),
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name:      "partials pattern selects a directory",
+			raw:       partialsRaw([]any{"partials/*"}),
+			setup:     func(t *testing.T, dir string) { writeFile(t, filepath.Join(dir, "partials", "sub", "x.md"), "x") },
+			wantField: "dispatch.partials[0]",
+		},
+		{
+			name: "partials pattern selects a symlink to outside the tree",
+			raw:  partialsRaw([]any{"partials/*.md"}),
+			setup: func(t *testing.T, dir string) {
+				outside := filepath.Join(filepath.Dir(dir), "secret.md")
+				writeFile(t, outside, "secret")
+				writeFile(t, filepath.Join(dir, "partials", "a.md"), "x")
+				if err := os.Symlink(outside, filepath.Join(dir, "partials", "b.md")); err != nil {
+					t.Skipf("os.Symlink(%q) = %v", outside, err)
+				}
+			},
+			wantField: "dispatch.partials[0]",
+		},
 	}
 
 	for _, tt := range tests {
@@ -638,7 +713,7 @@ func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 
 			dir := mkDispatchDir(t)
 			if tt.setup != nil {
-				tt.setup(dir)
+				tt.setup(t, dir)
 			}
 
 			_, err := BuildDispatchConfig(tt.raw, dir, neverRegistered, "")
