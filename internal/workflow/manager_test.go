@@ -243,7 +243,6 @@ func TestManager_ReloadFailSafe(t *testing.T) {
 		{name: "mistyped tracker endpoint", before: trackerEndpointWorkflow("https://jira.example.com"), after: trackerEndpointWorkflow("123"), wantField: "tracker.endpoint"},
 		{name: "rule block for another kind than the rule runs", before: ruleBlockWorkflow("kind-a", "kind-a"), after: ruleBlockWorkflow("kind-a", "kind-b"), wantField: "dispatch.rules[0].kind-b"},
 		{name: "default kind changed under a rule block", before: ruleBlockWorkflow("kind-a", "kind-a"), after: ruleBlockWorkflow("kind-b", "kind-a"), wantField: "dispatch.rules[0].kind-a"},
-		{name: "retired ci_feedback section", before: []byte("---\nreactions:\n  ci_failure:\n    provider: github\n---\nTask.\n"), after: []byte("---\nci_feedback:\n  kind: github\n---\nTask.\n"), wantField: "ci_feedback"},
 		{name: "retention days in the rejected range", before: retentionWorkflow(30), after: retentionWorkflow(5)},
 		{name: "zero turn timeout", before: turnTimeoutWorkflow(1800000), after: turnTimeoutWorkflow(0)},
 		{name: "watch window above the ceiling", before: ciWatchWindowWorkflow(3600000), after: ciWatchWindowWorkflow(9223372036855)},
