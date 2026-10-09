@@ -1,8 +1,9 @@
 // Package prompt renders per-issue prompt templates using Go
 // [text/template] in strict mode. Start with [Parse] to compile a
-// template body, then call [Template.Render] for each issue. Inspect
-// [TemplateError] for structured failure diagnostics with
-// WORKFLOW.md-relative line numbers.
+// template body, then call [Template.Render] for each issue. Templates
+// that share define blocks compile through [ParsePartials] and
+// [ParseWithPartials]. Inspect [TemplateError] for structured failure
+// diagnostics that name the file and line holding the fault.
 package prompt
 
 import (
@@ -10,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,17 +84,20 @@ var promptFuncMap = template.FuncMap{
 	"lower": strings.ToLower,
 }
 
-// linePattern matches text/template error messages and captures the
-// template-relative line number. Handles both "name:line:col:" and
-// "name:line:" formats. Compiled once at package init.
-var linePattern = regexp.MustCompile(`template: [^:]+:(\d+)`)
+// mainTemplateName is the parse name of every prompt template. A partial
+// cannot define it, because a call to it would re-enter the prompt itself.
+const mainTemplateName = "prompt"
 
 // Template is a parsed prompt template ready for per-issue execution.
-// Obtain via [Parse]. Safe for concurrent [Template.Render] calls.
+// Obtain via [Parse] or [ParseWithPartials]. Safe for concurrent
+// [Template.Render] calls.
 type Template struct {
 	tmpl             *template.Template
 	frontMatterLines int
 	source           string
+	body             string
+	partials         *Partials
+	reached          map[string]struct{}
 }
 
 // Tree returns the parsed template tree for static analysis. The tree
@@ -107,18 +110,45 @@ func (t *Template) Tree() *parse.Tree {
 	return t.tmpl.Tree
 }
 
+// Mentions reports whether s occurs in the body text the template was
+// parsed from, or in the Body of a partial that defines a block the
+// template reaches. A nil receiver mentions nothing.
+func (t *Template) Mentions(s string) bool {
+	if t == nil {
+		return false
+	}
+	if strings.Contains(t.body, s) {
+		return true
+	}
+	for name := range t.reached {
+		if owner, ok := t.partials.owner(name); ok && strings.Contains(owner.body, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // Parse compiles a prompt template body with strict mode
 // (missingkey=error) and the standard [FuncMap]. frontMatterLines is the
 // number of lines consumed by front matter in the source file (used to
-// rewrite error positions to WORKFLOW.md-relative line numbers). Returns
-// a [*TemplateError] with Kind [ErrTemplateParse] on failure.
+// rewrite error positions to WORKFLOW.md-relative line numbers). It
+// behaves as [ParseWithPartials] with no partials, so a call to an
+// undefined template fails here rather than at render time. Returns a
+// [*TemplateError] with Kind [ErrTemplateParse] on failure.
 func Parse(body, source string, frontMatterLines int) (*Template, error) {
-	tmpl, err := template.New("prompt").
-		Option("missingkey=error").
-		Funcs(promptFuncMap).
-		Parse(body)
+	return ParseWithPartials(body, source, frontMatterLines, nil)
+}
+
+// ParseWithPartials compiles a prompt template body into its own template
+// set, which holds the define blocks of partials besides the body's own.
+// partials may be nil and is never modified. A syntax error, a define name
+// that partials also define, and a call to an undefined template return a
+// [*TemplateError] with Kind [ErrTemplateParse], located in the file that
+// holds the fault.
+func ParseWithPartials(body, source string, frontMatterLines int, partials *Partials) (*Template, error) {
+	set, err := newSet(mainTemplateName).Parse(body)
 	if err != nil {
-		line := extractTemplateLine(err)
+		line := leadingLine(err, mainTemplateName)
 		if line > 0 {
 			line += frontMatterLines
 		}
@@ -129,11 +159,33 @@ func Parse(body, source string, frontMatterLines int) (*Template, error) {
 			Err:    err,
 		}
 	}
-	return &Template{
-		tmpl:             tmpl,
+	for _, b := range defineBlocks(set, mainTemplateName, body) {
+		if owner, dup := partials.owner(b.name); dup {
+			return nil, parseError(source, b.line+frontMatterLines, "template %q is already defined in %s", b.name, owner.path)
+		}
+	}
+	for _, b := range partials.blockList() {
+		if _, err := set.AddParseTree(b.name, b.tree); err != nil {
+			return nil, fmt.Errorf("add partial template %q: %w", b.name, err)
+		}
+	}
+	t := &Template{
+		tmpl:             set,
 		frontMatterLines: frontMatterLines,
 		source:           source,
-	}, nil
+		body:             body,
+		partials:         partials,
+	}
+	if err := t.checkCalls(); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func newSet(name string) *template.Template {
+	return template.New(name).
+		Option("missingkey=error").
+		Funcs(promptFuncMap)
 }
 
 // RenderOption applies optional overrides to the template data map
@@ -186,7 +238,9 @@ func WithStage(sc StageContext) RenderOption {
 // ensuring missingkey=error does not reject templates that reference these
 // fields.
 // Returns a [*TemplateError] with Kind [ErrTemplateRender] on failure,
-// with line numbers adjusted to WORKFLOW.md-relative positions.
+// located in the file that holds the fault: a partial's path with its own
+// line numbers, or the prompt template's source with line numbers adjusted
+// to WORKFLOW.md-relative positions.
 func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opts ...RenderOption) (string, error) {
 	templateVars := map[string]any{
 		"issue":   issue,
@@ -204,13 +258,10 @@ func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opt
 
 	var buf bytes.Buffer
 	if err := t.tmpl.Execute(&buf, templateVars); err != nil {
-		line := extractTemplateLine(err)
-		if line > 0 {
-			line += t.frontMatterLines
-		}
+		source, line := t.renderErrorOrigin(err)
 		return "", &TemplateError{
 			Kind:   ErrTemplateRender,
-			Source: t.source,
+			Source: source,
 			Line:   line,
 			Err:    err,
 		}
@@ -218,16 +269,48 @@ func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opt
 	return buf.String(), nil
 }
 
-// extractTemplateLine parses the template-relative line number from a
-// text/template error message. Returns 0 when the pattern does not
-// match.
-func extractTemplateLine(err error) int {
-	matches := linePattern.FindStringSubmatch(err.Error())
-	if len(matches) < 2 {
+// renderErrorOrigin locates an execution error from the parse name and
+// line its message leads with. The parse name is matched against the names
+// this template set holds because a file name may itself contain colons.
+func (t *Template) renderErrorOrigin(err error) (string, int) {
+	var parseName string
+	var line int
+	for _, name := range append(t.partials.parseNames(), mainTemplateName) {
+		if n := leadingLine(err, name); n > 0 && len(name) > len(parseName) {
+			parseName, line = name, n
+		}
+	}
+	if parseName == "" {
+		return t.source, 0
+	}
+	return t.origin(parseName, line)
+}
+
+// origin maps a line within the parse named parseName to the file that
+// holds it. Only the prompt template's own text sits behind front matter.
+func (t *Template) origin(parseName string, line int) (string, int) {
+	if path, ok := t.partials.pathOf(parseName); ok {
+		return path, line
+	}
+	if line > 0 {
+		line += t.frontMatterLines
+	}
+	return t.source, line
+}
+
+// leadingLine returns the line number of a text/template error message
+// that opens with "template: <parseName>:<line>", or 0 when it does not.
+func leadingLine(err error, parseName string) int {
+	rest, ok := strings.CutPrefix(err.Error(), "template: "+parseName+":")
+	if !ok {
 		return 0
 	}
-	n, parseErr := strconv.Atoi(matches[1])
-	if parseErr != nil {
+	digits := rest
+	if end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
+		digits = rest[:end]
+	}
+	n, convErr := strconv.Atoi(digits)
+	if convErr != nil {
 		return 0
 	}
 	return n

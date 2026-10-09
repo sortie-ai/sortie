@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -226,84 +228,79 @@ func TestManager_Reload(t *testing.T) {
 	}
 }
 
-func TestManager_ReloadRetainsOnError(t *testing.T) {
+const partialsWorkflow = "---\npolling:\n  interval_ms: 5000\nagent:\n  kind: mock\ndispatch:\n  partials: [\"*.part\"]\n  rules:\n    - name: bug\n      match:\n        labels: [bug]\n      template: rule.tmpl\n---\n{{ template \"greet\" . }}\n"
+
+func TestManager_ReloadFailSafe(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, validWorkflow(5000))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+	greet := func(body string) string { return "{{ define \"greet\" }}\n" + body + "\n{{ end }}\n" }
+	tests := []struct {
+		name, edit, wantField string
+		before, after         []byte
+		remove                bool
+	}{
+		{name: "invalid YAML", before: validWorkflow(5000), after: []byte("---\n[[[invalid\n---\nprompt\n")},
+		{name: "mistyped tracker endpoint", before: trackerEndpointWorkflow("https://jira.example.com"), after: trackerEndpointWorkflow("123"), wantField: "tracker.endpoint"},
+		{name: "rule block for another kind than the rule runs", before: ruleBlockWorkflow("kind-a", "kind-a"), after: ruleBlockWorkflow("kind-a", "kind-b"), wantField: "dispatch.rules[0].kind-b"},
+		{name: "default kind changed under a rule block", before: ruleBlockWorkflow("kind-a", "kind-a"), after: ruleBlockWorkflow("kind-b", "kind-a"), wantField: "dispatch.rules[0].kind-a"},
+		{name: "retired ci_feedback section", before: []byte("---\nreactions:\n  ci_failure:\n    provider: github\n---\nTask.\n"), after: []byte("---\nci_feedback:\n  kind: github\n---\nTask.\n"), wantField: "ci_feedback"},
+		{name: "retention days in the rejected range", before: retentionWorkflow(30), after: retentionWorkflow(5)},
+		{name: "zero turn timeout", before: turnTimeoutWorkflow(1800000), after: turnTimeoutWorkflow(0)},
+		{name: "watch window above the ceiling", before: ciWatchWindowWorkflow(3600000), after: ciWatchWindowWorkflow(9223372036855)},
+		{name: "malformed dispatch glob", before: validWorkflow(5000), after: []byte("---\ndispatch:\n  rules:\n    - name: bad-glob\n      match:\n        labels: [\"[unclosed\"]\n      agent: mock\n---\nPrompt.\n")},
+		{name: "partial syntax error", before: []byte(partialsWorkflow), edit: greet("{{ if }}")},
+		{name: "partial calls an undefined name", before: []byte(partialsWorkflow), edit: greet(`{{ template "missing" . }}`)},
+		{name: "deleted partial whose entry expands to nothing", before: []byte(partialsWorkflow), remove: true, wantField: "dispatch.partials[0]"},
 	}
 
-	// Overwrite with invalid content.
-	mustWriteFile(t, path, []byte("---\n[[[invalid\n---\nprompt\n"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	if mgr.Config().Polling.IntervalMS != 5000 {
-		t.Errorf("after failed Reload: Polling.IntervalMS = %d, want 5000", mgr.Config().Polling.IntervalMS)
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
-	}
-}
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
+			}
+			path, partial := filepath.Join(dir, "WORKFLOW.md"), filepath.Join(dir, "greet.part")
+			mustWriteFile(t, path, tt.before)
+			mustWriteFile(t, partial, []byte(greet("hello v1")))
+			mustWriteFile(t, filepath.Join(dir, "rule.tmpl"), []byte(`{{ template "greet" . }}`))
+			mgr, err := NewManager(path, testLogger())
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			templates := func() []*prompt.Template {
+				return []*prompt.Template{mgr.PromptTemplate(), mgr.PromptTemplateByID(""), mgr.PromptTemplateByID(filepath.Join(dir, "rule.tmpl"))}
+			}
+			wantConfig, wantTemplates := mgr.Config(), templates()
+			if tt.after != nil {
+				mustWriteFile(t, path, tt.after)
+			}
+			mustWriteFile(t, partial, []byte(tt.edit))
+			if tt.remove {
+				mustRemove(t, partial)
+			}
+			err = mgr.Reload()
 
-// TestManager_ReloadRetainsOnConfigTypeFault covers the reload fail-safe
-// path for a config-layer type fault: a reload whose new WORKFLOW.md
-// carries a mistyped tracker.endpoint leaves Manager.Config() returning
-// the previously loaded configuration and LastLoadError() reporting the
-// fault, exercising the existing fail-safe path with no new call site
-// inside Manager.Reload.
-func TestManager_ReloadRetainsOnConfigTypeFault(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, trackerEndpointWorkflow("https://jira.example.com"))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	if got := mgr.Config().Tracker.Endpoint; got != "https://jira.example.com" {
-		t.Fatalf("initial Config().Tracker.Endpoint = %q, want %q", got, "https://jira.example.com")
-	}
-
-	// A bare, unquoted number decodes as a YAML integer, not a string.
-	mustWriteFile(t, path, trackerEndpointWorkflow("123"))
-
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	var ce *config.ConfigError
-	if !errors.As(err, &ce) {
-		t.Fatalf("Reload() error type = %T, want *config.ConfigError", err)
-	}
-	if ce.Field != "tracker.endpoint" {
-		t.Errorf("Reload() ConfigError.Field = %q, want %q", ce.Field, "tracker.endpoint")
-	}
-	if ce.Message != "expected string, got integer" {
-		t.Errorf("Reload() ConfigError.Message = %q, want %q", ce.Message, "expected string, got integer")
-	}
-
-	if got := mgr.Config().Tracker.Endpoint; got != "https://jira.example.com" {
-		t.Errorf("after failed Reload: Config().Tracker.Endpoint = %q, want %q (retained)", got, "https://jira.example.com")
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
-	}
-	var lastCe *config.ConfigError
-	if !errors.As(mgr.LastLoadError(), &lastCe) {
-		t.Fatalf("LastLoadError() type = %T, want *config.ConfigError", mgr.LastLoadError())
-	}
-	if lastCe.Field != "tracker.endpoint" {
-		t.Errorf("LastLoadError() ConfigError.Field = %q, want %q", lastCe.Field, "tracker.endpoint")
+			var ce *config.ConfigError
+			if err == nil || !errors.Is(mgr.LastLoadError(), err) {
+				t.Errorf("Reload() error = %v, LastLoadError() = %v, want the same non-nil error", err, mgr.LastLoadError())
+			}
+			if tt.wantField != "" && (!errors.As(err, &ce) || ce.Field != tt.wantField) {
+				t.Errorf("Reload() error = %v, want a *config.ConfigError with Field %q", err, tt.wantField)
+			}
+			if !reflect.DeepEqual(mgr.Config(), wantConfig) || !slices.Equal(templates(), wantTemplates) {
+				t.Error("Config() or a prompt template changed after the failed reload, want the previous ones")
+			}
+			if tt.after == nil {
+				mustWriteFile(t, partial, []byte(greet("hello v2")))
+				reloadErr := mgr.Reload()
+				got, renderErr := mgr.PromptTemplate().Render(map[string]any{}, 1, prompt.RunContext{})
+				if reloadErr != nil || renderErr != nil || !strings.Contains(got, "hello v2") {
+					t.Errorf("Reload() = %v, Render() = %q, %v after fixing the partial, want the fixed partial text", reloadErr, got, renderErr)
+				}
+			}
+		})
 	}
 }
 
@@ -323,193 +320,6 @@ dispatch:
 ---
 Do the task for {{ .issue.title }}.
 `, agentKind, ruleBlockKind)
-}
-
-func kindsProbe(kinds ...string) ManagerOption {
-	return WithAgentKindProbe(func(kind string) bool { return slices.Contains(kinds, kind) })
-}
-
-func TestManager_ReloadRetainsOnRuleBlockFault(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		workflow    []byte
-		wantField   string
-		wantMessage string
-	}{
-		{name: "rule block for another kind than the one the rule runs", workflow: ruleBlockWorkflow("kind-a", "kind-b"), wantField: "dispatch.rules[0].kind-b", wantMessage: `settings block for agent kind "kind-b", but this rule runs agent kind "kind-a", taken from agent.kind`},
-		{name: "default kind changed under a rule block", workflow: ruleBlockWorkflow("kind-b", "kind-a"), wantField: "dispatch.rules[0].kind-a", wantMessage: `settings block for agent kind "kind-a", but this rule runs agent kind "kind-b", taken from agent.kind`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
-			mustWriteFile(t, path, ruleBlockWorkflow("kind-a", "kind-a"))
-			mgr, err := NewManager(path, testLogger(), kindsProbe("kind-a", "kind-b"))
-			if err != nil {
-				t.Fatalf("NewManager: %v", err)
-			}
-			mustWriteFile(t, path, tt.workflow)
-
-			err = mgr.Reload()
-
-			var ce *config.ConfigError
-			if !errors.As(err, &ce) || ce.Field != tt.wantField || ce.Message != tt.wantMessage {
-				t.Fatalf("Reload() error = %v, want a *config.ConfigError {Field:%q Message:%q}", err, tt.wantField, tt.wantMessage)
-			}
-			if !errors.As(mgr.LastLoadError(), &ce) {
-				t.Errorf("LastLoadError() = %v, want the reload fault", mgr.LastLoadError())
-			}
-			after := mgr.Config()
-			if len(after.Dispatch.Rules) != 1 || after.Dispatch.Rules[0].SettingsKind != "kind-a" || after.Dispatch.Rules[0].Settings["model"] != "provider/cheap" || after.Agent.Kind != "kind-a" {
-				t.Errorf("Config() after the failed reload = agent %q, rules %+v, want the previous kind and rule block retained", after.Agent.Kind, after.Dispatch.Rules)
-			}
-		})
-	}
-}
-
-func TestManager_ReloadRetainsOnCIFeedbackSection(t *testing.T) {
-	t.Parallel()
-
-	const wantMessage = "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, []byte("---\nreactions:\n  ci_failure:\n    provider: github\n    max_retries: 4\n---\nDo the task.\n"))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	before := mgr.Config().CIFeedback
-	if before.Kind != "github" {
-		t.Fatalf("initial Config().CIFeedback.Kind = %q, want %q", before.Kind, "github")
-	}
-
-	mustWriteFile(t, path, []byte("---\nci_feedback:\n  kind: github\n  max_retries: 4\n---\nDo the task.\n"))
-
-	err = mgr.Reload()
-
-	var ce *config.ConfigError
-	if !errors.As(err, &ce) {
-		t.Fatalf("Reload() error = %v (type %T), want *config.ConfigError", err, err)
-	}
-	if ce.Field != "ci_feedback" {
-		t.Errorf("Reload() ConfigError.Field = %q, want %q", ce.Field, "ci_feedback")
-	}
-	if ce.Message != wantMessage {
-		t.Errorf("Reload() ConfigError.Message = %q, want %q", ce.Message, wantMessage)
-	}
-	if got := mgr.Config().CIFeedback; got != before {
-		t.Errorf("after failed Reload: Config().CIFeedback = %+v, want %+v (retained)", got, before)
-	}
-	if got := mgr.LastLoadError(); !errors.Is(got, err) {
-		t.Errorf("LastLoadError() = %v, want %v", got, err)
-	}
-}
-
-// TestManager_ReloadRetainsOnInvalidRetentionDays asserts that a reload
-// whose workspace.retention_days fails validation leaves the previously
-// loaded configuration in force rather than disabling the bound or
-// terminating the process.
-func TestManager_ReloadRetainsOnInvalidRetentionDays(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, retentionWorkflow(30))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	if got := mgr.Config().Workspace.RetentionDays; got != 30 {
-		t.Fatalf("initial Config().Workspace.RetentionDays = %d, want 30", got)
-	}
-
-	// 5 is in the rejected 1-29 range.
-	mustWriteFile(t, path, retentionWorkflow(5))
-
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	if got := mgr.Config().Workspace.RetentionDays; got != 30 {
-		t.Errorf("after failed Reload: Config().Workspace.RetentionDays = %d, want 30 (retained)", got)
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
-	}
-}
-
-// TestManager_ReloadRetainsOnInvalidTurnTimeoutMS verifies that a reload
-// whose agent.turn_timeout_ms fails validation leaves the previously
-// loaded configuration in force rather than disabling the bound or
-// terminating the process.
-func TestManager_ReloadRetainsOnInvalidTurnTimeoutMS(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, turnTimeoutWorkflow(1800000))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	if got := mgr.Config().Agent.TurnTimeoutMS; got != 1800000 {
-		t.Fatalf("initial Config().Agent.TurnTimeoutMS = %d, want 1800000", got)
-	}
-
-	mustWriteFile(t, path, turnTimeoutWorkflow(0))
-
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	if got := mgr.Config().Agent.TurnTimeoutMS; got != 1800000 {
-		t.Errorf("after failed Reload: Config().Agent.TurnTimeoutMS = %d, want 1800000 (retained)", got)
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
-	}
-}
-
-// TestManager_ReloadRetainsOnInvalidCIWatchWindowMS verifies that a reload
-// whose reactions.ci_failure.watch_window_ms exceeds the shared ceiling
-// leaves the previously loaded configuration in force rather than
-// terminating the process.
-func TestManager_ReloadRetainsOnInvalidCIWatchWindowMS(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, ciWatchWindowWorkflow(3600000))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	if got := mgr.Config().CIFeedback.WatchWindowMS; got != 3600000 {
-		t.Fatalf("initial Config().CIFeedback.WatchWindowMS = %d, want 3600000", got)
-	}
-
-	// 9223372036855 is one above the shared ceiling.
-	mustWriteFile(t, path, ciWatchWindowWorkflow(9223372036855))
-
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error")
-	}
-	if got := mgr.Config().CIFeedback.WatchWindowMS; got != 3600000 {
-		t.Errorf("after failed Reload: Config().CIFeedback.WatchWindowMS = %d, want 3600000 (retained)", got)
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
-	}
 }
 
 // TestManager_WatchPicksUpChange verifies that workflow file changes are
@@ -1307,52 +1117,6 @@ Prompt.
 	_, err := NewManager(path, testLogger(), WithAgentKindProbe(probe))
 	if err == nil {
 		t.Fatal("NewManager with rejecting probe = nil error, want error")
-	}
-}
-
-func TestManager_FailSafeReload_DispatchError(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	mustWriteFile(t, path, validWorkflow(5000))
-
-	mgr, err := NewManager(path, testLogger())
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	initialInterval := mgr.Config().Polling.IntervalMS
-	initialPrompt := mgr.PromptTemplate()
-
-	// Overwrite with an invalid dispatch glob that BuildDispatchConfig will reject.
-	mustWriteFile(t, path, []byte(`---
-polling:
-  interval_ms: 9999
-dispatch:
-  rules:
-    - name: bad-glob
-      match:
-        labels: ["[unclosed"]
-      agent: mock
----
-Prompt.
-`))
-
-	err = mgr.Reload()
-	if err == nil {
-		t.Fatal("Reload() error = nil, want error for invalid dispatch config")
-	}
-
-	if mgr.Config().Polling.IntervalMS != initialInterval {
-		t.Errorf("after failed Reload: Polling.IntervalMS = %d, want %d (previous good value)",
-			mgr.Config().Polling.IntervalMS, initialInterval)
-	}
-	if mgr.PromptTemplate() != initialPrompt {
-		t.Errorf("after failed Reload: PromptTemplate pointer changed, want same previous good template")
-	}
-	if mgr.LastLoadError() == nil {
-		t.Error("after failed Reload: LastLoadError() = nil, want non-nil")
 	}
 }
 

@@ -23,20 +23,21 @@ const (
 // TemplateError represents a structured prompt template failure.
 //
 // It wraps the underlying cause so [errors.As] can extract it from errors
-// returned by [Parse] or [Template.Render]. Kind distinguishes
-// dispatch-blocking parse failures from per-attempt render failures, and
-// Line provides the operator-facing source location.
+// returned by [Parse], [ParsePartials], [ParseWithPartials] or
+// [Template.Render]. Kind distinguishes dispatch-blocking parse failures
+// from per-attempt render failures, and Line provides the operator-facing
+// source location.
 type TemplateError struct {
 	// Kind distinguishes parse errors (dispatch-blocking) from render
 	// errors (per-attempt).
 	Kind ErrorKind
 
-	// Source is the workflow file path for operator-facing messages.
+	// Source is the file that holds the fault.
 	Source string
 
-	// Line is the 1-based line number in the original WORKFLOW.md file
-	// (front matter offset applied). Zero when the line cannot be
-	// determined from the underlying error.
+	// Line is the 1-based line in Source, front-matter offset applied for
+	// the body template. Zero when the line cannot be determined from the
+	// underlying error.
 	Line int
 
 	// Err is the underlying cause from text/template.

@@ -18,6 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Notification destinations can now subscribe to `stage.advanced`, sent when Sortie moves an issue to its next stage, and `stage.not_advanced`, sent with the reason when a due move is not made. ([#1258](https://github.com/sortie-ai/sortie/issues/1258))
 
+- A workflow can now share prompt text between its templates: files listed under `dispatch.partials` hold named blocks that the Markdown body, the default template, and every rule template call with `{{ template "name" . }}`, so a shared instruction is edited in one place. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))
+
+- `sortie validate` now checks the templates of dispatch rules and the shared blocks they call, names the file and line of each template warning, and warns about a shared block that no template calls. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))
+
+### Changed
+
+- A template that calls a block nothing defines now stops the workflow from loading, instead of failing the run that reaches the call, so correct such a call before upgrading. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))
+
 ### Removed
 
 - A workflow that names the `kiro` agent kind is no longer converted to `agent-client-protocol`: it fails to start and fails `sortie validate`, like any unknown agent kind, so name `agent-client-protocol` for Kiro CLI instead. ([#1170](https://github.com/sortie-ai/sortie/issues/1170))

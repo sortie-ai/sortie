@@ -7,7 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// mustParseAnalyze compiles a template body or fatals the test.
 func mustParseAnalyze(t *testing.T, body string) *Template {
 	t.Helper()
 	tmpl, err := Parse(body, "test.md", 0)
@@ -17,8 +16,6 @@ func mustParseAnalyze(t *testing.T, body string) *Template {
 	return tmpl
 }
 
-// TestAnalyzeTemplate verifies all three warning classes, scope edge
-// cases, and boundary conditions defined in the spec.
 func TestAnalyzeTemplate(t *testing.T) {
 	t.Parallel()
 
@@ -237,6 +234,18 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantCount: 2,
 			wantKind:  WarnDotContext,
 		},
+		{
+			name:      "CalleeEnteredWithIssueNotFollowed",
+			body:      `{{ define "c" }}{{ .nope }}{{ end }}{{ template "c" .issue }}`,
+			wantCount: 0,
+		},
+		{
+			name:      "CallCycleTerminates",
+			body:      `{{ define "a" }}{{ .nope }}{{ template "a" . }}{{ end }}{{ template "a" . }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownVar,
+			wantNode:  ".nope",
+		},
 		// Boundary: nil template must return nil without panic.
 		{
 			name:      "NilTemplate",
@@ -286,8 +295,6 @@ func TestAnalyzeTemplate(t *testing.T) {
 	}
 }
 
-// TestAnalyzeTemplateDepth4ChainMessage verifies the full warning content
-// for depth-4+ field chains: kind, node text, and message substring.
 func TestAnalyzeTemplateDepth4ChainMessage(t *testing.T) {
 	t.Parallel()
 
@@ -315,9 +322,6 @@ func TestAnalyzeTemplateDepth4ChainMessage(t *testing.T) {
 	}
 }
 
-// TestAnalyzeTemplateNestedRangeAllWarnings verifies the DotContextRangeNested
-// case fully: both warnings must be WarnDotContext and reference the correct
-// node expressions.
 func TestAnalyzeTemplateNestedRangeAllWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -348,8 +352,6 @@ func TestAnalyzeTemplateNestedRangeAllWarnings(t *testing.T) {
 	}
 }
 
-// TestTemplateFieldSchemaMatchesDomain cross-checks the static schema
-// registry against the actual domain model to detect schema drift.
 func TestTemplateFieldSchemaMatchesDomain(t *testing.T) {
 	t.Parallel()
 
@@ -385,10 +387,6 @@ func TestTemplateFieldSchemaMatchesDomain(t *testing.T) {
 	}
 }
 
-// TestTemplateFieldSchemaCoversRecognizedKeys verifies that
-// templateFieldSchema carries exactly one entry per recognized top-level
-// key, computed as coreKeys plus continuationKeys, with no missing entry,
-// no extra entry, and no shadowing between the two source lists.
 func TestTemplateFieldSchemaCoversRecognizedKeys(t *testing.T) {
 	t.Parallel()
 
@@ -416,9 +414,6 @@ func TestTemplateFieldSchemaCoversRecognizedKeys(t *testing.T) {
 	}
 }
 
-// TestContinuationKeysRecognizedBare verifies that every entry of
-// continuationKeys is recognized by AnalyzeTemplate as a bare top-level
-// reference, both in its plain and its $-qualified form.
 func TestContinuationKeysRecognizedBare(t *testing.T) {
 	t.Parallel()
 
@@ -439,11 +434,6 @@ func TestContinuationKeysRecognizedBare(t *testing.T) {
 	}
 }
 
-// TestContinuationKeySubFieldBehavior verifies per-key sub-field behavior
-// for every continuation key: a map-shaped key accepts each of its
-// documented fields and flags an invented field name with the real field
-// list; a list-shaped key accepts an element field inside {{ range }} and
-// flags direct sub-field access as unknown.
 func TestContinuationKeySubFieldBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -510,11 +500,6 @@ func TestContinuationKeySubFieldBehavior(t *testing.T) {
 	}
 }
 
-// TestTopLevelKeysMatchRendererSeededKeys anchors the recognized set on
-// what Template.Render actually seeds, rather than on the same two
-// literals the analyzer derives topLevelKeys from. It renders a template
-// that enumerates the data map with no RenderOption applied and compares
-// the resulting key set against topLevelKeys in both directions.
 func TestTopLevelKeysMatchRendererSeededKeys(t *testing.T) {
 	t.Parallel()
 

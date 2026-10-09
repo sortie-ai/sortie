@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"text/template/parse"
 
@@ -27,6 +28,11 @@ const (
 	// WarnUnknownField flags a sub-field of a known top-level variable
 	// that does not exist in the domain schema.
 	WarnUnknownField
+
+	// WarnUnusedPartial flags a define block of a partial that no prompt
+	// template calls. [AnalyzeTemplates] reports it; [AnalyzeTemplate]
+	// cannot, because it sees one template only.
+	WarnUnusedPartial
 )
 
 // TemplateWarning represents a single advisory diagnostic from template
@@ -35,6 +41,13 @@ type TemplateWarning struct {
 	Kind    WarnKind
 	Node    string
 	Message string
+
+	// Source is the file holding the node, by the [TemplateError.Source]
+	// convention.
+	Source string
+
+	// Line is the 1-based line in Source.
+	Line int
 }
 
 // coreKeys lists the top-level template variables [Template.Render]
@@ -142,7 +155,9 @@ var templateFieldSchema = map[string]map[string]map[string]bool{
 // returns advisory warnings. The analysis detects three classes of
 // problems: dot-context misuse inside range/with blocks, unknown
 // top-level template variables, and unknown sub-fields of known
-// variables. Returns nil when no warnings are found.
+// variables. It follows a call into its define block, once per block, when
+// the call passes the root data, because the field schema describes the
+// root data only. Returns nil when no warnings are found.
 func AnalyzeTemplate(t *Template) []TemplateWarning {
 	if t == nil {
 		return nil
@@ -151,14 +166,77 @@ func AnalyzeTemplate(t *Template) []TemplateWarning {
 	if tree == nil || tree.Root == nil {
 		return nil
 	}
-	a := &analyzer{}
+	a := &analyzer{tmpl: t, tree: tree, followed: make(map[string]bool)}
 	a.walkNode(tree.Root, 0)
 	return a.warnings
 }
 
+// AnalyzeTemplates analyzes the prompt templates of one load, which share
+// one [Partials], and returns each template's warnings in input order
+// without repeating a warning that several templates reach through a
+// shared define block. It then reports every define block of the partials
+// that no template calls, in partial load order. Nil entries are skipped.
+func AnalyzeTemplates(templates []*Template) []TemplateWarning {
+	type warningKey struct {
+		kind   WarnKind
+		source string
+		line   int
+		node   string
+	}
+	var warnings []TemplateWarning
+	seen := make(map[warningKey]struct{})
+	reached := make(map[string]struct{})
+	var partials *Partials
+	for _, t := range templates {
+		if t == nil {
+			continue
+		}
+		if partials == nil {
+			partials = t.partials
+		}
+		maps.Copy(reached, t.reached)
+		for _, w := range AnalyzeTemplate(t) {
+			key := warningKey{w.Kind, w.Source, w.Line, w.Node}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			warnings = append(warnings, w)
+		}
+	}
+	for _, b := range partials.blockList() {
+		if _, ok := reached[b.name]; ok {
+			continue
+		}
+		warnings = append(warnings, TemplateWarning{
+			Kind:    WarnUnusedPartial,
+			Node:    b.name,
+			Message: fmt.Sprintf("template %q is defined but no prompt template calls it", b.name),
+			Source:  b.path,
+			Line:    b.line,
+		})
+	}
+	return warnings
+}
+
 // analyzer accumulates warnings during a single [AnalyzeTemplate] call.
 type analyzer struct {
+	tmpl     *Template
+	tree     *parse.Tree // tree whose nodes are being walked
+	followed map[string]bool
 	warnings []TemplateWarning
+}
+
+// warn records a warning located at the node, in the file that holds it.
+func (a *analyzer) warn(at parse.Node, kind WarnKind, node, message string) {
+	source, line := a.tmpl.origin(a.tree.ParseName, lineOf(a.tree, at))
+	a.warnings = append(a.warnings, TemplateWarning{
+		Kind:    kind,
+		Node:    node,
+		Message: message,
+		Source:  source,
+		Line:    line,
+	})
 }
 
 func (a *analyzer) walkNode(node parse.Node, scopeDepth int) {
@@ -187,8 +265,46 @@ func (a *analyzer) walkNode(node parse.Node, scopeDepth int) {
 		a.walkPipe(n.Pipe, scopeDepth)
 		a.walkNode(n.List, scopeDepth+1)
 		a.walkNode(n.ElseList, scopeDepth)
+	case *parse.TemplateNode:
+		a.walkPipe(n.Pipe, scopeDepth)
+		if passesRootData(n.Pipe, scopeDepth) {
+			a.follow(n.Name)
+		}
 	}
-	// TextNode, CommentNode, BreakNode, ContinueNode, TemplateNode: skip.
+	// TextNode, CommentNode, BreakNode, ContinueNode: skip.
+}
+
+// passesRootData reports whether a call argument is the root data: dot
+// outside every range and with body, or $ with no field chain.
+func passesRootData(pipe *parse.PipeNode, scopeDepth int) bool {
+	if pipe == nil || len(pipe.Cmds) != 1 || len(pipe.Cmds[0].Args) != 1 {
+		return false
+	}
+	switch arg := pipe.Cmds[0].Args[0].(type) {
+	case *parse.DotNode:
+		return scopeDepth == 0
+	case *parse.VariableNode:
+		return len(arg.Ident) == 1 && arg.Ident[0] == "$"
+	}
+	return false
+}
+
+// follow analyzes the define block name as top-level text. A callee entered
+// with any other argument sees data the field schema does not describe, and
+// analyzing it would report unknown variables that are not there.
+func (a *analyzer) follow(name string) {
+	if a.followed[name] {
+		return
+	}
+	callee := a.tmpl.callee(name)
+	if callee == nil {
+		return
+	}
+	a.followed[name] = true
+	caller := a.tree
+	a.tree = callee
+	a.walkNode(callee.Root, 0)
+	a.tree = caller
 }
 
 func (a *analyzer) walkPipe(pipe *parse.PipeNode, scopeDepth int) {
@@ -204,10 +320,10 @@ func (a *analyzer) walkCommand(cmd *parse.CommandNode, scopeDepth int) {
 	for _, arg := range cmd.Args {
 		switch n := arg.(type) {
 		case *parse.FieldNode:
-			a.checkFieldNode(n.Ident, scopeDepth)
+			a.checkFieldNode(n, scopeDepth)
 		case *parse.VariableNode:
 			if len(n.Ident) > 0 && n.Ident[0] == "$" {
-				a.checkVariableNode(n.Ident[1:], scopeDepth)
+				a.checkVariableNode(n)
 			}
 		case *parse.PipeNode:
 			a.walkPipe(n, scopeDepth)
@@ -215,7 +331,8 @@ func (a *analyzer) walkCommand(cmd *parse.CommandNode, scopeDepth int) {
 	}
 }
 
-func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
+func (a *analyzer) checkFieldNode(field *parse.FieldNode, scopeDepth int) {
+	ident := field.Ident
 	if len(ident) == 0 {
 		return
 	}
@@ -228,35 +345,28 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 	// may change the sub-field chain entirely.
 	if scopeDepth > 0 && isTopLevel {
 		expr := "." + strings.Join(ident, ".")
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind: WarnDotContext,
-			Node: expr,
-			Message: fmt.Sprintf(
-				"did you mean %q instead of %q? Inside a {{ range }}/{{ with }} block (including arguments to nested range/with), dot refers to the current element, not root data",
-				"$"+expr, expr),
-		})
+		a.warn(field, WarnDotContext, expr, fmt.Sprintf(
+			"did you mean %q instead of %q? Inside a {{ range }}/{{ with }} block (including arguments to nested range/with), dot refers to the current element, not root data",
+			"$"+expr, expr))
 		return
 	}
 
 	// Unknown top-level variable (only at scope depth 0).
 	if scopeDepth == 0 && !isTopLevel {
 		expr := "." + strings.Join(ident, ".")
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownVar,
-			Node:    expr,
-			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList),
-		})
+		a.warn(field, WarnUnknownVar, expr,
+			fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList))
 		return
 	}
 
 	// Unknown sub-field of a known top-level key.
 	if isTopLevel {
-		a.validateFieldChain(ident, "."+strings.Join(ident, "."))
+		a.validateFieldChain(field, ident, "."+strings.Join(ident, "."))
 	}
 }
 
-func (a *analyzer) checkVariableNode(ident []string, scopeDepth int) {
-	_ = scopeDepth // used only by checkFieldNode; kept in signature for symmetry
+func (a *analyzer) checkVariableNode(variable *parse.VariableNode) {
+	ident := variable.Ident[1:]
 	if len(ident) == 0 {
 		return
 	}
@@ -265,31 +375,23 @@ func (a *analyzer) checkVariableNode(ident []string, scopeDepth int) {
 	// Unknown top-level via $ (scope-independent).
 	if !isTopLevel {
 		expr := "$." + strings.Join(ident, ".")
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownVar,
-			Node:    expr,
-			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList),
-		})
+		a.warn(variable, WarnUnknownVar, expr,
+			fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList))
 		return
 	}
 
 	// Unknown sub-field via $ chain.
-	if isTopLevel {
-		a.validateFieldChain(ident, "$."+strings.Join(ident, "."))
-	}
+	a.validateFieldChain(variable, ident, "$."+strings.Join(ident, "."))
 }
 
-func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
+func (a *analyzer) validateFieldChain(at parse.Node, ident []string, nodeText string) {
 	topKey := ident[0]
 	schema := templateFieldSchema[topKey]
 
 	// Scalar top-level key (e.g. "attempt"): any sub-field is invalid.
 	if schema == nil && len(ident) >= 2 {
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownField,
-			Node:    nodeText,
-			Message: fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, topKey),
-		})
+		a.warn(at, WarnUnknownField, nodeText,
+			fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, topKey))
 		return
 	}
 
@@ -302,11 +404,8 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 	nestedSchema, exists := schema[subField]
 	if !exists {
 		known := maputil.SortedKeys(schema)
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownField,
-			Node:    nodeText,
-			Message: fmt.Sprintf("unknown field %q; known fields: %s", nodeText, strings.Join(known, ", ")),
-		})
+		a.warn(at, WarnUnknownField, nodeText,
+			fmt.Sprintf("unknown field %q; known fields: %s", nodeText, strings.Join(known, ", ")))
 		return
 	}
 
@@ -316,22 +415,16 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 
 	// Nested sub-field (e.g. .issue.parent.identifier).
 	if nestedSchema == nil {
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownField,
-			Node:    nodeText,
-			Message: fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, ident[0]+"."+subField),
-		})
+		a.warn(at, WarnUnknownField, nodeText,
+			fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, ident[0]+"."+subField))
 		return
 	}
 
 	nestedField := ident[2]
 	if !nestedSchema[nestedField] {
 		known := maputil.SortedKeys(nestedSchema)
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownField,
-			Node:    nodeText,
-			Message: fmt.Sprintf("unknown field %q; known fields: %s", nodeText, strings.Join(known, ", ")),
-		})
+		a.warn(at, WarnUnknownField, nodeText,
+			fmt.Sprintf("unknown field %q; known fields: %s", nodeText, strings.Join(known, ", ")))
 		return
 	}
 
@@ -339,10 +432,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 	// chaining is invalid.
 	if len(ident) > 3 {
 		base := ident[0] + "." + subField + "." + nestedField
-		a.warnings = append(a.warnings, TemplateWarning{
-			Kind:    WarnUnknownField,
-			Node:    nodeText,
-			Message: fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, base),
-		})
+		a.warn(at, WarnUnknownField, nodeText,
+			fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, base))
 	}
 }
