@@ -659,6 +659,14 @@ jobs:
           parameters: |
             version: ${{ toJSON(needs.validate.outputs.version) }}
 
+      # GoReleaser runs after the tag is published, so a signed file missing
+      # from the expected path must fail here, while the tag is still local.
+      - name: Verify signed binaries
+        if: ${{ !inputs.dry_run }}
+        run: |
+          test -f "${RUNNER_TEMP}/signed/windows_amd64/sortie.exe"
+          test -f "${RUNNER_TEMP}/signed/windows_arm64/sortie.exe"
+
       - name: Push tag
         if: ${{ !inputs.dry_run }}
         run: |
