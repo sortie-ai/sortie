@@ -299,7 +299,7 @@ func (s *ForkPerTurnSession) RunTurn(
 	// arriving in a reopened window cannot read s.group == nil and miss
 	// signaling a process that was about to be recorded.
 	s.mu.Lock()
-	pipes, group, err := startWithOwnedPipes(cmd, s.logger)
+	pipes, group, err := startWithOwnedPipes(cmdCtx, cmd, s.logger)
 	if err != nil {
 		s.mu.Unlock()
 

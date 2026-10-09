@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -465,4 +466,22 @@ func CancelledOutcome(result domain.TurnResult, err error) bool {
 		return true
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// SessionStartCancelledError returns the cancellation a session start
+// reports when its own context ended and a launch refused to start for
+// it: a [domain.AgentError] of kind [domain.ErrTurnCancelled] whose cause
+// is ctx's error. It returns nil unless startErr is a
+// [procutil.StartError] with Cancelled set and ctx is done, so a launch
+// bounded by a deadline of its own keeps its caller's report.
+func SessionStartCancelledError(ctx context.Context, startErr error) *domain.AgentError {
+	start, ok := errors.AsType[*procutil.StartError](startErr)
+	if !ok || !start.Cancelled || ctx.Err() == nil {
+		return nil
+	}
+	return &domain.AgentError{
+		Kind:    domain.ErrTurnCancelled,
+		Message: "session start cancelled",
+		Err:     ctx.Err(),
+	}
 }

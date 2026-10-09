@@ -329,8 +329,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		}
 		prefixedStdin := launch.PrefixStdin(stdinPipe)
 
-		pipes, group, err := procutil.StartWithOwnedPipes(cmd, state.logger)
+		pipes, group, err := procutil.StartWithOwnedPipes(ctx, cmd, state.logger)
 		if err != nil {
+			if cancelled := agentcore.SessionStartCancelledError(ctx, err); cancelled != nil {
+				return domain.Session{}, cancelled
+			}
 			var startErr *procutil.StartError
 			if !errors.As(err, &startErr) {
 				return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: err}

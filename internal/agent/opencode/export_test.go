@@ -23,7 +23,7 @@ func EffectivePermissionsForTest(ctx context.Context, session domain.Session) (e
 	}
 
 	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
+	result, startErr := procutil.RunCapture(ctx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
 		Stdout: &stdout,
 	})
 	raw = stdout.Bytes()

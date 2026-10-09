@@ -906,6 +906,22 @@ func TestRunVerification_Timeout(t *testing.T) {
 	}
 }
 
+func TestRunVerification_DeadlinePassedBeforeStartIsTimedOut(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	t.Cleanup(cancel)
+
+	result := runSingleVerification(ctx, "echo hello", t.TempDir(), 5000, discardLogger(), &domain.NoopMetrics{})
+
+	if !result.TimedOut {
+		t.Errorf("runSingleVerification(past deadline).TimedOut = false, want true (ExecutionError = %q)", result.ExecutionError)
+	}
+	if result.ExitCode != -1 {
+		t.Errorf("runSingleVerification(past deadline).ExitCode = %d, want -1", result.ExitCode)
+	}
+}
+
 func TestRunVerification_CommandNotFound(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {

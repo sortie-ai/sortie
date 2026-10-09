@@ -3,6 +3,7 @@
 package procutil
 
 import (
+	"context"
 	"log/slog"
 	"os/exec"
 	"time"
@@ -14,8 +15,9 @@ import (
 // Setpgid, so keepJobHandle is unused and the returned handle is always
 // zero. The returned record is nil on error. The returned time is the
 // moment cmd.Start returned, the zero value when it failed. A failed
-// start is a [StartError] at [StageProcessStart].
-func startAndAssign(cmd *exec.Cmd, _ *slog.Logger, _ bool) (*Group, uintptr, time.Time, *StartError) {
+// start is a [StartError] at [StageProcessStart]. A Unix launch is never
+// suspended, so there is no resume to decide and ctx is unused.
+func startAndAssign(_ context.Context, cmd *exec.Cmd, _ *slog.Logger, _ bool) (*Group, uintptr, time.Time, *StartError) {
 	SetProcessGroup(cmd)
 
 	// os/exec may run Cancel as soon as Start returns, and a cancellation

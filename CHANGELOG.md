@@ -44,6 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The `file` tracker now keeps every label Sortie adds to an issue instead of only the most recent one. ([#1255](https://github.com/sortie-ai/sortie/issues/1255))
 - A label Sortie applies is now checked on the issue afterwards, so a label the tracker accepts without adding, such as on GitLab with a token that cannot edit labels, is logged as a failed write instead of passing as applied. On Gitea a state change also removes a previous state label that is an organization label, and on Linear a label from a single-select label group replaces the group's other label on the issue. ([#1255](https://github.com/sortie-ai/sortie/issues/1255))
 - An `opencode` turn on an SSH worker no longer spends tokens on a session title, so the token usage reported for it covers every model request it makes. ([#1210](https://github.com/sortie-ai/sortie/issues/1210))
+- On Windows, a command or agent runtime that is cancelled or times out while Sortie is still starting it is now stopped before it runs, instead of running for up to the stop grace period. ([#1100](https://github.com/sortie-ai/sortie/issues/1100))
+- A `codex`, `opencode`, `copilot-cli`, or `agent-client-protocol` session that is cancelled before its agent runtime starts running is now reported as cancelled, instead of as a failed start or, for `copilot-cli`, as a runtime that does not work, and a self-review verification command that times out before its process starts as timed out, instead of as a failed start. ([#1100](https://github.com/sortie-ai/sortie/issues/1100))
 
 ### Migrations
 

@@ -325,7 +325,7 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 	}
 
 	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
+	result, startErr := procutil.RunCapture(queryCtx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
 		Stdout: &stdout,
 		Logger: state.logger(),
 	})

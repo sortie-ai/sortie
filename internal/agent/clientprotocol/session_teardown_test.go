@@ -93,7 +93,7 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 		t.Fatalf("StdinPipe: %v", err)
 	}
 
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, discardLogger())
+	pipes, group, err := procutil.StartWithOwnedPipes(context.Background(), cmd, discardLogger())
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
@@ -464,7 +464,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 		t.Fatalf("StdinPipe: %v", err)
 	}
 
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(context.Background(), cmd, logger)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}

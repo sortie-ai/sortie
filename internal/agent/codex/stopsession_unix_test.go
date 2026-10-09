@@ -77,7 +77,7 @@ func startFakeCodexProcess(t *testing.T, onTerm string, stopGraceMS int) *sessio
 	path := agenttest.FakeRuntime(t, dir, "codex-trap", scenarioSignalTrapName, signalTrapParams{ReadyFile: readyPath, OnTerm: onTerm})
 
 	cmd := exec.Command(path) //nolint:gosec // fixed path under t.TempDir()
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := procutil.StartWithOwnedPipes(context.Background(), cmd, nil)
 	if err != nil {
 		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
 	}

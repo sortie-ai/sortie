@@ -246,7 +246,7 @@ func TestCapture_EscapedDescendantHoldingBothStreams(t *testing.T) {
 	logger := slog.New(spy)
 
 	const grace = 300 * time.Millisecond
-	c, err := StartCapture(cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace, Logger: logger})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace, Logger: logger})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -302,7 +302,7 @@ func TestCapture_HeldDescendantHoldingBothStreams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	const grace = 3 * time.Second
-	c, err := StartCapture(cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace, Logger: logger})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace, Logger: logger})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -354,7 +354,7 @@ func TestCapture_SealedSinkDiscardsChunksAfterWaitReturns(t *testing.T) {
 	var stdout bytes.Buffer
 
 	const grace = 50 * time.Millisecond
-	c, err := StartCapture(cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Stdout: &stdout, DrainGrace: grace})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -396,7 +396,7 @@ func TestRunCapture_SIGTERMTrapMarkerCollected(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := RunCapture(cmd, DefaultStopGrace, CaptureParams{Stdout: &stdout})
+		result, err := RunCapture(ctx, cmd, DefaultStopGrace, CaptureParams{Stdout: &stdout})
 		done <- outcome{result, err}
 	}()
 
@@ -425,7 +425,7 @@ func TestStartCapture_CleanupFailureLogsExactlyOneRecord(t *testing.T) {
 	spy := &captureLogSpy{}
 	logger := slog.New(spy)
 
-	c, err := StartCapture(cmd, CaptureParams{Logger: logger})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Logger: logger})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -460,7 +460,7 @@ func TestSetGroupKill_CancellationSendsSIGKILLNotGraceful(t *testing.T) {
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupKill(cmd)
 
-	c, err := StartCapture(cmd, CaptureParams{})
+	c, err := StartCapture(ctx, cmd, CaptureParams{})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}

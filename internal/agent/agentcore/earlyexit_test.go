@@ -24,7 +24,7 @@ func earlyExitCmd(t *testing.T, out agenttest.Output) *exec.Cmd {
 
 func startOwned(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
-	pipes, _, err := procutil.StartWithOwnedPipes(cmd, nil)
+	pipes, _, err := procutil.StartWithOwnedPipes(context.Background(), cmd, nil)
 	if err != nil {
 		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
 	}

@@ -1,6 +1,7 @@
 package procutil
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -50,7 +51,7 @@ func TestStartWithOwnedPipes_StageProcessStart(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.Command("sortie-nonexistent-binary-99999")
-	pipes, group, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(context.Background(), cmd, nil)
 	if pipes != nil {
 		t.Errorf("StartWithOwnedPipes() pipes = %v, want nil", pipes)
 	}

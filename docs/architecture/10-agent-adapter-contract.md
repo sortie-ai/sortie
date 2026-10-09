@@ -463,7 +463,7 @@ Process group isolation:
 
 - The adapter MUST place the subprocess in its own process group before starting it.
   - POSIX: `Setpgid = true` (new process group at fork time).
-  - Windows: `CREATE_NEW_PROCESS_GROUP` creation flag; the subprocess starts suspended, is assigned to a Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so the entire process tree is terminated if the orchestrator crashes, and is resumed only after that assignment, so nothing it starts can run outside the job. A failed assignment is logged and the subprocess runs without the job; a failed resume terminates the subprocess and fails the launch as a failed start, unless the launch's own cancellation had begun before the resume was tried.
+  - Windows: `CREATE_NEW_PROCESS_GROUP` creation flag; the subprocess starts suspended, is assigned to a Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so the entire process tree is terminated if the orchestrator crashes, and is resumed only after that assignment, so nothing it starts can run outside the job. A failed assignment is logged and the subprocess runs without the job. A launch whose context is already done when its resume is reached is never resumed: its subprocess is terminated before it executes, and the launch fails as a start refused by a cancellation already in effect. A failed resume terminates the subprocess and fails the launch as a failed start.
 
 Graceful shutdown sequence:
 

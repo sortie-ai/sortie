@@ -53,7 +53,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	procutil.SetGroupKill(cmd)
 
 	buf := procutil.NewTailBuffer(MaxHookOutputBytes)
-	capture, startErr := startHookCapture(cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
+	capture, startErr := startHookCapture(hookCtx, cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
 
 	var result procutil.CaptureResult
 	if startErr == nil {
