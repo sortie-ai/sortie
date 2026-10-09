@@ -556,25 +556,6 @@ var knownTopLevelKeys = map[string]bool{
 	"notifications": true,
 }
 
-// refuseCIFeedbackSection rejects the ci_feedback key instead of collecting it as an extension, which would ignore it silently.
-func refuseCIFeedbackSection(raw map[string]any) error {
-	if _, ok := raw["ci_feedback"]; !ok {
-		return nil
-	}
-	if reactions, ok := raw["reactions"].(map[string]any); ok {
-		if _, ok := reactions["ci_failure"].(map[string]any); ok {
-			return &ConfigError{
-				Field:   "ci_feedback",
-				Message: "no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings",
-			}
-		}
-	}
-	return &ConfigError{
-		Field:   "ci_feedback",
-		Message: "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name",
-	}
-}
-
 // NewServiceConfig converts a raw front matter map into a validated
 // [ServiceConfig]. It applies built-in defaults, resolves `$VAR`
 // environment indirection on selected fields, expands `~` in path
@@ -597,9 +578,6 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 
 	envKeys, envAdvisories, err := applyEnvOverrides(raw)
 	if err != nil {
-		return ServiceConfig{}, err
-	}
-	if err := refuseCIFeedbackSection(raw); err != nil {
 		return ServiceConfig{}, err
 	}
 	var advisories []Advisory

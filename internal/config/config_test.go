@@ -1561,10 +1561,10 @@ func TestNewServiceConfig(t *testing.T) {
 		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
 			"reactions": map[string]any{
-				"CI_Feedback": map[string]any{},
+				"CI_Failure": map[string]any{},
 			},
 		})
-		assertConfigErrorField(t, err, "reactions.CI_Feedback")
+		assertConfigErrorField(t, err, "reactions.CI_Failure")
 	})
 
 	t.Run("Reactions/ProviderNonStringRejected", func(t *testing.T) {
@@ -2855,124 +2855,6 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 	})
 }
 
-func TestNewServiceConfig_CIFeedbackSectionRefused(t *testing.T) {
-	t.Parallel()
-
-	const (
-		moveMessage   = "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
-		deleteMessage = "no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings"
-	)
-
-	withReactions := func(ciFailure any) map[string]any {
-		return map[string]any{
-			"ci_feedback": map[string]any{"kind": "github"},
-			"reactions":   map[string]any{"ci_failure": ciFailure},
-		}
-	}
-
-	tests := []struct {
-		name        string
-		raw         map[string]any
-		wantMessage string
-	}{
-		{
-			name:        "bare key",
-			raw:         map[string]any{"ci_feedback": nil},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "empty mapping",
-			raw:         map[string]any{"ci_feedback": map[string]any{}},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "mapping without kind",
-			raw:         map[string]any{"ci_feedback": map[string]any{"max_retries": 3}},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "mapping with kind",
-			raw:         map[string]any{"ci_feedback": map[string]any{"kind": "github"}},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "string value",
-			raw:         map[string]any{"ci_feedback": "github"},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "list value",
-			raw:         map[string]any{"ci_feedback": []any{"github"}},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "reactions is not a mapping",
-			raw:         map[string]any{"ci_feedback": map[string]any{"kind": "github"}, "reactions": "none"},
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "ci_failure with provider",
-			raw:         withReactions(map[string]any{"provider": "github"}),
-			wantMessage: deleteMessage,
-		},
-		{
-			name:        "ci_failure empty mapping",
-			raw:         withReactions(map[string]any{}),
-			wantMessage: deleteMessage,
-		},
-		{
-			name:        "ci_failure bare key",
-			raw:         withReactions(nil),
-			wantMessage: moveMessage,
-		},
-		{
-			name:        "ci_failure string",
-			raw:         withReactions("github"),
-			wantMessage: moveMessage,
-		},
-	}
-
-	variants := []struct {
-		name string
-		opts []ServiceConfigOption
-	}{
-		{name: "default", opts: nil},
-		{name: "retired agents", opts: []ServiceConfigOption{WithRetiredAgents(fixtureLookup)}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			for _, v := range variants {
-				t.Run(v.name, func(t *testing.T) {
-					t.Parallel()
-
-					_, err := NewServiceConfig(maps.Clone(tt.raw), v.opts...)
-
-					assertConfigErrorField(t, err, "ci_feedback")
-					var ce *ConfigError
-					if !errors.As(err, &ce) {
-						t.Fatalf("error type = %T, want *ConfigError", err)
-					}
-					assertStringEqual(t, "ConfigError.Message", tt.wantMessage, ce.Message)
-				})
-			}
-		})
-	}
-
-	t.Run("reported before a later type fault", func(t *testing.T) {
-		t.Parallel()
-
-		_, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github"},
-			"polling":     map[string]any{"interval_ms": "notanumber"},
-		})
-
-		assertConfigErrorField(t, err, "ci_feedback")
-	})
-}
-
 func TestNewServiceConfig_SelfReview(t *testing.T) {
 	t.Parallel()
 
@@ -3535,8 +3417,6 @@ func TestPopulateCIFeedbackFromReactions(t *testing.T) {
 	}
 }
 
-// TestCIFailureMigration verifies the full precedence logic for the
-// reactions.ci_failure -> CIFeedback migration path through NewServiceConfig.
 func TestCIFailureMigration(t *testing.T) {
 	t.Parallel()
 
@@ -3683,17 +3563,6 @@ func TestCIFailureMigration(t *testing.T) {
 		assertIntEqual(t, "CIFeedback.MaxLogLines", 75, cfg.CIFeedback.MaxLogLines)
 		assertStringEqual(t, "CIFeedback.Escalation", "comment", cfg.CIFeedback.Escalation)
 		assertStringEqual(t, "CIFeedback.EscalationLabel", "ci-blocked", cfg.CIFeedback.EscalationLabel)
-	})
-
-	t.Run("Precedence/NeitherPresent", func(t *testing.T) {
-		t.Parallel()
-		cfg, err := NewServiceConfig(map[string]any{})
-		if err != nil {
-			t.Fatalf("NewServiceConfig: %v", err)
-		}
-		if cfg.CIFeedback != (CIFeedbackConfig{}) {
-			t.Errorf("CIFeedback = %+v, want zero value when neither section present", cfg.CIFeedback)
-		}
 	})
 
 	t.Run("Provider/ParsedForNonCIReaction", func(t *testing.T) {
