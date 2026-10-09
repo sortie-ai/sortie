@@ -212,7 +212,7 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	})
 	duration := time.Since(start)
 
-	if startErr != nil && cmdCtx.Err() == context.DeadlineExceeded {
+	if errors.Is(startErr, context.DeadlineExceeded) {
 		metrics.ObserveSelfReviewVerificationDuration(command, duration.Seconds())
 		return timedOutVerification(command, duration, &stdoutBuf, &stderrBuf, logger)
 	}
