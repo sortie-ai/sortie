@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -260,14 +261,40 @@ func runJobDrain(job windows.Handle) jobDrainResult {
 type jobSurvivor struct {
 	PID       uint32
 	ParentPID uint32
-	Image     string // ProcessEntry32.ExeFile, base name only
+	Image     string // base name from the system process snapshot
 	InJob     bool   // PID present in jobTeardown.JobMemberPIDs
+}
+
+// unexaminedCandidate names one process attributed to a capture's direct
+// child whose state the survivor scan could not read, so it is neither a
+// confirmed survivor nor confirmed gone. Reason is text because slog's
+// JSON handler keeps only the message of an error it is handed.
+type unexaminedCandidate struct {
+	PID       uint32
+	ParentPID uint32
+	Image     string
+	InJob     bool   // PID present in jobTeardown.JobMemberPIDs
+	Reason    string // text of the failed open, creation-time read, or wait
+}
+
+// processEntry is one process of the system snapshot.
+type processEntry struct {
+	pid, parent uint32
+	created     time.Time
+	image       string
+}
+
+// processLifetime is the direct child's creation and exit time, read from
+// its wait status.
+type processLifetime struct {
+	created, exited time.Time
 }
 
 // jobTeardown carries what drainCaptureJob observed while tearing a
 // Windows launch's process tree down, for one launch. Every field is
 // populated on every path that reaches the point where the record is
-// emitted.
+// emitted, except that Survivors, Unexamined and SurvivorScanErr stay
+// empty when no survivor scan ran.
 type jobTeardown struct {
 	Command           string
 	Dir               string
@@ -286,6 +313,7 @@ type jobTeardown struct {
 	RootOpenable      bool
 	RootProbeErr      error
 	Survivors         []jobSurvivor
+	Unexamined        []unexaminedCandidate
 	SurvivorScanErr   error
 }
 
@@ -300,7 +328,10 @@ var scanSurvivorsFunc = scanSurvivors
 // active process, or a drain query failed, logs the teardown record,
 // and closes job. startedAt is the moment cmd.Start returned, for the
 // root probe's PID-reuse guard; waitMS is the reap duration the caller
-// measured.
+// measured. cmd MUST have been waited for: the scan attributes
+// processes by the direct child's lifetime in cmd.ProcessState, and
+// declines, recording why in the teardown record, when that lifetime is
+// unreadable.
 func drainCaptureJob(job uintptr, cmd *exec.Cmd, startedAt time.Time, waitMS int64, logger *slog.Logger) {
 	jobHandle := windows.Handle(job)
 	hasJob := jobHandle != 0
@@ -335,21 +366,27 @@ func drainCaptureJob(job uintptr, cmd *exec.Cmd, startedAt time.Time, waitMS int
 
 	needsScan := !hasJob || teardown.ActiveLast > 0 || teardown.DrainQueryErr != nil
 	if needsScan && pidErr == nil {
-		teardown.Survivors, teardown.SurvivorScanErr = scanSurvivorsFunc(rootPID, teardown.JobMemberPIDs)
+		lifetime, lifetimeErr := directChildLifetime(cmd.ProcessState)
+		if lifetimeErr != nil {
+			teardown.SurvivorScanErr = lifetimeErr
+		} else {
+			teardown.Survivors, teardown.Unexamined, teardown.SurvivorScanErr = scanSurvivorsFunc(rootPID, teardown.JobMemberPIDs, lifetime)
+		}
 	}
 
 	logJobTeardown(logger, teardown)
 }
 
 // logJobTeardown emits exactly one record per drainCaptureJob call
-// describing what teardown observed. The level is Warn only on
-// conclusive evidence of a leak (a surviving descendant, a non-zero
-// active-process count at the last drain poll, a failed survivor scan,
-// or a failed job-member-list read); otherwise it is Debug, which the
+// describing what teardown observed. The level is Warn when the tree is
+// not shown to be gone: a surviving descendant, a candidate the scan
+// could not examine, a non-zero active-process count at the last drain
+// poll, a failed or declined survivor scan, a failed job-member-list
+// read, or a failed drain query; otherwise it is Debug, which the
 // default logger suppresses. DrainTerminateErr never raises the level
 // on its own: a job that drained despite a failed termination left no
 // process, and one that did not drain already takes the Warn arm
-// through ActiveLast.
+// through ActiveLast. RootProbeErr never raises it either.
 func logJobTeardown(logger *slog.Logger, teardown jobTeardown) {
 	if logger == nil {
 		logger = slog.Default()
@@ -369,6 +406,7 @@ func logJobTeardown(logger *slog.Logger, teardown jobTeardown) {
 		slog.Bool("root_openable", teardown.RootOpenable),
 		slog.Bool("root_in_job_list", teardown.RootInJobList),
 		slog.Any("survivors", teardown.Survivors),
+		slog.Any("unexamined", teardown.Unexamined),
 	}
 	if teardown.RootProbeErr != nil {
 		args = append(args, slog.Any("root_probe_err", teardown.RootProbeErr))
@@ -387,6 +425,7 @@ func logJobTeardown(logger *slog.Logger, teardown jobTeardown) {
 	}
 
 	unsettled := len(teardown.Survivors) > 0 ||
+		len(teardown.Unexamined) > 0 ||
 		teardown.ActiveLast > 0 ||
 		teardown.SurvivorScanErr != nil ||
 		teardown.JobListErr != nil ||
@@ -398,134 +437,180 @@ func logJobTeardown(logger *slog.Logger, teardown jobTeardown) {
 	logger.Debug("subprocess tree settled", args...)
 }
 
-// createToolhelp32SnapshotRetry calls CreateToolhelp32Snapshot, retrying
-// up to 3 attempts total with a 10 ms pause between attempts.
-// CreateToolhelp32Snapshot can fail transiently, so a single failure is
-// not conclusive. Callers decide their own policy for exhaustion; this
-// helper only retries and reports the last error.
-func createToolhelp32SnapshotRetry(flags uint32, processID uint32) (windows.Handle, error) {
-	const (
-		maxAttempts = 3
-		retryDelay  = 10 * time.Millisecond
-	)
+const (
+	snapshotInitialSize = 1 << 20
+	snapshotGrowSlack   = 64 << 10
+	snapshotMaxCalls    = 3
+)
 
-	var lastErr error
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			time.Sleep(retryDelay)
-		}
-		snapshot, err := windows.CreateToolhelp32Snapshot(flags, processID)
-		if err == nil {
-			return snapshot, nil
-		}
-		lastErr = err
-	}
-	return 0, fmt.Errorf("CreateToolhelp32Snapshot: %w", lastErr)
+// filetimeTime converts a FILETIME the way [windows.Filetime.Nanoseconds]
+// does, so every creation and exit time compared in this package shares
+// one conversion rather than raw tick arithmetic.
+func filetimeTime(low, high uint32) time.Time {
+	ft := windows.Filetime{LowDateTime: low, HighDateTime: high}
+	return time.Unix(0, ft.Nanoseconds())
 }
 
-// processIsRunning reports whether pid names a process that is still
-// running. Opening the identifier does not settle it on its own: a
-// process object stays openable after the process exits, for as long as
-// anything still holds a handle to it, so an exited descendant would
-// pass that check. A process handle is signaled once the process exits,
-// so only a zero-timeout wait that times out means it is still running.
-func processIsRunning(pid uint32) bool {
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
-	if err != nil {
-		return false
+// processCreated returns the creation time of the process handle names.
+// handle needs PROCESS_QUERY_LIMITED_INFORMATION.
+func processCreated(handle windows.Handle) (time.Time, error) {
+	var creationTime, exitTime, kernelTime, userTime windows.Filetime
+	if err := windows.GetProcessTimes(handle, &creationTime, &exitTime, &kernelTime, &userTime); err != nil {
+		return time.Time{}, fmt.Errorf("GetProcessTimes: %w", err)
 	}
-	defer func() { _ = windows.CloseHandle(handle) }()
-
-	event, waitErr := windows.WaitForSingleObject(handle, 0)
-	return waitErr == nil && event == uint32(windows.WAIT_TIMEOUT)
+	return filetimeTime(creationTime.LowDateTime, creationTime.HighDateTime), nil
 }
 
-// scanSurvivors reports every process descended from rootPID that is
-// still alive after the drain returned. A discovered PID is not pinned
-// by any handle of ours, so each candidate is confirmed still running
-// before it is reported; a candidate that has exited, or whose
-// identifier was recycled, is dropped rather than reported as a
-// survivor. A console host is dropped the same way the leftover report
-// drops one, by image base name; the snapshot this walk reads it from
-// carries the name for every entry it holds, so unlike the leftover
-// report's live query this exclusion has no candidate whose name it
-// could fail to read.
-func scanSurvivors(rootPID uint32, jobPIDs []uint32) ([]jobSurvivor, error) {
-	snapshot, err := createToolhelp32SnapshotRetry(windows.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return nil, fmt.Errorf("process snapshot: %w", err)
-	}
-	defer func() { _ = windows.CloseHandle(snapshot) }()
-
-	type procInfo struct {
-		pid, parent uint32
-		image       string
-	}
-	var entries []procInfo
-
-	var entry windows.ProcessEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-	walkErr := windows.Process32First(snapshot, &entry)
-	if walkErr != nil {
-		return nil, fmt.Errorf("Process32First: %w", walkErr)
-	}
-	for walkErr == nil {
-		entries = append(entries, procInfo{
-			pid:    entry.ProcessID,
-			parent: entry.ParentProcessID,
-			image:  windows.UTF16ToString(entry.ExeFile[:]),
-		})
-		entry.Size = uint32(unsafe.Sizeof(entry))
-		walkErr = windows.Process32Next(snapshot, &entry)
-	}
-	// Only ERROR_NO_MORE_FILES ends a completed walk. Any other error
-	// stops it partway, and reporting the descendants gathered so far as
-	// if they were all of them would let the teardown record call a tree
-	// settled while a live descendant sat past the truncation.
-	if !errors.Is(walkErr, windows.ERROR_NO_MORE_FILES) {
-		return nil, fmt.Errorf("Process32Next: %w", walkErr)
-	}
-
-	inJob := make(map[uint32]bool, len(jobPIDs))
-	for _, jobPID := range jobPIDs {
-		inJob[jobPID] = true
-	}
-
-	// Build the transitive closure of PIDs reachable from rootPID by
-	// following ParentProcessID edges, breadth-first, excluding rootPID
-	// itself.
-	closure := make(map[uint32]bool)
-	frontier := []uint32{rootPID}
-	for len(frontier) > 0 {
-		current := frontier[0]
-		frontier = frontier[1:]
-		for _, e := range entries {
-			if e.parent == current && e.pid != rootPID && !closure[e.pid] {
-				closure[e.pid] = true
-				frontier = append(frontier, e.pid)
-			}
-		}
-	}
-
-	survivors := make([]jobSurvivor, 0, len(closure))
-	for _, e := range entries {
-		if !closure[e.pid] {
+// processSnapshot lists every process of the system with its parent and
+// creation time, without opening any of them: an unopenable process such
+// as CSRSS is listed like any other.
+func processSnapshot() ([]processEntry, error) {
+	size := uint32(snapshotInitialSize)
+	for range snapshotMaxCalls {
+		// A uint64 backing array keeps the buffer 8-byte aligned for the
+		// structures read back out of it.
+		buf := make([]uint64, (size+7)/8)
+		var needed uint32
+		status := windows.NtQuerySystemInformation(windows.SystemProcessInformation, unsafe.Pointer(&buf[0]), size, &needed) //nolint:gosec // G103: NtQuerySystemInformation takes its output buffer as an unsafe.Pointer
+		if errors.Is(status, windows.STATUS_INFO_LENGTH_MISMATCH) {
+			size = needed + snapshotGrowSlack
 			continue
 		}
+		if status != nil {
+			return nil, fmt.Errorf("NtQuerySystemInformation: %w", status)
+		}
+		return readProcessEntries(unsafe.Pointer(&buf[0])), nil //nolint:gosec // G103: reading the kernel-filled buffer back as the mirrored structures
+	}
+	return nil, errors.New("NtQuerySystemInformation: the process list kept growing between calls")
+}
+
+// readProcessEntries copies every entry out of a filled
+// SystemProcessInformation buffer, because the image name of each points
+// into it.
+func readProcessEntries(base unsafe.Pointer) []processEntry {
+	var entries []processEntry
+	for offset := uintptr(0); ; {
+		info := (*windows.SYSTEM_PROCESS_INFORMATION)(unsafe.Add(base, offset)) //nolint:gosec // G103: indexing entries by NextEntryOffset inside the kernel-filled buffer
+		var image string
+		if info.ImageName.Buffer != nil {
+			image = windows.UTF16ToString(unsafe.Slice(info.ImageName.Buffer, info.ImageName.Length/2)) //nolint:gosec // G103: the image name is a counted UTF-16 string inside the buffer
+		}
+		entries = append(entries, processEntry{
+			pid:     uint32(info.UniqueProcessID),                                       //nolint:gosec // G115: a Windows PID never exceeds uint32 range
+			parent:  uint32(info.InheritedFromUniqueProcessID),                          //nolint:gosec // G115: a Windows PID never exceeds uint32 range
+			created: filetimeTime(uint32(info.CreateTime), uint32(info.CreateTime>>32)), //nolint:gosec // G115: splitting a FILETIME into its two 32-bit halves
+			image:   image,
+		})
+		if info.NextEntryOffset == 0 {
+			return entries
+		}
+		offset += uintptr(info.NextEntryOffset)
+	}
+}
+
+// directChildLifetime reads the creation and exit time of the process
+// state describes from the wait status os/exec recorded, so it needs no
+// handle and cannot be misled by a recycled identifier. It returns an
+// error when state carries no readable lifetime.
+func directChildLifetime(state *os.ProcessState) (processLifetime, error) {
+	if state == nil {
+		return processLifetime{}, errors.New("direct child lifetime: no wait status")
+	}
+	usage, ok := state.SysUsage().(*syscall.Rusage)
+	if !ok || usage == nil {
+		return processLifetime{}, fmt.Errorf("direct child lifetime: unexpected resource usage type %T", state.SysUsage())
+	}
+	lifetime := processLifetime{
+		created: filetimeTime(usage.CreationTime.LowDateTime, usage.CreationTime.HighDateTime),
+		exited:  filetimeTime(usage.ExitTime.LowDateTime, usage.ExitTime.HighDateTime),
+	}
+	if lifetime.exited.Before(lifetime.created) {
+		return processLifetime{}, errors.New("direct child lifetime: exit time precedes creation time")
+	}
+	return lifetime, nil
+}
+
+// descendantEntries returns the entries reachable from the direct child
+// rootPID, whose lifetime is root. Each edge is bounded by the lifetime of
+// the parent it leaves: a child created before that parent, or after its
+// exit, belongs to another holder of the identifier and is dropped with
+// everything it reaches. A child created exactly at either bound is kept.
+// An entry holding rootPID is a candidate like any other.
+func descendantEntries(entries []processEntry, rootPID uint32, root processLifetime) []processEntry {
+	type lineage struct {
+		pid uint32
+		processLifetime
+	}
+	frontier := []lineage{{pid: rootPID, processLifetime: root}}
+	visited := make(map[uint32]bool)
+	var found []processEntry
+	for len(frontier) > 0 {
+		parent := frontier[0]
+		frontier = frontier[1:]
+		for _, e := range entries {
+			if e.parent != parent.pid || visited[e.pid] {
+				continue
+			}
+			if e.created.Before(parent.created) {
+				continue
+			}
+			if !parent.exited.IsZero() && e.created.After(parent.exited) {
+				continue
+			}
+			visited[e.pid] = true
+			found = append(found, e)
+			frontier = append(frontier, lineage{pid: e.pid, processLifetime: processLifetime{created: e.created}})
+		}
+	}
+	return found
+}
+
+// scanSurvivors classifies every process attributed to the direct child
+// rootPID, whose lifetime is root, after the drain returned. A candidate
+// still running is a survivor; one that could not be read, whether its
+// open, creation-time read, or wait failed, is unexamined and MUST NOT be
+// treated as gone; one confirmed exited, or whose identifier a different
+// process now holds, is dropped. A console host is dropped by image base
+// name. The error is non-nil only when the snapshot itself failed.
+func scanSurvivors(rootPID uint32, jobPIDs []uint32, root processLifetime) ([]jobSurvivor, []unexaminedCandidate, error) {
+	entries, err := processSnapshot()
+	if err != nil {
+		return nil, nil, fmt.Errorf("process snapshot: %w", err)
+	}
+
+	survivors := make([]jobSurvivor, 0)
+	unexamined := make([]unexaminedCandidate, 0)
+	for _, e := range descendantEntries(entries, rootPID, root) {
 		if isConsoleHostImage(e.image) {
 			continue
 		}
-		if !processIsRunning(e.pid) {
-			continue
-		}
-		survivors = append(survivors, jobSurvivor{
-			PID:       e.pid,
-			ParentPID: e.parent,
-			Image:     e.image,
-			InJob:     inJob[e.pid],
+		inJob := slices.Contains(jobPIDs, e.pid)
+		running, runErr := processRunning(e.pid, func(handle windows.Handle) (bool, error) {
+			created, createdErr := processCreated(handle)
+			if createdErr != nil {
+				return false, createdErr
+			}
+			return created.Equal(e.created), nil
 		})
+		switch {
+		case runErr != nil:
+			unexamined = append(unexamined, unexaminedCandidate{
+				PID:       e.pid,
+				ParentPID: e.parent,
+				Image:     e.image,
+				InJob:     inJob,
+				Reason:    runErr.Error(),
+			})
+		case running:
+			survivors = append(survivors, jobSurvivor{
+				PID:       e.pid,
+				ParentPID: e.parent,
+				Image:     e.image,
+				InJob:     inJob,
+			})
+		}
 	}
-	return survivors, nil
+	return survivors, unexamined, nil
 }
 
 // probeRootProcess reports whether the direct child identified by
@@ -549,15 +634,12 @@ func probeRootProcess(rootPID uint32, jobPIDs []uint32, startedAt time.Time) (in
 	}
 	defer func() { _ = windows.CloseHandle(handle) }()
 
-	var creationTime, exitTime, kernelTime, userTime windows.Filetime
-	if timesErr := windows.GetProcessTimes(handle, &creationTime, &exitTime, &kernelTime, &userTime); timesErr != nil {
-		return inList, false, fmt.Errorf("GetProcessTimes: %w", timesErr)
+	created, createdErr := processCreated(handle)
+	if createdErr != nil {
+		return inList, false, createdErr
 	}
 
-	// Filetime.Nanoseconds already rebases off the Windows 1601 epoch and
-	// returns Unix-epoch nanoseconds, so time.Unix(0, ...) is its exact
-	// inverse rather than a raw 100-nanosecond tick count.
-	if time.Unix(0, creationTime.Nanoseconds()).After(startedAt) {
+	if created.After(startedAt) {
 		// Created after the direct child was started, so the PID was
 		// recycled; this is not the direct child.
 		return inList, false, nil
