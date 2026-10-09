@@ -2251,7 +2251,12 @@ func TestValidateTemplateAndPartialFaults(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := t.TempDir()
+			// Diagnostics carry symlink-resolved paths; on Windows that also
+			// expands 8.3 short names such as RUNNER~1.
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
+			}
 			for name, content := range tt.files {
 				path := filepath.Join(dir, name)
 				if err := errors.Join(os.MkdirAll(filepath.Dir(path), 0o755), os.WriteFile(path, []byte(content), 0o644)); err != nil {
