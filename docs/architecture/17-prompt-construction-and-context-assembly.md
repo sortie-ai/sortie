@@ -40,6 +40,7 @@ A fresh dispatch is seeded when the issue's workspace names a pull request, the 
 - Render with strict filter checking.
 - Convert issue object keys to strings for template compatibility.
 - Preserve nested arrays/maps (labels, blockers) so templates can iterate.
+- Execute define blocks under the same strict variable and filter checking, whichever file holds them.
 
 ### 12.3 Retry/Continuation Semantics
 
@@ -55,4 +56,5 @@ If prompt rendering fails:
 
 - Fail the run attempt immediately.
 - Let the orchestrator treat it like any other worker failure and decide retry behavior.
+- When the failure sits inside a define block of a partial, the error names that partial and the line within it, not the prompt template that called it. A fault the load can detect, such as an undefined call, never reaches rendering: it fails the workflow load (Section 5.5).
 

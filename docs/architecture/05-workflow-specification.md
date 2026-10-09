@@ -425,6 +425,7 @@ Fields:
 - `rules` (list of `DispatchRule`, optional): list of dispatch rules. Rules without a stage label are evaluated in order and the first match wins; a rule with a stage label is selected by that label before they are evaluated.
 - `default` (object, optional): carries `agent` and `template` overrides applied when no rule matches.
 - `max_consecutive_hops` (integer, optional): per-issue ceiling on consecutive automatic hops (see Stage chains below). When absent or null it defaults to the larger of `10` and the number of hops in the longest configured chain. A zero or negative value, a value that is not an integer, and a value below the number of hops in the longest configured chain are configuration errors. Changes take effect for future worker exits, not in-flight sessions.
+- `partials` (list of strings, optional): the files whose define blocks every prompt template of the workflow can call (see Partials below). Each entry is a path or a glob pattern relative to the workflow directory. When absent, null, or an empty list, no partial is selected. A value that is not a list is a configuration error.
 
 Each `DispatchRule` has six keys and an optional settings block:
 
@@ -534,9 +535,27 @@ dispatch:
 
 A successful run of `specify` adds `stage-implement` to the issue and leaves it active; the next tick dispatches `implement`; a successful run of `implement` ends on `tracker.handoff_state`.
 
+**Partials**
+
+A partial is a file that `dispatch.partials` selects. It holds define blocks, named templates written `{{ define "name" }}...{{ end }}`, that a prompt template calls with `{{ template "name" . }}`. A prompt template is the Markdown body of `WORKFLOW.md`, the default template, or a rule template. Every prompt template sees every partial, whichever rule it serves, and a workflow MAY set `partials` without `rules` or `default`. Each prompt template compiles in its own template set: the define blocks of every partial plus its own. A define block of one prompt template is never visible to another.
+
+Path rules. Entries are taken literally, with no `$VAR` resolution and no `~` expansion, and are joined and cleaned as a rule template path is. An absolute entry, a `~`-prefixed entry, and an entry that leaves the workflow directory tree are configuration errors, reported before any directory is read. Every selected file MUST lie inside the tree after symlink evaluation and MUST be a regular file. A file that fails either test fails the load and is never skipped. A message names a file by its path inside the tree, never by a symlink's outside target.
+
+Expansion. An entry that holds a glob metacharacter is a pattern, expanded below the workflow directory so that the directory's own path never takes part in the match: a metacharacter in that path cannot make an entry match no file. `/` separates path elements on every OS. On Windows `\` separates elements as well and escapes nothing; elsewhere `\` escapes the next character. The class `[[]` matches a literal `[` on every OS. An entry without a metacharacter is not expanded, and a missing file fails with the cause the filesystem reports. A pattern that is malformed, or that matches no file, is a configuration error. An expansion drops a file whose base name starts with `.`, such as an editor lock file, unless the last element of the entry starts with `.`. Load order is list order, lexical within an entry, and a file that several entries select loads once, at its first position.
+
+Content. A partial MUST NOT carry front matter, and a leading UTF-8 byte-order mark is ignored. A partial holds define blocks only: white space and comments may stand outside them, while text or an action outside a define block fails the load, because the text of a partial is never callable and a call by file name does not exist. Partials are read again on every load, as rule templates are.
+
+Names. A define name comes from one source. Within the template set of a prompt template, a name MUST be defined by at most one of: a single partial, or the prompt template itself. The rule covers two partials, a partial and a prompt template, `{{ block }}` (which defines its name as `define` does), and empty define blocks. A load that breaks it fails and names both files. The name `prompt` is reserved for the prompt template itself and MUST NOT be defined by a partial. Two prompt templates MAY define the same name, since each compiles in its own set. A partial MAY call a name that each prompt template defines, which gives shared text with per-template differences.
+
+Calls. A call to a name the template set does not define fails the load for every prompt template, with or without partials. The check follows calls through partials and covers both branches of every conditional, `range`, and `with`, so a call in a branch no current issue takes still fails the load. A call cycle is not an error.
+
+Fault location. Every parse and load-check fault names the file and the line within that file that hold it. Only the line of the body template carries the front matter offset.
+
+`sortie validate` warns about a define block that no prompt template calls. The warning does not fail the workflow.
+
 **Template lifecycle**
 
-Per-rule template paths are relative to `filepath.Dir(workflow_path)`. Absolute paths, `~`-prefixed paths, and symlink escapes outside the workflow directory tree are rejected at load time. The `ResolveRule` function and full algorithm details are in §5.3.9's source spec.
+Per-rule template paths and `dispatch.partials` entries are relative to the workflow directory. Absolute paths, `~`-prefixed paths, and symlink escapes outside the workflow directory tree are rejected at load time. A load reads `WORKFLOW.md`, every distinct template file, and every partial, and builds every prompt template of the load from the same partials. Nothing a load builds outlives it, so the next load reads every file again, and a fault in any of them fails the whole load. The `ResolveRule` function and full algorithm details are in §5.3.9's source spec.
 
 Example:
 
@@ -707,6 +726,13 @@ Template input variables:
   - `previous_outcome` (string): `succeeded`, or `no_change` when the previous stage's run declared that the requested outcome already held; empty when `previous` is empty.
   - `previous` and `previous_outcome` are frozen with the dispatch selection, so a retry or reaction continuation renders the pair its first dispatch rendered, also after a restart.
 
+Define blocks and calls:
+
+- A prompt template calls the define blocks of every partial (§5.3.9) and its own with the built-in `template` action. The FuncMap gains no entry for it.
+- A define block executes with the value its call passes as dot, and `$` inside it is that value; the engine has no dynamic scoping. `{{ template "name" . }}` outside every `range` and `with` body passes the whole input data, `issue`, `attempt`, `run`, `stage`, and every continuation key included. A call without an argument passes nil, and any field reference in the block then fails the render.
+- A define block executes under the same strict rules as the template that calls it: an unknown variable or function fails the render.
+- An undefined call, a name defined twice, and text outside a define block of a partial are `template_parse_error` at load, never at render. Each is located at the file and line that hold it.
+
 Fallback prompt behavior:
 
 - If the workflow prompt body is empty, the runtime may use a minimal default prompt.
@@ -719,11 +745,12 @@ Error classes:
 - `missing_workflow_file`
 - `workflow_parse_error`
 - `workflow_front_matter_not_a_map`
-- `template_parse_error` (during prompt rendering)
-- `template_render_error` (unknown variable/filter, invalid interpolation)
+- `template_parse_error` (at workflow load, in the body template, a rule or default template, or a partial: a syntax error, an undefined call, a name defined twice, or text outside the define blocks of a partial)
+- `template_render_error` (unknown variable/filter, invalid interpolation, during prompt rendering)
 
 Dispatch gating behavior:
 
 - Workflow file read/YAML errors block new dispatches until fixed.
-- Template errors fail only the affected run attempt.
+- Template parse errors, including every fault in a partial, fail the load and block new dispatches until fixed. A reload that hits one keeps the last known good configuration and templates.
+- Template render errors fail only the affected run attempt. A render error inside a define block names the file that holds the block and the line within it.
 
