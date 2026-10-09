@@ -257,9 +257,6 @@ func TestTeardownLeavesSameIdentifierRecordUntouched(t *testing.T) {
 			if tt.wantLeftover && !r.Leftover() {
 				t.Error("Leftover() = false, want true from the first launch's own job")
 			}
-			if !processIsRunning(uint32(secondMember.Process.Pid)) { //nolint:gosec // G115: a Windows PID fits in uint32
-				t.Fatalf("the second record's member %d stopped during the first launch's %s, want it running", secondMember.Process.Pid, tt.name)
-			}
 			if running, err := jobHasRunningMember(secondJob); err != nil || !running {
 				t.Errorf("jobHasRunningMember(second job) = %t, %v, want true, nil (its handle must stay usable)", running, err)
 			}

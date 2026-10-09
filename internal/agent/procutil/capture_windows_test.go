@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -336,9 +337,6 @@ func TestRunJobDrain(t *testing.T) {
 		groupDrainBound = 200 * time.Millisecond
 		terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
 
-		// runJobDrain itself never calls scanSurvivorsFunc: the survivor
-		// scan is drainCaptureJob's own step, exercised separately by
-		// TestDrainCaptureJob_TeardownRecordAndSurvivorScan.
 		result := runJobDrain(job)
 		if result.DrainPolls <= 1 {
 			t.Errorf("DrainPolls = %d, want > 1", result.DrainPolls)
@@ -745,98 +743,171 @@ func newCaptureTestHeldMember(t *testing.T, job windows.Handle) *exec.Cmd {
 	return cmd
 }
 
-func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
-	t.Run("unsettled job: the scan runs once and the record takes the Warn arm", func(t *testing.T) {
-		job, _ := newCaptureTestJob(t)
-		cmd := newCaptureTestHeldMember(t, job)
+func TestDrainCaptureJob_TeardownRecordLevel(t *testing.T) {
+	tests := []struct {
+		name       string
+		hasJob     bool
+		stuckJob   bool
+		unexamined []unexaminedCandidate
+		wantScans  int
+		wantLevel  slog.Level
+	}{
+		{name: "an undrained job scans once and warns", hasJob: true, stuckJob: true, wantScans: 1, wantLevel: slog.LevelWarn},
+		{name: "a drained job skips the scan and logs at debug", hasJob: true, wantLevel: slog.LevelDebug},
+		{
+			name:       "a jobless launch whose scan left a candidate unexamined warns",
+			unexamined: []unexaminedCandidate{{PID: 4242}},
+			wantScans:  1,
+			wantLevel:  slog.LevelWarn,
+		},
+	}
 
-		origBound, origTerm, origScan := groupDrainBound, terminateJobObjectFunc, scanSurvivorsFunc
-		defer func() { groupDrainBound, terminateJobObjectFunc, scanSurvivorsFunc = origBound, origTerm, origScan }()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newWaitedCmd(t)
+			var job uintptr
+			if tt.hasJob {
+				handle, _ := newCaptureTestJob(t)
+				newCaptureTestHeldMember(t, handle)
+				job = uintptr(handle)
+			}
 
-		var scanCalls int
-		groupDrainBound = 200 * time.Millisecond
-		terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
-		scanSurvivorsFunc = func(uint32, []uint32) ([]jobSurvivor, error) {
-			scanCalls++
-			return nil, nil
-		}
+			origBound, origTerm, origScan := groupDrainBound, terminateJobObjectFunc, scanSurvivorsFunc
+			t.Cleanup(func() { groupDrainBound, terminateJobObjectFunc, scanSurvivorsFunc = origBound, origTerm, origScan })
+			groupDrainBound = 200 * time.Millisecond
+			if tt.stuckJob {
+				terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
+			}
+			var scans int
+			scanSurvivorsFunc = func(uint32, []uint32, processLifetime) ([]jobSurvivor, []unexaminedCandidate, error) {
+				scans++
+				return nil, tt.unexamined, nil
+			}
+			spy := &captureWinLogSpy{}
 
-		spy := &captureWinLogSpy{}
-		logger := slog.New(spy)
+			drainCaptureJob(job, cmd, time.Now(), 0, slog.New(spy))
 
-		// drainCaptureJob closes job; no further cleanup needed.
-		drainCaptureJob(uintptr(job), cmd, time.Now(), 0, logger)
-
-		if scanCalls != 1 {
-			t.Errorf("scanSurvivorsFunc call count = %d, want 1 (the survivor scan must run when the drain leaves an active process)", scanCalls)
-		}
-		record, ok := latestCaptureTeardownRecord(spy, 0)
-		if !ok {
-			t.Fatalf("no teardown record captured")
-		}
-		if record.Msg != "subprocess tree did not settle" {
-			t.Errorf("teardown record message = %q, want %q", record.Msg, "subprocess tree did not settle")
-		}
-	})
-
-	t.Run("settled job: the scan does not run and the record takes the Debug arm", func(t *testing.T) {
-		job, _ := newCaptureTestJob(t)
-		cmd := newCaptureTestHeldMember(t, job)
-
-		origScan := scanSurvivorsFunc
-		defer func() { scanSurvivorsFunc = origScan }()
-		var scanCalls int
-		scanSurvivorsFunc = func(uint32, []uint32) ([]jobSurvivor, error) {
-			scanCalls++
-			return nil, nil
-		}
-
-		spy := &captureWinLogSpy{}
-		logger := slog.New(spy)
-
-		// The real termination settles the job well within groupDrainBound.
-		drainCaptureJob(uintptr(job), cmd, time.Now(), 0, logger)
-
-		if scanCalls != 0 {
-			t.Errorf("scanSurvivorsFunc call count = %d, want 0 (the survivor scan must not run once the job has settled)", scanCalls)
-		}
-		record, ok := latestCaptureTeardownRecord(spy, 0)
-		if !ok {
-			t.Fatalf("no teardown record captured")
-		}
-		if record.Msg != "subprocess tree settled" {
-			t.Errorf("teardown record message = %q, want %q", record.Msg, "subprocess tree settled")
-		}
-	})
+			if scans != tt.wantScans {
+				t.Errorf("scanSurvivorsFunc call count = %d, want %d", scans, tt.wantScans)
+			}
+			record, ok := latestCaptureTeardownRecord(spy, 0)
+			if !ok {
+				t.Fatal("no teardown record captured")
+			}
+			if record.Level != tt.wantLevel {
+				t.Errorf("teardown record level = %v, want %v", record.Level, tt.wantLevel)
+			}
+		})
+	}
 }
 
-func TestProcessIsRunning(t *testing.T) {
+func creationTimeOf(t *testing.T, pid uint32) time.Time {
+	t.Helper()
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		t.Fatalf("OpenProcess(%d) error = %v", pid, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+	created, err := processCreated(handle)
+	if err != nil {
+		t.Fatalf("processCreated(%d) error = %v", pid, err)
+	}
+	return created
+}
+
+func TestScanSurvivors(t *testing.T) {
+	root := uint32(os.Getpid()) //nolint:gosec // G115: a Windows PID fits in uint32
+	job, cleanup := newCaptureTestJob(t)
+	t.Cleanup(cleanup)
+	child := uint32(newCaptureTestHeldMember(t, job).Process.Pid) //nolint:gosec // G115: a Windows PID fits in uint32
+	rootCreated := creationTimeOf(t, root)
+	alive := processLifetime{created: rootCreated, exited: time.Now()}
+	recycled := processLifetime{created: rootCreated.Add(-time.Hour), exited: rootCreated.Add(-time.Millisecond)}
+
+	tests := []struct {
+		name           string
+		lifetime       processLifetime
+		openErr        error
+		wantSurvivor   bool
+		wantUnexamined bool
+	}{
+		{name: "a live child of a root alive when it was created survives", lifetime: alive, wantSurvivor: true},
+		{name: "a recycled root identifier owns no child created after its lifetime ended", lifetime: recycled},
+		{name: "a candidate whose open is refused is unexamined, not gone", lifetime: alive, openErr: windows.ERROR_ACCESS_DENIED, wantUnexamined: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.openErr != nil {
+				failOpen(t, child, tt.openErr)
+			}
+
+			survivors, unexamined, err := scanSurvivors(root, nil, tt.lifetime)
+
+			if err != nil {
+				t.Fatalf("scanSurvivors(%d) error = %v, want nil", root, err)
+			}
+			if got := slices.ContainsFunc(survivors, func(s jobSurvivor) bool { return s.PID == child }); got != tt.wantSurvivor {
+				t.Errorf("scanSurvivors(%d) survivors include child %d = %t, want %t", root, child, got, tt.wantSurvivor)
+			}
+			if got := slices.ContainsFunc(unexamined, func(u unexaminedCandidate) bool { return u.PID == child }); got != tt.wantUnexamined {
+				t.Errorf("scanSurvivors(%d) unexamined include child %d = %t, want %t", root, child, got, tt.wantUnexamined)
+			}
+		})
+	}
+}
+
+func TestDescendantEntries(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.Command("cmd.exe", "/C", "ping -n 30 127.0.0.1 >nul")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
+	const rootPID = 1
+	epoch := time.Unix(1_000_000, 0)
+	at := func(d time.Duration) time.Time { return epoch.Add(d) }
+	root := processLifetime{created: at(0), exited: at(10 * time.Second)}
+
+	tests := []struct {
+		name    string
+		entries []processEntry
+		want    []uint32
+	}{
+		{
+			name: "the orphan of a recycled intermediate is dropped with its subtree",
+			entries: []processEntry{
+				{pid: 10, parent: rootPID, created: at(time.Second)},
+				{pid: 20, parent: 10, created: at(500 * time.Millisecond)},
+				{pid: 30, parent: 20, created: at(2 * time.Second)},
+			},
+			want: []uint32{10},
+		},
+		{
+			name: "a child created at its parent's creation is attributed",
+			entries: []processEntry{
+				{pid: 10, parent: rootPID, created: root.created},
+				{pid: 20, parent: 10, created: root.created},
+			},
+			want: []uint32{10, 20},
+		},
+		{
+			name:    "a child created at the direct child's exit is attributed",
+			entries: []processEntry{{pid: 10, parent: rootPID, created: root.exited}},
+			want:    []uint32{10},
+		},
 	}
-	pid := uint32(cmd.Process.Pid) //nolint:gosec // G115: a Windows PID fits in uint32
 
-	if !processIsRunning(pid) {
-		t.Error("processIsRunning(running process) = false, want true")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Hold a handle of our own so the process object, and therefore the
-	// identifier, survives the exit. That is the state in which opening
-	// the PID succeeds for a process that is already gone.
-	pinned, openErr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
-	if openErr != nil {
-		t.Fatalf("OpenProcess() = %v, want nil", openErr)
-	}
-	defer func() { _ = windows.CloseHandle(pinned) }()
+			var got []uint32
+			for _, e := range descendantEntries(tt.entries, rootPID, root) {
+				got = append(got, e.pid)
+			}
+			slices.Sort(got)
 
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-
-	if processIsRunning(pid) {
-		t.Error("processIsRunning(exited process whose handle is still held) = true, want false")
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("descendantEntries(%v) pids = %v, want %v", tt.entries, got, tt.want)
+			}
+		})
 	}
 }
 

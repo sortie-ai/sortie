@@ -224,19 +224,39 @@ func TestDrainJobObject(t *testing.T) {
 			t.Errorf("drainJobObject() error = %v, want nil (the real termination settles the job)", err)
 		}
 	})
-}
 
-func TestDrainJobObject_UnreadableMemberList(t *testing.T) {
-	origBound, origTerm := groupDrainBound, terminateJobObjectFunc
-	defer func() { groupDrainBound, terminateJobObjectFunc = origBound, origTerm }()
+	unconfirmed := []struct {
+		name string
+		job  func(t *testing.T) windows.Handle
+	}{
+		{
+			name: "an unreadable member list does not confirm an empty job",
+			job:  func(*testing.T) windows.Handle { return windows.InvalidHandle },
+		},
+		{
+			name: "a member whose open is refused does not count as gone",
+			job: func(t *testing.T) windows.Handle {
+				job, cleanup := newCaptureTestJob(t)
+				t.Cleanup(cleanup)
+				failOpen(t, uint32(newCaptureTestHeldMember(t, job).Process.Pid), windows.ERROR_ACCESS_DENIED) //nolint:gosec // G115: a Windows PID fits in uint32
+				return job
+			},
+		},
+	}
+	for _, tt := range unconfirmed {
+		t.Run(tt.name, func(t *testing.T) {
+			job := tt.job(t)
+			origBound, origTerm := groupDrainBound, terminateJobObjectFunc
+			t.Cleanup(func() { groupDrainBound, terminateJobObjectFunc = origBound, origTerm })
+			groupDrainBound = 50 * time.Millisecond
+			terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
 
-	groupDrainBound = 50 * time.Millisecond
-	terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
+			err := drainJobObject(4242, job)
 
-	err := drainJobObject(4242, windows.InvalidHandle)
-
-	if err == nil {
-		t.Fatal("drainJobObject(unreadable job) error = nil, want non-nil (an unread member list does not confirm an empty job)")
+			if err == nil {
+				t.Error("drainJobObject() error = nil, want non-nil once the bound elapses without confirming the job empty")
+			}
+		})
 	}
 }
 
@@ -291,7 +311,7 @@ func newKillOnCloseJob(t *testing.T) windows.Handle {
 	return job
 }
 
-func newExitedProcess(t *testing.T) *os.Process {
+func newWaitedCmd(t *testing.T) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("cmd.exe", "/C", "exit 0")
 	if err := cmd.Start(); err != nil {
@@ -300,7 +320,80 @@ func newExitedProcess(t *testing.T) *os.Process {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("cmd.Wait() error = %v, want nil", err)
 	}
-	return cmd.Process
+	return cmd
+}
+
+func newExitedProcess(t *testing.T) *os.Process {
+	t.Helper()
+	return newWaitedCmd(t).Process
+}
+
+func failOpen(t *testing.T, pid uint32, openErr error) {
+	t.Helper()
+	orig := openProcessFunc
+	t.Cleanup(func() { openProcessFunc = orig })
+	openProcessFunc = func(access uint32, inherit bool, target uint32) (windows.Handle, error) {
+		if target == pid {
+			return 0, openErr
+		}
+		return orig(access, inherit, target)
+	}
+}
+
+func TestProcessRunning(t *testing.T) {
+	const absentPID = 4242
+	accept := func(windows.Handle) (bool, error) { return true, nil }
+
+	tests := []struct {
+		name   string
+		target func(t *testing.T) uint32
+		want   bool
+	}{
+		{
+			name:   "a running process runs",
+			target: func(*testing.T) uint32 { return uint32(os.Getpid()) }, //nolint:gosec // G115: a Windows PID fits in uint32
+			want:   true,
+		},
+		{
+			name: "an exited process whose handle is still held does not run",
+			target: func(t *testing.T) uint32 {
+				job, cleanup := newCaptureTestJob(t)
+				t.Cleanup(cleanup)
+				cmd := newCaptureTestHeldMember(t, job)
+				pid := uint32(cmd.Process.Pid) //nolint:gosec // G115: a Windows PID fits in uint32
+				pinned, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
+				if err != nil {
+					t.Fatalf("OpenProcess(%d) error = %v", pid, err)
+				}
+				t.Cleanup(func() { _ = windows.CloseHandle(pinned) })
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				return pid
+			},
+		},
+		{
+			name: "an open refused as an invalid parameter means no process holds the identifier",
+			target: func(t *testing.T) uint32 {
+				failOpen(t, absentPID, windows.ERROR_INVALID_PARAMETER)
+				return absentPID
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pid := tt.target(t)
+
+			got, err := processRunning(pid, accept)
+
+			if err != nil {
+				t.Fatalf("processRunning(%d) error = %v, want nil", pid, err)
+			}
+			if got != tt.want {
+				t.Errorf("processRunning(%d) = %t, want %t", pid, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestArmGroupEscalation_ReleasesDuplicateOnEveryExitPath(t *testing.T) {
