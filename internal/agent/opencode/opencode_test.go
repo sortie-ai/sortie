@@ -1406,6 +1406,54 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 	})
 }
 
+func TestRunTurn_SSH_CarriesInlineConfigDocument(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	fixture := writeFixtureFile(t, tmpDir, "simple_turn.jsonl", string(loadFixture(t, "simple_turn.jsonl")))
+	script := writeOpenCodeScript(t, tmpDir, "cat > '"+tmpDir+"/stdin.'$$\ncat '"+fixture+"'")
+
+	a, _ := NewOpenCodeAdapter()
+	session := mustBuildSSHSessionWithLocalScript(t, tmpDir, script, "example.test")
+	state := session.Internal.(*sessionState)
+	document, err := buildInlineConfig(state.passthrough, nil)
+	if err != nil {
+		t.Fatalf("buildInlineConfig() error = %v", err)
+	}
+	assertTitleAgentDisabled(t, decodeConfigDocument(t, document))
+	if strings.Contains(document, "'") {
+		t.Fatalf("document = %q, want no single quote", document)
+	}
+	state.turnConfigContent = document
+
+	_, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	inputs, err := filepath.Glob(filepath.Join(tmpDir, "stdin.*"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	for _, path := range inputs {
+		input, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", path, err)
+		}
+		if !strings.HasSuffix(string(input), "work") {
+			continue
+		}
+		if want := "OPENCODE_CONFIG_CONTENT='" + document + "'"; !strings.Contains(string(input), want) {
+			t.Errorf("run invocation standard input = %q, want it to contain %q", input, want)
+		}
+		return
+	}
+	t.Fatalf("no invocation received the prompt on standard input among %d captured inputs", len(inputs))
+}
+
 func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
 	t.Parallel()
 
