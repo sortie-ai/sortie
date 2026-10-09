@@ -133,6 +133,8 @@ release:
     **Full changelog**: https://github.com/sortie-ai/sortie/blob/{{ .Tag }}/CHANGELOG.md
 
     **Diff**: https://github.com/sortie-ai/sortie/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    **Code signing policy**: https://docs.sortie-ai.com/code-signing-policy/
   draft: false
   prerelease: auto
   make_latest: true

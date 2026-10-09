@@ -86,6 +86,7 @@ Sortie 是一个独立的可执行文件，无需另行部署数据库或任务�
 - [使用指南](https://docs.sortie-ai.com/guides/)
 - [架构](https://docs.sortie-ai.com/concepts/architecture/)
 - [路线图](https://github.com/orgs/sortie-ai/projects/1)
+- [代码签名策略](https://docs.sortie-ai.com/code-signing-policy/)
 
 ## 先前工作
 
