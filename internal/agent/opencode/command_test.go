@@ -329,16 +329,23 @@ func TestMCPInjectionConformance(t *testing.T) {
 		agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
 	})
 
-	t.Run("remote launch delivers nothing", func(t *testing.T) {
+	t.Run("remote launch delivers no tool servers", func(t *testing.T) {
 		t.Parallel()
+
+		servers, err := translateMCPServers(mcpConfigPath, true)
+		if err != nil {
+			t.Fatalf("translateMCPServers() error = %v", err)
+		}
+		document, err := buildInlineConfig(passthroughConfig{}, servers)
+		if err != nil {
+			t.Fatalf("buildInlineConfig() error = %v", err)
+		}
 
 		state := newTestSessionState("/workspace", "")
 		args := buildRunArgs(state, passthroughConfig{})
 		env := buildRunEnv([]string{"PATH=/usr/bin"})
+		env = append(env, "OPENCODE_CONFIG_CONTENT="+document)
 
-		// StartSession's remote guard skips rendering entirely, so a
-		// remote session's turn environment carries nothing to append
-		// here.
 		agenttest.AssertMCPInjection(t, registry.MCPInjectionUnsupported, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
 	})
 }

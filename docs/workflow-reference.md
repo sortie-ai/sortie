@@ -2525,7 +2525,7 @@ The adapter runs `opencode run --format json --standalone` once per turn with th
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
 - `opencode.effort` and `opencode.variant` MUST NOT both be set, because both fill the model-variant slot.
-- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one. The configuration document the adapter writes disables OpenCode's title agent, so a local turn makes no title request and a session keeps OpenCode's default title.
+- On a local launch, the adapter removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. On an SSH worker, the adapter's configuration document replaces any inherited `OPENCODE_CONFIG_CONTENT` value, while an `OPENCODE_PERMISSION` value set in the remote login environment is left in place. If either tool list is non-empty, the adapter-managed tool policy replaces the tool policy on a local launch. On an SSH worker, OpenCode applies an `OPENCODE_PERMISSION` value from the remote login environment after the adapter's configuration document, so that value wins for every tool it names. The configuration document the adapter writes disables OpenCode's title agent, so a turn, local or on an SSH worker, makes no title request and a session keeps OpenCode's default title.
 
 **Agent Client Protocol adapter:**
 

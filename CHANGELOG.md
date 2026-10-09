@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - A template that calls a block nothing defines now stops the workflow from loading, instead of failing the run that reaches the call, so correct such a call before upgrading. ([#1219](https://github.com/sortie-ai/sortie/issues/1219))
+- An `opencode` turn on an SSH worker now applies `opencode.allowed_tools`, `opencode.denied_tools`, and `opencode.disable_autocompact` and keeps session sharing off, as a local turn does; these settings were silently ignored on SSH workers until now. A workflow that needs OpenCode's automatic compaction on SSH workers sets `opencode.disable_autocompact: false`. ([#1210](https://github.com/sortie-ai/sortie/issues/1210))
 
 ### Removed
 
@@ -42,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dispatch rules and prompt templates now see every label of a Linear issue, not only the first 25. ([#1255](https://github.com/sortie-ai/sortie/issues/1255))
 - The `file` tracker now keeps every label Sortie adds to an issue instead of only the most recent one. ([#1255](https://github.com/sortie-ai/sortie/issues/1255))
 - A label Sortie applies is now checked on the issue afterwards, so a label the tracker accepts without adding, such as on GitLab with a token that cannot edit labels, is logged as a failed write instead of passing as applied. On Gitea a state change also removes a previous state label that is an organization label, and on Linear a label from a single-select label group replaces the group's other label on the issue. ([#1255](https://github.com/sortie-ai/sortie/issues/1255))
+- An `opencode` turn on an SSH worker no longer spends tokens on a session title, so the token usage reported for it covers every model request it makes. ([#1210](https://github.com/sortie-ai/sortie/issues/1210))
 
 ### Migrations
 

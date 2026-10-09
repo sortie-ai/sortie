@@ -6,10 +6,7 @@
 // The CLI accepts no MCP configuration path as an argument, so on a local
 // launch the adapter translates the file named by
 // [domain.StartSessionParams] MCPConfigPath into OpenCode's own
-// configuration form and delivers it in the turn's environment. A remote
-// launch receives none: the only delivery route there is the command line,
-// where the document's credentials would be readable by any user of the
-// host.
+// configuration form and delivers it in the turn's environment.
 package opencode
 
 import (
@@ -224,6 +221,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	var cmd *exec.Cmd
 	var launch sshutil.SSHLaunch
 	if state.target.RemoteCommand != "" {
+		managedEnv["OPENCODE_CONFIG_CONTENT"] = state.turnConfigContent
 		launch = sshutil.BuildSSHLaunch(
 			state.target.SSHHost,
 			state.target.WorkspacePath,
