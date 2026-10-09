@@ -39,7 +39,7 @@ func checkRuntimeVersion(ctx context.Context, state *sessionState) *domain.Agent
 		return agentErr
 	}
 
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
+	result, startErr := procutil.RunCapture(queryCtx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
 		Stdout: stdout,
 		Stderr: stderr,
 		Logger: state.logger(),
@@ -47,6 +47,9 @@ func checkRuntimeVersion(ctx context.Context, state *sessionState) *domain.Agent
 
 	switch {
 	case startErr != nil:
+		if cancelled := agentcore.SessionStartCancelledError(ctx, startErr); cancelled != nil {
+			return cancelled
+		}
 		return &domain.AgentError{
 			Kind:    domain.ErrResponseError,
 			Message: "could not start the agent runtime to read its version",

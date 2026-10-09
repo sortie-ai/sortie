@@ -209,7 +209,7 @@ func TestCapture_HeldDescendantInheritedJobMembership(t *testing.T) {
 	var stdout bytes.Buffer
 
 	start := time.Now()
-	result, err := RunCapture(cmd, DefaultStopGrace, CaptureParams{Stdout: &stdout})
+	result, err := RunCapture(ctx, cmd, DefaultStopGrace, CaptureParams{Stdout: &stdout})
 	if err != nil {
 		t.Fatalf("RunCapture() error = %v", err)
 	}
@@ -240,7 +240,7 @@ func TestCapture_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 		before := len(spy.snapshot())
 		cmd := exec.Command("cmd.exe", "/C", "start /b cmd.exe /C \"ping -n 30 127.0.0.1 >NUL\" & exit 0") //nolint:gosec // fixed literal script
 		cmd.Dir = dir
-		c, err := StartCapture(cmd, CaptureParams{Logger: logger})
+		c, err := StartCapture(context.Background(), cmd, CaptureParams{Logger: logger})
 		if err != nil {
 			t.Fatalf("StartCapture() error = %v", err)
 		}
@@ -321,74 +321,6 @@ func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing
 
 	if delayed < clean {
 		t.Errorf("registered job's total_processes with the seam delay = %d, want >= the clean reference %d", delayed, clean)
-	}
-}
-
-func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testing.T) {
-	leaderPath := agenttest.FakeRuntime(t, t.TempDir(), "leader", agenttest.OutputScenario, agenttest.Output{Hang: true})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
-	SetGroupCancel(cmd, escalationGrace)
-	groupCancel := cmd.Cancel
-	cancelReturned := make(chan struct{})
-	cmd.Cancel = func() error {
-		defer close(cancelReturned)
-		return groupCancel()
-	}
-
-	origAssignSeam, origResumeSeam := assignSeam, resumeSeam
-	t.Cleanup(func() { assignSeam, resumeSeam = origAssignSeam, origResumeSeam })
-	var cancelReturnedBeforeAssignment bool
-	assignSeam = func() {
-		cancel()
-		select {
-		case <-cancelReturned:
-			cancelReturnedBeforeAssignment = true
-		case <-time.After(time.Second):
-		}
-	}
-
-	// The graceful signal reaches the leader as it starts, before its
-	// runtime can catch one, so the leader may exit without starting a
-	// descendant. The job gets a member of the test's own instead, added
-	// while the leader is still suspended.
-	var member *exec.Cmd
-	resumeSeam = func() {
-		g := lookupGroup(cmd)
-		if g == nil {
-			t.Fatal("no record registered before the resume, want the launch's record")
-		}
-		job := jobHandleOf(g)
-		if job == 0 {
-			t.Fatal("record holds no job before the resume, want the launch's job")
-		}
-		member = newCaptureTestHeldMember(t, job)
-	}
-
-	pipes, group := startOwned(t, cmd)
-	defer func() { _ = pipes.Close() }()
-	t.Cleanup(func() { _ = group.Kill() })
-
-	if cancelReturnedBeforeAssignment {
-		t.Error("the Cancel closure returned before the Job Object assignment finished, want it held at the assignment gate")
-	}
-
-	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
-
-	memberPID, err := dwordPID(member.Process.Pid)
-	if err != nil {
-		t.Fatalf("dwordPID() error = %v", err)
-	}
-	wait := escalationGrace + groupDrainBound + 2*time.Second
-	deadline := time.Now().Add(wait)
-	for processIsRunning(memberPID) {
-		if !time.Now().Before(deadline) {
-			t.Fatalf("job member %d still running %v after a cancellation that preceded job registration, want gone", memberPID, wait)
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -477,7 +409,7 @@ func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		_, err := StartCapture(cmd, CaptureParams{Logger: logger})
+		_, err := StartCapture(context.Background(), cmd, CaptureParams{Logger: logger})
 		done <- outcome{err}
 	}()
 
@@ -505,7 +437,7 @@ func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	assertCaptureWinProcessGone(t, cmd.Process.Pid, 3*time.Second)
 
 	records := spy.snapshot()
-	var sawResumeFailed, sawTeardown int
+	var sawResumeFailed int
 	for _, r := range records {
 		if r.Msg == "process resume failed" {
 			sawResumeFailed++
@@ -519,15 +451,9 @@ func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 				t.Error("process resume failed record missing an error attribute")
 			}
 		}
-		if r.Msg == "subprocess tree did not settle" || r.Msg == "subprocess tree settled" {
-			sawTeardown++
-		}
 	}
 	if sawResumeFailed != 1 {
 		t.Errorf("process resume failed record count = %d, want 1", sawResumeFailed)
-	}
-	if sawTeardown != 1 {
-		t.Errorf("teardown record count = %d, want 1", sawTeardown)
 	}
 }
 
@@ -548,7 +474,7 @@ func TestStartWithOwnedPipes_ResumeSeamFailure(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		_, _, err := StartWithOwnedPipes(cmd, logger)
+		_, _, err := StartWithOwnedPipes(context.Background(), cmd, logger)
 		done <- outcome{err}
 	}()
 
@@ -621,7 +547,7 @@ func TestStartCapture_AssignJobObjectFailure(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		c, err := StartCapture(cmd, CaptureParams{Logger: logger})
+		c, err := StartCapture(context.Background(), cmd, CaptureParams{Logger: logger})
 		done <- outcome{c, err}
 	}()
 
@@ -702,7 +628,7 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		pipes, group, err := StartWithOwnedPipes(cmd, logger)
+		pipes, group, err := StartWithOwnedPipes(context.Background(), cmd, logger)
 		done <- outcome{pipes, group, err}
 	}()
 
@@ -762,56 +688,6 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	}
 	if sawAssignFailed != 1 {
 		t.Errorf("process group assignment failed record count = %d, want 1", sawAssignFailed)
-	}
-}
-
-func TestStartCapture_ResumeSeamCancelsRegisteredCapture(t *testing.T) {
-	spy := &captureWinLogSpy{}
-	logger := slog.New(spy)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "cmd.exe", "/C", "exit 0") //nolint:gosec // fixed literal script
-	SetGroupKill(cmd)
-
-	origResumeSeam := resumeSeam
-	t.Cleanup(func() { resumeSeam = origResumeSeam })
-	resumeSeam = func() {
-		g := lookupGroup(cmd)
-		job := jobHandleOf(g)
-		cancel()
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if running, err := jobHasRunningMember(job); err == nil && !running {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-
-	before := len(spy.snapshot())
-	c, err := StartCapture(cmd, CaptureParams{Logger: logger})
-	if err != nil {
-		var stageErr *StartError
-		if !errors.As(err, &stageErr) || stageErr.Stage != StageProcessResume {
-			t.Fatalf("StartCapture() error = %v, want nil or *StartError{Stage: StageProcessResume}", err)
-		}
-	} else {
-		_ = waitCaptureWinResult(t, c, 5*time.Second)
-	}
-
-	record, ok := latestCaptureTeardownRecord(spy, before)
-	if !ok {
-		t.Fatalf("no teardown record captured")
-	}
-	if record.Msg != "subprocess tree settled" {
-		t.Errorf("teardown record message = %q, want %q", record.Msg, "subprocess tree settled")
-	}
-	if polls, ok := record.Attrs["drain_polls"]; !ok || polls.Int64() < 1 {
-		t.Errorf("drain_polls = %v (present=%v), want >= 1", polls, ok)
-	}
-	if _, ok := record.Attrs["drain_query_err"]; ok {
-		t.Error("teardown record carries drain_query_err, want none")
 	}
 }
 
@@ -980,20 +856,6 @@ func TestResumeFailureReportsWhetherCancellationBegan(t *testing.T) {
 			},
 			want: false,
 		},
-		{
-			name: "the launch's cancellation was recorded before the resume",
-			stub: func(cmd *exec.Cmd, p *cancelProbe) (func(), func(int) error) {
-				seam := func() {
-					p.cancel()
-					deadline := time.Now().Add(5 * time.Second)
-					for time.Now().Before(deadline) && !lookupGroup(cmd).Stopped() {
-						time.Sleep(5 * time.Millisecond)
-					}
-				}
-				return seam, func(int) error { return errors.New("injected resume failure") }
-			},
-			want: true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -1005,7 +867,7 @@ func TestResumeFailureReportsWhetherCancellationBegan(t *testing.T) {
 				t.Cleanup(func() { resumeSeam, resumeProcess = origSeam, origResume })
 				resumeSeam, resumeProcess = seam, resume
 
-				err := st.start(cmd)
+				err := st.start(p.ctx, cmd)
 
 				var startErr *StartError
 				if !errors.As(err, &startErr) || startErr.Stage != StageProcessResume {
@@ -1013,6 +875,61 @@ func TestResumeFailureReportsWhetherCancellationBegan(t *testing.T) {
 				}
 				if startErr.Cancelled != tt.want {
 					t.Errorf("StartError.Cancelled = %t when %s, want %t", startErr.Cancelled, tt.name, tt.want)
+				}
+			})
+		}
+	}
+}
+
+func TestStartRefusesResumeOfLaunchCancelledDuringAssignment(t *testing.T) {
+	for _, hooked := range []bool{true, false} {
+		for _, st := range startEntries {
+			t.Run(fmt.Sprintf("hooked=%t through %s", hooked, st.name), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				markerPath := filepath.Join(t.TempDir(), "marker")
+				cmd := exec.CommandContext(ctx, "cmd.exe", "/C", "echo x> "+markerPath) //nolint:gosec // fixed literal script
+				hookReturned := make(chan struct{})
+				cmd.Cancel = nil
+				if hooked {
+					SetGroupCancel(cmd, 200*time.Millisecond)
+					inner := cmd.Cancel
+					cmd.Cancel = func() error {
+						defer close(hookReturned)
+						return inner()
+					}
+				}
+
+				origAssign, origResume := assignSeam, resumeSeam
+				t.Cleanup(func() { assignSeam, resumeSeam = origAssign, origResume })
+				assignSeam = cancel
+				resumeSeam = func() {
+					if hooked {
+						select {
+						case <-hookReturned:
+						case <-time.After(5 * time.Second):
+						}
+					}
+				}
+
+				err := st.start(ctx, cmd)
+
+				var startErr *StartError
+				if !errors.As(err, &startErr) || startErr.Stage != StageProcessResume || !startErr.Cancelled || !errors.Is(err, context.Canceled) {
+					t.Errorf("%s error = %v, want a cancelled *StartError at StageProcessResume wrapping context.Canceled", st.name, err)
+				}
+				if cmd.Process == nil {
+					t.Fatalf("%s left cmd.Process nil, want the suspended process started", st.name)
+				}
+				assertCaptureWinProcessGone(t, cmd.Process.Pid, 5*time.Second)
+				for deadline := time.Now().Add(5 * time.Second); lookupGroup(cmd) != nil; time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Error("lookupGroup(cmd) != nil after 5s, want the refused launch's record forgotten")
+						break
+					}
+				}
+				if _, statErr := os.Stat(markerPath); statErr == nil {
+					t.Errorf("%s ran the command: marker file exists, want the cancelled launch never resumed", st.name)
 				}
 			})
 		}

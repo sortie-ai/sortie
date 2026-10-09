@@ -36,7 +36,7 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 		return
 	}
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(stopGraceMS))
-	pipes, _, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, _, err := procutil.StartWithOwnedPipes(deadlineCtx, cmd, logger)
 	if err != nil {
 		logger.Warn("failed to delete credential verification session", slog.Any("error", err))
 		return

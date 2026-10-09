@@ -59,7 +59,11 @@ const unreadableConformanceLine = "Usage: sortie-early-exit-conformance [options
 // launches gives the kind a zero command: a kind with a
 // [registry.AgentMeta.DefaultCommand] must launch it and fail with the
 // early-exit report, and a kind with none must fail with the empty
-// command error. A working session is
+// command error. One more working session runs a runtime that would
+// succeed under a context that is already cancelled, and must fail
+// with a turn_cancelled [*domain.AgentError] that matches
+// [context.Canceled], not with the early-exit report. A working
+// session is
 // [domain.AgentAdapter.StartSession] followed, when it succeeds, by
 // its first [domain.AgentAdapter.RunTurn]. The first three cases'
 // runtime is a fake writing [earlyExitConformanceLine] to standard
@@ -137,6 +141,7 @@ func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapte
 		assertUnreadableLineConformance(t, formKind, adapter, form.apply(config, unreadablePath))
 	}
 
+	assertCancelledWorkingSession(t, kind, adapter, config, runtimePath)
 	assertZeroCommandLaunch(t, kind, adapter, config, meta.DefaultCommand)
 }
 
@@ -162,6 +167,31 @@ var commandForms = []commandForm{
 			return config
 		},
 	},
+}
+
+func assertCancelledWorkingSession(t *testing.T, kind string, adapter domain.AgentAdapter, config domain.AgentConfig, runtimePath string) {
+	t.Helper()
+
+	config.Command = runtimePath
+	config.CommandArgv = nil
+	name := kind + ": working session under a cancelled context"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := runWorking(ctx, adapter, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   config,
+	}, 0, 0)
+
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnCancelled {
+		t.Errorf("case %q: error %v is not a turn_cancelled *domain.AgentError", name, err)
+		return
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("case %q: error %v does not match context.Canceled", name, err)
+	}
 }
 
 // assertZeroCommandLaunch gives kind no command. A non-empty

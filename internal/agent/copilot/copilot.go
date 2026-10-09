@@ -261,8 +261,9 @@ func NewCopilotAdapter() (domain.AgentAdapter, error) {
 }
 
 // StartSession parses the session's settings, validates the workspace path,
-// resolves the copilot binary, and initializes per-session state. No
-// subprocess is spawned; that happens in [CopilotAdapter.RunTurn].
+// resolves the copilot binary, and initializes per-session state. A local
+// session runs a version canary of the binary; turns spawn their
+// subprocess in [CopilotAdapter.RunTurn].
 func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	pt, fault := parsePassthroughConfig(params.Settings)
 	if fault != nil {
@@ -281,8 +282,11 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		defer cancel()
 		cmd := exec.CommandContext(canaryCtx, target.Command, "--version") //nolint:gosec // target.Command from LookPath
 		var combined bytes.Buffer
-		result, startErr := procutil.RunCapture(cmd, stopGrace, procutil.CaptureParams{Stdout: &combined, Stderr: &combined})
+		result, startErr := procutil.RunCapture(canaryCtx, cmd, stopGrace, procutil.CaptureParams{Stdout: &combined, Stderr: &combined})
 		if startErr != nil || result.WaitErr != nil {
+			if cancelled := agentcore.SessionStartCancelledError(ctx, startErr); cancelled != nil {
+				return domain.Session{}, cancelled
+			}
 			canaryErr := startErr
 			if canaryErr == nil {
 				canaryErr = result.WaitErr

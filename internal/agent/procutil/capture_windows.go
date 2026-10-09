@@ -3,6 +3,7 @@
 package procutil
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,6 +76,7 @@ func defaultResumeProcess(pid int) error {
 
 // startAndAssign creates cmd suspended within a new process group,
 // registers its launch record, starts it, and assigns and resumes it.
+// ctx is the context cmd was created with; it decides the resume.
 // keepJobHandle requests a duplicate Job Object handle for a caller
 // that drains the job itself later (a Capture); the returned handle is
 // zero when keepJobHandle is false, when assignment failed, or when
@@ -82,16 +84,17 @@ func defaultResumeProcess(pid int) error {
 //
 // The returned record is nil on every error. A [StageProcessStart]
 // error means cmd.Start failed. A [StageProcessResume] error means the
-// process started but could not be resumed: by the time startAndAssign
-// returns, the process has already been killed, reaped, and, when
-// keepJobHandle, had its job drained and its teardown record logged.
-// Its Cancelled field is true when a stop began before the resume was
-// tried.
+// process started but was not resumed: either ctx was done when the
+// resume was reached, which is read once before the resume call and
+// reported as Cancelled with ctx's error, or the resume itself failed.
+// Either way the process never ran code; by the time startAndAssign
+// returns, its direct child has exited or groupDrainBound has elapsed,
+// and the reap is left to a reaper goroutine nobody awaits here.
 //
 // startedAt is the moment cmd.Start returned, for a caller that later
 // drains the job and needs it for the root probe's PID-reuse guard;
 // it is the zero value when cmd.Start failed.
-func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *Group, jobHandle uintptr, startedAt time.Time, startErr *StartError) {
+func startAndAssign(ctx context.Context, cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *Group, jobHandle uintptr, startedAt time.Time, startErr *StartError) {
 	SetProcessGroup(cmd)
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -123,32 +126,59 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (g *
 
 	resumeSeam()
 
-	// A stop arriving during the resume call waits for the lock, so the
-	// verdict read here is the order in which the two happened.
+	// ctx is read once, before the resume call: a deadline that expires
+	// during the call leaves the launch resumed. Holding the lock orders
+	// the read against every stop, which also takes it, and nothing that
+	// terminates or waits may run under it because the cancellation hook
+	// that abandonUnresumed waits on needs it.
 	g.mu.Lock()
-	cancelledFirst := g.stopped
-	resumeErr := resumeProcess(cmd.Process.Pid)
+	cause := ctx.Err()
+	jobForDrain := g.job
+	var resumeErr error
+	if cause == nil {
+		resumeErr = resumeProcess(cmd.Process.Pid)
+	}
 	g.mu.Unlock()
 
+	if cause == nil && resumeErr == nil {
+		return g, uintptr(dup), startedAt, nil
+	}
 	if resumeErr != nil {
 		logger.Warn("process resume failed",
 			slog.String("command", filepath.Base(cmd.Path)),
 			slog.String("dir", cmd.Dir),
 			slog.Any("error", resumeErr))
-
-		_ = cmd.Process.Kill()
-		reapStart := time.Now()
-		r := StartReaper(cmd, logger)
-		<-r.Done()
-		waitMS := time.Since(reapStart).Milliseconds()
-
-		if keepJobHandle {
-			drainCaptureJob(uintptr(dup), cmd, startedAt, waitMS, logger)
-		}
-		return nil, 0, startedAt, &StartError{Stage: StageProcessResume, Err: resumeErr, Cancelled: cancelledFirst}
 	}
 
-	return g, uintptr(dup), startedAt, nil
+	abandonUnresumed(cmd, jobForDrain, dup, logger)
+	if cause != nil {
+		return nil, 0, startedAt, &StartError{Stage: StageProcessResume, Err: cause, Cancelled: true}
+	}
+	return nil, 0, startedAt, &StartError{Stage: StageProcessResume, Err: resumeErr}
+}
+
+// abandonUnresumed terminates the process of a launch that was started
+// suspended and will not be resumed, and hands its reap to a reaper
+// goroutine it does not await: the reap can be stuck on os/exec's copy
+// of a caller-owned stdin reader. The termination completes before the
+// reaper starts, because the reaper closes the Job Object handle job
+// names. It returns once the direct child exited or groupDrainBound
+// elapsed, so a caller that removes the working directory next finds no
+// handle of the refused process open in it. It closes dup, the
+// capture's duplicate of the job handle, when non-zero. It MUST be
+// called holding no lock.
+func abandonUnresumed(cmd *exec.Cmd, job windows.Handle, dup windows.Handle, logger *slog.Logger) {
+	if job != 0 {
+		_ = drainJobObject(cmd.Process.Pid, job)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Process.WithHandle(func(handle uintptr) {
+		_, _ = windows.WaitForSingleObject(windows.Handle(handle), uint32(groupDrainBound.Milliseconds())) //nolint:gosec // G115: groupDrainBound is a small constant-scale duration
+	})
+	StartReaper(cmd, logger)
+	if dup != 0 {
+		_ = windows.CloseHandle(dup)
+	}
 }
 
 // terminateJobObjectFunc is runJobDrain's termination call. Only a test

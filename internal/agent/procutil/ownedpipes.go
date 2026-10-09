@@ -30,8 +30,9 @@ const (
 	StageStderrPipe
 	StageProcessStart
 	// StageProcessResume reports a Windows process that started
-	// suspended and could not be resumed after its Job Object
-	// assignment.
+	// suspended and was not resumed after its Job Object assignment,
+	// either because the launch's context was done by then or because
+	// the resume failed. The process never ran code.
 	StageProcessResume
 )
 
@@ -42,8 +43,11 @@ const (
 type StartError struct {
 	Stage StartStage
 	Err   error
-	// Cancelled is true when the launch's cancellation was in effect
-	// when the failing stage was tried. It is false for the pipe stages.
+	// Cancelled is true exactly when the launch's own cancellation
+	// refused the start, at StageProcessStart or StageProcessResume, and
+	// Err is then the context's error. A StageProcessResume error with
+	// Cancelled false is an operating-system resume failure. It is false
+	// for the pipe stages.
 	Cancelled bool
 }
 
@@ -72,20 +76,18 @@ func (e *StartError) Unwrap() error {
 // and closes the parent's copies of the two write ends. cmd.Stdout and
 // cmd.Stderr MUST be nil on entry. It closes every descriptor it
 // created before returning an error, and every error it returns is a
-// *StartError; on Windows a *StartError with StageProcessResume means
-// the process has already been terminated and reaped, and
-// [StartError.Cancelled] reports whether a stop began before the resume
-// was tried. logger receives
-// a failed Job Object assignment's or a failed resume's WARN record; a
-// nil logger resolves to slog.Default. A caller whose subprocess state
-// is guarded by a mutex MUST hold that mutex across this call, because
-// the call starts the process.
+// *StartError. ctx MUST be the context cmd was created with through
+// [exec.CommandContext], or [context.Background] for a command created
+// without one. logger receives a failed Job Object assignment's or a
+// failed resume's WARN record; a nil logger resolves to slog.Default. A
+// caller whose subprocess state is guarded by a mutex MUST hold that
+// mutex across this call, because the call starts the process.
 //
 // On success it also returns the launch's [Group], which the caller
 // keeps to call [Group.SignalGraceful] and [Group.Kill] for the rest of
 // the launch, and to which [StartReaper] binds the reap; on every error
 // the returned Group is nil.
-func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, *Group, error) {
+func StartWithOwnedPipes(ctx context.Context, cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, *Group, error) {
 	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		return nil, nil, &StartError{Stage: StageStdoutPipe, Err: err}
@@ -103,7 +105,7 @@ func StartWithOwnedPipes(cmd *exec.Cmd, logger *slog.Logger) (*OwnedPipes, *Grou
 	if logger == nil {
 		logger = slog.Default()
 	}
-	g, _, _, startErr := startAndAssign(cmd, logger, false)
+	g, _, _, startErr := startAndAssign(ctx, cmd, logger, false)
 	if startErr != nil {
 		closeFiles(stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 		cmd.Stdout = nil

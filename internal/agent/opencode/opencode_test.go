@@ -646,7 +646,7 @@ func startTurnRuntimeProcess(t *testing.T, scriptBody string) *turnRuntime {
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
 
 	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := procutil.StartWithOwnedPipes(context.Background(), cmd, nil)
 	if err != nil {
 		t.Fatalf("procutil.StartWithOwnedPipes() = %v", err)
 	}

@@ -137,7 +137,7 @@ func TestArmGroupEscalation_ForceTerminatesStubbornGroupMember(t *testing.T) {
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupCancel(cmd, escalationGrace)
 
-	pipes, group, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(ctx, cmd, nil)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
 	}
@@ -176,7 +176,7 @@ func TestArmGroupEscalation_GroupDrainedInsideGraceSendsNoForceSignal(t *testing
 	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
 	SetGroupCancel(cmd, escalationGrace)
 
-	pipes, group, err := StartWithOwnedPipes(cmd, nil)
+	pipes, group, err := StartWithOwnedPipes(ctx, cmd, nil)
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
 	}

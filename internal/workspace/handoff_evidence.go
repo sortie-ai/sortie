@@ -221,7 +221,7 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 
 	var stdout, stderr bytes.Buffer
-	result, startErr := procutil.RunCapture(cmd, procutil.DefaultStopGrace, procutil.CaptureParams{Stdout: &stdout, Stderr: &stderr})
+	result, startErr := procutil.RunCapture(ctx, cmd, procutil.DefaultStopGrace, procutil.CaptureParams{Stdout: &stdout, Stderr: &stderr})
 
 	reportErr := startErr
 	if reportErr == nil {

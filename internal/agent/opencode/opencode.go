@@ -242,7 +242,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	}
 	cmd.Stdin = buildTurnStdin(params.Prompt, launch.StdinReader())
 
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(ctx, cmd, logger)
 	if err != nil {
 		state.mu.Unlock()
 
@@ -628,7 +628,7 @@ func deleteVerificationSession(ctx context.Context, state *sessionState, session
 		state.logger().Warn("failed to delete credential verification session", slog.Any("error", buildErr))
 		return
 	}
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{})
+	result, startErr := procutil.RunCapture(deleteCtx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{})
 	if startErr != nil {
 		state.logger().Warn("failed to delete credential verification session", slog.Any("error", startErr))
 		return

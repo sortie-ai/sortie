@@ -109,7 +109,7 @@ func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffByt
 	// Stage intent-to-add so new files appear in the diff. Best-effort:
 	// its outcome is ignored, as before.
 	if intentCmd, intentErr := workspace.GitCommand(ctx, workspacePath, "add", "--intent-to-add", "."); intentErr == nil {
-		_, _ = procutil.RunCapture(intentCmd, procutil.DefaultStopGrace, procutil.CaptureParams{})
+		_, _ = procutil.RunCapture(ctx, intentCmd, procutil.DefaultStopGrace, procutil.CaptureParams{})
 	}
 
 	output, cmdErr := runGitDiffCombined(ctx, workspacePath, "diff", "HEAD")
@@ -140,7 +140,7 @@ func runGitDiffCombined(ctx context.Context, workspacePath string, args ...strin
 		return nil, err
 	}
 	var combined bytes.Buffer
-	result, err := procutil.RunCapture(cmd, procutil.DefaultStopGrace, procutil.CaptureParams{Stdout: &combined, Stderr: &combined})
+	result, err := procutil.RunCapture(ctx, cmd, procutil.DefaultStopGrace, procutil.CaptureParams{Stdout: &combined, Stderr: &combined})
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +155,21 @@ func runGitDiffCombined(ctx context.Context, workspacePath string, args ...strin
 		return combined.Bytes(), fmt.Errorf("git %s: output did not complete within %s", args[0], procutil.DefaultDrainGrace)
 	}
 	return combined.Bytes(), nil
+}
+
+func timedOutVerification(command string, duration time.Duration, stdout, stderr *cappedWriter, logger *slog.Logger) domain.VerificationResult {
+	logger.Info("verification command timed out",
+		slog.String("command", command),
+		slog.Int64("duration_ms", duration.Milliseconds()),
+	)
+	return domain.VerificationResult{
+		Command:    command,
+		ExitCode:   -1,
+		Stdout:     stdout.String(),
+		Stderr:     stderr.String(),
+		DurationMS: duration.Milliseconds(),
+		TimedOut:   true,
+	}
 }
 
 func runSingleVerification(ctx context.Context, command, workspacePath string, timeoutMS int, logger *slog.Logger, metrics domain.Metrics) domain.VerificationResult {
@@ -190,12 +205,17 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	stdoutBuf.max = int(domain.MaxVerificationOutputBytes)
 	stderrBuf.max = int(domain.MaxVerificationOutputBytes)
 
-	result, startErr := procutil.RunCapture(cmd, procutil.DefaultStopGrace, procutil.CaptureParams{
+	result, startErr := procutil.RunCapture(cmdCtx, cmd, procutil.DefaultStopGrace, procutil.CaptureParams{
 		Stdout: &stdoutBuf,
 		Stderr: &stderrBuf,
 		Logger: logger,
 	})
 	duration := time.Since(start)
+
+	if startErr != nil && cmdCtx.Err() == context.DeadlineExceeded {
+		metrics.ObserveSelfReviewVerificationDuration(command, duration.Seconds())
+		return timedOutVerification(command, duration, &stdoutBuf, &stderrBuf, logger)
+	}
 
 	if startErr != nil {
 		logger.Warn("verification command failed to start",
@@ -217,18 +237,7 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	}
 
 	if result.Stopped && cmdCtx.Err() == context.DeadlineExceeded {
-		logger.Info("verification command timed out",
-			slog.String("command", command),
-			slog.Int64("duration_ms", duration.Milliseconds()),
-		)
-		return domain.VerificationResult{
-			Command:    command,
-			ExitCode:   -1,
-			Stdout:     stdoutBuf.String(),
-			Stderr:     stderrBuf.String(),
-			DurationMS: duration.Milliseconds(),
-			TimedOut:   true,
-		}
+		return timedOutVerification(command, duration, &stdoutBuf, &stderrBuf, logger)
 	}
 
 	exitCode := 0

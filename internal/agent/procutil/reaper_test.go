@@ -2,6 +2,7 @@ package procutil
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,7 +20,7 @@ const (
 
 func startOwned(t *testing.T, cmd *exec.Cmd) (*OwnedPipes, *Group) {
 	t.Helper()
-	pipes, g, err := StartWithOwnedPipes(cmd, slog.New(slog.DiscardHandler))
+	pipes, g, err := StartWithOwnedPipes(context.Background(), cmd, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("StartWithOwnedPipes() error = %v, want nil", err)
 	}

@@ -446,8 +446,11 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	prefixedStdin := launch.PrefixStdin(stdinPipe)
 
 	logger := slog.Default().With(slog.String("component", "codex-adapter"))
-	pipes, group, err := procutil.StartWithOwnedPipes(cmd, logger)
+	pipes, group, err := procutil.StartWithOwnedPipes(ctx, cmd, logger)
 	if err != nil {
+		if cancelled := agentcore.SessionStartCancelledError(ctx, err); cancelled != nil {
+			return domain.Session{}, cancelled
+		}
 		var startErr *procutil.StartError
 		if !errors.As(err, &startErr) {
 			return domain.Session{}, &domain.AgentError{

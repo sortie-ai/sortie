@@ -1,6 +1,7 @@
 package procutil
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -167,13 +168,17 @@ type Capture struct {
 // suspended until its Job Object assignment), closes the parent's
 // write ends, starts one reader per pipe, and starts the reap.
 //
+// ctx MUST be the context cmd was created with through
+// [exec.CommandContext], or [context.Background] for a command created
+// without one: on Windows it decides whether the suspended process is
+// resumed, and a context done by then fails the start with
+// [StartError.Cancelled] set.
+//
 // cmd.Stdout and cmd.Stderr MUST be nil on entry; StartCapture panics
 // otherwise. Every error it returns is a *[StartError]. Before
 // returning an error it closes every descriptor it created and resets
-// cmd.Stdout and cmd.Stderr to nil; after a [StageProcessResume]
-// failure the process has already been terminated and reaped, and its
-// teardown logged.
-func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
+// cmd.Stdout and cmd.Stderr to nil.
+func StartCapture(ctx context.Context, cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 	if cmd.Stdout != nil || cmd.Stderr != nil {
 		panic("procutil: StartCapture requires nil cmd.Stdout and cmd.Stderr")
 	}
@@ -231,7 +236,7 @@ func StartCapture(cmd *exec.Cmd, params CaptureParams) (*Capture, error) {
 		}
 	}
 
-	_, jobHandle, startedAt, startErr := startAndAssign(cmd, logger, true)
+	_, jobHandle, startedAt, startErr := startAndAssign(ctx, cmd, logger, true)
 	if startErr != nil {
 		return fail(startErr)
 	}
@@ -329,11 +334,12 @@ func (c *Capture) awaitStreams() bool {
 // RunCapture calls [SetGroupCancel](cmd, stopGrace), then StartCapture,
 // then Wait. cmd MUST be built with [exec.CommandContext]; a command
 // built without one fails at [StageProcessStart], because os/exec
-// rejects a cancellation function without a context. A non-positive
-// stopGrace resolves to [DefaultStopGrace] inside SetGroupCancel.
-func RunCapture(cmd *exec.Cmd, stopGrace time.Duration, params CaptureParams) (CaptureResult, error) {
+// rejects a cancellation function without a context. ctx MUST be the
+// context cmd was created with. A non-positive stopGrace resolves to
+// [DefaultStopGrace] inside SetGroupCancel.
+func RunCapture(ctx context.Context, cmd *exec.Cmd, stopGrace time.Duration, params CaptureParams) (CaptureResult, error) {
 	SetGroupCancel(cmd, stopGrace)
-	c, err := StartCapture(cmd, params)
+	c, err := StartCapture(ctx, cmd, params)
 	if err != nil {
 		return CaptureResult{}, err
 	}

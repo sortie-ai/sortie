@@ -98,7 +98,7 @@ func startBoundedLaunch(commandPath string, argv []string, dir string, env []str
 
 	stdout := &lineBoundedWriter{limit: 1 << 20}
 	stderr := &lineBoundedWriter{limit: 1 << 20}
-	capture, err := procutil.StartCapture(cmd, procutil.CaptureParams{Stdout: stdout, Stderr: stderr, DrainGrace: nativeDrainBound})
+	capture, err := procutil.StartCapture(ctx, cmd, procutil.CaptureParams{Stdout: stdout, Stderr: stderr, DrainGrace: nativeDrainBound})
 	if err != nil {
 		cancel()
 		return nil, err

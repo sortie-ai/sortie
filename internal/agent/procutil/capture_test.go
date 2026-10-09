@@ -59,7 +59,7 @@ func TestStartCapture_SameWriterSharesOnePipeInWriteOrder(t *testing.T) {
 	cmd := exec.Command(path) //nolint:gosec // fake runtime path under t.TempDir()
 
 	var combined bytes.Buffer
-	c, err := StartCapture(cmd, CaptureParams{Stdout: &combined, Stderr: &combined})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Stdout: &combined, Stderr: &combined})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestCapture_NonZeroExitReportsExitErrorWithOutputCollected(t *testing.T) {
 	cmd := exec.Command(path) //nolint:gosec // fake runtime path under t.TempDir()
 
 	var stdout bytes.Buffer
-	c, err := StartCapture(cmd, CaptureParams{Stdout: &stdout})
+	c, err := StartCapture(context.Background(), cmd, CaptureParams{Stdout: &stdout})
 	if err != nil {
 		t.Fatalf("StartCapture() error = %v", err)
 	}
@@ -196,25 +196,26 @@ func TestCapture_AbandonedStreamClosesThroughAsyncSeam(t *testing.T) {
 
 var startEntries = []struct {
 	name  string
-	start func(cmd *exec.Cmd) error
+	start func(ctx context.Context, cmd *exec.Cmd) error
 }{
 	{
 		name: "StartCapture",
-		start: func(cmd *exec.Cmd) error {
-			_, err := StartCapture(cmd, CaptureParams{})
+		start: func(ctx context.Context, cmd *exec.Cmd) error {
+			_, err := StartCapture(ctx, cmd, CaptureParams{})
 			return err
 		},
 	},
 	{
 		name: "StartWithOwnedPipes",
-		start: func(cmd *exec.Cmd) error {
-			_, _, err := StartWithOwnedPipes(cmd, nil)
+		start: func(ctx context.Context, cmd *exec.Cmd) error {
+			_, _, err := StartWithOwnedPipes(ctx, cmd, nil)
 			return err
 		},
 	},
 }
 
 type cancelProbe struct {
+	ctx      context.Context
 	cancel   context.CancelFunc
 	ran      chan struct{}
 	observed atomic.Bool
@@ -227,7 +228,7 @@ func newCancelProbe(t *testing.T, install func(*exec.Cmd), name string, args ...
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fake runtime path under t.TempDir() or a fixed literal script
 	install(cmd)
 
-	p := &cancelProbe{cancel: cancel, ran: make(chan struct{})}
+	p := &cancelProbe{ctx: ctx, cancel: cancel, ran: make(chan struct{})}
 	inner := cmd.Cancel
 	cmd.Cancel = func() error {
 		defer close(p.ran)
@@ -294,7 +295,7 @@ func TestCapture_StopWhileRunningIsRecorded(t *testing.T) {
 
 			path := agenttest.FakeRuntime(t, t.TempDir(), "fake", agenttest.OutputScenario, agenttest.Output{Hang: true})
 			cmd, p := newCancelProbe(t, tt.install, path)
-			c, err := StartCapture(cmd, CaptureParams{})
+			c, err := StartCapture(p.ctx, cmd, CaptureParams{})
 			if err != nil {
 				t.Fatalf("StartCapture() error = %v", err)
 			}
@@ -317,29 +318,29 @@ func TestStartFailureReportsWhetherCancellationRefusedIt(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		command func(t *testing.T) *exec.Cmd
+		command func(t *testing.T) (context.Context, *exec.Cmd)
 		want    bool
 	}{
 		{
 			name: "a context that is already done",
-			command: func(t *testing.T) *exec.Cmd {
+			command: func(t *testing.T) (context.Context, *exec.Cmd) {
 				t.Helper()
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
 				path := agenttest.FakeRuntime(t, t.TempDir(), "fake", agenttest.OutputScenario, agenttest.Output{})
-				return exec.CommandContext(ctx, path) //nolint:gosec // fake runtime path under t.TempDir()
+				return ctx, exec.CommandContext(ctx, path) //nolint:gosec // fake runtime path under t.TempDir()
 			},
 			want: true,
 		},
 		{
 			name: "a file that is not executable under a live context",
-			command: func(t *testing.T) *exec.Cmd {
+			command: func(t *testing.T) (context.Context, *exec.Cmd) {
 				t.Helper()
 				path := filepath.Join(t.TempDir(), "notexec.exe")
 				if err := os.WriteFile(path, []byte("not a program"), 0o600); err != nil {
 					t.Fatalf("os.WriteFile(%q) = %v", path, err)
 				}
-				return exec.CommandContext(t.Context(), path) //nolint:gosec // file written under t.TempDir()
+				return t.Context(), exec.CommandContext(t.Context(), path) //nolint:gosec // file written under t.TempDir()
 			},
 			want: false,
 		},
@@ -350,7 +351,8 @@ func TestStartFailureReportsWhetherCancellationRefusedIt(t *testing.T) {
 			t.Run(tt.name+" through "+st.name, func(t *testing.T) {
 				t.Parallel()
 
-				err := st.start(tt.command(t))
+				ctx, cmd := tt.command(t)
+				err := st.start(ctx, cmd)
 
 				var startErr *StartError
 				if !errors.As(err, &startErr) {

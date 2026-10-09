@@ -9,7 +9,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
-func stubHookStart(t *testing.T, fn func(*exec.Cmd, procutil.CaptureParams) (*procutil.Capture, error)) {
+func stubHookStart(t *testing.T, fn func(context.Context, *exec.Cmd, procutil.CaptureParams) (*procutil.Capture, error)) {
 	t.Helper()
 	orig := startHookCapture
 	t.Cleanup(func() { startHookCapture = orig })
@@ -22,15 +22,15 @@ func TestRunHook_ResumeFailureAfterTheDeadline(t *testing.T) {
 		cancelled bool
 		wantOp    string
 	}{
-		{name: "cancellation had not begun", cancelled: false, wantOp: "start"},
-		{name: "cancellation had begun", cancelled: true, wantOp: "timeout"},
+		{name: "start failed without a cancellation", cancelled: false, wantOp: "start"},
+		{name: "start refused by a cancellation", cancelled: true, wantOp: "timeout"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
-			stubHookStart(t, func(*exec.Cmd, procutil.CaptureParams) (*procutil.Capture, error) {
+			stubHookStart(t, func(context.Context, *exec.Cmd, procutil.CaptureParams) (*procutil.Capture, error) {
 				cancel()
 				return nil, &procutil.StartError{
 					Stage:     procutil.StageProcessResume,

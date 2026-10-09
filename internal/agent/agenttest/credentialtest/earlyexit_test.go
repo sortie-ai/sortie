@@ -34,7 +34,7 @@ func newEarlyExitConformingAdapter(t *testing.T) *earlyExitConformingAdapter {
 func (a *earlyExitConformingAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target := agentcore.LaunchTarget{Command: a.runtimePath, WorkspacePath: params.WorkspacePath}
 	stderr := procutil.NewTailBuffer(agentcore.EarlyExitCaptureBytes)
-	result, err := procutil.RunCapture(exec.CommandContext(ctx, a.runtimePath), procutil.DefaultStopGrace, procutil.CaptureParams{Stderr: stderr})
+	result, err := procutil.RunCapture(ctx, exec.CommandContext(ctx, a.runtimePath), procutil.DefaultStopGrace, procutil.CaptureParams{Stderr: stderr})
 	if err != nil {
 		return domain.Session{}, err
 	}

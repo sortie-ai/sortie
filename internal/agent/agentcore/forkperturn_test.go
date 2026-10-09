@@ -1228,7 +1228,7 @@ func TestForkPerTurnSession_RunTurn_LinkedWorkspaceRefusedBeforeStart(t *testing
 	sess.mu.Unlock()
 }
 
-func stubStartWithOwnedPipes(t *testing.T, fn func(*exec.Cmd, *slog.Logger) (*procutil.OwnedPipes, *procutil.Group, error)) {
+func stubStartWithOwnedPipes(t *testing.T, fn func(context.Context, *exec.Cmd, *slog.Logger) (*procutil.OwnedPipes, *procutil.Group, error)) {
 	t.Helper()
 	orig := startWithOwnedPipes
 	t.Cleanup(func() { startWithOwnedPipes = orig })
@@ -1281,8 +1281,8 @@ func TestForkPerTurnSession_ResumeFailureAfterTheDeadline(t *testing.T) {
 		wantKind      domain.AgentErrorKind
 		wantCancelled bool
 	}{
-		{name: "cancellation had not begun", cancelled: false, wantKind: domain.ErrPortExit, wantCancelled: false},
-		{name: "cancellation had begun", cancelled: true, wantKind: domain.ErrTurnCancelled, wantCancelled: true},
+		{name: "start failed without a cancellation", cancelled: false, wantKind: domain.ErrPortExit, wantCancelled: false},
+		{name: "start refused by a cancellation", cancelled: true, wantKind: domain.ErrTurnCancelled, wantCancelled: true},
 	}
 
 	for _, tt := range tests {
@@ -1291,7 +1291,7 @@ func TestForkPerTurnSession_ResumeFailureAfterTheDeadline(t *testing.T) {
 			script := agenttest.FakeRuntime(t, tmpDir, "agent", agenttest.OutputScenario, agenttest.Output{})
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
-			stubStartWithOwnedPipes(t, func(*exec.Cmd, *slog.Logger) (*procutil.OwnedPipes, *procutil.Group, error) {
+			stubStartWithOwnedPipes(t, func(context.Context, *exec.Cmd, *slog.Logger) (*procutil.OwnedPipes, *procutil.Group, error) {
 				cancel()
 				return nil, nil, &procutil.StartError{
 					Stage:     procutil.StageProcessResume,
