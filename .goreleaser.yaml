@@ -7,6 +7,16 @@ report_sizes: true
 before:
   hooks:
     - go mod verify
+    - >-
+      go run github.com/tc-hib/go-winres@v0.3.3 simply
+      --arch amd64,arm64
+      --out cmd/sortie/rsrc
+      --manifest none
+      --product-name Sortie
+      --file-description Sortie
+      --original-filename sortie.exe
+      --product-version {{ .Version }}
+      --file-version {{ .Version }}
 
 builds:
   - id: sortie
