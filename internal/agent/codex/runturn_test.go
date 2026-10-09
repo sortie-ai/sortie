@@ -1179,12 +1179,15 @@ func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 		t.Errorf("ExitReason = %v, want EventTurnCompleted", result.ExitReason)
 	}
 
-	e, ok := firstEventOfType(events, domain.EventToolResult)
-	if !ok {
-		t.Fatal("expected EventToolResult from item tracking, not found")
+	wantToolError := map[string]bool{"ls -la": false, "mcpToolCall": true, "rm -rf build": true}
+	results := filterEventsOfType(events, domain.EventToolResult)
+	if len(results) != len(wantToolError) {
+		t.Fatalf("EventToolResult count = %d, want %d", len(results), len(wantToolError))
 	}
-	if e.ToolName != "ls -la" {
-		t.Errorf("ToolResult.ToolName = %q, want %q", e.ToolName, "ls -la")
+	for _, e := range results {
+		if want, ok := wantToolError[e.ToolName]; !ok || e.ToolError != want {
+			t.Errorf("ToolResult %q: ToolError = %v, want %v (known tool: %v)", e.ToolName, e.ToolError, want, ok)
+		}
 	}
 }
 

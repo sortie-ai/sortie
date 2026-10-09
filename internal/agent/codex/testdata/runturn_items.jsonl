@@ -2,5 +2,9 @@
 {"method":"turn/started","params":{"turnId":"turn-001"}}
 {"method":"item/started","params":{"item":{"id":"item-001","type":"commandExecution","command":"ls -la"}}}
 {"method":"item/completed","params":{"item":{"id":"item-001","type":"commandExecution","status":"completed"}}}
+{"method":"item/started","params":{"item":{"id":"item-002","type":"mcpToolCall","server":"sortie-tools","tool":"sortie_status"}}}
+{"method":"item/completed","params":{"item":{"id":"item-002","type":"mcpToolCall","status":"failed","error":{"message":"MCP tool call requires approval, but approval policy is never"}}}}
+{"method":"item/started","params":{"item":{"id":"item-003","type":"commandExecution","command":"rm -rf build"}}}
+{"method":"item/completed","params":{"item":{"id":"item-003","type":"commandExecution","status":"declined"}}}
 {"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}
 {"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}

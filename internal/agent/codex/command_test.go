@@ -240,23 +240,6 @@ func TestRenderMCPServerOverrides_HTTPHeaderByVariableName(t *testing.T) {
 	}
 }
 
-func TestRenderMCPServerOverrides_HTTPWithoutHeaders(t *testing.T) {
-	t.Parallel()
-
-	servers := []mcpconfig.Server{
-		{Name: "remote-tools", Transport: mcpconfig.TransportHTTP, URL: "https://example.invalid/mcp"},
-	}
-
-	args, err := renderMCPServerOverrides(servers, nil)
-	if err != nil {
-		t.Fatalf("renderMCPServerOverrides() error = %v, want a headerless HTTP entry to render", err)
-	}
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "https://example.invalid/mcp") {
-		t.Errorf("renderMCPServerOverrides() = %v, want the url on the override", args)
-	}
-}
-
 func TestRenderMCPServerOverrides_DottedPathPerServer(t *testing.T) {
 	t.Parallel()
 
@@ -361,7 +344,16 @@ func TestRenderMCPServerTable_EncodingContract(t *testing.T) {
 				Command:   "/bin/echo",
 				Args:      []string{"a"},
 			},
-			wantSubstr: []string{`command="/bin/echo"`, `args=["a"]`},
+			wantSubstr: []string{`command="/bin/echo"`, `args=["a"]`, `default_tools_approval_mode="approve"`},
+		},
+		{
+			name: "http server without headers renders its url and approves its tools",
+			server: mcpconfig.Server{
+				Name:      "remote-tools",
+				Transport: mcpconfig.TransportHTTP,
+				URL:       "https://example.invalid/mcp",
+			},
+			wantSubstr: []string{`url="https://example.invalid/mcp"`, `default_tools_approval_mode="approve"`},
 		},
 		{
 			name: "environment variable name rendered as quoted key",
