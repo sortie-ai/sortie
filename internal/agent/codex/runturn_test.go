@@ -1186,8 +1186,12 @@ func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 	}
 	for _, e := range results {
 		if want, ok := wantToolError[e.ToolName]; !ok || e.ToolError != want {
-			t.Errorf("ToolResult %q: ToolError = %v, want %v (known tool: %v)", e.ToolName, e.ToolError, want, ok)
+			t.Errorf("ToolResult %q: ToolError = %v, want %v (expected and unseen: %v)", e.ToolName, e.ToolError, want, ok)
 		}
+		delete(wantToolError, e.ToolName)
+	}
+	if len(wantToolError) != 0 {
+		t.Errorf("missing ToolResult for %v", wantToolError)
 	}
 }
 
