@@ -2756,6 +2756,7 @@ var contractAnchorSortieDirSites = []contractSiteEntry{
 	{importPath: "github.com/sortie-ai/sortie/internal/agent/mcpconfig", name: "Parse", reason: "location check"},
 	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "RunWorkerAttempt", reason: "exported summary path"},
 	{importPath: "github.com/sortie-ai/sortie/tools/qualify/probe", name: "writeToolServerMCPConfig", reason: "fixture path"},
+	{importPath: "github.com/sortie-ai/sortie/internal/agent/agenttest", name: "NewSortieTools", reason: "returned path"},
 }
 
 // contractWorkdirSites pairs each exec.Cmd.Dir assignment rule WORKDIR

@@ -10,8 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // MCPRelayScenario names the built-in [Scenario] that stands in for an MCP
@@ -163,19 +168,70 @@ func NewRecordingMCPRelay(t testing.TB, dir, target string) RecordingMCPRelay {
 func (r RecordingMCPRelay) AssertToolCallSucceeded(t testing.TB, tool string) {
 	t.Helper()
 
+	reportToolCallOutcome(t, tool, r.outcome(t, tool))
+}
+
+// AssertModelToolCall is [RecordingMCPRelay.AssertToolCallSucceeded] for a
+// live turn whose model decides whether to call tool. When no tools/call
+// request for tool was recorded it fails t if events show the runtime
+// attempted one, and skips t otherwise. An attempt is a tool_result event
+// whose tool name contains tool or equals one of attemptNames, the generic
+// names a runtime gives every MCP call.
+func (r RecordingMCPRelay) AssertModelToolCall(t testing.TB, tool string, events []domain.AgentEvent, attemptNames ...string) {
+	t.Helper()
+
+	outcome := r.outcome(t, tool)
+	if outcome.called {
+		reportToolCallOutcome(t, tool, outcome)
+		return
+	}
+	attempted := slices.ContainsFunc(events, func(e domain.AgentEvent) bool {
+		return e.Type == domain.EventToolResult && (strings.Contains(e.ToolName, tool) || slices.Contains(attemptNames, e.ToolName))
+	})
+	if attempted {
+		t.Errorf("tool call %q = the runtime reported an attempt, but no tools/call request for the tool reached the server in %d recorded messages", tool, outcome.messages)
+		return
+	}
+	t.Skipf("model choice: the model neither called %q nor attempted to, so this turn proves nothing about the MCP path", tool)
+}
+
+func (r RecordingMCPRelay) outcome(t testing.TB, tool string) toolCallResult {
+	t.Helper()
+
 	data, err := os.ReadFile(r.RecordPath) //nolint:gosec // G304: path is the test's own t.TempDir fixture.
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("AssertToolCallSucceeded(%q): read MCP traffic: %v", tool, err)
+		t.Fatalf("tool call %q: read MCP traffic: %v", tool, err)
 	}
+	return requestOutcome(data, "tools/call", tool)
+}
 
-	outcome := toolCallOutcome(data, tool)
+// WaitToolsListed reports whether the recorded traffic comes to hold a
+// successful tools/list exchange within bound, which shows the runtime has
+// read the server's tools.
+func (r RecordingMCPRelay) WaitToolsListed(bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		data, _ := os.ReadFile(r.RecordPath) //nolint:gosec // G304: path is the test's own t.TempDir fixture.
+		if listing := requestOutcome(data, "tools/list", ""); listing.answered && !listing.failed {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func reportToolCallOutcome(t testing.TB, tool string, outcome toolCallResult) {
+	t.Helper()
+
 	switch {
 	case !outcome.called:
-		t.Errorf("AssertToolCallSucceeded(%q) = no tools/call request for the tool in %d recorded messages, want one", tool, outcome.messages)
+		t.Errorf("tool call %q = no tools/call request for the tool in %d recorded messages, want one", tool, outcome.messages)
 	case !outcome.answered:
-		t.Errorf("AssertToolCallSucceeded(%q) = request recorded without a response, want a response with the same id", tool)
+		t.Errorf("tool call %q = request recorded without a response, want a response with the same id", tool)
 	case outcome.failed:
-		t.Errorf("AssertToolCallSucceeded(%q) = every response to the call carried a JSON-RPC error, want one without", tool)
+		t.Errorf("tool call %q = every response to the call carried a JSON-RPC error, want one without", tool)
 	}
 }
 
@@ -200,11 +256,12 @@ type callKey struct {
 	id  string
 }
 
-// toolCallOutcome reduces recorded traffic to what AssertToolCallSucceeded
-// needs. A response matches a request on relay pid and id; a message that
-// carries a method is a request or notification, never a response, so a
-// server-originated request reusing an id does not count.
-func toolCallOutcome(data []byte, tool string) toolCallResult {
+// requestOutcome reduces recorded traffic to the fate of the requests for
+// method whose params.name is name. A response matches a request on relay
+// pid and id; a message that carries a method is a request or notification,
+// never a response, so a server-originated request reusing an id does not
+// count.
+func requestOutcome(data []byte, method, name string) toolCallResult {
 	var out toolCallResult
 	calls := make(map[callKey]bool)
 	for line := range bytes.SplitSeq(data, []byte("\n")) {
@@ -223,7 +280,7 @@ func toolCallOutcome(data []byte, tool string) toolCallResult {
 
 		key := callKey{pid: rec.PID, id: string(msg.ID)}
 		switch {
-		case rec.Dir == relayToServer && msg.Method == "tools/call" && msg.Params.Name == tool && len(msg.ID) > 0:
+		case rec.Dir == relayToServer && msg.Method == method && msg.Params.Name == name && len(msg.ID) > 0:
 			out.called = true
 			calls[key] = true
 		case rec.Dir == relayToClient && msg.Method == "" && len(msg.ID) > 0 && calls[key]:

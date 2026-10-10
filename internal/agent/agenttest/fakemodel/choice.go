@@ -88,3 +88,18 @@ func singleRequiredString(parameters json.RawMessage) (string, bool) {
 func normalizePropertyName(name string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(name))
 }
+
+// serverTool returns a [ToolChoice] that calls, with no arguments, the first
+// declared tool named name or ending in name after a separator: a runtime
+// prefixes a tool an MCP server serves with that server's name.
+func serverTool(name string) ToolChoice {
+	return func(declared []Tool) (FunctionCall, error) {
+		for _, tool := range declared {
+			prefix, found := strings.CutSuffix(tool.Name, name)
+			if found && (prefix == "" || strings.ContainsAny(prefix[len(prefix)-1:], "_-.:/")) {
+				return FunctionCall{Name: tool.Name, Namespace: tool.Namespace, Arguments: json.RawMessage(`{}`)}, nil
+			}
+		}
+		return FunctionCall{}, fmt.Errorf("no declared tool is named %q or ends in it after a separator", name)
+	}
+}

@@ -104,7 +104,7 @@ jobs:
             install: npm install -g @google/gemini-cli
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
-            clientprotocol_command: "gemini --acp"
+            clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
             clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 const mcpEchoServerScenario = "mcp-echo-server"
@@ -40,7 +41,8 @@ func init() {
 
 type recordingTB struct {
 	testing.TB
-	errors int
+	errors  int
+	skipped bool
 }
 
 func (r *recordingTB) Helper() {}
@@ -48,6 +50,8 @@ func (r *recordingTB) Helper() {}
 func (r *recordingTB) Errorf(string, ...any) { r.errors++ }
 
 func (r *recordingTB) Fatalf(string, ...any) { r.errors++ }
+
+func (r *recordingTB) Skipf(string, ...any) { r.skipped = true }
 
 func writeMCPRecord(t *testing.T, lines ...string) agenttest.RecordingMCPRelay {
 	t.Helper()
@@ -100,6 +104,50 @@ func TestRecordingMCPRelay_AssertToolCallSucceeded(t *testing.T) {
 
 			if failed := rec.errors > 0; failed != tt.wantFail {
 				t.Errorf("AssertToolCallSucceeded(%q) failed = %v, want %v", "sortie_status", failed, tt.wantFail)
+			}
+		})
+	}
+}
+
+func TestRecordingMCPRelay_AssertModelToolCall(t *testing.T) {
+	t.Parallel()
+
+	const (
+		listCall   = `{"pid":10,"dir":"to_server","msg":{"jsonrpc":"2.0","id":2,"method":"tools/list"}}`
+		statusCall = `{"pid":10,"dir":"to_server","msg":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sortie_status"}}}`
+		statusOK   = `{"pid":10,"dir":"to_client","msg":{"jsonrpc":"2.0","id":3,"result":{}}}`
+		statusErr  = `{"pid":10,"dir":"to_client","msg":{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"bad"}}}`
+	)
+	toolEvent := func(name string) []domain.AgentEvent {
+		return []domain.AgentEvent{{Type: domain.EventToolResult, ToolName: name}}
+	}
+
+	tests := []struct {
+		name     string
+		lines    []string
+		events   []domain.AgentEvent
+		wantFail bool
+		wantSkip bool
+	}{
+		{name: "call succeeded", lines: []string{statusCall, statusOK}},
+		{name: "call failed", lines: []string{statusCall, statusErr}, wantFail: true},
+		{name: "call unanswered", lines: []string{statusCall}, wantFail: true},
+		{name: "no call and no attempt", lines: []string{listCall}, events: toolEvent("read"), wantSkip: true},
+		{name: "attempt named for the tool never reached the server", lines: []string{listCall}, events: toolEvent("sortie-tools_sortie_status"), wantFail: true},
+		{name: "attempt under a generic MCP name never reached the server", lines: []string{listCall}, events: toolEvent("mcpToolCall"), wantFail: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			relay := writeMCPRecord(t, tt.lines...)
+			rec := &recordingTB{TB: t}
+
+			relay.AssertModelToolCall(rec, "sortie_status", tt.events, "mcpToolCall")
+
+			if failed := rec.errors > 0; failed != tt.wantFail || rec.skipped != tt.wantSkip {
+				t.Errorf("AssertModelToolCall() failed = %v, skipped = %v, want %v, %v", failed, rec.skipped, tt.wantFail, tt.wantSkip)
 			}
 		})
 	}
