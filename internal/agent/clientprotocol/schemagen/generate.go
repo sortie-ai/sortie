@@ -20,8 +20,8 @@ import (
 // Provenance the generator is pinned to. Changing the pinned release means
 // re-vendoring the assets under testdata/ and updating these two values.
 const (
-	upstreamTag       = "schema-v1.23.0"
-	upstreamCommit    = "6d08f412a7a1370d3cc9a124e3be3d6acf92641e"
+	upstreamTag       = "schema-v1.25.0"
+	upstreamCommit    = "4cf3dd858c819fc3ab99ae53f76883ede0345a10"
 	pinnedWireVersion = 1
 
 	generatorPackagePath = "github.com/sortie-ai/sortie/internal/agent/clientprotocol/schemagen"

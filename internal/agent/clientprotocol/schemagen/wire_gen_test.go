@@ -57,15 +57,15 @@ func TestGenerateMatchesCommittedWireGen(t *testing.T) {
 	t.Parallel()
 
 	dir := callerDir(t)
-	assetsDir := filepath.Join(dir, "..", "testdata", "schema-v1.23.0")
+	assetsDir := filepath.Join(dir, "..", "testdata", "schema-v1.25.0")
 	wireGenPath := filepath.Join(dir, "..", "wire_gen.go")
 
 	got, err := Generate(assetsDir)
 	if err != nil {
 		t.Fatalf("Generate(%q) returned error: %v", assetsDir, err)
 	}
-	if gotCount := bytes.Count(got, []byte("\ntype ")); gotCount != 108 {
-		t.Errorf("Generate(%q) type declaration count = %d, want 108", assetsDir, gotCount)
+	if gotCount := bytes.Count(got, []byte("\ntype ")); gotCount != 116 {
+		t.Errorf("Generate(%q) type declaration count = %d, want 116", assetsDir, gotCount)
 	}
 	for _, continuation := range []string{
 		"type loadSessionRequest ",
