@@ -154,7 +154,7 @@ func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
 	})
 
 	cancel()
-	waitForFile(t, evidencePath)
+	waitForFile(t, evidencePath, awaitTimeout)
 }
 
 func TestStartSessionLocalWorkspaceIsSymlink(t *testing.T) {

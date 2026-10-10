@@ -38,6 +38,12 @@ const teardownParkedOptionSize = 4*1024*1024 + 4096
 // so a reply built from that option still cannot drain through it.
 const teardownReaderBufSize = 65536
 
+// teardownSetupBound bounds the wait for the parked fixture to settle. The
+// fixture first moves a reply of teardownParkedOptionSize through JSON under
+// the race detector, which takes about a second on a fast idle machine and
+// several times that on a loaded CI runner.
+const teardownSetupBound = 60 * time.Second
+
 type parkedTeardownFixture struct {
 	state   *sessionState
 	release func()
@@ -122,7 +128,7 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	go runPump(state)
 	markSessionKnown(state)
 
-	waitForFile(t, readerDonePath)
+	waitForFile(t, readerDonePath, teardownSetupBound)
 
 	release := sync.OnceFunc(func() {
 		// Each helper leads its own process group, so killing only the
@@ -139,9 +145,9 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	return &parkedTeardownFixture{state: state, release: release}
 }
 
-func waitForFile(t *testing.T, path string) {
+func waitForFile(t *testing.T, path string, bound time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(awaitTimeout)
+	deadline := time.Now().Add(bound)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -498,7 +504,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	})
 
 	if readyPath != "" {
-		waitForFile(t, readyPath)
+		waitForFile(t, readyPath, awaitTimeout)
 	}
 
 	return state

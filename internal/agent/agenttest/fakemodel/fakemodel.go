@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,11 +33,13 @@ type Usage struct {
 	CacheWrite    int64 // input tokens written to the provider's prompt cache
 }
 
-// Response is one scripted turn answer: Text when Call is nil, a function
-// call otherwise.
+// Response is one scripted turn answer: Text when Call is nil and Hold is
+// false, a function call when Call is set, and a held request when Hold is
+// true.
 type Response struct {
 	Text  string
 	Call  ToolChoice
+	Hold  bool // keeps the request open and answers nothing until the client disconnects
 	Usage Usage
 }
 
@@ -61,7 +64,6 @@ type ToolChoice func(declared []Tool) (FunctionCall, error)
 // Wire names one model API dialect the server answers.
 type Wire string
 
-// The wires a codec can serve.
 const (
 	WireGenerateContent Wire = "generateContent"
 	WireMessages        Wire = "messages"
@@ -71,7 +73,6 @@ const (
 // ExchangeKind classifies how the server answered one request.
 type ExchangeKind string
 
-// The ways the server answers a request.
 const (
 	ExchangeTurn        ExchangeKind = "turn"        // answered from the script
 	ExchangeAuxiliary   ExchangeKind = "auxiliary"   // answered outside the script
@@ -80,6 +81,7 @@ const (
 	ExchangeUnrouted    ExchangeKind = "unrouted"    // no wire routes the method and path
 	ExchangeUnsupported ExchangeKind = "unsupported" // a routed request in a shape its wire does not answer
 	ExchangeInvalid     ExchangeKind = "invalid"     // encoded body, or a body that is not a JSON object
+	ExchangeHeld        ExchangeKind = "held"        // answered by a held answer; nothing written unless the server released it
 )
 
 // ToolResult is one tool result a model request carries back.
@@ -140,7 +142,6 @@ func (c *FunctionCall) clone() *FunctionCall {
 	return &dup
 }
 
-// maxBodyBytes bounds the request body the server reads.
 const maxBodyBytes = 32 << 20
 
 // auxiliaryUsage is the usage every auxiliary answer reports. Its basis
@@ -150,7 +151,6 @@ const maxBodyBytes = 32 << 20
 // lacks a turn record.
 var auxiliaryUsage = Usage{Prompt: 7, Candidates: 3, Thoughts: 2}
 
-// route is what a codec learns from the method and path of a request.
 type route struct {
 	model     string
 	streaming bool
@@ -162,7 +162,6 @@ type responseSchema struct {
 	properties map[string]string
 }
 
-// decoded is what a codec reads from a request body.
 type decoded struct {
 	model       string
 	streaming   bool
@@ -172,7 +171,6 @@ type decoded struct {
 	unsupported string // "non-streaming answer" or "response schema"; empty when the wire answers the shape
 }
 
-// reply is one answer a codec renders.
 type reply struct {
 	seq       int
 	model     string
@@ -182,7 +180,6 @@ type reply struct {
 	usage     Usage
 }
 
-// rendered is the bytes a codec writes for one reply.
 type rendered struct {
 	contentType string
 	body        []byte
@@ -214,19 +211,27 @@ type Server struct {
 	script []Response
 	http   *httptest.Server
 
-	mu     sync.Mutex
-	served []bool     // guarded by mu
-	log    []Exchange // guarded by mu
+	holdingOnce sync.Once
+	holdingCh   chan struct{} // closed when the first held request is held
+	releaseOnce sync.Once
+	released    chan struct{}
+
+	mu         sync.Mutex
+	served     []bool        // guarded by mu
+	log        []Exchange    // guarded by mu
+	open       map[int]bool  // guarded by mu; Seq of every held request still open
+	holdsMoved chan struct{} // guarded by mu; closed and replaced whenever open changes
 }
 
 // Start serves script on 127.0.0.1 with an OS-assigned port and closes the
 // server through t.Cleanup.
 //
 // Start fails t with Fatalf, naming the first invalid index, unless each
-// entry has exactly one of a non-empty Text and a non-nil Call, no negative
-// count, and CachedContent plus CacheWrite no greater than Prompt. At
-// cleanup it reports every entry no request was served from. It must be
-// called on the test goroutine.
+// entry has exactly one of a non-empty Text, a non-nil Call and a true Hold,
+// no negative count, and CachedContent plus CacheWrite no greater than Prompt.
+// A held entry reports no usage. At cleanup it ends every held request and
+// reports every entry no request was served from. It must be called on the
+// test goroutine.
 func Start(t testing.TB, script []Response) *Server {
 	t.Helper()
 
@@ -244,6 +249,11 @@ func Start(t testing.TB, script []Response) *Server {
 		t:      t,
 		script: slices.Clone(script),
 		served: make([]bool, len(script)),
+
+		holdingCh:  make(chan struct{}),
+		released:   make(chan struct{}),
+		open:       make(map[int]bool),
+		holdsMoved: make(chan struct{}),
 	}
 	s.http = &httptest.Server{
 		Listener: listener,
@@ -257,14 +267,26 @@ func Start(t testing.TB, script []Response) *Server {
 func invalidScriptRule(r Response) string {
 	u := r.Usage
 	switch {
-	case (r.Text != "") == (r.Call != nil):
-		return "must hold exactly one of Text and Call"
+	case !exactlyOne(r.Text != "", r.Call != nil, r.Hold):
+		return "must hold exactly one of Text, Call and Hold"
+	case r.Hold && u != (Usage{}):
+		return "holds a request but reports usage"
 	case min(u.Prompt, u.Candidates, u.Thoughts, u.CachedContent, u.CacheWrite) < 0:
 		return "reports a negative usage count"
 	case u.CachedContent+u.CacheWrite > u.Prompt:
 		return "reports CachedContent plus CacheWrite above Prompt"
 	}
 	return ""
+}
+
+func exactlyOne(flags ...bool) bool {
+	set := 0
+	for _, flag := range flags {
+		if flag {
+			set++
+		}
+	}
+	return set == 1
 }
 
 // URL returns the server's base address, http://127.0.0.1:<port>, with no
@@ -286,7 +308,66 @@ func (s *Server) Exchanges() []Exchange {
 	return out
 }
 
+// holding returns a channel closed once the first request a held answer
+// answers is read in full and held; Exchanges lists that request from then
+// on. It is safe from any goroutine.
+func (s *Server) holding() <-chan struct{} {
+	return s.holdingCh
+}
+
+// release ends every hold, current and later, with the release answer. It is
+// idempotent.
+func (s *Server) release() {
+	s.releaseOnce.Do(func() { close(s.released) })
+}
+
+// awaitHolds returns the held requests still open once all have ended or
+// bound has elapsed.
+func (s *Server) awaitHolds(bound time.Duration) []Exchange {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	for {
+		s.mu.Lock()
+		moved := s.holdsMoved
+		pending := len(s.open)
+		s.mu.Unlock()
+		if pending == 0 {
+			return nil
+		}
+		select {
+		case <-moved:
+		case <-timer.C:
+			return s.openHolds()
+		}
+	}
+}
+
+func (s *Server) openHolds() []Exchange {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var open []Exchange
+	for _, seq := range slices.Sorted(maps.Keys(s.open)) {
+		open = append(open, s.log[seq-1].clone())
+	}
+	return open
+}
+
+func (s *Server) setHold(seq int, open bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if open {
+		s.open[seq] = true
+	} else {
+		delete(s.open, seq)
+	}
+	close(s.holdsMoved)
+	s.holdsMoved = make(chan struct{})
+}
+
 func (s *Server) close() {
+	s.release()
 	s.http.Close()
 
 	s.mu.Lock()
@@ -342,6 +423,10 @@ func (s *Server) claimStep() int {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	ex := s.begin(r)
 	contentType, failure := s.respond(&ex, r)
+	if ex.Kind == ExchangeHeld {
+		s.hold(w, r, ex)
+		return
+	}
 	s.record(ex)
 	if failure != "" {
 		s.t.Errorf("%s", failure)
@@ -357,7 +442,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 // server answers as designed.
 func (s *Server) respond(ex *Exchange, r *http.Request) (contentType, failure string) {
 	ex.Credentials = credentialValues(r.Header, unroutedCredentialHeaders)
-	label := fmt.Sprintf("scripted model: request %d (%s %s)", ex.Seq, ex.Method, ex.Path)
+	label := failureLabel(*ex)
 
 	if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		return failGeneric(ex, http.StatusUnsupportedMediaType, ExchangeInvalid,
@@ -399,6 +484,10 @@ func (s *Server) respond(ex *Exchange, r *http.Request) (contentType, failure st
 	}
 	ex.Step = step
 	entry := s.script[step]
+	if entry.Hold {
+		ex.Kind = ExchangeHeld
+		return "", ""
+	}
 	turn := reply{seq: ex.Seq, model: dec.model, streaming: dec.streaming, text: entry.Text, usage: entry.Usage}
 	if entry.Call != nil {
 		call, err := entry.Call(dec.tools)
@@ -416,6 +505,41 @@ func (s *Server) respond(ex *Exchange, r *http.Request) (contentType, failure st
 }
 
 const jsonContentType = "application/json"
+
+func failureLabel(ex Exchange) string {
+	return fmt.Sprintf("scripted model: request %d (%s %s)", ex.Seq, ex.Method, ex.Path)
+}
+
+// hold keeps a claimed held request open without writing, so the runtime
+// sees a model that has not answered yet. The client's disconnect, noticed
+// through the background read net/http starts once the body is read to EOF,
+// ends the hold with nothing written.
+func (s *Server) hold(w http.ResponseWriter, r *http.Request, ex Exchange) {
+	s.setHold(ex.Seq, true)
+	s.record(ex)
+	s.holdingOnce.Do(func() { close(s.holdingCh) })
+
+	select {
+	case <-r.Context().Done():
+	case <-s.released:
+	}
+	defer s.setHold(ex.Seq, false)
+	// A release wake may race a disconnect that already ended the context, so
+	// a context error decides, and a disconnect is never a failure.
+	if r.Context().Err() != nil {
+		return
+	}
+
+	c, _, _ := findRoute(r.Method, r.URL.Path)
+	text := failureLabel(ex) + " was still held when the server released it"
+	ex.Answer = Answer{Status: http.StatusBadRequest, Text: text, Body: c.errorBody(http.StatusBadRequest, text)}
+	s.record(ex)
+	s.t.Errorf("%s", text)
+
+	w.Header().Set("Content-Type", jsonContentType)
+	w.WriteHeader(ex.Answer.Status)
+	_, _ = w.Write(ex.Answer.Body)
+}
 
 func failGeneric(ex *Exchange, status int, kind ExchangeKind, message string) (contentType, failure string) {
 	envelope := struct {

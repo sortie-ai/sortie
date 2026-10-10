@@ -62,11 +62,6 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 	return a
 }
 
-func mustStartIntegrationSession(t *testing.T, a domain.AgentAdapter) domain.Session {
-	t.Helper()
-	return mustStartIntegrationSessionWith(t, a, integrationConfig())
-}
-
 func mustStartIntegrationSessionWith(t *testing.T, a domain.AgentAdapter, settings map[string]any) domain.Session {
 	t.Helper()
 	return mustStartIntegrationSessionIn(t, a, "", t.TempDir(), settings)
@@ -227,39 +222,6 @@ func TestIntegration_InvalidModelFailure(t *testing.T) {
 	}
 	if !sawModelNotFound {
 		t.Errorf("expected at least one turn_failed event with invalid-model detail, events=%+v", events)
-	}
-}
-
-func TestIntegration_TurnCancellation(t *testing.T) {
-	skipIfNotEnabled(t)
-
-	a := mustNewAdapter(t)
-	session := mustStartIntegrationSession(t, a)
-	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	turnCtx, turnCancel := context.WithCancel(ctx)
-	resultCh := make(chan domain.TurnResult, 1)
-	go func() {
-		result, _ := a.RunTurn(turnCtx, session, domain.RunTurnParams{
-			Prompt:  "Count to 1000 slowly, outputting each number on its own line",
-			OnEvent: func(_ domain.AgentEvent) {},
-		})
-		resultCh <- result
-	}()
-
-	time.Sleep(500 * time.Millisecond)
-	turnCancel()
-
-	select {
-	case result := <-resultCh:
-		if result.ExitReason != domain.EventTurnCancelled {
-			t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
-		}
-	case <-ctx.Done():
-		t.Fatal("RunTurn did not return after context cancel")
 	}
 }
 

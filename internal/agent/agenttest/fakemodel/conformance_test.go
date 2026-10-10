@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -238,6 +239,50 @@ func conformanceExchange(kind ExchangeKind, usage Usage) Exchange {
 	return Exchange{Kind: kind, Answer: Answer{Usage: usage}}
 }
 
+type conformanceInterruptedState struct {
+	run Run
+	in  interruption
+}
+
+type conformanceGoneState struct {
+	run       Run
+	td        teardown
+	remaining map[int]string
+}
+
+const conformanceRuntimePID = 4242
+
+func conformanceCancelledRun() conformanceInterruptedState {
+	return conformanceInterruptedState{
+		run: Run{
+			Environment: Environment{Scenario: ScenarioCancellation},
+			Result:      domain.TurnResult{ExitReason: domain.EventTurnCancelled},
+			Err:         &domain.AgentError{Kind: domain.ErrTurnCancelled},
+		},
+		in: interruption{held: true, interrupted: true, returned: true},
+	}
+}
+
+func conformanceStoppedRun() conformanceInterruptedState {
+	state := conformanceCancelledRun()
+	state.run.Environment.Scenario = ScenarioStop
+	state.in.stopped = true
+	return state
+}
+
+func conformanceGoneRun() conformanceGoneState {
+	return conformanceGoneState{
+		run: Run{
+			Environment: Environment{Scenario: ScenarioStop},
+			Session:     domain.Session{AgentPID: strconv.Itoa(conformanceRuntimePID)},
+		},
+		td:        teardown{snapshot: []int{conformanceRuntimePID, conformanceRuntimePID + 1}},
+		remaining: map[int]string{},
+	}
+}
+
+func (s conformanceGoneState) probe(pid int) string { return s.remaining[pid] }
+
 func TestConformanceTurnUsage(t *testing.T) {
 	t.Parallel()
 
@@ -375,14 +420,18 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 	toolServer := conformanceToolServerRun()
 	exhaustion := conformanceNewExhaustion()
 	streams := []streamFile{{path: "client.log", content: []byte("traffic")}}
+	cancelled, stopped, gone := conformanceCancelledRun(), conformanceStoppedRun(), conformanceGoneRun()
 	got := map[string][]string{
-		"turn outcome":            turnOutcomeViolations(run, 2),
-		"deterministic tool path": toolPathViolations(run, conformanceNonce),
-		"tool server":             toolServerViolations(toolServer, conformanceServerTurn),
-		"exact usage":             usageViolations(run, registry.UsageArrivalTurnEnd),
-		"credential containment":  containmentViolations(run, streams),
-		"script exhaustion":       exhaustionViolations(exhaustion.run, conformanceNonce, false, exhaustion.failures),
-		"refused call":            refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
+		"interrupted turn, cancellation": interruptedTurnViolations(cancelled.run, cancelled.in),
+		"interrupted turn, stop":         interruptedTurnViolations(stopped.run, stopped.in),
+		"runtime gone":                   runtimeGoneViolations(gone.run, gone.probe, gone.td),
+		"turn outcome":                   turnOutcomeViolations(run, 2),
+		"deterministic tool path":        toolPathViolations(run, conformanceNonce),
+		"tool server":                    toolServerViolations(toolServer, conformanceServerTurn),
+		"exact usage":                    usageViolations(run, registry.UsageArrivalTurnEnd),
+		"credential containment":         containmentViolations(run, streams),
+		"script exhaustion":              exhaustionViolations(exhaustion.run, conformanceNonce, false, exhaustion.failures),
+		"refused call":                   refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
 	}
 
 	for property, violations := range got {
@@ -614,6 +663,155 @@ func TestConformancePropertyToolServer(t *testing.T) {
 		conformanceToolServerRun,
 		func(run Run) []string { return toolServerViolations(run, conformanceServerTurn) },
 	)
+}
+
+func TestConformancePropertyInterruptedTurn(t *testing.T) {
+	t.Parallel()
+
+	stopped := func(mutate func(s *conformanceInterruptedState)) func(s *conformanceInterruptedState) {
+		return func(s *conformanceInterruptedState) {
+			*s = conformanceStoppedRun()
+			mutate(s)
+		}
+	}
+	cases := []conformanceCase[conformanceInterruptedState]{
+		{
+			name: "stop ending the turn as failed",
+			mutate: stopped(func(s *conformanceInterruptedState) {
+				s.run.Result.ExitReason = domain.EventTurnFailed
+				s.run.Err = &domain.AgentError{Kind: domain.ErrTurnFailed}
+			}),
+		},
+		{
+			name:   "I-1: the endpoint never held the request",
+			mutate: func(s *conformanceInterruptedState) { s.in.held = false },
+			want:   []string{"held"},
+		},
+		{
+			name: "I-2: RunTurn did not return, so I-3 is not judged",
+			mutate: func(s *conformanceInterruptedState) {
+				s.in.returned = false
+				s.run.Result = domain.TurnResult{}
+				s.run.Err = nil
+			},
+			want: []string{interruptBound.String()},
+		},
+		{
+			name:   "I-3 cancellation: exit reason is turn_failed",
+			mutate: func(s *conformanceInterruptedState) { s.run.Result.ExitReason = domain.EventTurnFailed },
+			want:   []string{"ExitReason"},
+		},
+		{
+			name:   "I-3 cancellation: error is not an agent error",
+			mutate: func(s *conformanceInterruptedState) { s.run.Err = errors.New("canceled") },
+			want:   []string{"canceled"},
+		},
+		{
+			name: "I-3 cancellation: agent error of another kind",
+			mutate: func(s *conformanceInterruptedState) {
+				s.run.Err = &domain.AgentError{Kind: domain.ErrTurnFailed}
+			},
+			want: []string{string(domain.ErrTurnCancelled)},
+		},
+		{
+			name:   "I-3 stop: exit reason is turn_completed",
+			mutate: stopped(func(s *conformanceInterruptedState) { s.run.Result.ExitReason = domain.EventTurnCompleted }),
+			want:   []string{"ExitReason"},
+		},
+		{
+			name:   "I-3 stop: error is not an agent error",
+			mutate: stopped(func(s *conformanceInterruptedState) { s.run.Err = nil }),
+			want:   []string{"AgentError"},
+		},
+		{
+			name:   "I-4: StopSession did not return",
+			mutate: stopped(func(s *conformanceInterruptedState) { s.in.stopped = false }),
+			want:   []string{stopBound.String()},
+		},
+		{
+			name:   "I-4: StopSession returned an error",
+			mutate: stopped(func(s *conformanceInterruptedState) { s.in.stopErr = errors.New("stop refused") }),
+			want:   []string{"stop refused"},
+		},
+	}
+
+	conformanceRunCases(t, "interrupted turn", cases,
+		conformanceCancelledRun,
+		func(s conformanceInterruptedState) []string { return interruptedTurnViolations(s.run, s.in) },
+	)
+}
+
+func TestConformancePropertyRuntimeGone(t *testing.T) {
+	t.Parallel()
+
+	const pid = conformanceRuntimePID
+	cases := []conformanceCase[conformanceGoneState]{
+		{
+			name: "pid reported only by an event",
+			mutate: func(s *conformanceGoneState) {
+				s.run.Session.AgentPID = ""
+				s.run.Events = []domain.AgentEvent{{Type: domain.EventSessionStarted, AgentPID: strconv.Itoa(pid)}}
+			},
+		},
+		{
+			name:   "R-1: no process id reported",
+			mutate: func(s *conformanceGoneState) { s.run.Session.AgentPID = "" },
+			want:   []string{"AgentPID"},
+		},
+		{
+			name:   "R-3: reported process still answers, and so does its snapshot entry",
+			mutate: func(s *conformanceGoneState) { s.remaining[pid] = "process 4242" },
+			want:   []string{"reported process 4242", "4242"},
+		},
+		{
+			name: "R-4: a request is still held",
+			mutate: func(s *conformanceGoneState) {
+				s.td.stillHeld = []Exchange{{Seq: 1, Method: "POST", Path: "/v1/messages", Kind: ExchangeHeld}}
+			},
+			want: []string{"request 1 (POST /v1/messages)"},
+			also: []string{holdEndBound.String()},
+		},
+		{
+			name:   "R-5: reported process missing from the snapshot",
+			mutate: func(s *conformanceGoneState) { s.td.snapshot = []int{pid + 1} },
+			want:   []string{strconv.Itoa(pid)},
+		},
+		{
+			name:   "R-5: a snapshot process outside the reported ones still answers",
+			mutate: func(s *conformanceGoneState) { s.remaining[pid+1] = "process 4243" },
+			want:   []string{strconv.Itoa(pid + 1)},
+		},
+	}
+
+	conformanceRunCases(t, "runtime gone", cases,
+		conformanceGoneRun,
+		func(s conformanceGoneState) []string { return runtimeGoneViolations(s.run, s.probe, s.td) },
+	)
+}
+
+func TestConformanceRuntimeGoneNeverProbesAnIdBelowTwo(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"0", "1", "-7", "abc"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+
+			state := conformanceGoneRun()
+			state.run.Session.AgentPID = raw
+			var probed []int
+			probe := func(pid int) string {
+				probed = append(probed, pid)
+				return ""
+			}
+
+			got := runtimeGoneViolations(state.run, probe, teardown{})
+
+			conformanceAssertViolations(t, "runtime gone", got, []string{raw}, nil)
+			if len(probed) != 0 {
+				t.Errorf("runtimeGoneViolations(AgentPID %q) probed %v, want no probe", raw, probed)
+			}
+		})
+	}
 }
 
 func TestConformancePropertyRefusedCall(t *testing.T) {

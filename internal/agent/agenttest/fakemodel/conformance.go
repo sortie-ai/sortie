@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -41,6 +42,14 @@ const (
 	// ScenarioToolServer scripts a preamble read, the server call and a
 	// closing answer, with the Sortie MCP server delivered.
 	ScenarioToolServer
+
+	// ScenarioCancellation scripts one held answer; the driver cancels the
+	// turn's context once the endpoint holds the request.
+	ScenarioCancellation
+
+	// ScenarioStop scripts one held answer; the driver stops the session
+	// once the endpoint holds the request.
+	ScenarioStop
 )
 
 // Binding is one agent kind's fixture for [AssertConformance]: how to reach
@@ -116,7 +125,35 @@ const (
 	stopBound             = 30 * time.Second
 	toolsListedBound      = 30 * time.Second
 	toolsRegisteredSettle = 2500 * time.Millisecond
+
+	// interruptBound, from an interrupt until RunTurn returns, sits above the
+	// 30 s a persistent kind may wait for an unanswered interrupt at the
+	// bindings' read timeout and above the 15 s a fork-per-turn teardown
+	// takes at its defaults, and below the 60 s floor of every wait that ends
+	// only on a model answer, so inside it only the interrupt can end a held
+	// turn.
+	interruptBound = 45 * time.Second
+
+	// holdEndBound, from StopSession's return, covers a model connection and a
+	// process outside the session's process group, which close and exit a
+	// moment after the runtime's own process.
+	holdEndBound = 5 * time.Second
+
+	livenessPoll = 25 * time.Millisecond
 )
+
+type interruption struct {
+	held        bool // holding closed while RunTurn still ran
+	interrupted bool // the interrupt was issued while RunTurn still ran
+	returned    bool // RunTurn returned within interruptBound of the interrupt
+	stopped     bool // ScenarioStop: StopSession returned within its wait
+	stopErr     error
+}
+
+type teardown struct {
+	snapshot  []int // agenttest.LiveDescendants(os.Getpid()) once holding closed, before the interrupt
+	stillHeld []Exchange
+}
 
 // sortieStatusTurn is the turn number the scripted session's state file
 // records, so only a sortie_status result can carry it back to the model.
@@ -134,7 +171,9 @@ const serverCallStep = 1
 // sortie_status call succeeds through the relay identity the MCP configuration
 // declares, and, when b.PermissionRefusal is set, a refused call reaches the
 // model as one errored tool result with the notice and without the file's
-// content.
+// content. A turn interrupted while the endpoint holds its model request ends
+// within a bound, and once the session's stop returns every process the
+// session reported is gone.
 //
 // It sets environment variables for the rest of the test, so it must not be
 // called from a test that uses t.Parallel.
@@ -148,6 +187,8 @@ func AssertConformance(t *testing.T, b Binding) {
 	if b.PermissionRefusal != nil {
 		t.Run("permission refusal", func(t *testing.T) { runPermissionRefusal(t, b) })
 	}
+	t.Run("turn cancellation", func(t *testing.T) { runInterruption(t, b, ScenarioCancellation) })
+	t.Run("session stop", func(t *testing.T) { runInterruption(t, b, ScenarioStop) })
 }
 
 func requireValidBinding(t *testing.T, b Binding) {
@@ -283,7 +324,14 @@ type drive struct {
 	prompt        string
 }
 
-func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedOut bool) {
+type preparedSession struct {
+	environment Environment
+	launch      Launch
+	events      *eventCollector
+	adapter     domain.AgentAdapter
+}
+
+func prepareSession(t *testing.T, b Binding, d drive) preparedSession {
 	t.Helper()
 
 	home := t.TempDir()
@@ -299,7 +347,7 @@ func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedO
 		Sentinel:  sentinel,
 		Events:    events.snapshot,
 	}
-	launch = b.Launch(t, environment)
+	launch := b.Launch(t, environment)
 	for _, key := range slices.Sorted(maps.Keys(launch.Env)) {
 		t.Setenv(key, launch.Env[key])
 	}
@@ -312,12 +360,20 @@ func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedO
 	if err != nil {
 		t.Fatalf("construct %q adapter error = %v", b.Kind, err)
 	}
+	return preparedSession{environment: environment, launch: launch, events: events, adapter: adapter}
+}
+
+func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedOut bool) {
+	t.Helper()
+
+	p := prepareSession(t, b, d)
+	adapter, events := p.adapter, p.events
 
 	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
 	defer cancel()
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: d.workspace,
-		AgentConfig:   launch.Config,
+		AgentConfig:   p.launch.Config,
 		MCPConfigPath: d.mcpConfigPath,
 		Settings:      d.settings,
 	})
@@ -337,14 +393,14 @@ func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedO
 	}
 
 	run = Run{
-		Environment: environment,
+		Environment: p.environment,
 		Session:     session,
 		Result:      result,
 		Err:         runErr,
 		Events:      events.snapshot(),
 		Exchanges:   d.server.Exchanges(),
 	}
-	return run, launch, timedOut
+	return run, p.launch, timedOut
 }
 
 func runPermissionRefusal(t *testing.T, b Binding) {
@@ -383,6 +439,165 @@ func runPermissionRefusal(t *testing.T, b Binding) {
 	})
 	if b.Inspect != nil {
 		t.Run("adapter", func(t *testing.T) { b.Inspect(t, run) })
+	}
+}
+
+type turnOutcome struct {
+	result domain.TurnResult
+	err    error
+}
+
+// runInterruption interrupts a turn the endpoint holds, so the interrupt
+// lands on a runtime provably waiting on the model rather than on one a fixed
+// delay happens to catch mid-turn.
+func runInterruption(t *testing.T, b Binding, scenario Scenario) {
+	t.Helper()
+
+	workspace := newWorkspace(t)
+	server := Start(t, []Response{{Hold: true}})
+	d := drive{
+		scenario:  scenario,
+		server:    server,
+		workspace: workspace,
+		settings:  b.Passthrough,
+		prompt:    "Reply with the word ready.",
+	}
+	p := prepareSession(t, b, d)
+
+	startCtx, startCancel := context.WithTimeout(context.Background(), turnBound)
+	defer startCancel()
+	session, err := p.adapter.StartSession(startCtx, domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   p.launch.Config,
+		Settings:      d.settings,
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(server.Exchanges()))
+	}
+
+	turnCtx, cancelTurn := context.WithTimeout(context.Background(), turnBound)
+	defer cancelTurn()
+	outcome := make(chan turnOutcome, 1)
+	go func() {
+		result, runErr := p.adapter.RunTurn(turnCtx, session, domain.RunTurnParams{
+			Prompt:  d.prompt,
+			OnEvent: p.events.collect,
+		})
+		outcome <- turnOutcome{result: result, err: runErr}
+	}()
+	stopSession := func() error {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), stopBound)
+		defer stopCancel()
+		return p.adapter.StopSession(stopCtx, session)
+	}
+
+	var (
+		in    interruption
+		td    teardown
+		turn  turnOutcome
+		ended bool
+	)
+	turnTimer := time.NewTimer(turnBound)
+	defer turnTimer.Stop()
+	select {
+	case <-server.holding():
+		in.held = true
+		td.snapshot = agenttest.LiveDescendants(os.Getpid())
+	case turn = <-outcome:
+		ended = true
+	case <-turnTimer.C:
+	}
+	if !ended {
+		select {
+		case turn = <-outcome:
+			ended = true
+		default:
+		}
+	}
+
+	stopIssued := false
+	stopped := make(chan error, 1)
+	if ended {
+		in.returned = true
+	} else {
+		in.interrupted = true
+		if scenario == ScenarioStop {
+			stopIssued = true
+			go func() { stopped <- stopSession() }()
+		} else {
+			cancelTurn()
+		}
+		turn, in.returned = receiveWithin(outcome, interruptBound)
+		if !in.returned {
+			server.release()
+			cancelTurn()
+			turn, _ = receiveWithin(outcome, interruptBound)
+		}
+	}
+
+	if stopIssued {
+		in.stopErr, in.stopped = receiveWithin(stopped, stopBound)
+	} else {
+		stopErr := stopSession()
+		if stopErr != nil {
+			t.Logf("StopSession() error = %v", stopErr)
+		}
+		if scenario == ScenarioStop {
+			in.stopped, in.stopErr = true, stopErr
+		}
+	}
+
+	deadline := time.Now().Add(holdEndBound)
+	td.stillHeld = server.awaitHolds(holdEndBound)
+	if livenessChecked {
+		awaitGone(td.snapshot, remainingRuntime, deadline)
+	}
+
+	run := Run{
+		Environment: p.environment,
+		Session:     session,
+		Result:      turn.result,
+		Err:         turn.err,
+		Events:      p.events.snapshot(),
+		Exchanges:   server.Exchanges(),
+	}
+	t.Run("interrupted turn", func(t *testing.T) {
+		reportViolations(t, interruptedTurnViolations(run, in))
+	})
+	t.Run("runtime gone", func(t *testing.T) {
+		if !livenessChecked {
+			t.Skip("this platform has no process liveness probe")
+		}
+		reportViolations(t, runtimeGoneViolations(run, remainingRuntime, td))
+	})
+	if b.Inspect != nil {
+		t.Run("adapter", func(t *testing.T) { b.Inspect(t, run) })
+	}
+}
+
+func receiveWithin[T any](ch <-chan T, bound time.Duration) (T, bool) {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case value := <-ch:
+		return value, true
+	case <-timer.C:
+		var zero T
+		return zero, false
+	}
+}
+
+func awaitGone(pids []int, remaining func(pid int) string, deadline time.Time) {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	ticker := time.NewTicker(livenessPoll)
+	defer ticker.Stop()
+	for slices.ContainsFunc(pids, func(pid int) bool { return remaining(pid) != "" }) {
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			return
+		}
 	}
 }
 
@@ -980,4 +1195,98 @@ func lastEventOfType(events []domain.AgentEvent, eventType domain.AgentEventType
 		}
 	}
 	return domain.AgentEvent{}, false
+}
+
+func interruptedTurnViolations(run Run, in interruption) []string {
+	v := &findings{property: "interrupted turn"}
+	scenario := run.Environment.Scenario
+
+	if !in.held {
+		v.add("the endpoint held no model request while RunTurn ran, so the interrupt did not land on a turn waiting on the model")
+	}
+	if in.interrupted && !in.returned {
+		v.add("RunTurn did not return within %s of the interrupt", interruptBound)
+	}
+	if !in.interrupted || in.returned {
+		var agentErr *domain.AgentError
+		isAgentErr := errors.As(run.Err, &agentErr)
+		switch scenario {
+		case ScenarioCancellation:
+			if run.Result.ExitReason != domain.EventTurnCancelled {
+				v.add("ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnCancelled)
+			}
+			if !isAgentErr || agentErr.Kind != domain.ErrTurnCancelled {
+				v.add("RunTurn returned error %v, want a *domain.AgentError of kind %q", run.Err, domain.ErrTurnCancelled)
+			}
+		case ScenarioStop:
+			if run.Result.ExitReason != domain.EventTurnCancelled && run.Result.ExitReason != domain.EventTurnFailed {
+				v.add("ExitReason = %q, want %q or %q", run.Result.ExitReason, domain.EventTurnCancelled, domain.EventTurnFailed)
+			}
+			if !isAgentErr {
+				v.add("RunTurn returned error %v, want a *domain.AgentError", run.Err)
+			}
+		}
+	}
+	if scenario == ScenarioStop {
+		switch {
+		case !in.stopped:
+			v.add("StopSession did not return within %s", stopBound)
+		case in.stopErr != nil:
+			v.add("StopSession returned error %v, want nil", in.stopErr)
+		}
+	}
+	return v.items
+}
+
+func runtimeGoneViolations(run Run, remaining func(pid int) string, td teardown) []string {
+	v := &findings{property: "runtime gone"}
+
+	reported := reportedProcessIDs(run)
+	if len(reported) == 0 {
+		v.add("neither Session.AgentPID nor any event's AgentPID names a process")
+	}
+	var pids []int
+	for _, raw := range reported {
+		pid, err := strconv.Atoi(raw)
+		if err != nil || pid <= 1 {
+			v.add("reported process id %q is not an integer above 1, so it was not probed", raw)
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	for _, pid := range pids {
+		if left := remaining(pid); left != "" {
+			v.add("%s of reported process %d still answers after StopSession returned", left, pid)
+		}
+	}
+	for _, ex := range td.stillHeld {
+		v.add("%s was still held %s after StopSession returned", requestLabel(ex), holdEndBound)
+	}
+	for _, pid := range pids {
+		if !slices.Contains(td.snapshot, pid) {
+			v.add("reported process %d is not among the processes alive while the request was held", pid)
+		}
+	}
+	for _, pid := range td.snapshot {
+		if left := remaining(pid); left != "" {
+			v.add("%s of process %d, alive while the request was held, still answers %s after StopSession returned", left, pid, holdEndBound)
+		}
+	}
+	return v.items
+}
+
+// reportedProcessIDs lists each distinct non-empty process id the session and
+// its delivered events name, in first-seen order.
+func reportedProcessIDs(run Run) []string {
+	var ids []string
+	add := func(id string) {
+		if id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	add(run.Session.AgentPID)
+	for _, event := range run.Events {
+		add(event.AgentPID)
+	}
+	return ids
 }

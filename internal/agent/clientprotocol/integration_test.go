@@ -238,8 +238,6 @@ func gitInitWorkspace(t *testing.T) string {
 	return dir
 }
 
-// mustNewClientProtocolAdapter constructs a *ClientProtocolAdapter or
-// fails the test immediately.
 func mustNewClientProtocolAdapter(t *testing.T) *ClientProtocolAdapter {
 	t.Helper()
 	a, err := NewClientProtocolAdapter()
@@ -287,8 +285,6 @@ func makeEventCollector(t *testing.T) (onEvent func(domain.AgentEvent), collecte
 	return onEvent, collected
 }
 
-// assertContainsEventType fails t when no event in events has the
-// given type.
 func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
 	t.Helper()
 	for _, e := range events {
@@ -303,8 +299,6 @@ func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType
 	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
 }
 
-// TestIntegration_StartSession verifies that StartSession returns a
-// populated Session with a non-empty session id and process PID.
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
@@ -576,7 +570,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			command := os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")
 			expect := expectScriptedToolTurn
 			switch env.Scenario {
-			case fakemodel.ScenarioExhaustion:
+			case fakemodel.ScenarioExhaustion, fakemodel.ScenarioCancellation, fakemodel.ScenarioStop:
 				expect = expectHandshakeOnly
 			case fakemodel.ScenarioPermissionRefusal:
 				command = askingCommand

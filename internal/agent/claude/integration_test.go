@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -162,64 +161,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			}
 		},
 	})
-}
-
-func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
-	skipUnlessIntegration(t)
-
-	adapter, err := NewClaudeCodeAdapter()
-	if err != nil {
-		t.Fatalf("NewClaudeCodeAdapter: %v", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(workspace+"/dummy.txt", []byte("test"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		Settings:      singleTurnIntegrationConfig(t),
-		WorkspacePath: workspace,
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	var mu sync.Mutex
-	var events []domain.AgentEvent
-	onEvent := func(e domain.AgentEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
-	}
-
-	// Two seconds outlasts subprocess startup but not a Claude API round
-	// trip, so the context always expires mid-turn.
-	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	prompt := "Use the Bash tool to execute the command 'sleep 15'. Do nothing else."
-
-	result, err := adapter.RunTurn(shortCtx, session, domain.RunTurnParams{
-		Prompt:  prompt,
-		OnEvent: onEvent,
-	})
-	if err == nil {
-		t.Fatal("expected error from cancelled RunTurn, got nil")
-	}
-
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("error type = %T, want *domain.AgentError", err)
-	}
-	if agentErr.Kind != domain.ErrTurnCancelled {
-		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnCancelled)
-	}
-	if result.ExitReason != domain.EventTurnCancelled {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
-	}
 }
 
 func TestIntegration_SessionResume(t *testing.T) {

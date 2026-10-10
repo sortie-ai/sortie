@@ -652,6 +652,9 @@ func TestStartInvalidScript(t *testing.T) {
 	}{
 		{"text and call", []fakemodel.Response{{Text: "ok", Call: choice}}, 0},
 		{"neither text nor call", []fakemodel.Response{{}}, 0},
+		{"hold and text", []fakemodel.Response{{Hold: true, Text: "ok"}}, 0},
+		{"hold and call", []fakemodel.Response{{Hold: true, Call: choice}}, 0},
+		{"hold with usage", []fakemodel.Response{{Hold: true, Usage: fakemodel.Usage{Prompt: 1}}}, 0},
 		{"negative Prompt", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: -1}}}, 0},
 		{"negative Candidates", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, Candidates: -1}}}, 0},
 		{"negative Thoughts", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, Thoughts: -1}}}, 0},
@@ -692,6 +695,7 @@ func TestStartAcceptsBoundaryScripts(t *testing.T) {
 		{"cache equal to Prompt", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, CachedContent: 6, CacheWrite: 4}}}},
 		{"zero usage", []fakemodel.Response{{Text: "ok"}}},
 		{"call entry", []fakemodel.Response{{Call: fakemodel.ReadFile("/workspace/nonce.txt")}}},
+		{"held answer", []fakemodel.Response{{Hold: true}}},
 	}
 
 	for _, tt := range tests {
