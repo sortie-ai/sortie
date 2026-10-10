@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/gitlab`: the design decisions behind it, the places GitLab's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-08-23
+Last updated: 2026-10-10
 
 ## Shape of the package
 
@@ -90,9 +90,9 @@ The mitigation is normative and lives at construction: **resolve the canonical s
 
 **An update the token may not make still answers 200.** A token without the permission to edit an issue's labels gets a successful response from the update route, with the labels unchanged. The status therefore proves nothing, so both label writes read the label list from the response and treat a list that contradicts the write as `tracker_payload_error`. The response carries the full list, so no second read follows an accepted write.
 
-**`remove_labels` matches names exactly.** A stored `Sortie:Review` is not removed by `sortie:review`, and a project holding both spellings needs both named. Removal reads the issue's labels, selects every spelling that names the requested label regardless of letter case, and sends them together in one `remove_labels` update. The merge request label command uses the same constructor and the merge request route, and trims its label first, as it always did.
+**`remove_labels` matches names exactly.** A stored `Sortie:Review` is not removed by `sortie:review`, and a project holding both spellings needs both named. Removal reads the issue's labels, selects every spelling that names the requested label regardless of letter case, and sends them together in one `remove_labels` update. The merge request label command uses the same constructor on the merge request route, and trims its label first.
 
-**A label with only white space is refused.** The add trims the label before it looks up the stored casing, so a label with surrounding white space attaches its trimmed spelling and then fails the confirmation, which compares the label as given. A label with nothing but white space returns `tracker_payload_error` with no request, where the add used to log a warning and report success.
+**A label with only white space is refused.** The add trims the label before it looks up the stored casing, so a label with surrounding white space attaches its trimmed spelling and then fails the confirmation, which compares the label as given. A label with nothing but white space returns `tracker_payload_error` without sending a request.
 
 ## Blockers are structurally unavailable on the floor
 
@@ -230,7 +230,11 @@ The pipeline scope on that route is load-bearing rather than defensive: a commit
 
 **A commit-status entry is not always a job.** Jobs and external statuses share one identifier space, so the status list mixes entries whose id works on the job-log route with entries whose id does not, and nothing in the entry's own fields separates them. Resolve the real job set from the pipeline's jobs route and select only from entries appearing there, rather than calling the log route speculatively and reading a not-found as a negative. When the first failing entry is an external status, leave the log excerpt empty rather than fabricating one.
 
-**The job log is not plain text.** Every line carries three layers of markup: a high-precision timestamp, a stream token marking stdout or stderr and line continuation, and ANSI escape sequences plus collapsible-section markers with literal control bytes. Handing that to an agent puts terminal control bytes into a prompt. Strip all three layers, not only the ANSI one. The route also supports no partial fetch, so the trace is streamed up to the read ceiling and the excerpt is anchored on the stage in which the job stopped, not on the end of the trace. The section markers are the stage boundaries, so read them before stripping them: the last runner stage that started before the first post-script stage (`after_script`, the cache and artifact uploads, cleanup) is the anchor, and sections the job's own script writes never are. A failing `after_script` under `AFTER_SCRIPT_IGNORE_ERRORS: "false"` is not located as the failing stage; the excerpt covers the script stage that succeeded.
+**The job log is not plain text.** Every line carries three layers of markup: a high-precision timestamp, a stream token marking stdout or stderr and line continuation, and ANSI escape sequences plus collapsible-section markers with literal control bytes. Handing that to an agent puts terminal control bytes into a prompt. Strip all three layers, not only the ANSI one.
+
+The route supports no partial fetch, so the trace is streamed up to the read ceiling. The excerpt is anchored on the stage in which the job stopped, not on the end of the trace. The section markers are the stage boundaries, so read them before stripping them. The anchor is the last runner stage that started before the first post-script stage (`after_script`, the cache and artifact uploads, cleanup); sections the job's own script writes are never the anchor.
+
+A failing `after_script` under `AFTER_SCRIPT_IGNORE_ERRORS: "false"` is not located as the failing stage; the excerpt covers the script stage that succeeded.
 
 ## The merge call
 

@@ -2,7 +2,7 @@
 
 Notes for a developer changing Sortie's Jira tracker adapter: the decisions it encodes, the places Jira's model does not line up with ours, and the failure modes worth recognizing before you spend a day rediscovering one.
 
-Last updated: 2026-08-23
+Last updated: 2026-10-10
 
 ## One adapter, two products
 
@@ -62,7 +62,11 @@ On Server the same fields are plain strings carrying wiki markup, passed through
 
 Comment creation mirrors the split. On Cloud the text is split on newlines into one paragraph node per line, because a single node with embedded newlines does not render as line breaks.
 
-A comment that carries agent text keeps the split and ends in a literal block. On Cloud the paragraph nodes for Sortie's text are followed by one `codeBlock` node holding one text node with the whole literal, newlines included. On Server the body is the text, two line feeds, `{noformat}`, a line feed, the literal, a line feed, and `{noformat}`. The closing marker is matched without regard to letter case, so the adapter inserts U+200B after every `{` that starts the word `noformat` in the literal, which keeps the literal from ending the block early. Server also parses `[~user]` mentions inside a `{noformat}` block, so the adapter inserts U+200B after every `[` followed by `~` as well, which keeps the text as written but notifies nobody. Server rendering is covered by a request-body test only: whether the renderer closes on a case-insensitive match is unchecked, and the integration suite cannot post a version 2 comment because it refuses a Cloud host.
+A comment that carries agent text keeps the split and ends in a literal block. On Cloud the paragraph nodes for Sortie's text are followed by one `codeBlock` node holding one text node with the whole literal, newlines included.
+
+On Server the body is the text, two line feeds, `{noformat}`, a line feed, the literal, a line feed, and `{noformat}`. The closing marker is matched without regard to letter case, so the adapter inserts U+200B after every `{` that starts the word `noformat` in the literal; otherwise the literal could end the block early. Server also parses `[~user]` mentions inside a `{noformat}` block, so the adapter inserts U+200B after every `[` followed by `~`. The text stays as written but notifies nobody.
+
+Server rendering is covered by a request-body test only. Whether the renderer closes on a case-insensitive match is unchecked, and the integration suite cannot post a version 2 comment because it refuses a Cloud host.
 
 ## Label writes
 

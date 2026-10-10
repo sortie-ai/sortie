@@ -1,12 +1,12 @@
 # Copilot CLI adapter notes
 
-Working notes for anyone changing Sortie's GitHub Copilot CLI adapter in `internal/agent/copilot`: the decisions behind it, where its session and cost model collide with ours, and the failures that are hard to diagnose from a log.
+Working notes for anyone changing Sortie's GitHub Copilot CLI adapter in `internal/agent/copilot`.
 
-Last updated: 2026-09-11
+Last updated: 2026-10-10
 
 ## Where to get the volatile facts
 
-Nothing here pins a flag list, an event vocabulary, or a payload shape. Read the argument surface off `copilot --help` on the version you are targeting, and take the headless output format, permission flags, hooks, and telemetry from GitHub's published Copilot CLI reference. Context7 and the upstream issue tracker are the places to check when the rendered docs and the shipped binary disagree, which they periodically do. What Sortie actually sends and parses is defined by `buildArgs` and `parse.go`, and those are authoritative over any prose.
+Nothing here pins a flag list, an event vocabulary, or a payload shape. Read the flags off `copilot --help` on the version you target, and the output format, permission flags, hooks, and telemetry from GitHub's Copilot CLI reference. Check the upstream issue tracker when the docs and the binary disagree. `buildArgs` and `parse.go` define what Sortie actually sends and parses.
 
 ## Shape of the integration
 
@@ -16,13 +16,15 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 ## Session identity, and why turn one is different
 
-The CLI does accept a caller-assigned session ID (measured, `--session-id`, 1.0.51 and later): `StartSession` mints a v4 UUID with `crypto/rand` for every session it creates, before any turn runs, and returns it as the session's own `domain.Session.ID`. The first turn of a session this run created carries `--session-id <uuid>`, and every later turn carries `--resume <uuid>`. No launch ever carries `--continue`: measured across two directories, that flag resumes the home's most recent session, whichever directory created it, which risked continuing another issue's conversation or a credential-verification session's own. A session the orchestrator hands back after a restart resumes immediately with `--resume <uuid>` from the first turn.
+`StartSession` mints a v4 UUID for every new session before any turn runs and returns it as `domain.Session.ID`. The first turn passes `--session-id <uuid>`, and every later turn passes `--resume <uuid>`. A session handed back after a restart uses `--resume <uuid>` from its first turn.
+
+No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
 The adapter opens the runtime's session-state tree only by a known ID, and it validates that ID against a path-segment character set before joining it into a path. Both properties are security boundaries, not stylistic choices.
 
 ## Preflight, and the fake-binary trap
 
-`StartSession` runs a version canary before it will hand back a session, local-mode only; it checks that the binary runs under Node.js 22 or later and nothing else. The credential itself is proven separately: before the working session's first turn, a shared step (`internal/agent/agentcore`) starts a verification session and sends one fixed request. This CLI states a refused or absent credential only on standard error with a failing exit, so the step reports it with the shared early-exit report carrying that message, before any working turn runs; a stored `gh` login now passes it, which the version canary alone could never confirm.
+`StartSession` runs a version canary before it will hand back a session, local-mode only; it checks that the binary runs under Node.js 22 or later and nothing else. The credential itself is proven separately: before the working session's first turn, a shared step (`internal/agent/agentcore`) starts a verification session and sends one fixed request. This CLI reports a refused or absent credential only on stderr with a failing exit, so the step reports it as the shared early-exit report carrying that message. A stored `gh` login passes the step.
 
 This is the thing that ruins an afternoon when writing tests. A stand-in binary that exits zero and prints something unparseable never reaches a turn, because the version canary rejected it first, and the failure surfaces as an agent-not-found error that looks nothing like a parse problem. In SSH mode the canary is skipped, so a broken remote binary instead fails later, at the credential-verification step or the first turn, with a different error kind. Know which mode your test is in.
 
@@ -48,9 +50,13 @@ A denial is recognized on the tool-completion event by its error code, distinct 
 
 ## Deciding how a turn ended
 
-The runtime's own task-completion report is the turn's outcome, not the terminal event's exit code alone: a non-zero exit still decides a failure, and on a zero exit the report's absence, once the terminal event proves the stream ran to its end, is the autopilot continuation ceiling's ending rather than a success. That absence is meaningful only once the terminal event has arrived; without one, the decision falls to the process exit and to work evidence instead. The CLI publishes no stop reason of its own, and its session-state journal writes the same routine shutdown word whether the session finished or was cut off at the ceiling, so the task-completion report is the only signal that distinguishes the two. The shared `agentcore.FinalizeTurn` owns the mapping from that evidence to a disposition. On a non-zero exit the failure reason is the turn's last `session.error` message, and `non-zero exit in result event` only when none arrived.
+The runtime's task-completion report decides the turn, not the exit code alone. A non-zero exit is a failure. On a zero exit with a terminal event but no task-completion report, the turn hit the autopilot continuation ceiling; it did not succeed. Without a terminal event, the decision falls to the process exit and work evidence.
 
-Work evidence comes from the shared per-turn observer, never a token count: it records assistant-authored content (`assistant.message`'s non-empty `data.content`, any `assistant.message_delta`) and tool-call activity (`assistant.message`'s non-empty `data.toolRequests`, a parsed `tool.execution_start` or `tool.execution_complete`). Get that wrong and the safety row that turns "exited cleanly, produced nothing" into a failure stops firing for the rest of the run. That row exists because this CLI has more than one way to exit zero having done nothing at all. A zero exit that wrote no line the decoder decodes as an event, such as on a configuration file it could not parse, is the early-exit report rather than the zero-work row; the zero-work row is reached only once at least one such line arrived but no terminal event followed it, since a stream that reaches its terminal event is decided by the exit code and the task-completion report instead.
+The CLI publishes no stop reason, and its journal writes the same shutdown word for a finished session and for one cut off at the ceiling. The task-completion report is the only signal that separates them. `agentcore.FinalizeTurn` maps the evidence to a disposition. On a non-zero exit the failure reason is the turn's last `session.error` message, or `non-zero exit in result event` when none arrived.
+
+Work evidence comes from the shared per-turn observer, never a token count: it records assistant-authored content (`assistant.message`'s non-empty `data.content`, any `assistant.message_delta`) and tool-call activity (`assistant.message`'s non-empty `data.toolRequests`, a parsed `tool.execution_start` or `tool.execution_complete`). Get that wrong and the safety row that turns "exited cleanly, produced nothing" into a failure stops firing for the rest of the run. This CLI has more than one way to exit zero having done nothing.
+
+A zero exit that wrote no decodable event line, for example after a configuration file it could not parse, gets the early-exit report. The zero-work row applies only when at least one event line arrived and no terminal event followed.
 
 The adapter enforces no read deadline and no turn deadline of its own; both are orchestrator-side. Combined with the disabled ask-the-user tool, that makes the response-timeout and input-required outcomes unreachable here by construction.
 
@@ -72,6 +78,9 @@ Session state accumulates under the user's home directory, outside the workspace
 
 ## Verifying a change
 
-Unit tests cover argument construction, event parsing, journal reading, and disposition. The tests that drive the real binary are env-gated on `SORTIE_COPILOT_TEST=1` and skip cleanly without it; keep them skipping cleanly rather than failing. `SORTIE_COPILOT_COMMAND` points at a specific binary and `SORTIE_COPILOT_MODEL` overrides the model. The gated suite's working case needs a real credential in the environment: one of the token variables the CLI accepts, or an authenticated `gh`; `SORTIE_COPILOT_CREDENTIAL_ENV` names the variables its refused-credential case overrides, and its absence skips only that one case, cleanly, with a logged reason, and accepts either `credential_unverified` or the early-exit report as the outcome. The same suite appends an unknown switch to the configured command on a verification request and on a working session, asserting both end with the early-exit report, skipping with a logged reason if the real binary ever accepts that switch.
+The live tests in `integration_test.go` are gated on `SORTIE_COPILOT_TEST=1` and skip cleanly without it. The other `SORTIE_COPILOT_*` variables they read are described in that file. Traps:
 
-`TestIntegration_ScriptedModel` runs under the same gate, needs no credential and spends nothing. It launches the binary against a loopback endpoint that answers from a fixed script, using the CLI's own-provider settings: `COPILOT_PROVIDER_BASE_URL` points at the endpoint, `COPILOT_PROVIDER_TYPE` selects the messages wire, and `COPILOT_OFFLINE` turns off GitHub authentication, telemetry and update traffic. Every credential variable the kind declares, and the provider key variable, carries a sentinel value. The script ends with a call to the `task_complete` tool, because in autopilot the runtime keeps prompting until the model calls it, and a plain text finish draws a further request that the script does not hold. The case asserts that the turn ends completed, the reported usage equals everything the endpoint served field by field, the scripted read reaches one normalized tool result carrying the file's content, the scripted `sortie_status` call reaches the Sortie tool server named in the session's generated MCP config (the recorded traffic shows the call answered without a JSON-RPC error) and returns the session state to the endpoint, the sentinel appears only in a credential header, and a request beyond the script ends the turn failed with the endpoint's message. It isolates `HOME` and the XDG base directories and points `COPILOT_HOME` inside that directory, so a command reached through a version-manager shim that reads `HOME` fails to start; name the binary by an absolute path whose interpreter resolves without `HOME`. The working-credential case runs on the hosted path under a temporary `COPILOT_HOME` and asserts that its verification turn reports a measured, positive figure.
+- The working case needs a real credential: one of the token variables the CLI accepts, or an authenticated `gh`.
+- A stand-in binary is rejected by the version canary before any turn, as described above.
+- The scripted-model case uses the CLI's own-provider settings, with `COPILOT_OFFLINE` turning off GitHub authentication, telemetry, and update traffic. Its script must end with a `task_complete` call: in autopilot the runtime keeps prompting until the model calls it, and a plain text finish draws a request the script does not hold.
+- The scripted-model case isolates `HOME` and the XDG directories and puts `COPILOT_HOME` inside them, so a version-manager shim that reads `HOME` fails to start. Name the binary by an absolute path.

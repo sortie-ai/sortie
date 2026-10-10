@@ -1,58 +1,56 @@
 # Kiro adapter notes
 
-Working notes for anyone dealing with Kiro CLI through Sortie. The one route that reaches it is the generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`. Sortie's own tools reach the agent only on a local launch, and there the credential decides whether they reach it at all, which the load-bearing observations below cover.
+Working notes for anyone running Kiro CLI through Sortie's generic Agent Client Protocol kind in `internal/agent/clientprotocol`, which drives `kiro-cli acp`.
 
 Eligibility: qualified
 
 Product conformance: not_qualified
 
-The two answers are computed separately and diverge here. Every load-bearing row was measured, and none puts the protocol surface below the richest measured native reference, so the protocol route can stand in for the native one. Product conformance does not hold: the effective adapter does not meet the token-accounting obligation, and nothing outside the protocol supplies it, so that capability does not work for the operator whichever route they take.
+The two verdicts diverge here. Every load-bearing row was measured, and none puts the protocol surface below the richest native reference, so the protocol route can stand in for the native one. Product conformance fails on token accounting: no route supplies a token figure, so that capability does not work whichever route the operator takes.
 
-This file is validated against the tracked measurement under `tools/qualify/probe/testdata/kiro-cli/`, so an edit to a grade row below reddens the staleness gate until a fresh run replaces that artifact.
+This file is checked against the tracked measurement under `tools/qualify/probe/testdata/kiro-cli/`. Changing a grade row below fails the staleness gate until a fresh run replaces that measurement.
 
 ## Where to get the volatile facts
 
-Read the flag surface off `kiro-cli chat --help` and `kiro-cli acp --help` on the version you are targeting, and the account's own model set off the CLI's model-listing command in its JSON format, which is the only authoritative answer because the list is served by the backend and depends on the subscription. The runtime's own version is never pinned in prose here; the protocol adapter records it per session from that session's own `initialize` handshake. The rendered docs at `kiro.dev` cover the headless path and the exit codes; treat them as the vendor's claim and the binary as the fact, because the two are known to disagree.
+Read the flags off `kiro-cli chat --help` and `kiro-cli acp --help`. Read the account's model set from the CLI's model-listing command in JSON format; the backend serves that list per subscription. The protocol adapter records the runtime's version per session from the `initialize` handshake. The docs at `kiro.dev` cover the headless path and exit codes, but they are the vendor's claim and the binary is the fact; the two disagree.
 
-Lineage is worth knowing and does not expire: this CLI is a distribution of Amazon Q Developer CLI, so the upstream `aws/amazon-q-developer-cli` repository is the source of record for CLI behavior, while the public Kiro tracker is where product-level feature requests live. When a symptom looks like a CLI bug, search upstream, not the IDE tracker.
+This CLI is a distribution of Amazon Q Developer CLI, so `aws/amazon-q-developer-cli` is the source of record for CLI behavior. The public Kiro tracker is for product feature requests. Search upstream for a CLI bug, not the IDE tracker.
 
-The runtime keeps its own log, and it is the only place some failures are explained at all. Find it under the runtime directory's `kiro-log/kiro-chat.log`. Two of the behaviors below are invisible on the wire and visible only there.
+The runtime keeps its own log at `kiro-log/kiro-chat.log` under its runtime directory. Some failures below are explained only there.
 
 ## Entry points
 
-One route reaches this runtime: the generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. It delivers session continuation and, on a local launch and subject to the credential constraint below, Sortie's own tool servers.
+The generic `agent-client-protocol` kind drives `kiro-cli acp`. It delivers session continuation and, on a local launch and subject to the credential constraint below, Sortie's own tool servers.
 
-The `acp` subcommand does not appear in `kiro-cli --help`. It is listed under `--help-all` only, which is worth knowing before concluding a build does not have it.
+The `acp` subcommand is missing from `kiro-cli --help` and listed only under `--help-all`.
 
-Where other runtimes on this transport spell trust and asking posture as two separate switches, this one spells both with `-a` (`--trust-all-tools`): it auto-approves every tool permission request, so dropping it restores asking for every tool, Sortie's and the runtime's own. `--trust-tools=<names>` narrows that to an explicit set, and a tool offered by a declared server is named there as `@<server>/<tool>`. That qualified form is the runtime's own, and it is also what the runtime prints in a tool-call title.
+One switch, `-a` (`--trust-all-tools`), sets both trust and the asking posture. It approves every tool permission request, so removing it brings back asking for every tool, Sortie's and the runtime's own. `--trust-tools=<names>` narrows it to a list; a declared server's tool is named there as `@<server>/<tool>`, the same form the runtime prints in a tool-call title.
 
-`--model <id>` on the `acp` entry point does take effect: the session-creation response reports the requested identifier as the session's current model. The same flag on the runtime's own `chat` surface with the JSON-Lines output format can fail silently instead, warning that the model could not be set and running the turn on the default; the warning goes to standard error as prose and never into the JSON stream.
+`--model <id>` on `acp` takes effect: the session-creation response reports the requested model. The same flag on `chat` with JSON-Lines output can fail silently instead. It prints a prose warning on stderr, never in the JSON stream, and runs on the default model.
 
-Launching the protocol entry point with no stored login and no API key exits before the handshake completes, printing a message on standard error that names the login command and states the account is not signed in. No nightly case exercises this on the protocol route; a regression there still ends at the protocol adapter's own bounded handshake wait, so it cannot hold a run.
+With no stored login and no API key, `acp` exits before the handshake completes and prints a message on stderr naming the login command. No nightly case covers this; a regression still ends at the adapter's bounded handshake wait.
 
-Naming an agent definition on the protocol entry point, whether declared globally or inside the workspace, makes the session report that name as its own mode and that definition's own model unless a model flag names another; leaving the flag unset, or naming an undefined agent, reports the runtime's default agent and model instead, and an undefined name also carries a vendor notification naming the requested and the fallback agent. Both flags scope to the one session a launch starts, which matches how the protocol adapter starts or loads exactly one session per launch.
+Naming an agent definition, global or in the workspace, makes the session report that agent as its mode and use its model unless a model flag names another. With no agent flag, or an undefined agent, the session reports the default agent and model; an undefined name also gets a vendor notification naming the requested and fallback agents. Both flags apply to the one session a launch starts, which matches the adapter's one session per launch.
 
-The verification session the protocol route opens stays in the runtime's own store outside the workspace rather than being deleted, because the runtime advertises no delete capability. A session load shortly after its own creation waits briefly for the runtime's own store to catch up.
+The verification session stays in the runtime's store outside the workspace, because the runtime advertises no delete capability. A load shortly after a session's creation waits briefly for the runtime's store to catch up.
 
 ## Load-bearing capability observations
 
-No row blocks transport parity: session continuation grades usable on both surfaces. Token accounting blocks product conformance without blocking parity, because both routes miss it equally, and a shortfall both routes share costs nothing in moving between them while still meaning the capability does not work.
+No row blocks transport parity. Token accounting blocks product conformance but not parity, because both routes miss it equally.
 
-The credential decides whether Sortie's tools arrive, and this is the single most important thing on this page. Authenticating with `KIRO_API_KEY` starts sessions, runs turns and continues sessions correctly, and silently carries none of Sortie's tools. The runtime's backend refuses to serve a governance profile for the key, and the runtime responds by disabling MCP entirely for the session: `Failed to get governance config from API - MCP disabled, web tools disabled` in its own log, plus a vendor-namespaced `governance_disabled` notification on the wire. The declared server is never started, the model is never offered the tool, and the turn completes normally while answering that it has no such tool. Nothing on the wire and nothing in Sortie's own output marks this as a failure, which makes it the most expensive way to get this integration wrong: the route is chosen for the tools, and it silently delivers everything except them.
+The credential decides whether Sortie's tools arrive, and this is the most important fact on this page. With `KIRO_API_KEY` the runtime starts sessions, runs turns, and continues sessions correctly, but silently carries none of Sortie's tools. The backend refuses to serve a governance profile for the key, and the runtime disables MCP for the session. Its log says `Failed to get governance config from API - MCP disabled, web tools disabled`, and the wire carries only a vendor-namespaced `governance_disabled` notification. The declared server never starts, the model is never offered the tool, and the turn completes normally while saying it has no such tool. Nothing in Sortie's output marks this as a failure.
 
-No flag turns the server-side profile check off.
+No flag turns the profile check off. Whether it fails for every API key or only on some plans is unknown, because only one key was tried. When tools go missing, read the runtime log first.
 
-Whether the check fails for every API key or only for keys on some plans is unestablished; one key was available to try. An operator seeing tools go missing should read the runtime log first, because that line is the only place the cause is stated.
+Every grade on this page was measured under a stored device login, the credential the measurement assumes. Nothing was measured under an API key.
 
-The rows below were measured under a stored device login, which is the credential the measurement procedure assumes and the one under which the runtime's real capability shows. Nothing below was measured under an API key, so read every grade on this page as the device-login answer.
+Token accounting has no source on either surface. The runtime reports spend as an abstract credits figure and context use as a percentage, never as tokens. So token-based budgets are inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn in a vendor extension; the native stream has no token field either. Parity holds on this row because the shortfall is shared; conformance fails because the capability works on neither route. A live run with a one-token `agent.max_tokens` ceiling spent tokens, recorded unaccounted spend, and finished without stopping.
 
-Token accounting has no source here, on either surface. The runtime reports spend as an abstract credits figure and context use as a percentage, never as a token count, so token-based budget enforcement is inert and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn as a vendor extension on its metadata notifications; the raw native stream carries no token-bearing field either. Both inventories complete with no token-bearing path resolved, and both grade a gap: there is no extension source present for the protocol route to admit, and nothing outside the protocol supplies one. That is the row where the two answers separate, and it is worth reading carefully. Parity is satisfied on it, because the shortfall is shared and an operator changing routes loses nothing they had. Conformance is not, because the capability works on neither route. A live run through Sortie's own orchestrator under a one-token `agent.max_tokens` ceiling on the protocol surface spent tokens and recorded no figure: three turns reported unaccounted spend while the run finished with its own status rather than a stop, so the ceiling could not bound it. The conformance row still stands on the wire gap, because no figure reaches Sortie on either route for a ceiling to be built on.
+Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. This runtime never produces either. A request built to trigger one completes normally, so the case is recorded as `outcome_never_produced`.
 
-Two cases are declared rather than measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as a `non_retryable_refusal`. This runtime never produces either outcome; a request built to trigger one instead completes the turn normally, so the case is recorded as `outcome_never_produced` rather than graded from an attempt that failed to reach it.
+On the protocol surface, retry classification excludes the human-input case as not applicable. The consent request the asking-posture launch raised offered a refusing option, the client refused it inside the protocol, and the turn went on. That exclusion does not cover a question addressed to a person. On the native stream the case was induced and the row is a gap: a recognized terminal ended the turn even though the probe's marker file shows the block was reached.
 
-Retry classification does not read the same way on the two surfaces. On the protocol surface the human-input case is excluded as not applicable, and the row grades usable on the cases that remain. The exclusion rests on the consent request the asking-posture launch raised and the client refused inside the protocol: the request offered a refusing option, the refusal was answered there, and the turn went on. It does not cover a question addressed to a person. Permission handling graded usable on the same run, which is what that request actually is. On the raw native stream the case was induced and the row grades a gap, because a recognized terminal ended the turn even though the probe's own marker file, which shows the block was reached, is present.
-
-The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation and retry classification stands answered under product conformance on the cases that remain. `limit_reached` still stays unmeasured for turn disposition, because it was not induced on either surface.
+The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation. `limit_reached` stays unmeasured for turn disposition because it was not induced on either surface.
 
 - protocol turn_disposition: Observed: usable
 - protocol retry_classification: Observed: usable
@@ -65,37 +63,37 @@ The `unknown_outcome` case has no deterministic inducer on either surface, so it
 - native_stream_json token_ceiling: Observed: gap
 - native_stream_json session_continuation: Observed: usable
 
-Two of the cases excluded below are excluded while keeping their obligation, which is a different thing from being forgiven: a case that was induced and that the surface then reported no outcome for counts against that surface rather than passing for free.
+A case that was induced and that the surface reported no outcome for keeps its obligation. It counts against that surface; it is not forgiven.
 
-Permission handling was measured under the posture that asks, which for this runtime means the same launch with its single trust-and-posture switch taken back out. The runtime raises the request, Sortie's unattended posture refuses it, the refusal is accepted, and nothing is left pending when the turn ends. The consequence for a real run is the one the transport notes already state: under a posture that asks, a declared tool is delivered and still never called.
+Permission handling was measured with the `-a` switch removed. The runtime raises the request, Sortie refuses it, the refusal is accepted, and nothing is left pending. So under a posture that asks, a declared tool is delivered and still never called.
 
 ## Protocol-specific observations
 
-The handshake advertises `loadSession` true, `mcpCapabilities.http` true with `sse` false, and an empty `sessionCapabilities` object. Sortie decides whether to send `session/close` from that capability being present, so a session here is never closed through the protocol. `authMethods` comes back empty, which is evidence in neither direction. `agentInfo` carries both a name and a version, which is what the gated suite's identity rule reads.
+The handshake advertises `loadSession` true, `mcpCapabilities.http` true with `sse` false, and an empty `sessionCapabilities` object, so Sortie never closes a session here through the protocol. `authMethods` is empty, which proves nothing either way. `agentInfo` carries a name and a version, which the gated suite's identity rule reads.
 
-Session continuation restores the session and its memory. The load succeeds, the recall turn runs under the seed's own session identifier read back from the runtime rather than one Sortie minted, and the model returns what the seed turn asked it to remember. A successful load is still not on its own evidence that anything said in the session survived; only the recall turn's own answer settles that. The runtime's own native surface returns it too, so the two agree on this row.
+Session continuation restores the session and its memory: the recall turn runs under the seed's own session identifier and returns what the seed asked it to remember. A successful load alone does not prove that; only the recall answer does.
 
-The runtime carries a large vendor-namespaced surface alongside the standard one, announcing available commands, subagent lists, MCP server initialization and per-turn metadata under its own method prefix. Those arrive as notifications rather than requests, so nothing answers them and nothing depends on them; Sortie records them as unrecognized and moves on. Do not add handlers for them to make a log quieter, because the standard surface already carries everything the adapter reads.
+The runtime sends many notifications under its own vendor method prefix. Sortie records them as unrecognized and moves on. Do not add handlers for them to quiet a log; the standard surface already carries everything the adapter reads.
 
-A `limit_reached` turn was not induced on this surface. The prompt channel is too small to carry a request large enough to reach whatever ceiling would make the runtime report running out of room, so the case stays unmeasured here rather than graded, and turn disposition keeps its usable grade on the cases that did run.
+`limit_reached` was not induced here: the prompt channel cannot carry a request big enough to reach the runtime's limit.
 
 ## Native headless observations
 
-The runtime's own native surface has a structured output mode, and older notes in this file claiming it has none were wrong. `kiro-cli chat --output-format stream-json` emits JSON Lines on standard output, one self-describing event per line, opening with a run-started event that names the protocol as its own payload schema and closing with a run-finished event carrying a status, a stop reason and the final text. A failure arrives in the same envelope under a run-error type. The mode requires the second-generation agent engine and refuses to start on the first.
+`kiro-cli chat --output-format stream-json` emits JSON Lines on stdout, one event per line. It opens with a run-started event, closes with a run-finished event carrying a status, a stop reason, and the final text, and reports a failure as a run-error event. The mode needs the second-generation agent engine and refuses to start on the first.
 
-This run measured the structured surface directly. Session continuation grades usable there and is the richest measured reference on that row: it resumes by naming a session identifier explicitly, a seed launch's own terminal reports the identifier in its run-started event, which is the only place this runtime exposes one at all, and a following launch names it to resume and gets back what the seed turn left. Turn disposition and retry classification both grade a gap there, and token accounting grades the same gap as on the protocol surface.
+Session continuation is the richest reference on this surface. The seed launch's run-started event reports the session identifier, the only place this runtime exposes it, and a later launch names it to resume.
 
-Two turn-disposition cases were induced here and the surface reported no outcome for either. The structured stream stays silent on a failed launch, and because this is a one-shot launch that writes its terminal only when the process exits, a cancellation signal sent mid-turn leaves no terminal to read: the process just stops, so a cancelled turn and one that has not finished yet look identical. Silence does not excuse either case, and the two of them are why turn disposition grades a gap on this surface. A third case, `limit_reached`, was not induced here either, for the same prompt-channel reason it was not induced on the protocol surface.
+Turn disposition is a gap here. The stream stays silent on a failed launch. And because the launch writes its terminal only at exit, a turn cancelled mid-way leaves no terminal, so it looks the same as a turn that has not finished.
 
-The profile treats the plain-JSON surface as absent, which the binary agrees with: the output-format flag accepts only the text and JSON-Lines values, and rejects anything else on a non-zero exit with a plain-text message. Its entry point in the profile is therefore the ordinary headless invocation rather than a flag value the runtime would reject, because a declared absence is corroborated by running the surface and finding no structured terminal in what comes out. A launch that fails to start demonstrates nothing, and the corroboration reads any non-zero exit as a terminal rather than as an absence.
+The profile treats the plain-JSON surface as absent. The output-format flag accepts only text and JSON Lines and rejects anything else with a non-zero exit. A declared absence is checked by running the ordinary headless invocation and finding no structured terminal; a launch that fails to start would prove nothing.
 
 ## Workspace trust and process boundary
 
-The protocol entry point is a launcher, not the worker. Launching it forks a second process that does the work and stays alive behind the parent, so a single-pid kill leaves that worker running until its inherited standard input closes. Sortie's teardown sends a catchable signal to the whole process group, closes standard input, waits a bounded grace, and kills the group only once that wait elapses, and the launched process is put at the head of its own group so an inheriting worker is reached. The qualification run asserts the group is gone after teardown, so a survivor is reported as a leak rather than tolerated as a slow exit.
+`kiro-cli acp` is a launcher, not the worker. It forks a second process that does the work and outlives a single-pid kill until its inherited stdin closes. Sortie puts the launched process at the head of its own group, signals the whole group, closes stdin, waits a bounded grace, and then kills the group. The qualification run asserts the group is gone after teardown, so a survivor is reported as a leak.
 
-The containment boundary held under measurement: every launch ran in a directory inside the run-scoped root, no project settings applied to any of them, and every process-group member observed was the launched command or a descendant of it.
+The containment boundary held under measurement: every launch ran inside the run-scoped root, no project settings applied, and every process-group member observed was the launched command or its descendant.
 
-Tool servers declared in the session-creation request are merged over whatever the runtime's own configuration already holds. A workspace-scoped MCP configuration lives at `.kiro/settings/mcp.json`, and agent definitions with their own tool lists live under `.kiro/agents`; the tracked profile records both. A declared server is dropped silently when its entry does not match the wire shape the runtime expects, with the reason recorded only in the runtime log, so an unexplained absence of tools is worth checking there before anywhere else.
+Tool servers declared in `session/new` are merged over the runtime's own configuration. A workspace MCP configuration lives at `.kiro/settings/mcp.json`, and agent definitions with their own tool lists live under `.kiro/agents`. A declared server whose entry does not match the shape the runtime expects is dropped silently, with the reason only in the runtime log.
 
 ## Excluded capability cases
 
@@ -113,4 +111,4 @@ Windows live qualification is unobserved.
 
 ## Verifying a change
 
-The protocol route is covered by the generic adapter's own gated suite, pointed at this runtime through the client-protocol command coordinate, and by the live qualification profile, which is separately gated and spends real credits.
+The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. The live qualification profile is gated separately and spends real credits.
