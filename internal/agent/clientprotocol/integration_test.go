@@ -34,6 +34,11 @@
 //	                                  comma-separated names of the
 //	                                  environment variables the runtime
 //	                                  reads its credential from
+//	SORTIE_CLIENTPROTOCOL_ASKING_COMMAND
+//	                                  the same runtime's launch command
+//	                                  in a posture that asks before
+//	                                  running a tool; unset skips the
+//	                                  refusal case with a logged reason
 //
 // Run:
 //
@@ -54,6 +59,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -87,11 +93,11 @@ func skipUnlessClientProtocolIntegration(t *testing.T) {
 // accommodate a real model's latency.
 func integrationAgentConfig(t *testing.T, expect captureExpectation, events func() []domain.AgentEvent) domain.AgentConfig {
 	t.Helper()
-	config, _ := captureAgentConfig(t, expect, events)
+	config, _ := captureAgentConfig(t, os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND"), expect, events)
 	return config
 }
 
-func captureAgentConfig(t *testing.T, expect captureExpectation, events func() []domain.AgentEvent) (domain.AgentConfig, liveProtocolCapture) {
+func captureAgentConfig(t *testing.T, command string, expect captureExpectation, events func() []domain.AgentEvent) (domain.AgentConfig, liveProtocolCapture) {
 	t.Helper()
 	dir := t.TempDir()
 	capture := liveProtocolCapture{
@@ -108,7 +114,7 @@ func captureAgentConfig(t *testing.T, expect captureExpectation, events func() [
 	t.Cleanup(func() { assertLiveProtocolConformance(t, capture) })
 
 	return domain.AgentConfig{
-		Command:       wrapperPath + " " + os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND"),
+		Command:       wrapperPath + " " + command,
 		TurnTimeoutMS: 300000,
 		ReadTimeoutMS: 30000,
 	}, capture
@@ -356,18 +362,7 @@ func TestIntegration_StopSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunTurnWithPermissionContinuation drives one full
-// session: start a session, run a turn whose prompt asks the model to
-// write and then read back a file (an action a protocol-speaking
-// runtime's default posture typically pauses on for approval),
-// observe the normalized events, and stop the session. The
-// adapter's own posture answers any session/request_permission it
-// receives by selecting a refusing option and letting the turn
-// continue, per this piece's refusal-reply design; this test observes
-// that continuation when the runtime asked, and reports plainly when
-// it did not, since a live runtime's default approval posture is
-// outside this suite's control.
-func TestIntegration_RunTurnWithPermissionContinuation(t *testing.T) {
+func TestIntegration_ToolForcingTurn(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
 	adapter := mustNewClientProtocolAdapter(t)
@@ -405,19 +400,6 @@ func TestIntegration_RunTurnWithPermissionContinuation(t *testing.T) {
 	}
 
 	assertContainsEventType(t, events, domain.EventSessionStarted)
-
-	var sawPermissionContinuation bool
-	for _, e := range events {
-		if e.Type == domain.EventNotification && strings.Contains(e.Message, "refused a permission request") {
-			sawPermissionContinuation = true
-			break
-		}
-	}
-	if sawPermissionContinuation {
-		t.Log("observed a session/request_permission the adapter refused, and the turn continued past it to completion")
-	} else {
-		t.Log("no session/request_permission was observed on this run; this runtime's default approval posture may not require one for this prompt")
-	}
 }
 
 // TestIntegration_SessionContinuation drives one session through a
@@ -574,17 +556,32 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		t.Fatalf("SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV = %q, want a name matching %s", baseURLEnv, environmentNamePattern)
 	}
 
+	askingCommand := os.Getenv("SORTIE_CLIENTPROTOCOL_ASKING_COMMAND")
+	var skipRefusal string
+	if askingCommand == "" {
+		skipRefusal = "skipping permission refusal: SORTIE_CLIENTPROTOCOL_ASKING_COMMAND must name the runtime's launch command in a posture that asks before running a tool"
+	}
+
 	fakemodel.AssertConformance(t, fakemodel.Binding{
 		Kind:          "agent-client-protocol",
 		Passthrough:   map[string]any{},
 		CredentialEnv: credentialNames,
 		Read:          fakemodel.ReadFile,
+		PermissionRefusal: &fakemodel.PermissionRefusal{
+			Guarded: fakemodel.CatFile,
+			Notice:  agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).Notice,
+			Skip:    skipRefusal,
+		},
 		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			command := os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")
 			expect := expectScriptedToolTurn
-			if env.Scenario == fakemodel.ScenarioExhaustion {
+			switch env.Scenario {
+			case fakemodel.ScenarioExhaustion:
 				expect = expectHandshakeOnly
+			case fakemodel.ScenarioPermissionRefusal:
+				command = askingCommand
 			}
-			config, capture := captureAgentConfig(t, expect, env.Events)
+			config, capture := captureAgentConfig(t, command, expect, env.Events)
 			return fakemodel.Launch{
 				Config:  config,
 				Env:     map[string]string{baseURLEnv: env.URL},

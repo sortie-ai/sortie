@@ -26,6 +26,7 @@ const (
 	conformanceCommandKind   = "conformance-scripted-command"
 	conformancePlainKind     = "conformance-scripted-plain"
 	conformanceDeclaredToken = "CONFORMANCE_DECLARED_TOKEN"
+	conformanceNotice        = "tool call refused by the session policy"
 )
 
 const (
@@ -114,6 +115,14 @@ func conformanceTurnRun() Run {
 			},
 		},
 	}
+}
+
+func conformanceRefusedRun() Run {
+	run := conformanceTurnRun()
+	run.Exchanges[conformanceSecondTurnAt].ToolResults[0].Output = "refused by the session policy"
+	run.Events[conformanceEventToolAt].ToolError = true
+	run.Events = append(run.Events, domain.AgentEvent{Type: domain.EventNotification, Message: conformanceNotice})
+	return run
 }
 
 func conformanceNewExhaustion() conformanceExhaustionState {
@@ -348,6 +357,7 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 		"exact usage":             usageViolations(run, registry.UsageArrivalTurnEnd),
 		"credential containment":  containmentViolations(run, streams),
 		"script exhaustion":       exhaustionViolations(exhaustion.run, conformanceNonce, false, exhaustion.failures),
+		"refused call":            refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
 	}
 
 	for property, violations := range got {
@@ -531,6 +541,48 @@ func TestConformancePropertyToolPath(t *testing.T) {
 	conformanceRunCases(t, "deterministic tool path", cases,
 		func() Run { return conformanceTurnRun() },
 		func(run Run) []string { return toolPathViolations(run, conformanceNonce) },
+	)
+}
+
+func TestConformancePropertyRefusedCall(t *testing.T) {
+	t.Parallel()
+
+	cases := []conformanceCase[Run]{
+		{name: "clean run"},
+		{
+			name:   "no tool result answers the guarded call",
+			mutate: func(run *Run) { run.Exchanges[conformanceSecondTurnAt].ToolResults = nil },
+			want:   []string{"carries 0 tool results answering the guarded call"},
+		},
+		{
+			name: "the file's content in an auxiliary request body",
+			mutate: func(run *Run) {
+				run.Exchanges[conformanceAuxiliaryAt].Body = []byte(`{"text":"` + conformanceNonce + `"}`)
+			},
+			want: []string{"carried the file's content"},
+		},
+		{
+			name:   "tool result reported without an error",
+			mutate: func(run *Run) { run.Events[conformanceEventToolAt].ToolError = false },
+			want:   []string{"reports a successful tool result"},
+		},
+		{
+			name: "no tool_result event",
+			mutate: func(run *Run) {
+				run.Events = slices.Delete(run.Events, conformanceEventToolAt, conformanceEventToolAt+1)
+			},
+			want: []string{"0 tool_result events, want exactly one"},
+		},
+		{
+			name:   "no refusal notice",
+			mutate: func(run *Run) { run.Events[len(run.Events)-1].Message = "something else" },
+			want:   []string{"0 notification events"},
+		},
+	}
+
+	conformanceRunCases(t, "refused call", cases,
+		conformanceRefusedRun,
+		func(run Run) []string { return refusedCallViolations(run, conformanceNonce, conformanceNotice) },
 	)
 }
 
@@ -1083,6 +1135,10 @@ func TestConformanceFatalArmChild(t *testing.T) {
 		binding.Read = nil
 	case "nil-launch":
 		binding.Launch = nil
+	case "nil-guarded":
+		binding.PermissionRefusal = &PermissionRefusal{Notice: conformanceNotice}
+	case "nil-notice":
+		binding.PermissionRefusal = &PermissionRefusal{Guarded: CatFile}
 	case "factory-error":
 	default:
 		t.Fatalf("unknown arm %q", arm)
@@ -1124,6 +1180,18 @@ func TestConformanceFatalArms(t *testing.T) {
 			arm:     "nil-launch",
 			want:    []string{"Binding.Launch is nil"},
 			notWant: []string{"Binding.Kind", "Binding.Read"},
+		},
+		{
+			name:    "nil Guarded",
+			arm:     "nil-guarded",
+			want:    []string{"Binding.PermissionRefusal.Guarded is nil"},
+			notWant: []string{"Binding.Kind", "Binding.Read", "Binding.Launch", "Binding.PermissionRefusal.Notice"},
+		},
+		{
+			name:    "empty Notice",
+			arm:     "nil-notice",
+			want:    []string{"Binding.PermissionRefusal.Notice is empty"},
+			notWant: []string{"Binding.Kind", "Binding.Read", "Binding.Launch", "Binding.PermissionRefusal.Guarded"},
 		},
 		{
 			name:           "adapter factory error",
