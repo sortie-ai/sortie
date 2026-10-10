@@ -3,7 +3,11 @@
 // Required environment variables:
 //
 //	SORTIE_COPILOT_TEST=1          enable this suite
-//	SORTIE_COPILOT_COMMAND         path to copilot binary (default: "copilot")
+//
+// Optional environment variables:
+//
+//	SORTIE_COPILOT_COMMAND         override the default "copilot" binary
+//	SORTIE_COPILOT_MODEL           override the default "gpt-5-mini" model
 //
 // Authentication: the live cases need at least one of COPILOT_GITHUB_TOKEN,
 // GH_TOKEN, or GITHUB_TOKEN, or an authenticated gh CLI. The scripted-model
@@ -24,15 +28,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// skipUnlessCopilotIntegration skips the current test when SORTIE_COPILOT_TEST
-// is not set to "1", so disabled integration tests are reported as skipped
-// rather than silently passing.
 func skipUnlessCopilotIntegration(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SORTIE_COPILOT_TEST") != "1" {
@@ -40,10 +40,7 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 	}
 }
 
-// integrationConfig builds the adapter config map for integration tests.
 func integrationConfig() map[string]any {
-	// For supported models for Copilot CLI, see
-	// https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-in-auto-model-selection
 	model := os.Getenv("SORTIE_COPILOT_MODEL")
 	if model == "" {
 		model = "gpt-5-mini"
@@ -54,8 +51,6 @@ func integrationConfig() map[string]any {
 	}
 }
 
-// integrationCommand returns the Copilot CLI binary path from the
-// SORTIE_COPILOT_COMMAND environment variable, defaulting to "copilot".
 func integrationCommand() string {
 	if cmd := os.Getenv("SORTIE_COPILOT_COMMAND"); cmd != "" {
 		return cmd
@@ -63,8 +58,6 @@ func integrationCommand() string {
 	return "copilot"
 }
 
-// assertContainsEventType asserts that at least one event in the slice
-// has the given type.
 func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
 	t.Helper()
 	for _, e := range events {
@@ -79,8 +72,6 @@ func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType
 	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
 }
 
-// collectEvents collects events from a turn using a mutex-safe callback.
-// Returns the collected slice after the turn completes.
 func collectEvents(t *testing.T) (onEvent func(domain.AgentEvent), collected func() []domain.AgentEvent) {
 	t.Helper()
 	var mu sync.Mutex
@@ -120,7 +111,7 @@ func TestIntegration_StartSession(t *testing.T) {
 	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 
 	// Copilot CLI does not pre-assign a session ID: it is set only after
-	// the first turn's result event. Session.Internal must be non-nil.
+	// the first turn's result event.
 	if session.Internal == nil {
 		t.Error("Session.Internal is nil")
 	}
@@ -144,7 +135,6 @@ func TestIntegration_StopSession(t *testing.T) {
 		t.Fatalf("StartSession: %v", err)
 	}
 
-	// StopSession before RunTurn starts must be a no-op (no process running).
 	if err := adapter.StopSession(context.Background(), session); err != nil {
 		t.Fatalf("StopSession (idle): %v", err)
 	}
@@ -218,9 +208,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 	})
 }
 
-// TestIntegration_RunTurn_ContextCancellation verifies that cancelling the
-// context mid-turn causes RunTurn to return ErrTurnCancelled promptly and
-// cleans up the subprocess.
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
@@ -246,9 +233,8 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 
 	onEvent, collected := collectEvents(t)
 
-	// Use a 2-second timeout: long enough for subprocess startup (~100ms)
-	// but well below the minimum API round-trip (~3-5s), ensuring the
-	// context always expires before the turn completes.
+	// 2s outlasts subprocess startup (~100ms) but not the fastest API
+	// round-trip (~3-5s), so the turn is always cancelled mid-flight.
 	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	result, err := adapter.RunTurn(shortCtx, session, domain.RunTurnParams{
@@ -274,8 +260,6 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	assertContainsEventType(t, collected(), domain.EventTurnCancelled)
 }
 
-// TestIntegration_ResumeSession verifies that a second turn on the same
-// session uses --resume and the CLI returns the same session ID.
 func TestIntegration_ResumeSession(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
@@ -298,7 +282,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 
-	// Turn 1: establish session ID.
 	result1, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: hello",
 		OnEvent: func(_ domain.AgentEvent) {},
@@ -313,14 +296,11 @@ func TestIntegration_ResumeSession(t *testing.T) {
 		t.Fatalf("turn 1: ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
 	}
 
-	// RunTurn updates state.copilotSessionID; verify internal state was
-	// updated so the next turn will use --resume.
 	state := session.Internal.(*sessionState)
 	if state.copilotSessionID != result1.SessionID {
 		t.Errorf("state.copilotSessionID = %q, want %q (should match turn 1 result)",
 			state.copilotSessionID, result1.SessionID)
 	}
-	// Turn 2: continuation must produce the same session ID.
 	result2, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
 		OnEvent: func(_ domain.AgentEvent) {},
@@ -336,8 +316,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_ResumeSessionID verifies that StartSession with a
-// ResumeSessionID propagates that ID to the first turn's --resume flag.
 func TestIntegration_ResumeSessionID(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
@@ -350,7 +328,6 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Establish real session ID from turn 1.
 	session1, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		Settings:      integrationConfig(),
 		WorkspacePath: workspace,
@@ -370,7 +347,6 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 		t.Fatal("session 1: TurnResult.SessionID is empty")
 	}
 
-	// Resume via a fresh StartSession with the captured ID.
 	resumedSettings := integrationConfig()
 	resumedSettings["max_autopilot_continues"] = float64(6)
 	session2, err := adapter.StartSession(ctx, domain.StartSessionParams{
@@ -384,8 +360,6 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session2) })
 
-	// session2.ID must equal the provided ResumeSessionID so the
-	// orchestrator can record continuity.
 	if session2.ID != result1.SessionID {
 		t.Errorf("session2.ID = %q, want %q (provided ResumeSessionID)", session2.ID, result1.SessionID)
 	}
@@ -439,7 +413,6 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
-		// Not parallel: t.Setenv carries the invalid credential.
 		credentialtest.SetRefusedCredential(t, "SORTIE_COPILOT_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
@@ -472,33 +445,5 @@ func TestIntegration_EarlyExit(t *testing.T) {
 		} else {
 			credentialtest.RequireEarlyExitReport(t, err)
 		}
-	})
-}
-
-func TestIntegration_ToolServerIdentity(t *testing.T) {
-	skipUnlessCopilotIntegration(t)
-
-	agenttest.AssertToolServerIdentity(t, func(ctx context.Context, workspacePath, mcpConfigPath string) error {
-		adapter, err := NewCopilotAdapter()
-		if err != nil {
-			return err
-		}
-
-		session, err := adapter.StartSession(ctx, domain.StartSessionParams{
-			Settings:      integrationConfig(),
-			WorkspacePath: workspacePath,
-			AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
-			MCPConfigPath: mcpConfigPath,
-		})
-		if err != nil {
-			return err
-		}
-		defer func() { _ = adapter.StopSession(context.Background(), session) }()
-
-		_, err = adapter.RunTurn(ctx, session, domain.RunTurnParams{
-			Prompt:  "Say exactly: hello",
-			OnEvent: func(domain.AgentEvent) {},
-		})
-		return err
 	})
 }

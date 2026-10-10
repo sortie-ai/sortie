@@ -27,6 +27,8 @@ const (
 	conformancePlainKind     = "conformance-scripted-plain"
 	conformanceDeclaredToken = "CONFORMANCE_DECLARED_TOKEN"
 	conformanceNotice        = "tool call refused by the session policy"
+	conformanceServerTool    = "sortie_status"
+	conformanceServerTurn    = "731948265"
 )
 
 const (
@@ -113,6 +115,27 @@ func conformanceTurnRun() Run {
 				ToolResults: []ToolResult{{CallID: conformanceCallID, Name: conformanceToolName, Output: conformanceNonce + "\n"}},
 				Answer:      Answer{Status: 200, Text: "done", Usage: conformanceSecondUsage},
 			},
+		},
+	}
+}
+
+func conformanceToolServerRun() Run {
+	preamble := ToolResult{CallID: "call-0", Name: conformanceToolName, Output: "permission denied"}
+	server := ToolResult{CallID: conformanceCallID, Name: conformanceServerTool, Output: `{"turn_number":` + conformanceServerTurn + `}`}
+	turn := func(seq, step int, answer Answer, results ...ToolResult) Exchange {
+		return Exchange{Seq: seq, Kind: ExchangeTurn, Method: "POST", Path: "/v1/messages", Step: step, ToolResults: results, Answer: answer}
+	}
+	return Run{
+		Environment: Environment{Scenario: ScenarioToolServer, Sentinel: conformanceSentinel},
+		Events: []domain.AgentEvent{
+			{Type: domain.EventToolResult, ToolName: conformanceToolName, ToolError: true},
+			{Type: domain.EventToolResult, ToolName: conformanceServerTool},
+			{Type: domain.EventToolResult, ToolName: "task_complete", ToolError: true},
+		},
+		Exchanges: []Exchange{
+			turn(1, 0, Answer{Call: &FunctionCall{Name: conformanceToolName}, CallID: "call-0"}),
+			turn(2, 1, Answer{Call: &FunctionCall{Name: conformanceServerTool}, CallID: conformanceCallID}, preamble),
+			turn(3, 2, Answer{Call: &FunctionCall{Name: "task_complete"}, CallID: "call-2"}, preamble, server),
 		},
 	}
 }
@@ -349,11 +372,13 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 	t.Parallel()
 
 	run := conformanceTurnRun()
+	toolServer := conformanceToolServerRun()
 	exhaustion := conformanceNewExhaustion()
 	streams := []streamFile{{path: "client.log", content: []byte("traffic")}}
 	got := map[string][]string{
 		"turn outcome":            turnOutcomeViolations(run, 2),
 		"deterministic tool path": toolPathViolations(run, conformanceNonce),
+		"tool server":             toolServerViolations(toolServer, conformanceServerTurn),
 		"exact usage":             usageViolations(run, registry.UsageArrivalTurnEnd),
 		"credential containment":  containmentViolations(run, streams),
 		"script exhaustion":       exhaustionViolations(exhaustion.run, conformanceNonce, false, exhaustion.failures),
@@ -541,6 +566,53 @@ func TestConformancePropertyToolPath(t *testing.T) {
 	conformanceRunCases(t, "deterministic tool path", cases,
 		func() Run { return conformanceTurnRun() },
 		func(run Run) []string { return toolPathViolations(run, conformanceNonce) },
+	)
+}
+
+func TestConformancePropertyToolServer(t *testing.T) {
+	t.Parallel()
+
+	cases := []conformanceCase[Run]{
+		{name: "failed preamble and a closing call"},
+		{
+			name: "server call answered with text",
+			mutate: func(run *Run) {
+				run.Exchanges[1].Answer.Call = nil
+				run.Events[2].ToolError = false
+				run.Events = slices.Delete(run.Events, 1, 2)
+			},
+			want: []string{"answered with text"},
+		},
+		{
+			name:   "server call's result missing from the next request",
+			mutate: func(run *Run) { run.Exchanges[2].ToolResults = run.Exchanges[2].ToolResults[:1] },
+			want:   []string{`carries 0 tool results answering call "call-1"`},
+		},
+		{
+			name:   "server call's result lacks the turn number",
+			mutate: func(run *Run) { run.Exchanges[2].ToolResults[1].Output = "{}" },
+			want:   []string{`does not contain "` + conformanceServerTurn + `"`},
+		},
+		{
+			name:   "server call's event reports an error",
+			mutate: func(run *Run) { run.Events[1].ToolError = true },
+			want:   []string{"reports a tool error"},
+		},
+		{
+			name:   "server call's event has the unknown tool name",
+			mutate: func(run *Run) { run.Events[1].ToolName = "unknown" },
+			want:   []string{"tool name"},
+		},
+		{
+			name:   "no event for the closing call",
+			mutate: func(run *Run) { run.Events = run.Events[:2] },
+			want:   []string{"2 tool_result events, want one per call answered (3)"},
+		},
+	}
+
+	conformanceRunCases(t, "tool server", cases,
+		conformanceToolServerRun,
+		func(run Run) []string { return toolServerViolations(run, conformanceServerTurn) },
 	)
 }
 
@@ -927,8 +999,6 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 	)
 }
 
-// conformanceResendExhausted makes the runtime resend the rejected request
-// once, as a runtime that retries without an optional feature does.
 func conformanceResendExhausted(s *conformanceExhaustionState) {
 	resent := s.run.Exchanges[1]
 	resent.Seq = 3
@@ -937,7 +1007,7 @@ func conformanceResendExhausted(s *conformanceExhaustionState) {
 	s.failures = append(s.failures, "scripted model: request 3 (POST /v1/messages) arrived after the last script entry")
 }
 
-func TestConformanceReportsOnly(t *testing.T) {
+func TestConformanceOneFailurePerRequest(t *testing.T) {
 	t.Parallel()
 
 	exhausted := []Exchange{{Seq: 2, Method: "POST", Path: "/v1/messages"}}
@@ -988,10 +1058,10 @@ func TestConformanceReportsOnly(t *testing.T) {
 				requests = exhausted
 			}
 
-			got := reportsOnly(tt.failures, requests)
+			got := oneFailurePerRequest(tt.failures, requests)
 
 			if got != tt.want {
-				t.Errorf("reportsOnly(%q, %d requests) = %t, want %t", tt.failures, len(requests), got, tt.want)
+				t.Errorf("oneFailurePerRequest(%q, %d requests) = %t, want %t", tt.failures, len(requests), got, tt.want)
 			}
 		})
 	}
