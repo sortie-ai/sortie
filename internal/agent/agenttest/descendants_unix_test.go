@@ -89,6 +89,40 @@ func TestWriteRecordingScriptRecordsItsBackgroundJob(t *testing.T) {
 	}
 }
 
+func TestLiveDescendantsListsGrandchildren(t *testing.T) {
+	t.Parallel()
+
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("skipping: no shell to start a grandchild: %v", err)
+	}
+	child := exec.Command(shell, "-c", requireSleeper(t)+" "+detachedLifetime+" & echo $!; wait") //nolint:gosec // the shell and the sleeper are resolved by the test
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe() error = %v", err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-child.Process.Pid, syscall.SIGKILL)
+		_ = child.Wait()
+	})
+	var grandchild int
+	if _, err := fmt.Fscanln(stdout, &grandchild); err != nil {
+		t.Fatalf("read the grandchild's pid: %v", err)
+	}
+
+	got := agenttest.LiveDescendants(os.Getpid())
+
+	for _, want := range []int{child.Process.Pid, grandchild} {
+		if !slices.Contains(got, want) {
+			t.Errorf("LiveDescendants(%d) = %v, want it to list %d", os.Getpid(), got, want)
+		}
+	}
+}
+
 func requireSleeper(t *testing.T) string {
 	t.Helper()
 	sleeper, err := exec.LookPath("sleep")

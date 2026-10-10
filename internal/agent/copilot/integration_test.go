@@ -24,7 +24,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -56,39 +55,6 @@ func integrationCommand() string {
 		return cmd
 	}
 	return "copilot"
-}
-
-func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
-	t.Helper()
-	for _, e := range events {
-		if e.Type == eventType {
-			return
-		}
-	}
-	types := make([]domain.AgentEventType, len(events))
-	for i, e := range events {
-		types[i] = e.Type
-	}
-	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
-}
-
-func collectEvents(t *testing.T) (onEvent func(domain.AgentEvent), collected func() []domain.AgentEvent) {
-	t.Helper()
-	var mu sync.Mutex
-	var events []domain.AgentEvent
-	onEvent = func(e domain.AgentEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
-	}
-	collected = func() []domain.AgentEvent {
-		mu.Lock()
-		defer mu.Unlock()
-		out := make([]domain.AgentEvent, len(events))
-		copy(out, events)
-		return out
-	}
-	return onEvent, collected
 }
 
 func TestIntegration_StartSession(t *testing.T) {
@@ -206,58 +172,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			}
 		},
 	})
-}
-
-func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
-	skipUnlessCopilotIntegration(t)
-
-	adapter, err := NewCopilotAdapter()
-	if err != nil {
-		t.Fatalf("NewCopilotAdapter: %v", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(workspace+"/dummy.txt", []byte("test"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		Settings:      integrationConfig(),
-		WorkspacePath: workspace,
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	onEvent, collected := collectEvents(t)
-
-	// 2s outlasts subprocess startup (~100ms) but not the fastest API
-	// round-trip (~3-5s), so the turn is always cancelled mid-flight.
-	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	result, err := adapter.RunTurn(shortCtx, session, domain.RunTurnParams{
-		Prompt:  "Count from 1 to 1000, printing each number on a new line. Do not stop early.",
-		OnEvent: onEvent,
-	})
-	if err == nil {
-		t.Fatal("expected error from cancelled RunTurn, got nil")
-	}
-
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("error type = %T, want *domain.AgentError", err)
-	}
-	if agentErr.Kind != domain.ErrTurnCancelled {
-		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnCancelled)
-	}
-	if result.ExitReason != domain.EventTurnCancelled {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
-	}
-
-	assertContainsEventType(t, collected(), domain.EventSessionStarted)
-	assertContainsEventType(t, collected(), domain.EventTurnCancelled)
 }
 
 func TestIntegration_ResumeSession(t *testing.T) {

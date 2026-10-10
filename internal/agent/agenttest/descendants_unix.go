@@ -40,13 +40,35 @@ func recordDescendants(exe string) {
 }
 
 func liveChildren(ppid int) []int {
+	return processChildren()[ppid]
+}
+
+// LiveDescendants returns every live process descended from root by parent id,
+// root excluded; nil where the platform has no scan or the scan fails.
+func LiveDescendants(root int) []int {
+	children := processChildren()
+	var descendants []int
+	for queue := []int{root}; len(queue) > 0; queue = queue[1:] {
+		descendants = append(descendants, children[queue[0]]...)
+		queue = append(queue, children[queue[0]]...)
+	}
+	return descendants
+}
+
+// processChildren maps each parent id to its live children, in table order.
+// The table never lists the reading ps: it is a child of the caller that has
+// exited by the time its output is parsed, so listing it would report a
+// process that is already gone.
+func processChildren() map[int][]int {
 	ctx, cancel := context.WithTimeout(context.Background(), liveChildrenBound)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-Ao", "pid=,ppid=").Output() //nolint:gosec // fixed command and fixed arguments
+	cmd := exec.CommandContext(ctx, "ps", "-Ao", "pid=,ppid=") //nolint:gosec // fixed command and fixed arguments
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
-	var children []int
+	reader := cmd.Process.Pid
+	children := make(map[int][]int)
 	for line := range strings.SplitSeq(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
@@ -54,10 +76,10 @@ func liveChildren(ppid int) []int {
 		}
 		pid, pidErr := strconv.Atoi(fields[0])
 		parent, parentErr := strconv.Atoi(fields[1])
-		if pidErr != nil || parentErr != nil || parent != ppid || pid == ppid {
+		if pidErr != nil || parentErr != nil || pid == parent || pid == reader {
 			continue
 		}
-		children = append(children, pid)
+		children[parent] = append(children[parent], pid)
 	}
 	return children
 }

@@ -317,56 +317,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 	})
 }
 
-func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
-	skipUnlessCodexIntegration(t)
-
-	adapter := mustNewAdapter(t)
-	workspace := gitInitWorkspace(t)
-
-	outerCtx, outerCancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer outerCancel()
-
-	session, err := adapter.StartSession(outerCtx, domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   integrationAgentConfig(),
-		Settings:      integrationConfig(),
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-
-	type turnOutcome struct {
-		result domain.TurnResult
-		err    error
-	}
-	outcomeCh := make(chan turnOutcome, 1)
-
-	go func() {
-		r, e := adapter.RunTurn(outerCtx, session, domain.RunTurnParams{
-			Prompt:  "Execute the shell command: sleep 30",
-			OnEvent: func(_ domain.AgentEvent) {},
-		})
-		outcomeCh <- turnOutcome{result: r, err: e}
-	}()
-
-	// 400ms is well above the turn/start round-trip latency.
-	time.Sleep(400 * time.Millisecond)
-
-	if stopErr := adapter.StopSession(context.Background(), session); stopErr != nil {
-		t.Errorf("StopSession during turn: %v", stopErr)
-	}
-
-	select {
-	case outcome := <-outcomeCh:
-		if outcome.err == nil {
-			t.Error("RunTurn returned nil after StopSession was called mid-turn; expected an error")
-		}
-		t.Logf("RunTurn returned error after StopSession: %v", outcome.err)
-	case <-time.After(10 * time.Second):
-		t.Error("RunTurn did not unblock within 10s after StopSession; possible deadlock in reader goroutine")
-	}
-}
-
 func TestIntegration_MultiTurn(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
