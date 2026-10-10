@@ -23,7 +23,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
-// Scenario selects which of the two scripts the driver runs.
+// Scenario selects which script the driver runs.
 type Scenario int
 
 const (
@@ -33,6 +33,10 @@ const (
 	// ScenarioExhaustion scripts the read call alone, so the request that
 	// follows its result arrives after the script is exhausted.
 	ScenarioExhaustion
+
+	// ScenarioPermissionRefusal scripts a guarded call the session's policy
+	// refuses, then a closing answer.
+	ScenarioPermissionRefusal
 )
 
 // Binding is one agent kind's fixture for [AssertConformance]: how to reach
@@ -47,6 +51,17 @@ type Binding struct {
 	Finish        ToolChoice // the turn's last answer; nil answers with text
 	Launch        func(t *testing.T, env Environment) Launch
 	Inspect       func(t *testing.T, run Run) // optional adapter-only assertions
+
+	PermissionRefusal *PermissionRefusal // nil runs no refusal scenario
+}
+
+// PermissionRefusal is a binding's fixture for the permission refusal
+// scenario.
+type PermissionRefusal struct {
+	Passthrough map[string]any               // the scenario session's settings; nil hands Binding.Passthrough
+	Guarded     func(path string) ToolChoice // prints the file at path through a tool the policy gates
+	Notice      string                       // the notification the adapter emits for the refusal
+	Skip        string                       // non-empty skips the scenario with this reason
 }
 
 // Environment is what the driver hands a binding's Launch.
@@ -54,7 +69,7 @@ type Environment struct {
 	Scenario  Scenario
 	URL       string // Server.URL()
 	Home      string // HOME and every XDG base directory point here
-	Workspace string // a git work tree holding the nonce file
+	Workspace string // a git work tree
 	Sentinel  string
 	Events    func() []domain.AgentEvent // a copy of the events delivered so far
 }
@@ -103,7 +118,11 @@ const sortieStatusTurn = 731948265
 // endpoint served, each scripted tool call reaches one normalized tool result,
 // the scripted sortie_status call reaches the Sortie MCP server and succeeds,
 // the credential stays in its header, and requests beyond the script end the
-// turn failed with the endpoint's last message.
+// turn failed with the endpoint's last message. When Binding.PermissionRefusal
+// is set it also runs the refusal scenario and fails unless the refused call
+// reaches the model as a tool result, the file's content reaches no request,
+// and the adapter reports it as one errored tool result with the permission
+// notice.
 //
 // It sets environment variables for the rest of the test, so it must not be
 // called from a test that uses t.Parallel.
@@ -113,6 +132,9 @@ func AssertConformance(t *testing.T, b Binding) {
 	requireValidBinding(t, b)
 	t.Run("scripted turn", func(t *testing.T) { runScenario(t, b, ScenarioTurn) })
 	t.Run("script exhaustion", func(t *testing.T) { runScenario(t, b, ScenarioExhaustion) })
+	if b.PermissionRefusal != nil {
+		t.Run("permission refusal", func(t *testing.T) { runPermissionRefusal(t, b) })
+	}
 }
 
 func requireValidBinding(t *testing.T, b Binding) {
@@ -128,6 +150,10 @@ func requireValidBinding(t *testing.T, b Binding) {
 		t.Fatalf("Binding.Read is nil, want a function selecting the read tool")
 	case b.Launch == nil:
 		t.Fatalf("Binding.Launch is nil, want a function launching the runtime")
+	case b.PermissionRefusal != nil && b.PermissionRefusal.Guarded == nil:
+		t.Fatalf("Binding.PermissionRefusal.Guarded is nil, want a function selecting the guarded tool")
+	case b.PermissionRefusal != nil && b.PermissionRefusal.Notice == "":
+		t.Fatalf("Binding.PermissionRefusal.Notice is empty, want the notification the adapter emits for the refusal")
 	}
 }
 
@@ -159,64 +185,14 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	}
 	server := Start(reporter, script)
 
-	home := t.TempDir()
-	sentinel := "sortie-scripted-credential-" + randomHex(t, 16)
-	isolateEnvironment(t, b, home, sentinel)
-
-	events := &eventCollector{}
-	environment := Environment{
-		Scenario:  scenario,
-		URL:       server.URL(),
-		Home:      home,
-		Workspace: workspace,
-		Sentinel:  sentinel,
-		Events:    events.snapshot,
-	}
-	launch := b.Launch(t, environment)
-	for _, key := range slices.Sorted(maps.Keys(launch.Env)) {
-		t.Setenv(key, launch.Env[key])
-	}
-
-	newAdapter, err := registry.Agents.Get(b.Kind)
-	if err != nil {
-		t.Fatalf("registry.Agents.Get(%q) error = %v", b.Kind, err)
-	}
-	adapter, err := newAdapter()
-	if err != nil {
-		t.Fatalf("construct %q adapter error = %v", b.Kind, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
-	defer cancel()
-	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   launch.Config,
-		MCPConfigPath: tools.ConfigPath,
-		Settings:      b.Passthrough,
+	run, launch, timedOut := driveTurn(t, b, drive{
+		scenario:      scenario,
+		server:        server,
+		workspace:     workspace,
+		mcpConfigPath: tools.ConfigPath,
+		settings:      b.Passthrough,
+		prompt:        "Read the file " + file + " and report its contents.",
 	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(server.Exchanges()))
-	}
-	result, runErr := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  "Read the file " + file + " and report its contents.",
-		OnEvent: events.collect,
-	})
-	timedOut := ctx.Err() != nil
-
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), stopBound)
-	defer stopCancel()
-	if err := adapter.StopSession(stopCtx, session); err != nil {
-		t.Logf("StopSession() error = %v", err)
-	}
-
-	run := Run{
-		Environment: environment,
-		Session:     session,
-		Result:      result,
-		Err:         runErr,
-		Events:      events.snapshot(),
-		Exchanges:   server.Exchanges(),
-	}
 
 	if scenario == ScenarioExhaustion {
 		failures := recorded.snapshot()
@@ -243,6 +219,122 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	})
 	t.Run("credential containment", func(t *testing.T) {
 		reportViolations(t, containmentViolations(run, streams))
+	})
+	if b.Inspect != nil {
+		t.Run("adapter", func(t *testing.T) { b.Inspect(t, run) })
+	}
+}
+
+// drive is what one scripted turn needs beyond the binding.
+type drive struct {
+	scenario      Scenario
+	server        *Server
+	workspace     string
+	mcpConfigPath string
+	settings      map[string]any
+	prompt        string
+}
+
+// driveTurn isolates the environment, launches the binding's runtime through
+// its adapter, runs one turn against d.server and stops the session. timedOut
+// reports whether the turn exhausted its bound.
+func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedOut bool) {
+	t.Helper()
+
+	home := t.TempDir()
+	sentinel := "sortie-scripted-credential-" + randomHex(t, 16)
+	isolateEnvironment(t, b, home, sentinel)
+
+	events := &eventCollector{}
+	environment := Environment{
+		Scenario:  d.scenario,
+		URL:       d.server.URL(),
+		Home:      home,
+		Workspace: d.workspace,
+		Sentinel:  sentinel,
+		Events:    events.snapshot,
+	}
+	launch = b.Launch(t, environment)
+	for _, key := range slices.Sorted(maps.Keys(launch.Env)) {
+		t.Setenv(key, launch.Env[key])
+	}
+
+	newAdapter, err := registry.Agents.Get(b.Kind)
+	if err != nil {
+		t.Fatalf("registry.Agents.Get(%q) error = %v", b.Kind, err)
+	}
+	adapter, err := newAdapter()
+	if err != nil {
+		t.Fatalf("construct %q adapter error = %v", b.Kind, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
+	defer cancel()
+	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		WorkspacePath: d.workspace,
+		AgentConfig:   launch.Config,
+		MCPConfigPath: d.mcpConfigPath,
+		Settings:      d.settings,
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(d.server.Exchanges()))
+	}
+	result, runErr := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt:  d.prompt,
+		OnEvent: events.collect,
+	})
+	timedOut = ctx.Err() != nil
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), stopBound)
+	defer stopCancel()
+	if err := adapter.StopSession(stopCtx, session); err != nil {
+		t.Logf("StopSession() error = %v", err)
+	}
+
+	run = Run{
+		Environment: environment,
+		Session:     session,
+		Result:      result,
+		Err:         runErr,
+		Events:      events.snapshot(),
+		Exchanges:   d.server.Exchanges(),
+	}
+	return run, launch, timedOut
+}
+
+func runPermissionRefusal(t *testing.T, b Binding) {
+	t.Helper()
+
+	r := b.PermissionRefusal
+	if r.Skip != "" {
+		t.Skip(r.Skip)
+	}
+
+	nonce := "nonce-" + randomHex(t, 8)
+	workspace := newWorkspace(t)
+	guarded := filepath.Join(t.TempDir(), "guarded.txt")
+	if err := os.WriteFile(guarded, []byte(nonce+"\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", guarded, err)
+	}
+
+	script := []Response{{Call: r.Guarded(guarded), Usage: firstTurnUsage}, closingResponse(b)}
+	settings := r.Passthrough
+	if settings == nil {
+		settings = b.Passthrough
+	}
+	run, _, _ := driveTurn(t, b, drive{
+		scenario:  ScenarioPermissionRefusal,
+		server:    Start(t, script),
+		workspace: workspace,
+		settings:  settings,
+		prompt:    "Read the file " + guarded + " and report its contents.",
+	})
+
+	t.Run("turn outcome", func(t *testing.T) {
+		reportViolations(t, turnOutcomeViolations(run, len(script)))
+	})
+	t.Run("refused call", func(t *testing.T) {
+		reportViolations(t, refusedCallViolations(run, nonce, r.Notice))
 	})
 	if b.Inspect != nil {
 		t.Run("adapter", func(t *testing.T) { b.Inspect(t, run) })
@@ -498,6 +590,51 @@ func turnOutcomeViolations(run Run, entries int) []string {
 		case ExchangeExhausted, ExchangeUnmatched, ExchangeUnrouted, ExchangeUnsupported, ExchangeInvalid:
 			v.add("%s ended %s: %s", requestLabel(ex), ex.Kind, ex.Answer.Text)
 		}
+	}
+	return v.items
+}
+
+func refusedCallViolations(run Run, nonce, notice string) []string {
+	v := &findings{property: "refused call"}
+
+	if turns := exchangesOfKind(run.Exchanges, ExchangeTurn); len(turns) >= 2 {
+		call, next := turns[0], turns[1]
+		answers := slices.DeleteFunc(slices.Clone(next.ToolResults), func(r ToolResult) bool { return !answersCall(call.Answer, r) })
+		if len(answers) != 1 {
+			v.add("%s carries %d tool results answering the guarded call, want exactly one", requestLabel(next), len(answers))
+		}
+	}
+
+	for _, ex := range run.Exchanges {
+		if strings.Contains(string(ex.Body), nonce) {
+			v.add("%s carried the file's content in its body", requestLabel(ex))
+		}
+	}
+
+	toolResults, erroredResult := 0, -1
+	for i, event := range run.Events {
+		if event.Type == domain.EventToolResult {
+			toolResults++
+			if !event.ToolError {
+				erroredResult = i
+			}
+		}
+	}
+	if toolResults != 1 {
+		v.add("%d tool_result events, want exactly one", toolResults)
+	}
+	if erroredResult >= 0 {
+		v.add("event %d reports a successful tool result, want a tool error", erroredResult)
+	}
+
+	notices := 0
+	for _, event := range run.Events {
+		if event.Type == domain.EventNotification && event.Message == notice {
+			notices++
+		}
+	}
+	if notices != 1 {
+		v.add("%d notification events with message %q, want exactly one", notices, notice)
 	}
 	return v.items
 }

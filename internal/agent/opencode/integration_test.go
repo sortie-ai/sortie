@@ -12,6 +12,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
@@ -130,15 +131,24 @@ func scriptedProviderDocument(url string) string {
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	fakemodel.AssertConformance(t, fakemodel.Binding{
-		Kind: "opencode",
-		Passthrough: map[string]any{
+	scriptedSettings := func(skipPermissions bool) map[string]any {
+		return map[string]any{
 			"model":                        "scripted/scripted-model",
-			"dangerously_skip_permissions": true,
+			"dangerously_skip_permissions": skipPermissions,
 			"disable_autocompact":          true,
-		},
+		}
+	}
+
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind:          "opencode",
+		Passthrough:   scriptedSettings(true),
 		CredentialEnv: []string{"GOOGLE_GENERATIVE_AI_API_KEY"},
 		Read:          fakemodel.ReadFile,
+		PermissionRefusal: &fakemodel.PermissionRefusal{
+			Passthrough: scriptedSettings(false),
+			Guarded:     fakemodel.ReadFile,
+			Notice:      agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).Notice,
+		},
 		// 2.x offers MCP tools to the model only inside its Code Mode
 		// runtime, which the execute tool scripts.
 		SortieStatus: fakemodel.Named("execute", json.RawMessage(fmt.Sprintf(
@@ -230,58 +240,6 @@ func TestIntegration_InvalidModelFailure(t *testing.T) {
 	if !sawModelNotFound {
 		t.Errorf("expected at least one turn_failed event with invalid-model detail, events=%+v", events)
 	}
-}
-
-func TestIntegration_PermissionDeny(t *testing.T) {
-	skipIfNotEnabled(t)
-
-	cfg := integrationConfig()
-	cfg["dangerously_skip_permissions"] = false
-
-	a := mustNewAdapter(t)
-
-	session := mustStartIntegrationSessionWith(t, a, cfg)
-	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
-
-	// The prompt explicitly names the tool so the model is compelled to invoke
-	// it rather than narrating intent or answering from memory.
-	events, _ := collectAllEvents(t, a, session,
-		"Use your file-read tool to read /etc/hostname and return the exact contents verbatim. You must call the tool — do not answer from memory and do not describe what you would do.")
-
-	// Strong signal: OpenCode auto-rejects external_directory access in
-	// headless mode without --dangerously-skip-permissions, emitting a
-	// tool_use error envelope.
-	var sawToolError bool
-	for _, e := range events {
-		if e.Type == domain.EventToolResult && e.ToolError {
-			sawToolError = true
-			break
-		}
-	}
-	if sawToolError {
-		return
-	}
-
-	// Weak signal: the model acknowledged the denial in assistant text without
-	// emitting a tool result (e.g. OpenCode reported the block as a
-	// notification before the tool completed).
-	denialKeywords := []string{"denied", "permission", "not allowed", "cannot", "can't", "unable"}
-	for _, e := range events {
-		if e.Type != domain.EventNotification && e.Type != domain.EventOtherMessage && e.Type != domain.EventTurnFailed {
-			continue
-		}
-		msg := strings.ToLower(e.Message)
-		for _, kw := range denialKeywords {
-			if strings.Contains(msg, kw) {
-				return
-			}
-		}
-	}
-
-	// Neither signal was present: the model did not attempt the tool and did
-	// not report a denial. This is a non-deterministic model choice, not an
-	// adapter defect. Skip rather than block the release pipeline.
-	t.Skip("model neither invoked the file-read tool nor reported a denial; skipping to avoid blocking release on non-deterministic model behavior")
 }
 
 func TestIntegration_TurnCancellation(t *testing.T) {

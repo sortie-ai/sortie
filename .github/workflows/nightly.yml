@@ -105,6 +105,7 @@ jobs:
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
             clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
+            clientprotocol_asking_command: "gemini --acp"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
             clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
 
@@ -288,6 +289,7 @@ jobs:
           TEST_PATH: ${{ matrix.test_path }}
           TIMEOUT: ${{ matrix.timeout }}
           SORTIE_CLIENTPROTOCOL_COMMAND: ${{ matrix.clientprotocol_command }}
+          SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: ${{ matrix.clientprotocol_asking_command }}
           SORTIE_CLIENTPROTOCOL_PROFILE: ${{ matrix.clientprotocol_profile }}
           SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: ${{ matrix.clientprotocol_model_base_url_env }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
