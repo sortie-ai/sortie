@@ -1868,8 +1868,8 @@ func TestAuthenticateIfNeeded_LoginWaitEOF(t *testing.T) {
 		2: `{"id":2,"result":{}}`,
 	})
 
-	if got := readTimeout(state); got != 30*time.Second {
-		t.Fatalf("readTimeout() = %v, want the 30s default", got)
+	if got := agentcore.ReadTimeout(state.agentConfig); got != 30*time.Second {
+		t.Fatalf("ReadTimeout() = %v, want the 30s default", got)
 	}
 
 	done := make(chan error, 1)

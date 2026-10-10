@@ -12,7 +12,8 @@ import (
 // "stream": true, or one asking for a json_schema text format, is a shape the
 // codec does not answer.
 //
-// A request that declares no function tool is auxiliary: it is answered
+// A request that declares no function tool, at the top level or as a member
+// of a namespace, is auxiliary: it is answered
 // outside the script and its usage still counts, because a runtime keeps the
 // figure of every request it makes. Tools of any other type, such as a hosted
 // web search, do not make a request a turn request.
@@ -31,16 +32,19 @@ func (responsesCodec) route(method, path string) (route, bool) {
 	return route{}, method == http.MethodPost && path == "/v1/responses"
 }
 
+type responsesTool struct {
+	Type       string          `json:"type"`
+	Name       string          `json:"name"`
+	Parameters json.RawMessage `json:"parameters"`
+	Tools      []responsesTool `json:"tools"` // a namespace's members
+}
+
 type responsesRequest struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
-	Tools  []struct {
-		Type       string          `json:"type"`
-		Name       string          `json:"name"`
-		Parameters json.RawMessage `json:"parameters"`
-	} `json:"tools"`
-	Input json.RawMessage `json:"input"`
-	Text  struct {
+	Model  string          `json:"model"`
+	Stream bool            `json:"stream"`
+	Tools  []responsesTool `json:"tools"`
+	Input  json.RawMessage `json:"input"`
+	Text   struct {
 		Format struct {
 			Type string `json:"type"`
 		} `json:"format"`
@@ -67,8 +71,15 @@ func (responsesCodec) decode(_ route, body []byte) (decoded, error) {
 		dec.unsupported = "response schema"
 	}
 	for _, tool := range req.Tools {
-		if tool.Type == "function" {
+		switch tool.Type {
+		case "function":
 			dec.tools = append(dec.tools, Tool{Name: tool.Name, Parameters: tool.Parameters})
+		case "namespace":
+			for _, member := range tool.Tools {
+				if member.Type == "function" {
+					dec.tools = append(dec.tools, Tool{Name: member.Name, Namespace: tool.Name, Parameters: member.Parameters})
+				}
+			}
 		}
 	}
 
@@ -140,6 +151,7 @@ type responsesCallItem struct {
 	Status    string `json:"status"`
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
 	Arguments string `json:"arguments"`
 }
 
@@ -185,7 +197,7 @@ func (responsesCodec) render(r reply) rendered {
 		callID = fmt.Sprintf("call_scripted_%d", r.seq)
 		itemID := fmt.Sprintf("fc_scripted_%d", r.seq)
 		arguments := string(r.call.Arguments)
-		started := responsesCallItem{ID: itemID, Type: "function_call", Status: "in_progress", CallID: callID, Name: r.call.Name}
+		started := responsesCallItem{ID: itemID, Type: "function_call", Status: "in_progress", CallID: callID, Name: r.call.Name, Namespace: r.call.Namespace}
 		finished := started
 		finished.Status, finished.Arguments = "completed", arguments
 		final = encodeJSON(finished)

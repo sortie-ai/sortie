@@ -136,7 +136,7 @@ func assertCredentialVerificationOutcome(t credentialVerificationReporter, name 
 func VerifyLive(adapter domain.AgentAdapter, params domain.StartSessionParams) (domain.TurnResult, error) {
 	return agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
 		Session:   params,
-		TurnBound: 300 * time.Second,
+		TurnBound: agenttest.LiveTurnBound,
 		StopBound: 30 * time.Second,
 	})
 }
@@ -153,7 +153,7 @@ func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, par
 	var events []domain.AgentEvent
 	result, err := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
 		Session:   params,
-		TurnBound: 300 * time.Second,
+		TurnBound: agenttest.LiveTurnBound,
 		StopBound: 30 * time.Second,
 		OnEvent: func(event domain.AgentEvent) {
 			mu.Lock()
@@ -219,7 +219,7 @@ func SetRefusedCredential(t *testing.T, envVar string) {
 // 30-second context regardless of the turn's outcome. Returns
 // StartSession's error, else RunTurn's, else nil.
 func RunWorkingLive(adapter domain.AgentAdapter, params domain.StartSessionParams) error {
-	return runWorking(context.Background(), adapter, params, 300*time.Second, 30*time.Second)
+	return runWorking(context.Background(), adapter, params, agenttest.LiveTurnBound, 30*time.Second)
 }
 
 // runWorking drives one working session through adapter: StartSession

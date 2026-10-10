@@ -7,7 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// LiveTurnBound bounds one live-model turn in a gated suite. The nightly
+// runs the shortest agent suites under a 300-second go test timeout, and a
+// suite's slowest passing turns take about 70 seconds, so a turn that hangs
+// fails on its own here instead of panicking the package and losing every
+// later test's result.
+const LiveTurnBound = 2 * time.Minute
 
 // RequireSetsid skips t cleanly when setsid is not on PATH. An
 // escaped-descendant fixture needs it to detach a background job into its own

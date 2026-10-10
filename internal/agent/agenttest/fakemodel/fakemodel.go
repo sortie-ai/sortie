@@ -43,12 +43,14 @@ type Response struct {
 // Tool is one function tool a model request declares.
 type Tool struct {
 	Name       string
+	Namespace  string          // the group the request nests the tool in; empty when none
 	Parameters json.RawMessage // the argument JSON Schema exactly as declared
 }
 
 // FunctionCall is a call resolved against one request's declared tools.
 type FunctionCall struct {
 	Name      string
+	Namespace string          // the called tool's Namespace
 	Arguments json.RawMessage // a JSON object
 }
 

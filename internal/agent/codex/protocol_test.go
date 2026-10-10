@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -41,26 +40,6 @@ func (w *capturingWriteCloser) find(prefix string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func TestReadTimeout_CustomValue(t *testing.T) {
-	t.Parallel()
-
-	state := &sessionState{agentConfig: domain.AgentConfig{ReadTimeoutMS: 5000}}
-	got := readTimeout(state)
-	if got != 5*time.Second {
-		t.Errorf("readTimeout() = %v, want 5s", got)
-	}
-}
-
-func TestReadTimeout_DefaultsTo30s(t *testing.T) {
-	t.Parallel()
-
-	state := &sessionState{}
-	got := readTimeout(state)
-	if got != 30*time.Second {
-		t.Errorf("readTimeout() = %v, want 30s", got)
-	}
 }
 
 func TestIsAgentError_WithAgentError(t *testing.T) {

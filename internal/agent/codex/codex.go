@@ -785,7 +785,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			// turn/completed: past this deadline the interrupt is presumed
 			// lost, and the loop returns rather than reading until stdout
 			// closes.
-			cancelDeadline = time.After(readTimeout(state))
+			cancelDeadline = time.After(agentcore.ReadTimeout(state.agentConfig))
 			continue
 
 		case <-cancelDeadline:

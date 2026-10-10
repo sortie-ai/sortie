@@ -79,10 +79,11 @@ func mustBuildSSHSessionWithLocalScript(t *testing.T, workDir, script, sshHost s
 			RemoteCommand: "opencode",
 			SSHHost:       sshHost,
 		},
-		passthrough: pt,
-		baseLogger:  slog.Default(),
-		usage:       agentcore.NewTurnEndUsage(),
-		drainGrace:  procutil.DefaultDrainGrace,
+		passthrough:       pt,
+		baseLogger:        slog.Default(),
+		usage:             agentcore.NewTurnEndUsage(),
+		drainGrace:        procutil.DefaultDrainGrace,
+		firstEventTimeout: agentcore.FirstResponseTimeout(domain.AgentConfig{}),
 	}}
 }
 
@@ -2153,11 +2154,12 @@ sleep 5`)
 	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 100},
+		AgentConfig:   domain.AgentConfig{Command: script},
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
 	}
+	session.Internal.(*sessionState).firstEventTimeout = 100 * time.Millisecond
 
 	events, result, err := collectEvents(t, a, session, "work")
 	if result.ExitReason != domain.EventTurnFailed {
@@ -2182,6 +2184,28 @@ sleep 5`)
 		TerminalErrorKind: domain.ErrResponseTimeout,
 		TerminalMessage:   wantMessage,
 	}, result, err)
+}
+
+func TestRunTurn_FirstEventLaterThanReadTimeoutCompletes(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	runPath := writeFixtureFile(t, tmpDir, "run.jsonl", string(loadFixture(t, "simple_turn.jsonl")))
+	script := writeOpenCodeScript(t, tmpDir, "sleep 0.5; cat '"+runPath+"'")
+
+	a, _ := NewOpenCodeAdapter()
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 100},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	_, result, err := collectEvents(t, a, session, "work")
+	if err != nil || result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn() = (%q, %v), want a completed turn: the model answering slower than agent.read_timeout_ms is healthy", result.ExitReason, err)
+	}
 }
 
 func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
@@ -2833,12 +2857,12 @@ sleep 3600
 }
 
 // TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit asserts that an
-// observed exit disarms the read timer: agent.read_timeout_ms is
-// configured shorter than the injected sessionState.drainGrace, and the
+// observed exit disarms the read timer: sessionState.firstEventTimeout is
+// set shorter than the injected sessionState.drainGrace, and the
 // subprocess exits without ever emitting a JSON event while an escaped
 // descendant holds the output handle. The published disposition must be
 // the exit-based one, never ErrResponseTimeout: the exit is observed and
-// the read timer disarmed well before read_timeout_ms could elapse.
+// the read timer disarmed well before it could elapse.
 func TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit(t *testing.T) {
 	agenttest.RequireSetsid(t)
 	t.Parallel()
@@ -2859,11 +2883,12 @@ esac
 		// loop (writeEscapedHolderSpawn), polling every 10ms, so the
 		// read timeout needs enough margin over that polling latency to
 		// keep this deterministic rather than racing the scheduler.
-		AgentConfig: domain.AgentConfig{Command: script, ReadTimeoutMS: 300},
+		AgentConfig: domain.AgentConfig{Command: script},
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
 	}
+	session.Internal.(*sessionState).firstEventTimeout = 300 * time.Millisecond
 	session.Internal.(*sessionState).drainGrace = 800 * time.Millisecond
 
 	_, result, runErr := collectEvents(t, a, session, "work")
@@ -2906,7 +2931,7 @@ exit 0
 // been observed must still set the first-JSON latch, so finalizeExitedTurn
 // does not re-emit the direct child's standard error at WARN on a turn
 // that otherwise succeeded. The gate opens no earlier than
-// agent.read_timeout_ms after the direct child has already exited and
+// sessionState.firstEventTimeout after the direct child has already exited and
 // started the descendant, so by the time it opens the read timer has
 // long been disarmed by the observed exit.
 func TestRunTurn_LatchSetDuringPostExitDrain(t *testing.T) {
@@ -2923,12 +2948,13 @@ func TestRunTurn_LatchSetDuringPostExitDrain(t *testing.T) {
 	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: readTimeoutMS},
+		AgentConfig:   domain.AgentConfig{Command: script},
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
 	}
 	state := session.Internal.(*sessionState)
+	state.firstEventTimeout = readTimeoutMS * time.Millisecond
 	state.baseLogger = slog.New(spy)
 	state.drainGrace = 2 * time.Second
 
@@ -2990,11 +3016,12 @@ printf 'direct child stderr\n' >&2
 	a, _ := NewOpenCodeAdapter()
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 200},
+		AgentConfig:   domain.AgentConfig{Command: script},
 	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
 	}
+	session.Internal.(*sessionState).firstEventTimeout = 200 * time.Millisecond
 	// Longer than the read timeout, so the escaped holder keeps the
 	// result channel shut for a window the timer would otherwise win.
 	session.Internal.(*sessionState).drainGrace = 1500 * time.Millisecond
@@ -3186,6 +3213,7 @@ sleep 1000`)
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
 	}
+	session.Internal.(*sessionState).firstEventTimeout = 1500 * time.Millisecond
 
 	result, _ := a.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "only prompt",

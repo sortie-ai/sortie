@@ -19,12 +19,10 @@ package codex
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -561,96 +559,22 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 }
 
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs("../../../")
-	if err != nil {
-		t.Fatalf("resolving repo root: %v", err)
-	}
-	return abs
-}
-
-// buildSortieBinary builds the sortie binary from the repository
-// root into a fresh temp directory and returns its absolute path.
-// The generated MCP config's "command" must name a real, runnable
-// binary, matching what internal/orchestrator/mcpconfig.go's
-// GenerateMCPConfig writes in production.
-func buildSortieBinary(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	binPath := filepath.Join(dir, "sortie")
-	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", binPath, "./cmd/sortie")
-	cmd.Dir = repoRoot(t)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/sortie: %v\n%s", err, out)
-	}
-	return binPath
-}
-
-const minimalMCPServerWorkflow = "---\npolling:\n  interval_ms: 30000\nagent:\n  kind: mock\n---\nDo something.\n"
-
-// writeIntegrationMCPConfig writes a real generated-shape MCP config
-// naming one server, "sortie-tools", whose command launches
-// "sortie mcp-server --workflow <wfPath>" with SORTIE_WORKSPACE set,
-// so the sortie_status tool (gated only on a non-empty workspace
-// path) is the one tool this session's sidecar serves. Returns the
-// config's path.
-func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string) string {
-	t.Helper()
-
-	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
-	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	doc := fmt.Sprintf(
-		`{"mcpServers":{"sortie-tools":{"command":%s,"args":["mcp-server","--workflow",%s],"env":{"SORTIE_WORKSPACE":%s}}}}`,
-		mustJSONString(t, sortieBin), mustJSONString(t, wfPath), mustJSONString(t, workspace),
-	)
-	if err := os.WriteFile(mcpConfigPath, []byte(doc), 0o600); err != nil {
-		t.Fatalf("WriteFile mcp.json: %v", err)
-	}
-	return mcpConfigPath
-}
-
-func mustJSONString(t *testing.T, s string) string {
-	t.Helper()
-	encoded, err := json.Marshal(s)
-	if err != nil {
-		t.Fatalf("json.Marshal(%q): %v", s, err)
-	}
-	return string(encoded)
-}
-
-// TestIntegration_ToolRoundTrip drives one real turn with a generated
-// MCP config translated into codex's own launch arguments, and
-// asserts the sidecar saw a successful sortie_status tools/call. The
-// proof is the recorded JSON-RPC traffic between the runtime and the
-// sidecar, not a tool result event, which the runtime also reports for
-// tools that never reach Sortie.
 func TestIntegration_ToolRoundTrip(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
-	sortieBin := buildSortieBinary(t)
 	workspace := gitInitWorkspace(t)
-
-	wfPath := filepath.Join(workspace, "WORKFLOW.md")
-	if err := os.WriteFile(wfPath, []byte(minimalMCPServerWorkflow), 0o644); err != nil {
-		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
-	}
-	relay := agenttest.NewRecordingMCPRelay(t, t.TempDir(), sortieBin)
-	mcpConfigPath := writeIntegrationMCPConfig(t, workspace, relay.Command, wfPath)
+	tools := agenttest.NewSortieTools(t, workspace)
 
 	adapter := mustNewAdapter(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), agenttest.LiveTurnBound)
 	defer cancel()
 
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   integrationAgentConfig(),
 		Settings:      integrationConfig(),
-		MCPConfigPath: mcpConfigPath,
+		MCPConfigPath: tools.ConfigPath,
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -678,7 +602,9 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 	if result.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
-	relay.AssertToolCallSucceeded(t, "sortie_status")
+	// The adapter names every MCP call after its item type, and the session
+	// declares no server but Sortie's, so any such event is an attempt at it.
+	tools.Relay.AssertModelToolCall(t, agenttest.SortieStatusTool, events, "mcpToolCall")
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

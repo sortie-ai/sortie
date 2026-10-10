@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/opencode"
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -101,12 +101,9 @@ func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID
 	return session
 }
 
-// collectAllEvents runs a turn and returns all events and the result.
-// The per-turn context allows up to 5 minutes so that tests are not tripped
-// by slow first-turn processing on a cold-start instance.
 func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Session, prompt string) ([]domain.AgentEvent, domain.TurnResult) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), agenttest.LiveTurnBound)
 	defer cancel()
 
 	var events []domain.AgentEvent
@@ -142,6 +139,10 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		},
 		CredentialEnv: []string{"GOOGLE_GENERATIVE_AI_API_KEY"},
 		Read:          fakemodel.ReadFile,
+		// 2.x offers MCP tools to the model only inside its Code Mode
+		// runtime, which the execute tool scripts.
+		SortieStatus: fakemodel.Named("execute", json.RawMessage(fmt.Sprintf(
+			`{"code":"return await tools[\"%s\"].%s()"}`, agenttest.SortieToolsServer, agenttest.SortieStatusTool))),
 		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
 			// The adapter drops an inherited OPENCODE_CONFIG_CONTENT and writes
 			// its own, so the provider rides in a file OPENCODE_CONFIG names.
@@ -488,39 +489,6 @@ func assertRecordedToolServerIdentity(t *testing.T, raw []byte, wantDispatchID, 
 	}
 }
 
-// repoRoot returns the absolute path to the repository root, derived
-// from this test file's known location at internal/agent/opencode/.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs("../../../")
-	if err != nil {
-		t.Fatalf("resolving repo root: %v", err)
-	}
-	return abs
-}
-
-// buildSortieBinary builds the sortie binary from the repository
-// root into a fresh temp directory and returns its absolute path.
-// The generated MCP config's "command" must name a real, runnable
-// binary, matching what internal/orchestrator/mcpconfig.go's
-// GenerateMCPConfig writes in production.
-func buildSortieBinary(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	binPath := filepath.Join(dir, "sortie")
-	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", binPath, "./cmd/sortie")
-	cmd.Dir = repoRoot(t)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/sortie: %v\n%s", err, out)
-	}
-	return binPath
-}
-
-// minimalMCPServerWorkflow is a WORKFLOW.md body with no tracker
-// section: just enough for workflow.Load and config.NewServiceConfig
-// to succeed.
-const minimalMCPServerWorkflow = "---\npolling:\n  interval_ms: 30000\nagent:\n  kind: mock\n---\nDo something.\n"
-
 // mustJSONString renders s as a JSON string literal.
 func mustJSONString(t *testing.T, s string) string {
 	t.Helper()
@@ -531,49 +499,11 @@ func mustJSONString(t *testing.T, s string) string {
 	return string(encoded)
 }
 
-// writeIntegrationMCPConfig writes a real generated-shape MCP config
-// naming one server, "sortie-tools", whose command launches
-// "sortie mcp-server --workflow <wfPath>" with SORTIE_WORKSPACE set,
-// so the sortie_status tool (gated only on a non-empty workspace
-// path) is the one tool this session's sidecar serves. Returns the
-// config's path.
-func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string) string {
-	t.Helper()
-
-	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
-	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	doc := fmt.Sprintf(
-		`{"mcpServers":{"sortie-tools":{"command":%s,"args":["mcp-server","--workflow",%s],"env":{"SORTIE_WORKSPACE":%s}}}}`,
-		mustJSONString(t, sortieBin), mustJSONString(t, wfPath), mustJSONString(t, workspace),
-	)
-	if err := os.WriteFile(mcpConfigPath, []byte(doc), 0o600); err != nil {
-		t.Fatalf("WriteFile mcp.json: %v", err)
-	}
-	return mcpConfigPath
-}
-
-// TestIntegration_ToolRoundTrip drives one real turn with a generated
-// MCP config translated into the runtime's own inline configuration
-// document, and asserts the sidecar saw a successful sortie_status
-// tools/call. The proof is the recorded JSON-RPC traffic between the
-// runtime and the sidecar: a tool result event proves nothing here,
-// because the runtime also reports its own tools and code-mode calls
-// that never reach Sortie.
 func TestIntegration_ToolRoundTrip(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	sortieBin := buildSortieBinary(t)
 	workspace := t.TempDir()
-
-	wfPath := filepath.Join(workspace, "WORKFLOW.md")
-	if err := os.WriteFile(wfPath, []byte(minimalMCPServerWorkflow), 0o644); err != nil {
-		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
-	}
-	relay := agenttest.NewRecordingMCPRelay(t, t.TempDir(), sortieBin)
-	mcpConfigPath := writeIntegrationMCPConfig(t, workspace, relay.Command, wfPath)
+	tools := agenttest.NewSortieTools(t, workspace)
 
 	a := mustNewAdapter(t)
 
@@ -586,7 +516,7 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 			Command:       integrationCommand(),
 			ReadTimeoutMS: 3 * 60 * 1000,
 		},
-		MCPConfigPath: mcpConfigPath,
+		MCPConfigPath: tools.ConfigPath,
 		Settings:      integrationConfig(),
 	})
 	if err != nil {
@@ -607,16 +537,23 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
 
-	relay.AssertToolCallSucceeded(t, "sortie_status")
+	// No attempt name: 2.x reaches MCP tools through its execute tool, which
+	// also runs code that calls nothing of Sortie's, so an execute event does
+	// not show an attempt. The scripted-model run proves that path instead.
+	tools.Relay.AssertModelToolCall(t, agenttest.SortieStatusTool, events)
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipIfNotEnabled(t)
 
+	defaults, err := config.NewServiceConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("config.NewServiceConfig(defaults) error = %v", err)
+	}
 	adapter := mustNewAdapter(t)
 	params := domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: defaults.Agent.ReadTimeoutMS},
 		Settings:      integrationConfig(),
 	}
 	credentialtest.VerifyLiveUsage(t, "opencode", adapter, params, integrationConfig())

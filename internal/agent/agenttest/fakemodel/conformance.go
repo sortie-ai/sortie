@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // Scenario selects which of the two scripts the driver runs.
@@ -41,6 +43,7 @@ type Binding struct {
 	Passthrough   map[string]any // the settings block handed to the session
 	CredentialEnv []string       // names given the sentinel beyond the kind's declared credential names
 	Read          func(path string) ToolChoice
+	SortieStatus  ToolChoice // the call that reaches sortie_status; nil calls the declared tool named for it
 	Finish        ToolChoice // the turn's last answer; nil answers with text
 	Launch        func(t *testing.T, env Environment) Launch
 	Inspect       func(t *testing.T, run Run) // optional adapter-only assertions
@@ -73,24 +76,32 @@ type Run struct {
 	Exchanges   []Exchange
 }
 
-// The two turn answers carry counts that differ from each other and from
-// every other count in play, so a mapping that drops, swaps or double-counts
-// a field changes a total. Their basis (Prompt plus Candidates) must stay
+// The turn answers carry counts that differ from each other and from every
+// other count in play, so a mapping that drops, swaps or double-counts a
+// field changes a total. Their basis (Prompt plus Candidates) must stay
 // above auxiliaryUsage's.
 var (
 	firstTurnUsage  = Usage{Prompt: 211, Candidates: 13, Thoughts: 5, CachedContent: 53, CacheWrite: 19}
+	sortieToolUsage = Usage{Prompt: 263, Candidates: 11, Thoughts: 3, CachedContent: 41, CacheWrite: 29}
 	secondTurnUsage = Usage{Prompt: 307, Candidates: 17, Thoughts: 7, CachedContent: 61, CacheWrite: 23}
 )
 
 const (
-	turnBound = 180 * time.Second
-	stopBound = 30 * time.Second
+	turnBound             = 180 * time.Second
+	stopBound             = 30 * time.Second
+	toolsListedBound      = 30 * time.Second
+	toolsRegisteredSettle = 2500 * time.Millisecond
 )
+
+// sortieStatusTurn is the turn number the scripted session's state file
+// records, so only a sortie_status result can carry it back to the model.
+const sortieStatusTurn = 731948265
 
 // AssertConformance launches b's installed runtime through its adapter
 // against a scripted model endpoint and fails t unless the run holds every
 // property: the turn ends completed, the reported usage equals everything the
-// endpoint served, the scripted tool call reaches one normalized tool result,
+// endpoint served, each scripted tool call reaches one normalized tool result,
+// the scripted sortie_status call reaches the Sortie MCP server and succeeds,
 // the credential stays in its header, and requests beyond the script end the
 // turn failed with the endpoint's last message.
 //
@@ -139,8 +150,12 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	}
 
 	script := []Response{{Call: b.Read(file), Usage: firstTurnUsage}}
+	var tools agenttest.SortieTools
 	if scenario == ScenarioTurn {
-		script = append(script, closingResponse(b))
+		tools = agenttest.NewSortieTools(t, workspace)
+		writeSortieState(t, workspace)
+		script[0].Call = afterToolsListed(tools.Relay, script[0].Call)
+		script = append(script, Response{Call: sortieStatusCall(b), Usage: sortieToolUsage}, closingResponse(b))
 	}
 	server := Start(reporter, script)
 
@@ -173,7 +188,12 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
 	defer cancel()
-	session, err := adapter.StartSession(ctx, domain.StartSessionParams{WorkspacePath: workspace, AgentConfig: launch.Config, Settings: b.Passthrough})
+	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   launch.Config,
+		MCPConfigPath: tools.ConfigPath,
+		Settings:      b.Passthrough,
+	})
 	if err != nil {
 		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(server.Exchanges()))
 	}
@@ -218,7 +238,8 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 		assertExactUsage(t, b, run)
 	})
 	t.Run("deterministic tool path", func(t *testing.T) {
-		reportViolations(t, toolPathViolations(run, nonce))
+		reportViolations(t, toolPathViolations(run, nonce, strconv.Itoa(sortieStatusTurn)))
+		tools.Relay.AssertToolCallSucceeded(t, agenttest.SortieStatusTool)
 	})
 	t.Run("credential containment", func(t *testing.T) {
 		reportViolations(t, containmentViolations(run, streams))
@@ -228,11 +249,44 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	}
 }
 
+// afterToolsListed holds the answer choice makes until the runtime has listed
+// the Sortie tools, so the request after this answer can call one: a runtime
+// connects its MCP servers alongside its first model request. The settle
+// covers registration that trails the listing with nothing on the wire to
+// wait for; opencode 2.x left the tools out of the next request in 6 of 20
+// runs without it and in none of 20 with a tenth of it.
+func afterToolsListed(relay agenttest.RecordingMCPRelay, choice ToolChoice) ToolChoice {
+	return func(declared []Tool) (FunctionCall, error) {
+		if relay.WaitToolsListed(toolsListedBound) {
+			time.Sleep(toolsRegisteredSettle)
+		}
+		return choice(declared)
+	}
+}
+
+func sortieStatusCall(b Binding) ToolChoice {
+	if b.SortieStatus != nil {
+		return b.SortieStatus
+	}
+	return serverTool(agenttest.SortieStatusTool)
+}
+
 func closingResponse(b Binding) Response {
 	if b.Finish != nil {
 		return Response{Call: b.Finish, Usage: secondTurnUsage}
 	}
 	return Response{Text: "The file holds the nonce.", Usage: secondTurnUsage}
+}
+
+// writeSortieState records the session state sortie_status reports, so its
+// call succeeds where a session without state would get a tool error.
+func writeSortieState(t *testing.T, workspace string) {
+	t.Helper()
+
+	state := fmt.Sprintf(`{"turn_number":%d,"max_turns":%d,"started_at":"2026-01-02T03:04:05Z"}`, sortieStatusTurn, sortieStatusTurn)
+	if err := workspacekit.WriteSortieFile(workspace, "state.json", []byte(state)); err != nil {
+		t.Fatalf("write session state in %s: %v", workspace, err)
+	}
 }
 
 func newWorkspace(t *testing.T) string {
@@ -448,15 +502,19 @@ func turnOutcomeViolations(run Run, entries int) []string {
 	return v.items
 }
 
-func toolPathViolations(run Run, nonce string) []string {
+// toolPathViolations checks the scripted calls in turn order: outputs[i] is
+// what the result of the call answering turn i must contain.
+func toolPathViolations(run Run, outputs ...string) []string {
 	v := &findings{property: "deterministic tool path"}
 
 	turns := exchangesOfKind(run.Exchanges, ExchangeTurn)
-	if len(turns) > 0 && turns[0].Answer.Call == nil {
-		v.add("%s was answered with text, want the scripted call", requestLabel(turns[0]))
-	}
-	if len(turns) > 1 {
-		checkToolResult(v, turns[0], turns[1], nonce, run.Environment.Sentinel)
+	for i, output := range outputs[:min(len(outputs), len(turns))] {
+		if turns[i].Answer.Call == nil {
+			v.add("%s was answered with text, want the scripted call", requestLabel(turns[i]))
+		}
+		if i+1 < len(turns) {
+			checkToolResult(v, turns[i], turns[i+1], output, run.Environment.Sentinel)
+		}
 	}
 
 	called := 0
@@ -488,24 +546,19 @@ func toolPathViolations(run Run, nonce string) []string {
 }
 
 // checkToolResult records a violation unless next carries exactly one tool
-// result, that result answers call's exchange, and its output holds the
-// nonce.
-func checkToolResult(v *findings, call, next Exchange, nonce, sentinel string) {
+// result answering call's exchange and its output holds want. A request
+// resends the whole conversation, so it also carries earlier calls' results.
+func checkToolResult(v *findings, call, next Exchange, want, sentinel string) {
 	if call.Answer.Call == nil {
 		return
 	}
-	if len(next.ToolResults) != 1 {
-		v.add("%s carries %d tool results, want exactly one", requestLabel(next), len(next.ToolResults))
+	answers := slices.DeleteFunc(slices.Clone(next.ToolResults), func(r ToolResult) bool { return !answersCall(call.Answer, r) })
+	if len(answers) != 1 {
+		v.add("%s carries %d tool results answering call %q of tool %q, want exactly one", requestLabel(next), len(answers), call.Answer.CallID, call.Answer.Call.Name)
 		return
 	}
-	result := next.ToolResults[0]
-	switch {
-	case call.Answer.CallID != "" && result.CallID != call.Answer.CallID:
-		v.add("%s carries a tool result for call %q, want call %q", requestLabel(next), result.CallID, call.Answer.CallID)
-	case call.Answer.CallID == "" && result.Name != call.Answer.Call.Name:
-		v.add("%s carries a tool result for tool %q, want tool %q", requestLabel(next), result.Name, call.Answer.Call.Name)
-	}
-	if !strings.Contains(result.Output, nonce) {
+	result := answers[0]
+	if !strings.Contains(result.Output, want) {
 		output := result.Output
 		if sentinel != "" {
 			output = strings.ReplaceAll(output, sentinel, "[redacted]")
@@ -513,8 +566,17 @@ func checkToolResult(v *findings, call, next Exchange, nonce, sentinel string) {
 		if len(output) > 2000 {
 			output = output[:2000] + "... [truncated]"
 		}
-		v.add("%s carries a tool result whose output does not contain the nonce; tool %q returned %q", requestLabel(next), call.Answer.Call.Name, output)
+		v.add("%s carries a tool result whose output does not contain %q; tool %q returned %q", requestLabel(next), want, call.Answer.Call.Name, output)
 	}
+}
+
+// answersCall matches on the call id the answer issued, or on the tool name
+// where the wire issues none.
+func answersCall(answer Answer, result ToolResult) bool {
+	if answer.CallID != "" {
+		return result.CallID == answer.CallID
+	}
+	return result.Name == answer.Call.Name
 }
 
 func assertExactUsage(t *testing.T, b Binding, run Run) {

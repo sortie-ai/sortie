@@ -226,6 +226,34 @@ func TestConformanceTurnUsage(t *testing.T) {
 	}
 }
 
+func TestServerToolChoice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		declared []Tool
+		want     FunctionCall
+	}{
+		{name: "bare name", declared: []Tool{{Name: "sortie_status"}}, want: FunctionCall{Name: "sortie_status"}},
+		{name: "server prefix", declared: []Tool{{Name: "mcp__sortie-tools__sortie_status"}}, want: FunctionCall{Name: "mcp__sortie-tools__sortie_status"}},
+		{name: "namespace member", declared: []Tool{{Name: "sortie_status", Namespace: "mcp__sortie_tools"}}, want: FunctionCall{Name: "sortie_status", Namespace: "mcp__sortie_tools"}},
+		{name: "suffix without a separator", declared: []Tool{{Name: "notsortie_status"}}},
+		{name: "name inside a longer one", declared: []Tool{{Name: "sortie_status_v2"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := serverTool("sortie_status")(tt.declared)
+
+			if (err == nil) != (tt.want.Name != "") || got.Name != tt.want.Name || got.Namespace != tt.want.Namespace {
+				t.Errorf("serverTool(%q)(%+v) = %+v, %v, want %+v", "sortie_status", tt.declared, got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestConformanceClosingResponse(t *testing.T) {
 	t.Parallel()
 
@@ -411,6 +439,13 @@ func TestConformancePropertyToolPath(t *testing.T) {
 	cases := []conformanceCase[Run]{
 		{name: "clean run"},
 		{
+			name: "a request resending an earlier call's result",
+			mutate: func(run *Run) {
+				second := &run.Exchanges[conformanceSecondTurnAt]
+				second.ToolResults = append([]ToolResult{{CallID: "call-0", Name: "other_tool"}}, second.ToolResults...)
+			},
+		},
+		{
 			name: "generateContent run correlates by tool name",
 			mutate: func(run *Run) {
 				run.Exchanges[conformanceFirstTurnAt].Answer.CallID = ""
@@ -441,7 +476,7 @@ func TestConformancePropertyToolPath(t *testing.T) {
 		{
 			name:   "tool result answers another call id",
 			mutate: func(run *Run) { run.Exchanges[conformanceSecondTurnAt].ToolResults[0].CallID = "call-2" },
-			want:   []string{`for call "call-2", want call "call-1"`},
+			want:   []string{`carries 0 tool results answering call "call-1"`},
 		},
 		{
 			name: "tool result names another tool when no call id was issued",
@@ -450,12 +485,12 @@ func TestConformancePropertyToolPath(t *testing.T) {
 				run.Exchanges[conformanceSecondTurnAt].ToolResults[0].CallID = ""
 				run.Exchanges[conformanceSecondTurnAt].ToolResults[0].Name = "other_tool"
 			},
-			want: []string{`for tool "other_tool", want tool "read_file"`},
+			want: []string{`carries 0 tool results answering call "" of tool "read_file"`},
 		},
 		{
 			name:   "tool result output lacks the nonce",
 			mutate: func(run *Run) { run.Exchanges[conformanceSecondTurnAt].ToolResults[0].Output = "something else" },
-			want:   []string{"does not contain the nonce"},
+			want:   []string{`does not contain "` + conformanceNonce + `"`},
 		},
 		{
 			name:   "tool event reports an error",

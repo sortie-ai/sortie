@@ -1852,20 +1852,32 @@ func TestResponsesFixtures(t *testing.T) {
 	}
 }
 
-func TestResponsesFixtureDeclaresOnlyFunctionToolsAsTools(t *testing.T) {
+func TestResponsesDeclaresFunctionsAndNamespaceMembersAsTools(t *testing.T) {
 	t.Parallel()
 
-	srv := fakemodel.Start(t, []fakemodel.Response{{Text: "answer"}})
-
-	send(t, srv.URL(), http.MethodPost, "/v1/responses", nil, loadFixture(t, responsesDir+"codex-first-turn.json"))
-
-	var got []string
-	for _, tool := range exchangeAt(t, srv, 0).Tools {
-		got = append(got, tool.Name)
+	member := func(declared []fakemodel.Tool) (fakemodel.FunctionCall, error) {
+		for _, tool := range declared {
+			if tool.Namespace != "" {
+				return fakemodel.FunctionCall{Name: tool.Name, Namespace: tool.Namespace, Arguments: json.RawMessage(`{}`)}, nil
+			}
+		}
+		return fakemodel.FunctionCall{}, fmt.Errorf("no namespace member among %d declared tools", len(declared))
 	}
-	want := []string{"exec_command", "write_stdin", "request_user_input", "view_image", "get_goal", "create_goal", "update_goal"}
-	if !slices.Equal(got, want) {
-		t.Errorf("Exchange.Tools names = %q, want %q with the namespace and web_search entries left out", got, want)
+	srv := fakemodel.Start(t, []fakemodel.Response{{Call: member}})
+	body := `{"model":"` + testModel + `","stream":true,"input":[],"tools":[` +
+		`{"type":"function","name":"read_file","parameters":` + readSchema + `},` +
+		`{"type":"namespace","name":"mcp__sortie_tools","tools":[{"type":"function","name":"sortie_status","parameters":{"type":"object"}}]},` +
+		`{"type":"web_search"}]}`
+
+	reply := send(t, srv.URL(), http.MethodPost, "/v1/responses", nil, []byte(body))
+
+	got := exchangeAt(t, srv, 0).Tools
+	want := []fakemodel.Tool{{Name: "read_file"}, {Name: "sortie_status", Namespace: "mcp__sortie_tools"}}
+	if len(got) != len(want) || got[0].Name != want[0].Name || got[0].Namespace != "" || got[1].Name != want[1].Name || got[1].Namespace != want[1].Namespace {
+		t.Errorf("Exchange.Tools = %+v, want names and namespaces %+v with web_search left out", got, want)
+	}
+	if !strings.Contains(string(reply.body), `"name":"sortie_status","namespace":"mcp__sortie_tools"`) {
+		t.Errorf("answer body = %s, want a function_call carrying the member's namespace", reply.body)
 	}
 }
 
