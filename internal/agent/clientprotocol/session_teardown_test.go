@@ -122,11 +122,6 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	go runPump(state)
 	markSessionKnown(state)
 
-	if !fileAppears(readerDonePath) {
-		_, pidErr := os.Stat(readerPIDPath)
-		t.Fatalf("timed out waiting for %s to appear; reader pid file: %v; agent stderr: %q", readerDonePath, pidErr, state.stderrCollector.Lines())
-	}
-
 	release := sync.OnceFunc(func() {
 		// Each helper leads its own process group, so killing only the
 		// recorded pid leaves its idle process holding the pipe end open;
@@ -138,6 +133,13 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 		}
 	})
 	t.Cleanup(release)
+
+	if !fileAppears(readerDonePath) {
+		_, pidErr := os.Stat(readerPIDPath)
+		// Lines waits for the drain to finish, and the helpers hold stderr open.
+		state.stderrCollector.Abandon(0)
+		t.Fatalf("timed out waiting for %s to appear; reader pid file: %v; agent stderr: %q", readerDonePath, pidErr, state.stderrCollector.Lines())
+	}
 
 	return &parkedTeardownFixture{state: state, release: release}
 }
