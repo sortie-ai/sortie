@@ -36,7 +36,7 @@ LYCHEE  ?= lychee
 
 LYCHEE_FLAGS ?= --offline
 
-ACP_VERSION ?= 1.23.0
+ACP_VERSION ?= 1.25.0
 
 # golangci-lint resolves build constraints the same way the compiler does, so a
 # run only ever analyses the files that survive for the current GOOS: every

@@ -28,7 +28,7 @@ import (
 
 // schemaAssetsDir is the directory holding the pinned schema artifact
 // and its provenance file, relative to this package's own directory.
-const schemaAssetsDir = "testdata/schema-v1.23.0"
+const schemaAssetsDir = "testdata/schema-v1.25.0"
 
 // assertProvenance asserts that every asset line PROVENANCE.txt records
 // (the form "<path> <byte-count> sha256:<hex>") matches the file it
@@ -135,6 +135,9 @@ var goTypeRegistry = map[string]reflect.Type{
 	"clientSessionCapabilities":                reflect.TypeFor[clientSessionCapabilities](),
 	"closeSessionRequest":                      reflect.TypeFor[closeSessionRequest](),
 	"closeSessionResponse":                     reflect.TypeFor[closeSessionResponse](),
+	"compactionCapabilities":                   reflect.TypeFor[compactionCapabilities](),
+	"compactionSummaryChunk":                   reflect.TypeFor[compactionSummaryChunk](),
+	"compactionUpdate":                         reflect.TypeFor[compactionUpdate](),
 	"configOptionUpdate":                       reflect.TypeFor[configOptionUpdate](),
 	"content":                                  reflect.TypeFor[content](),
 	"contentChunk":                             reflect.TypeFor[contentChunk](),
@@ -163,6 +166,8 @@ var goTypeRegistry = map[string]reflect.Type{
 	"mcpServerStdio":                           reflect.TypeFor[mcpServerStdio](),
 	"newSessionRequest":                        reflect.TypeFor[newSessionRequest](),
 	"newSessionResponse":                       reflect.TypeFor[newSessionResponse](),
+	"notice":                                   reflect.TypeFor[notice](),
+	"noticeCapabilities":                       reflect.TypeFor[noticeCapabilities](),
 	"permissionOption":                         reflect.TypeFor[permissionOption](),
 	"plan":                                     reflect.TypeFor[plan](),
 	"planEntry":                                reflect.TypeFor[planEntry](),
@@ -900,6 +905,9 @@ func TestSchemaConformance(t *testing.T) {
 				sessionUpdateConfigOptionUpdate:      true,
 				sessionUpdateSessionInfoUpdate:       true,
 				sessionUpdateUsageUpdate:             true,
+				sessionUpdateNotice:                  true,
+				sessionUpdateCompactionUpdate:        true,
+				sessionUpdateCompactionSummaryChunk:  true,
 			})
 		})
 	})
