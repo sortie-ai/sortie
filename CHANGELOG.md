@@ -47,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - On Windows, a command or agent runtime that is cancelled or times out while Sortie is still starting it is now stopped before it runs, instead of running for up to the stop grace period. ([#1100](https://github.com/sortie-ai/sortie/issues/1100))
 - A `codex`, `opencode`, `copilot-cli`, or `agent-client-protocol` session that is cancelled before its agent runtime starts running is now reported as cancelled, instead of as a failed start or, for `copilot-cli`, as a runtime that does not work, and a self-review verification command that times out before its process starts as timed out, instead of as a failed start. ([#1100](https://github.com/sortie-ai/sortie/issues/1100))
 - On Windows, when Sortie could not place a command in a Job Object and cannot check one of the command's processes afterwards, it now logs `subprocess tree did not settle`, and that warning no longer lists processes that belong to other programs. A process in the Job Object of a command or agent session that Sortie cannot check no longer counts as gone: Sortie keeps terminating the job for up to 2 seconds, then logs `subprocess group termination failed after the launch returned`. ([#1098](https://github.com/sortie-ai/sortie/issues/1098))
+- A `codex` agent can now call Sortie's tools, which the agent runtime refused on every call before, and a tool from a server in its `mcp_config` is no longer refused for want of an approval nobody can give. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
+- A `codex` tool call that fails or is refused is now reported as a tool error instead of as a successful call. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
 
 ### Migrations
 

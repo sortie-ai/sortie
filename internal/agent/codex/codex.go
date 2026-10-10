@@ -990,6 +990,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						Timestamp:      now,
 						ToolName:       toolName,
 						ToolDurationMS: durationMS,
+						ToolError:      item.Status == "failed" || item.Status == "declined",
 					})
 				}
 				if item.Type == "agentMessage" && item.Text != "" {
