@@ -122,7 +122,10 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	go runPump(state)
 	markSessionKnown(state)
 
-	waitForFile(t, readerDonePath)
+	if !fileAppears(readerDonePath) {
+		_, pidErr := os.Stat(readerPIDPath)
+		t.Fatalf("timed out waiting for %s to appear; reader pid file: %v; agent stderr: %q", readerDonePath, pidErr, state.stderrCollector.Lines())
+	}
 
 	release := sync.OnceFunc(func() {
 		// Each helper leads its own process group, so killing only the
@@ -141,14 +144,20 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
+	if !fileAppears(path) {
+		t.Fatalf("timed out waiting for %s to appear", path)
+	}
+}
+
+func fileAppears(path string) bool {
 	deadline := time.Now().Add(awaitTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
-			return
+			return true
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s to appear", path)
+	return false
 }
 
 func killHelperGroup(pidFile string) {
