@@ -28,15 +28,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// skipUnlessCodexIntegration skips the current test when SORTIE_CODEX_TEST
-// is not set to "1", so disabled integration tests are reported as skipped
-// rather than silently passing.
 func skipUnlessCodexIntegration(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SORTIE_CODEX_TEST") != "1" {
@@ -81,9 +77,7 @@ func integrationAgentConfig() domain.AgentConfig {
 	}
 }
 
-// gitInitWorkspace creates a temp directory and runs git init inside it.
-// The absolute path is returned. The test fails immediately if git init
-// fails, because the Codex app-server requires a git repository by default.
+// The Codex app-server requires a git repository by default.
 func gitInitWorkspace(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -212,10 +206,6 @@ func TestIntegration_StartSession(t *testing.T) {
 	}
 }
 
-// TestIntegration_StopSession verifies that StopSession terminates the
-// persistent subprocess cleanly when called after a successful StartSession
-// but before any RunTurn. This validates that the subprocess lifecycle is
-// correctly managed at both ends.
 func TestIntegration_StopSession(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -234,12 +224,9 @@ func TestIntegration_StopSession(t *testing.T) {
 		t.Fatalf("StartSession: %v", err)
 	}
 
-	// StopSession before any RunTurn must terminate the subprocess.
 	if err := adapter.StopSession(context.Background(), session); err != nil {
 		t.Fatalf("StopSession (idle): %v", err)
 	}
-
-	// A second StopSession call must be idempotent and not panic.
 	if err := adapter.StopSession(context.Background(), session); err != nil {
 		t.Errorf("StopSession (second call): %v", err)
 	}
@@ -261,10 +248,9 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	requireAgentErrorKind(t, err, domain.ErrAgentNotFound)
 }
 
-// scriptedProviderCommand appends the overrides that point the runtime at a
-// custom provider on url. Overrides carry the redirect because the runtime
-// ignores OPENAI_BASE_URL and a project-local config file; the retry counts
-// are zero so a refused request ends the turn instead of being replayed.
+// The redirect rides in -c overrides because the runtime ignores
+// OPENAI_BASE_URL and a project-local config file; zero retry counts make a
+// refused request end the turn instead of being replayed.
 func scriptedProviderCommand(url string) string {
 	pairs := []string{
 		"model_provider=\"scripted\"",
@@ -296,6 +282,16 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			"thread_sandbox": "dangerFullAccess",
 			"model":          "scripted-model",
 		},
+		// Under full disk write access the runtime approves every MCP call by
+		// itself, so only a narrower sandbox shows that it honors the approval
+		// grant on the server. The unknown model slug keeps fallback metadata
+		// with tool search and code mode off, so the request declares the MCP
+		// tools themselves.
+		ToolServerPassthrough: map[string]any{
+			"approval_policy": "never",
+			"thread_sandbox":  "workspaceWrite",
+			"model":           "scripted-model",
+		},
 		CredentialEnv: []string{"CODEX_API_KEY"},
 		Read:          fakemodel.CatFile,
 		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
@@ -321,11 +317,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 	})
 }
 
-// TestIntegration_RunTurn_StopDuringTurn verifies that calling StopSession
-// while RunTurn is blocked on the event stream causes RunTurn to unblock
-// and return an error without deadlocking. This is the persistent subprocess
-// equivalent of context cancellation: it tests the critical lifecycle
-// invariant that StopSession always terminates an in-flight turn.
 func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -352,24 +343,19 @@ func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 
 	go func() {
 		r, e := adapter.RunTurn(outerCtx, session, domain.RunTurnParams{
-			// A prompt that causes the model to start a long tool execution,
-			// ensuring the turn is genuinely in-flight when it is stopped.
 			Prompt:  "Execute the shell command: sleep 30",
 			OnEvent: func(_ domain.AgentEvent) {},
 		})
 		outcomeCh <- turnOutcome{result: r, err: e}
 	}()
 
-	// Give the turn time to start (turn/start sent, model begins processing).
 	// 400ms is well above the turn/start round-trip latency.
 	time.Sleep(400 * time.Millisecond)
 
-	// StopSession must terminate the subprocess, unblocking RunTurn.
 	if stopErr := adapter.StopSession(context.Background(), session); stopErr != nil {
 		t.Errorf("StopSession during turn: %v", stopErr)
 	}
 
-	// RunTurn must return within a reasonable bound after the subprocess exits.
 	select {
 	case outcome := <-outcomeCh:
 		if outcome.err == nil {
@@ -381,11 +367,6 @@ func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 	}
 }
 
-// TestIntegration_MultiTurn validates the core architectural invariant of the
-// Codex adapter: the subprocess and thread persist across turns within a
-// session. Turn 1 emits EventSessionStarted; turn 2 emits only
-// EventNotification for the turn/started notification. Both turns share the
-// same SessionID (the thread ID), and the subprocess launch record does not change.
 func TestIntegration_MultiTurn(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -404,7 +385,6 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Fatal("state.group = nil after StartSession, want the subprocess's launch record")
 	}
 
-	// Turn 1: must emit EventSessionStarted and complete successfully.
 	onEvent1, collected1 := makeEventCollector(t)
 	result1, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: hello",
@@ -425,7 +405,6 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("state.turnCount after turn 1 = %d, want 1", state.turnCount)
 	}
 
-	// The launch record stays the same after turn 1.
 	state.mu.Lock()
 	groupAfterTurn1 := state.group
 	state.mu.Unlock()
@@ -433,8 +412,6 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("launch record changed after turn 1: before=%p after=%p (persistent subprocess must survive turns)", groupAfterStart, groupAfterTurn1)
 	}
 
-	// Turn 2: must NOT emit EventSessionStarted (only turn 1 does that).
-	// The turn/started notification for subsequent turns maps to EventNotification.
 	onEvent2, collected2 := makeEventCollector(t)
 	result2, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
@@ -458,7 +435,6 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("state.turnCount after turn 2 = %d, want 2", state.turnCount)
 	}
 
-	// The launch record must still be the original one.
 	state.mu.Lock()
 	groupAfterTurn2 := state.group
 	state.mu.Unlock()
@@ -466,16 +442,11 @@ func TestIntegration_MultiTurn(t *testing.T) {
 		t.Errorf("launch record changed after turn 2: original=%p current=%p (persistent subprocess must survive all turns)", groupAfterStart, groupAfterTurn2)
 	}
 
-	// Thread ID must be identical across both turns.
 	if result1.SessionID != result2.SessionID {
 		t.Errorf("SessionID changed between turns: turn1=%q turn2=%q (same thread must be reused)", result1.SessionID, result2.SessionID)
 	}
 }
 
-// TestIntegration_ResumeSession verifies that StartSession with a
-// ResumeSessionID sends thread/resume and returns a session whose ID
-// matches the provided thread ID. A turn on the resumed session must
-// complete successfully.
 func TestIntegration_ResumeSession(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -484,7 +455,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	// Establish an original session and capture its thread ID.
 	adapter1 := mustNewAdapter(t)
 	session1, err := adapter1.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
@@ -534,7 +504,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 		t.Errorf("resumed session.ID = %q, want %q (provided ResumeSessionID)", session2.ID, originalThreadID)
 	}
 
-	// A turn on the resumed session must complete successfully.
 	onEvent, collected := makeEventCollector(t)
 	result2, err := adapter1.RunTurn(ctx, session2, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
@@ -559,54 +528,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 }
 
-func TestIntegration_ToolRoundTrip(t *testing.T) {
-	skipUnlessCodexIntegration(t)
-
-	workspace := gitInitWorkspace(t)
-	tools := agenttest.NewSortieTools(t, workspace)
-
-	adapter := mustNewAdapter(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), agenttest.LiveTurnBound)
-	defer cancel()
-
-	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   integrationAgentConfig(),
-		Settings:      integrationConfig(),
-		MCPConfigPath: tools.ConfigPath,
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	onEvent, collected := makeEventCollector(t)
-
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  "Call the sortie_status tool now, with no arguments, and report exactly what it returns. Do not explain first; call the tool immediately.",
-		OnEvent: onEvent,
-	})
-	if err != nil {
-		t.Fatalf("RunTurn: %v", err)
-	}
-
-	events := collected()
-	t.Logf("received %d events, exit reason: %q", len(events), result.ExitReason)
-	for _, e := range events {
-		if e.Type == domain.EventToolResult {
-			t.Logf("EventToolResult: ToolName=%q ToolDurationMS=%d", e.ToolName, e.ToolDurationMS)
-		}
-	}
-
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-	// The adapter names every MCP call after its item type, and the session
-	// declares no server but Sortie's, so any such event is an attempt at it.
-	tools.Relay.AssertModelToolCall(t, agenttest.SortieStatusTool, events, "mcpToolCall")
-}
-
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
@@ -624,7 +545,6 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
-		// Not parallel: t.Setenv carries the invalid credential.
 		credentialtest.SetRefusedCredential(t, "SORTIE_CODEX_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))

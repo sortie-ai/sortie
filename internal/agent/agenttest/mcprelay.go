@@ -7,46 +7,44 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // MCPRelayScenario names the built-in [Scenario] that stands in for an MCP
-// server command: it launches the real server named by [MCPRelay]'s Target
-// with the arguments it received and relays standard input and output
-// between the agent and that server unchanged, recording each JSON-RPC
-// message on the way.
+// server command by running [MCPRelay.Run].
 const MCPRelayScenario = "agenttest.mcprelay"
 
 // MCPRelay parameterizes [MCPRelayScenario].
 type MCPRelay struct {
 	Target     string
 	RecordPath string
+	Env        []string // names whose values the relay records before it starts Target
 }
 
 type relayRecord struct {
-	PID int             `json:"pid"`
-	Dir string          `json:"dir"`
-	Msg json.RawMessage `json:"msg"`
+	PID int               `json:"pid"`
+	Dir string            `json:"dir"`
+	Msg json.RawMessage   `json:"msg,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
 }
 
 const (
 	relayToServer = "to_server"
 	relayToClient = "to_client"
+	relayEnv      = "env"
 )
 
-// Run launches Target with args and relays until the server's output
-// closes, then returns the server's exit status. Each newline-terminated
-// message is appended to RecordPath before it is forwarded, so a message
-// the agent acted on is always on the record.
+// Run launches Target with args and relays stdio unchanged until the
+// server's output closes, then returns the server's exit status. Each
+// JSON-RPC message is appended to RecordPath before it is forwarded, so a
+// message the agent acted on is always on the record.
 func (p MCPRelay) Run(args []string) int {
 	record, err := os.OpenFile(p.RecordPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // G304: path is the test's own t.TempDir fixture.
 	if err != nil {
@@ -55,6 +53,12 @@ func (p MCPRelay) Run(args []string) int {
 	}
 	defer record.Close() //nolint:errcheck // the record is flushed line by line
 
+	if err := writeEnvRecord(record, p.Env); err != nil {
+		fmt.Fprintf(os.Stderr, "agenttest: record MCP relay environment: %v\n", err)
+		return 2
+	}
+
+	// cmd.Env stays nil: the recorded environment must be the server's own.
 	cmd := exec.CommandContext(context.Background(), p.Target, args...) //nolint:gosec // G204: Target is the test's own sortie binary.
 	cmd.Stderr = os.Stderr
 	serverIn, err := cmd.StdinPipe()
@@ -102,9 +106,22 @@ func runMCPRelay(args []string, params MCPRelay) int {
 	return params.Run(args)
 }
 
-// lineRecorder appends one record per complete line written to it. The
-// agent may start the same server command more than once, so every record
-// carries the relay's pid to keep request ids from different servers apart.
+func writeEnvRecord(w io.Writer, names []string) error {
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		values[name] = os.Getenv(name)
+	}
+	encoded, err := json.Marshal(relayRecord{PID: os.Getpid(), Dir: relayEnv, Env: values})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(encoded, '\n'))
+	return err
+}
+
+// lineRecorder tags each record with the relay's pid because the agent may
+// start the same server command more than once, and request ids repeat
+// across those servers.
 type lineRecorder struct {
 	mu      *sync.Mutex
 	w       io.Writer
@@ -147,52 +164,41 @@ type RecordingMCPRelay struct {
 }
 
 // NewRecordingMCPRelay creates under dir a [FakeRuntime] running
-// [MCPRelayScenario] against target. The calling package's TestMain must
-// call [Main].
-func NewRecordingMCPRelay(t testing.TB, dir, target string) RecordingMCPRelay {
+// [MCPRelayScenario] against target. The relay records the value of each name
+// in env from its own environment before it starts target. The calling
+// package's TestMain must call [Main].
+func NewRecordingMCPRelay(t testing.TB, dir, target string, env ...string) RecordingMCPRelay {
 	t.Helper()
 
 	recordPath := filepath.Join(dir, "mcp-traffic.jsonl")
 	return RecordingMCPRelay{
-		Command:    FakeRuntime(t, dir, "mcp-relay", MCPRelayScenario, MCPRelay{Target: target, RecordPath: recordPath}),
+		Command:    FakeRuntime(t, dir, "mcp-relay", MCPRelayScenario, MCPRelay{Target: target, RecordPath: recordPath, Env: env}),
 		RecordPath: recordPath,
 	}
 }
 
 // AssertToolCallSucceeded fails t unless the recorded traffic holds a
 // tools/call request for tool and a response to it that carries no JSON-RPC
-// error. It reads the request's params.name rather than any event the
-// agent adapter reports, because a runtime can label every MCP call with
-// one generic tool name, or report a tool result for a call that never
-// reached the server.
-func (r RecordingMCPRelay) AssertToolCallSucceeded(t testing.TB, tool string) {
-	t.Helper()
-
-	reportToolCallOutcome(t, tool, r.outcome(t, tool))
-}
-
-// AssertModelToolCall is [RecordingMCPRelay.AssertToolCallSucceeded] for a
-// live turn whose model decides whether to call tool. When no tools/call
-// request for tool was recorded it fails t if events show the runtime
-// attempted one, and skips t otherwise. An attempt is a tool_result event
-// whose tool name contains tool or equals one of attemptNames, the generic
-// names a runtime gives every MCP call.
-func (r RecordingMCPRelay) AssertModelToolCall(t testing.TB, tool string, events []domain.AgentEvent, attemptNames ...string) {
+// error. It reads the request's params.name rather than adapter events,
+// because a runtime can label every MCP call with one generic tool name or
+// report a result for a call that never reached the server.
+//
+// When env is not empty, the relay process that recorded the first such
+// response must also have recorded every entry of env as its own
+// environment; each missing or differing entry fails t.
+func (r RecordingMCPRelay) AssertToolCallSucceeded(t testing.TB, tool string, env map[string]string) {
 	t.Helper()
 
 	outcome := r.outcome(t, tool)
-	if outcome.called {
-		reportToolCallOutcome(t, tool, outcome)
+	reportToolCallOutcome(t, tool, outcome)
+	if !outcome.called || !outcome.answered || outcome.failed {
 		return
 	}
-	attempted := slices.ContainsFunc(events, func(e domain.AgentEvent) bool {
-		return e.Type == domain.EventToolResult && (strings.Contains(e.ToolName, tool) || slices.Contains(attemptNames, e.ToolName))
-	})
-	if attempted {
-		t.Errorf("tool call %q = the runtime reported an attempt, but no tools/call request for the tool reached the server in %d recorded messages", tool, outcome.messages)
-		return
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		if got, ok := outcome.answeringEnv[name]; !ok || got != env[name] {
+			t.Errorf("tool call %q = the answering relay recorded %s=%q, want %q", tool, name, got, env[name])
+		}
 	}
-	t.Skipf("model choice: the model neither called %q nor attempted to, so this turn proves nothing about the MCP path", tool)
 }
 
 func (r RecordingMCPRelay) outcome(t testing.TB, tool string) toolCallResult {
@@ -240,6 +246,8 @@ type toolCallResult struct {
 	called   bool
 	answered bool
 	failed   bool
+
+	answeringEnv map[string]string
 }
 
 type rpcMessage struct {
@@ -256,20 +264,23 @@ type callKey struct {
 	id  string
 }
 
-// requestOutcome reduces recorded traffic to the fate of the requests for
-// method whose params.name is name. A response matches a request on relay
-// pid and id; a message that carries a method is a request or notification,
-// never a response, so a server-originated request reusing an id does not
-// count.
+// requestOutcome matches a response to a request on relay pid and id. A
+// message carrying a method is never a response, because JSON-RPC lets the
+// server send its own requests with an id the client already used.
 func requestOutcome(data []byte, method, name string) toolCallResult {
 	var out toolCallResult
 	calls := make(map[callKey]bool)
+	envs := make(map[int]map[string]string)
 	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var rec relayRecord
 		if json.Unmarshal(line, &rec) != nil {
+			continue
+		}
+		if rec.Dir == relayEnv {
+			envs[rec.PID] = rec.Env
 			continue
 		}
 		var msg rpcMessage
@@ -287,6 +298,7 @@ func requestOutcome(data []byte, method, name string) toolCallResult {
 			out.answered = true
 			if isNullOrAbsent(msg.Error) {
 				out.failed = false
+				out.answeringEnv = envs[rec.PID]
 				return out
 			}
 			out.failed = true

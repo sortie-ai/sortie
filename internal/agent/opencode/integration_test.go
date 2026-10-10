@@ -28,7 +28,6 @@ func skipIfNotEnabled(t *testing.T) {
 	}
 }
 
-// integrationCommand returns the opencode binary path, defaulting to "opencode".
 func integrationCommand() string {
 	if cmd := os.Getenv("SORTIE_OPENCODE_COMMAND"); cmd != "" {
 		return cmd
@@ -36,7 +35,6 @@ func integrationCommand() string {
 	return "opencode"
 }
 
-// integrationConfig returns base config for integration tests.
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_OPENCODE_MODEL")
 	if model == "" {
@@ -51,7 +49,6 @@ func integrationConfig() map[string]any {
 	return cfg
 }
 
-// mustNewAdapter creates an adapter or fatals.
 func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 	t.Helper()
 	factory, err := registry.Agents.Get("opencode")
@@ -65,8 +62,6 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 	return a
 }
 
-// mustStartIntegrationSession starts a session against the real opencode binary
-// in a fresh workspace.
 func mustStartIntegrationSession(t *testing.T, a domain.AgentAdapter) domain.Session {
 	t.Helper()
 	return mustStartIntegrationSessionWith(t, a, integrationConfig())
@@ -77,11 +72,10 @@ func mustStartIntegrationSessionWith(t *testing.T, a domain.AgentAdapter, settin
 	return mustStartIntegrationSessionIn(t, a, "", t.TempDir(), settings)
 }
 
-// mustStartIntegrationSessionIn starts a session in the given workspace.
-// ReadTimeoutMS is set to 3 minutes to absorb one-time cold-start SQLite
-// migrations that can run for over 30 seconds on first launch. Resuming a
-// session requires the workspace the session was created in: opencode replays
-// a --session only when the run executes in that same project directory.
+// coldStartReadTimeoutMS absorbs the SQLite migration a first launch runs,
+// which can take over 30 seconds.
+const coldStartReadTimeoutMS = 3 * 60 * 1000
+
 func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID, workspacePath string, settings map[string]any) domain.Session {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -91,7 +85,7 @@ func mustStartIntegrationSessionIn(t *testing.T, a domain.AgentAdapter, resumeID
 		WorkspacePath: workspacePath,
 		AgentConfig: domain.AgentConfig{
 			Command:       integrationCommand(),
-			ReadTimeoutMS: 3 * 60 * 1000, // 3 minutes: absorbs cold-start SQLite migration
+			ReadTimeoutMS: coldStartReadTimeoutMS,
 		},
 		ResumeSessionID: resumeID,
 		Settings:        settings,
@@ -120,10 +114,8 @@ func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Sessio
 	return events, result
 }
 
-// scriptedProviderDocument is the provider configuration that points the
-// runtime's bundled Google provider at the scripted endpoint on url. The key
-// is an {env:} reference because 2.x does not read the provider's key
-// variable on its own.
+// The key is an {env:} reference because opencode 2.x does not read the
+// provider's key variable on its own.
 func scriptedProviderDocument(url string) string {
 	return fmt.Sprintf(`{"$schema":"https://opencode.ai/config.json","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"%s/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}`, url)
 }
@@ -162,11 +154,9 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			}
 			return fakemodel.Launch{
 				Config: domain.AgentConfig{
-					Command: integrationCommand(),
-					// A first launch on an isolated home runs the database
-					// migration every time.
+					Command:       integrationCommand(),
 					TurnTimeoutMS: 300000,
-					ReadTimeoutMS: 180000,
+					ReadTimeoutMS: coldStartReadTimeoutMS,
 				},
 				Env: map[string]string{"OPENCODE_CONFIG": document},
 			}
@@ -177,11 +167,9 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 func TestIntegration_SessionResume(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	// opencode replays a --session only when the run executes in the same
-	// project directory the session was created in; resuming under a different
-	// --dir exits cleanly with no events. The orchestrator reuses an issue's
-	// workspace across turns, so the resumed turn must share turn one's
-	// workspace.
+	// opencode replays a --session only from the project directory the
+	// session was created in; under another --dir the resume exits cleanly
+	// with no events.
 	workspace := t.TempDir()
 
 	a := mustNewAdapter(t)
@@ -262,7 +250,6 @@ func TestIntegration_TurnCancellation(t *testing.T) {
 		resultCh <- result
 	}()
 
-	// Cancel after a brief moment.
 	time.Sleep(500 * time.Millisecond)
 	turnCancel()
 
@@ -276,10 +263,6 @@ func TestIntegration_TurnCancellation(t *testing.T) {
 	}
 }
 
-// TestIntegration_PermissionDeepMerge reads the resolved tool-
-// permission document a session's own turns carry, with no model
-// request: the operator's own opencode.json must survive the adapter's
-// merge, and the adapter's own entries must win a conflict.
 func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	skipIfNotEnabled(t)
 
@@ -310,7 +293,7 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 		WorkspacePath: workspace,
 		AgentConfig: domain.AgentConfig{
 			Command:       integrationCommand(),
-			ReadTimeoutMS: 3 * 60 * 1000,
+			ReadTimeoutMS: coldStartReadTimeoutMS,
 		},
 		MCPConfigPath: mcpConfigPath,
 		Settings:      cfg,
@@ -345,109 +328,6 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	}
 }
 
-// TestIntegration_ToolServerIdentity proves tool-server delivery
-// without a model call invoking the tool, mirroring
-// internal/agent/claude's TestIntegration_ToolServerIdentity.
-//
-// It does not call agenttest.AssertToolServerIdentity: that helper
-// writes the generated MCP config at <dir>/mcp.json, a path
-// mcpconfig.Parse refuses for a translated-injection adapter, which
-// requires the config to sit under a workspace's own ".sortie"
-// directory. codex and agent-client-protocol, this adapter's fellow
-// translated-injection kinds, do not use the helper for the same
-// reason.
-func TestIntegration_ToolServerIdentity(t *testing.T) {
-	skipIfNotEnabled(t)
-
-	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.MkdirAll(workspace, 0o750); err != nil {
-		t.Fatalf("MkdirAll(workspace): %v", err)
-	}
-
-	const wantDispatchID = "opencode-tool-server-identity"
-	recordingPath := filepath.Join(dir, "recorded.json")
-	runtimePath := agenttest.FakeRuntime(t, dir, "tool-server-recorder", agenttest.RecordedEnvScenario, agenttest.RecordedEnv{
-		Path:  recordingPath,
-		Names: []string{"SORTIE_DISPATCH_ID", "SORTIE_WORKSPACE"},
-	})
-
-	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
-	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	mcpDoc := fmt.Sprintf(`{"mcpServers":{"sortie-tools":{"type":"stdio","command":%s,"env":{"SORTIE_DISPATCH_ID":%s,"SORTIE_WORKSPACE":%s}}}}`,
-		mustJSONString(t, runtimePath), mustJSONString(t, wantDispatchID), mustJSONString(t, workspace))
-	if err := os.WriteFile(mcpConfigPath, []byte(mcpDoc), 0o600); err != nil {
-		t.Fatalf("WriteFile(mcp.json): %v", err)
-	}
-
-	a := mustNewAdapter(t)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sessionDone := make(chan error, 1)
-	go func() {
-		session, startErr := a.StartSession(ctx, domain.StartSessionParams{
-			WorkspacePath: workspace,
-			AgentConfig: domain.AgentConfig{
-				Command:       integrationCommand(),
-				ReadTimeoutMS: 3 * 60 * 1000,
-			},
-			MCPConfigPath: mcpConfigPath,
-			Settings:      integrationConfig(),
-		})
-		if startErr != nil {
-			sessionDone <- startErr
-			return
-		}
-		defer func() { _ = a.StopSession(context.Background(), session) }()
-
-		_, runErr := a.RunTurn(ctx, session, domain.RunTurnParams{
-			Prompt:  "Say exactly: hello",
-			OnEvent: func(domain.AgentEvent) {},
-		})
-		sessionDone <- runErr
-	}()
-
-	deadline := time.Now().Add(60 * time.Second)
-	for {
-		if raw, readErr := os.ReadFile(recordingPath); readErr == nil {
-			cancel()
-			<-sessionDone
-			assertRecordedToolServerIdentity(t, raw, wantDispatchID, workspace)
-			return
-		}
-		if !time.Now().Before(deadline) {
-			cancel()
-			runErr := <-sessionDone
-			t.Fatalf("no recording observed within 60s (session error = %v)", runErr)
-		}
-		select {
-		case runErr := <-sessionDone:
-			t.Fatalf("no recording observed before the session returned (error = %v)", runErr)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-}
-
-func assertRecordedToolServerIdentity(t *testing.T, raw []byte, wantDispatchID, wantWorkspace string) {
-	t.Helper()
-
-	var recorded map[string]string
-	if err := json.Unmarshal(raw, &recorded); err != nil {
-		t.Fatalf("decode recorded tool-server environment %q: %v", raw, err)
-	}
-	if recorded["SORTIE_DISPATCH_ID"] != wantDispatchID {
-		t.Errorf("recorded SORTIE_DISPATCH_ID = %q, want %q", recorded["SORTIE_DISPATCH_ID"], wantDispatchID)
-	}
-	if recorded["SORTIE_WORKSPACE"] != wantWorkspace {
-		t.Errorf("recorded SORTIE_WORKSPACE = %q, want %q", recorded["SORTIE_WORKSPACE"], wantWorkspace)
-	}
-}
-
-// mustJSONString renders s as a JSON string literal.
 func mustJSONString(t *testing.T, s string) string {
 	t.Helper()
 	encoded, err := json.Marshal(s)
@@ -455,50 +335,6 @@ func mustJSONString(t *testing.T, s string) string {
 		t.Fatalf("json.Marshal(%q): %v", s, err)
 	}
 	return string(encoded)
-}
-
-func TestIntegration_ToolRoundTrip(t *testing.T) {
-	skipIfNotEnabled(t)
-
-	workspace := t.TempDir()
-	tools := agenttest.NewSortieTools(t, workspace)
-
-	a := mustNewAdapter(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	session, err := a.StartSession(ctx, domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig: domain.AgentConfig{
-			Command:       integrationCommand(),
-			ReadTimeoutMS: 3 * 60 * 1000,
-		},
-		MCPConfigPath: tools.ConfigPath,
-		Settings:      integrationConfig(),
-	})
-	if err != nil {
-		t.Fatalf("StartSession(): %v", err)
-	}
-	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
-
-	events, result := collectAllEvents(t, a, session,
-		"Call the sortie_status tool now, with no arguments, and report exactly what it returns. Do not explain first; call the tool immediately.")
-
-	for _, e := range events {
-		if e.Type == domain.EventToolResult {
-			t.Logf("EventToolResult: ToolName=%q ToolDurationMS=%d", e.ToolName, e.ToolDurationMS)
-		}
-	}
-
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-
-	// No attempt name: 2.x reaches MCP tools through its execute tool, which
-	// also runs code that calls nothing of Sortie's, so an execute event does
-	// not show an attempt. The scripted-model run proves that path instead.
-	tools.Relay.AssertModelToolCall(t, agenttest.SortieStatusTool, events)
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

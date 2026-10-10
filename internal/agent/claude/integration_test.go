@@ -9,15 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// skipUnlessIntegration skips the current test when the SORTIE_CLAUDE_TEST
-// environment variable is not set to "1", so disabled integration tests are
-// reported as skipped rather than silently passing.
 func skipUnlessIntegration(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SORTIE_CLAUDE_TEST") != "1" {
@@ -25,11 +21,8 @@ func skipUnlessIntegration(t *testing.T) {
 	}
 }
 
-// singleTurnIntegrationConfig builds the adapter config map for
-// single-turn integration tests. Session persistence is disabled to
-// prevent ~/.claude/ pollution from repeated test runs, which makes the
-// resulting config non-resumable: a test that resumes a session must not
-// use this helper.
+// Session persistence is off so repeated runs leave nothing in ~/.claude,
+// which makes a session started with this config impossible to resume.
 func singleTurnIntegrationConfig(t *testing.T) map[string]any {
 	t.Helper()
 	model := os.Getenv("SORTIE_CLAUDE_MODEL")
@@ -42,8 +35,6 @@ func singleTurnIntegrationConfig(t *testing.T) map[string]any {
 	}
 }
 
-// integrationCommand returns the Claude Code binary path from the
-// SORTIE_CLAUDE_COMMAND environment variable, defaulting to "claude".
 func integrationCommand(t *testing.T) string {
 	t.Helper()
 	if cmd := os.Getenv("SORTIE_CLAUDE_COMMAND"); cmd != "" {
@@ -164,9 +155,8 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			if !ok {
 				t.Fatalf("session.Internal type = %T, want *sessionState", run.Session.Internal)
 			}
-			// A normal turn decides at the terminal-success row and never
-			// consults Work, so the disposition alone does not show the
-			// observer fired against the installed runtime.
+			// A normal turn never consults Work, so the disposition alone
+			// does not show the observer fired against the installed runtime.
 			if !state.work.Observed() {
 				t.Error("state.work.Observed() = false after a scripted turn, want true")
 			}
@@ -205,9 +195,8 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 		mu.Unlock()
 	}
 
-	// Use a 2-second timeout: long enough for subprocess startup (~100ms)
-	// but well below the minimum Claude API round-trip (~3-5s), ensuring
-	// the context always expires before the turn completes.
+	// Two seconds outlasts subprocess startup but not a Claude API round
+	// trip, so the context always expires mid-turn.
 	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -302,11 +291,9 @@ func TestIntegration_SessionResume(t *testing.T) {
 	if result2.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("resumed turn ExitReason = %q, want %q", result2.ExitReason, domain.EventTurnCompleted)
 	}
-	// A turn that silently started a fresh session would also complete,
-	// so completion alone does not show the session was resumed. The CLI
-	// appends to the existing conversation under the same identifier
-	// unless --fork-session is passed, which this adapter never passes,
-	// so an identifier that changed means no resume happened.
+	// A fresh session would also complete. The CLI keeps the session
+	// identifier on resume unless --fork-session is passed, which this
+	// adapter never does, so a changed identifier means no resume happened.
 	if result2.SessionID != result1.SessionID {
 		t.Errorf("resumed turn SessionID = %q, want %q: the turn did not resume the first turn's session",
 			result2.SessionID, result1.SessionID)
@@ -334,7 +321,6 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
-		// Not parallel: t.Setenv carries the invalid credential.
 		credentialtest.SetRefusedCredential(t, "SORTIE_CLAUDE_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
@@ -367,33 +353,5 @@ func TestIntegration_EarlyExit(t *testing.T) {
 		} else {
 			credentialtest.RequireEarlyExitReport(t, err)
 		}
-	})
-}
-
-func TestIntegration_ToolServerIdentity(t *testing.T) {
-	skipUnlessIntegration(t)
-
-	agenttest.AssertToolServerIdentity(t, func(ctx context.Context, workspacePath, mcpConfigPath string) error {
-		adapter, err := NewClaudeCodeAdapter()
-		if err != nil {
-			return err
-		}
-
-		session, err := adapter.StartSession(ctx, domain.StartSessionParams{
-			Settings:      singleTurnIntegrationConfig(t),
-			WorkspacePath: workspacePath,
-			AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
-			MCPConfigPath: mcpConfigPath,
-		})
-		if err != nil {
-			return err
-		}
-		defer func() { _ = adapter.StopSession(context.Background(), session) }()
-
-		_, err = adapter.RunTurn(ctx, session, domain.RunTurnParams{
-			Prompt:  "Say exactly: hello",
-			OnEvent: func(domain.AgentEvent) {},
-		})
-		return err
 	})
 }

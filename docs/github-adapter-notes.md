@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/github`: the design decisions behind it, the places GitHub's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-08-23
+Last updated: 2026-10-10
 
 ## Shape of the package
 
@@ -16,11 +16,11 @@ Two HTTP clients live side by side: one for REST, one for GraphQL. The GraphQL b
 
 The adapter sets a REST API version header on every request, in one place in the client constructor, and no configuration key overrides it. That pin is deliberate: it makes the payload shapes the normalizers depend on stable, and it makes a payload change an explicit decision rather than something that arrives one morning.
 
-The corollary is that **bumping the pin is a payload-shape change, not a version bump**. A version has already removed a field the adapter used to read. Do not assume a removal announced for one payload is confined to it.
+The corollary is that **bumping the pin is a payload-shape change, not a version bump**. A new version can remove a field the adapter reads, and a removal announced for one payload is not always confined to it.
 
-The method for finding out is worth keeping even though its results are not. Because the pin lives in one place, the probe is a single header change: issue the same request twice against the same live resource, varying only the version header between the outgoing value and the incoming one, and **diff the JSON key sets rather than the values**. A removal surfaces as a missing key and never as an error, so a comparison that looks at values will not see it. Run that across every route the adapter reads, not only the one a release note mentions, and against a resource in each state the adapter cares about: a field can be present-but-null in one state and absent in another, so a merged pull request and an open one are two separate probes, as are an issue with a parent and one without.
+To find out, probe. Because the pin lives in one place, the probe is a single header change: issue the same request twice against the same live resource, varying only the version header between the outgoing value and the incoming one, and **diff the JSON key sets rather than the values**. A removal surfaces as a missing key and never as an error, so a comparison that looks at values will not see it. Run that across every route the adapter reads, not only the one a release note mentions, and against a resource in each state the adapter cares about: a field can be present-but-null in one state and absent in another, so a merged pull request and an open one are two separate probes, as are an issue with a parent and one without.
 
-One consequence is load-bearing today: the pull request payload under the current pin carries no merge commit identifier, so `GetMergeability` sources it from a second, gated GraphQL call when the REST read reports the pull request merged. Two details of that call matter. It asks only for the real merge commit and never for the potential (test) merge commit, so GitHub's speculative merge commit is structurally unreachable through this path. And the merged gate bounds the cost: an open, draft, or closed-unmerged pull request costs no GraphQL call at all.
+One consequence: the pull request payload under the current pin carries no merge commit identifier, so `GetMergeability` sources it from a second, gated GraphQL call when the REST read reports the pull request merged. Two details of that call matter. It asks only for the real merge commit and never for the potential (test) merge commit, so GitHub's speculative merge commit is structurally unreachable through this path. And the merged gate bounds the cost: an open, draft, or closed-unmerged pull request costs no GraphQL call at all.
 
 ## Where GitHub's model does not match ours
 

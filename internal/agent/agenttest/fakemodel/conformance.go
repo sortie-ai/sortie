@@ -37,6 +37,10 @@ const (
 	// ScenarioPermissionRefusal scripts a guarded call the session's policy
 	// refuses, then a closing answer.
 	ScenarioPermissionRefusal
+
+	// ScenarioToolServer scripts a preamble read, the server call and a
+	// closing answer, with the Sortie MCP server delivered.
+	ScenarioToolServer
 )
 
 // Binding is one agent kind's fixture for [AssertConformance]: how to reach
@@ -51,6 +55,12 @@ type Binding struct {
 	Finish        ToolChoice // the turn's last answer; nil answers with text
 	Launch        func(t *testing.T, env Environment) Launch
 	Inspect       func(t *testing.T, run Run) // optional adapter-only assertions
+
+	// ToolServerPassthrough is the tool-server scenario's settings; nil hands
+	// Passthrough. A binding sets it when its scripted settings let the
+	// runtime approve every tool call by itself, which would hide a refused
+	// approval grant.
+	ToolServerPassthrough map[string]any
 
 	PermissionRefusal *PermissionRefusal // nil runs no refusal scenario
 }
@@ -112,17 +122,19 @@ const (
 // records, so only a sortie_status result can carry it back to the model.
 const sortieStatusTurn = 731948265
 
+// serverCallStep is the script entry of the tool-server scenario's server
+// call, after the preamble read.
+const serverCallStep = 1
+
 // AssertConformance launches b's installed runtime through its adapter
-// against a scripted model endpoint and fails t unless the run holds every
-// property: the turn ends completed, the reported usage equals everything the
-// endpoint served, each scripted tool call reaches one normalized tool result,
-// the scripted sortie_status call reaches the Sortie MCP server and succeeds,
-// the credential stays in its header, and requests beyond the script end the
-// turn failed with the endpoint's last message. When Binding.PermissionRefusal
-// is set it also runs the refusal scenario and fails unless the refused call
-// reaches the model as a tool result, the file's content reaches no request,
-// and the adapter reports it as one errored tool result with the permission
-// notice.
+// against a scripted model endpoint and fails t unless the turn completes, the
+// reported usage equals everything the endpoint served, each scripted tool
+// call reaches one normalized tool result, the credential stays in its header,
+// requests beyond the script fail the turn with the endpoint's last message, a
+// sortie_status call succeeds through the relay identity the MCP configuration
+// declares, and, when b.PermissionRefusal is set, a refused call reaches the
+// model as one errored tool result with the notice and without the file's
+// content.
 //
 // It sets environment variables for the rest of the test, so it must not be
 // called from a test that uses t.Parallel.
@@ -132,6 +144,7 @@ func AssertConformance(t *testing.T, b Binding) {
 	requireValidBinding(t, b)
 	t.Run("scripted turn", func(t *testing.T) { runScenario(t, b, ScenarioTurn) })
 	t.Run("script exhaustion", func(t *testing.T) { runScenario(t, b, ScenarioExhaustion) })
+	t.Run("tool server", func(t *testing.T) { runToolServer(t, b) })
 	if b.PermissionRefusal != nil {
 		t.Run("permission refusal", func(t *testing.T) { runPermissionRefusal(t, b) })
 	}
@@ -176,28 +189,23 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	}
 
 	script := []Response{{Call: b.Read(file), Usage: firstTurnUsage}}
-	var tools agenttest.SortieTools
 	if scenario == ScenarioTurn {
-		tools = agenttest.NewSortieTools(t, workspace)
-		writeSortieState(t, workspace)
-		script[0].Call = afterToolsListed(tools.Relay, script[0].Call)
-		script = append(script, Response{Call: sortieStatusCall(b), Usage: sortieToolUsage}, closingResponse(b))
+		script = append(script, closingResponse(b))
 	}
 	server := Start(reporter, script)
 
 	run, launch, timedOut := driveTurn(t, b, drive{
-		scenario:      scenario,
-		server:        server,
-		workspace:     workspace,
-		mcpConfigPath: tools.ConfigPath,
-		settings:      b.Passthrough,
-		prompt:        "Read the file " + file + " and report its contents.",
+		scenario:  scenario,
+		server:    server,
+		workspace: workspace,
+		settings:  b.Passthrough,
+		prompt:    "Read the file " + file + " and report its contents.",
 	})
 
 	if scenario == ScenarioExhaustion {
 		failures := recorded.snapshot()
 		reportViolations(t, exhaustionViolations(run, nonce, timedOut, failures))
-		if exhausted := exchangesOfKind(run.Exchanges, ExchangeExhausted); len(exhausted) > 0 && reportsOnly(failures, exhausted) {
+		if exhausted := exchangesOfKind(run.Exchanges, ExchangeExhausted); len(exhausted) > 0 && oneFailurePerRequest(failures, exhausted) {
 			recorded.discard()
 		}
 		if b.Inspect != nil {
@@ -214,8 +222,7 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 		assertExactUsage(t, b, run)
 	})
 	t.Run("deterministic tool path", func(t *testing.T) {
-		reportViolations(t, toolPathViolations(run, nonce, strconv.Itoa(sortieStatusTurn)))
-		tools.Relay.AssertToolCallSucceeded(t, agenttest.SortieStatusTool)
+		reportViolations(t, toolPathViolations(run, nonce))
 	})
 	t.Run("credential containment", func(t *testing.T) {
 		reportViolations(t, containmentViolations(run, streams))
@@ -225,7 +232,48 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 	}
 }
 
-// drive is what one scripted turn needs beyond the binding.
+func runToolServer(t *testing.T, b Binding) {
+	t.Helper()
+
+	nonce := "nonce-" + randomHex(t, 8)
+	workspace := newWorkspace(t)
+	file := filepath.Join(workspace, "scripted-"+nonce+".txt")
+	if err := os.WriteFile(file, []byte(nonce+"\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", file, err)
+	}
+
+	tools := agenttest.NewSortieTools(t, workspace)
+	writeSortieState(t, workspace)
+	script := []Response{
+		{Call: afterToolsListed(tools.Relay, b.Read(file)), Usage: firstTurnUsage},
+		{Call: sortieStatusCall(b), Usage: sortieToolUsage},
+		closingResponse(b),
+	}
+	settings := b.ToolServerPassthrough
+	if settings == nil {
+		settings = b.Passthrough
+	}
+	run, _, _ := driveTurn(t, b, drive{
+		scenario:      ScenarioToolServer,
+		server:        Start(t, script),
+		workspace:     workspace,
+		mcpConfigPath: tools.ConfigPath,
+		settings:      settings,
+		prompt:        "Read the file " + file + " and report its contents.",
+	})
+
+	t.Run("turn outcome", func(t *testing.T) {
+		reportViolations(t, turnOutcomeViolations(run, len(script)))
+	})
+	t.Run("tool server", func(t *testing.T) {
+		reportViolations(t, toolServerViolations(run, strconv.Itoa(sortieStatusTurn)))
+		tools.Relay.AssertToolCallSucceeded(t, agenttest.SortieStatusTool, tools.Identity)
+	})
+	if b.Inspect != nil {
+		t.Run("adapter", func(t *testing.T) { b.Inspect(t, run) })
+	}
+}
+
 type drive struct {
 	scenario      Scenario
 	server        *Server
@@ -235,9 +283,6 @@ type drive struct {
 	prompt        string
 }
 
-// driveTurn isolates the environment, launches the binding's runtime through
-// its adapter, runs one turn against d.server and stops the session. timedOut
-// reports whether the turn exhausted its bound.
 func driveTurn(t *testing.T, b Binding, d drive) (run Run, launch Launch, timedOut bool) {
 	t.Helper()
 
@@ -345,8 +390,8 @@ func runPermissionRefusal(t *testing.T, b Binding) {
 // the Sortie tools, so the request after this answer can call one: a runtime
 // connects its MCP servers alongside its first model request. The settle
 // covers registration that trails the listing with nothing on the wire to
-// wait for; opencode 2.x left the tools out of the next request in 6 of 20
-// runs without it and in none of 20 with a tenth of it.
+// wait for; without it a runtime was measured leaving the tools out of the
+// next request in 6 of 20 runs.
 func afterToolsListed(relay agenttest.RecordingMCPRelay, choice ToolChoice) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
 		if relay.WaitToolsListed(toolsListedBound) {
@@ -393,8 +438,7 @@ func newWorkspace(t *testing.T) string {
 }
 
 // isolateEnvironment points HOME and every XDG base directory at home so no
-// stored login is reachable, and gives the sentinel to every credential name
-// the kind declares and the binding adds.
+// stored login is reachable.
 func isolateEnvironment(t *testing.T, b Binding, home, sentinel string) {
 	t.Helper()
 
@@ -485,7 +529,6 @@ func (r *recordingReporter) discard() {
 	r.failures = nil
 }
 
-// reraise fails the test with every failure no property consumed.
 func (r *recordingReporter) reraise() {
 	for _, failure := range r.snapshot() {
 		r.TB.Errorf("%s", failure)
@@ -507,8 +550,6 @@ func readStreams(paths []string) []streamFile {
 	return streams
 }
 
-// expectedUsage sums the usage every turn and auxiliary answer reported,
-// which a runtime's figure must cover.
 func expectedUsage(exchanges []Exchange) domain.TokenUsage {
 	var total domain.TokenUsage
 	for _, ex := range exchanges {
@@ -539,8 +580,6 @@ func requestLabel(ex Exchange) string {
 	return fmt.Sprintf("request %d (%s %s)", ex.Seq, ex.Method, ex.Path)
 }
 
-// findings collects what one property found broken, each entry naming the
-// property.
 type findings struct {
 	property string
 	items    []string
@@ -639,19 +678,15 @@ func refusedCallViolations(run Run, nonce, notice string) []string {
 	return v.items
 }
 
-// toolPathViolations checks the scripted calls in turn order: outputs[i] is
-// what the result of the call answering turn i must contain.
-func toolPathViolations(run Run, outputs ...string) []string {
+func toolPathViolations(run Run, wantOutput string) []string {
 	v := &findings{property: "deterministic tool path"}
 
 	turns := exchangesOfKind(run.Exchanges, ExchangeTurn)
-	for i, output := range outputs[:min(len(outputs), len(turns))] {
-		if turns[i].Answer.Call == nil {
-			v.add("%s was answered with text, want the scripted call", requestLabel(turns[i]))
-		}
-		if i+1 < len(turns) {
-			checkToolResult(v, turns[i], turns[i+1], output, run.Environment.Sentinel)
-		}
+	if len(turns) > 0 && turns[0].Answer.Call == nil {
+		v.add("%s was answered with text, want the scripted call", requestLabel(turns[0]))
+	}
+	if len(turns) > 1 {
+		checkToolResult(v, turns[0], turns[1], wantOutput, run.Environment.Sentinel)
 	}
 
 	called := 0
@@ -682,9 +717,53 @@ func toolPathViolations(run Run, outputs ...string) []string {
 	return v.items
 }
 
-// checkToolResult records a violation unless next carries exactly one tool
-// result answering call's exchange and its output holds want. A request
-// resends the whole conversation, so it also carries earlier calls' results.
+// toolServerViolations leaves the preamble read unjudged: a runtime may fail
+// that read before it runs, and the turn continues with the failure as its
+// result.
+func toolServerViolations(run Run, wantOutput string) []string {
+	v := &findings{property: "tool server"}
+
+	turns := exchangesOfKind(run.Exchanges, ExchangeTurn)
+	if len(turns) > serverCallStep {
+		call := turns[serverCallStep]
+		if call.Answer.Call == nil {
+			v.add("%s was answered with text, want the server call", requestLabel(call))
+		}
+		if serverCallStep+1 < len(turns) {
+			checkToolResult(v, call, turns[serverCallStep+1], wantOutput, run.Environment.Sentinel)
+		}
+	}
+
+	called := 0
+	for _, ex := range turns {
+		if ex.Answer.Call != nil {
+			called++
+		}
+	}
+	var toolEvents []int
+	for i, event := range run.Events {
+		if event.Type == domain.EventToolResult {
+			toolEvents = append(toolEvents, i)
+		}
+	}
+	if len(toolEvents) != called {
+		v.add("%d tool_result events, want one per call answered (%d)", len(toolEvents), called)
+	}
+	if len(toolEvents) > serverCallStep {
+		i := toolEvents[serverCallStep]
+		event := run.Events[i]
+		if event.ToolError {
+			v.add("event %d reports a tool error for %q", i, event.ToolName)
+		}
+		if event.ToolName == "" || event.ToolName == "unknown" {
+			v.add("event %d has tool name %q, want the tool's own name", i, event.ToolName)
+		}
+	}
+	return v.items
+}
+
+// checkToolResult filters next's tool results down to those answering call,
+// because a request resends the whole conversation with earlier calls' results.
 func checkToolResult(v *findings, call, next Exchange, want, sentinel string) {
 	if call.Answer.Call == nil {
 		return
@@ -707,8 +786,6 @@ func checkToolResult(v *findings, call, next Exchange, want, sentinel string) {
 	}
 }
 
-// answersCall matches on the call id the answer issued, or on the tool name
-// where the wire issues none.
 func answersCall(answer Answer, result ToolResult) bool {
 	if answer.CallID != "" {
 		return result.CallID == answer.CallID
@@ -858,11 +935,9 @@ func exhaustionViolations(run Run, nonce string, timedOut bool, failures []strin
 	return v.items
 }
 
-// checkExhaustedExchanges records a violation unless every request beyond the
-// script carried the first call's result, the last one's message reached the
-// turn's error and its failed event, and the endpoint reported each of them.
-// A runtime may resend a rejected request, such as once more without an
-// optional feature, so more than one such request is not a violation.
+// checkExhaustedExchanges accepts more than one request beyond the script: a
+// runtime may resend a rejected request, such as once more without an
+// optional feature.
 func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string) {
 	message := exhausted[len(exhausted)-1].Answer.Text
 	if run.Err == nil || !strings.Contains(run.Err.Error(), message) {
@@ -880,14 +955,12 @@ func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Ex
 		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
 	}
 
-	if !reportsOnly(failures, exhausted) {
+	if !oneFailurePerRequest(failures, exhausted) {
 		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
 	}
 }
 
-// reportsOnly reports whether failures holds exactly one failure per
-// exhausted request, each naming its request.
-func reportsOnly(failures []string, exhausted []Exchange) bool {
+func oneFailurePerRequest(failures []string, exhausted []Exchange) bool {
 	if len(failures) != len(exhausted) {
 		return false
 	}
