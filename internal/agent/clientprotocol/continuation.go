@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -57,7 +58,7 @@ func (v negativeControlVerdict) matches(code int) bool {
 // surfaces the same normalized failure any other loss of the agent
 // connection does.
 func sendNegativeControl(ctx context.Context, state *sessionState) (negativeControlVerdict, *domain.AgentError) {
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
 	resp, err := state.conn.Call(callCtx, negativeControlMethod, struct{}{})
@@ -133,7 +134,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 
 	state.inbox.Put(pumpItem{control: &pumpControl{expectLoad: resumeID}})
 
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 	resp, err := state.conn.Call(callCtx, methodSessionLoad, loadSessionRequest{
 		Cwd: cwd, MCPServers: servers, SessionID: sessionId(resumeID),
@@ -153,7 +154,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 	reply := make(chan bool, 1)
 	state.inbox.Put(pumpItem{control: &pumpControl{query: &replayQuery{reply: reply}}})
 
-	timer := time.NewTimer(readTimeout(state))
+	timer := time.NewTimer(agentcore.ReadTimeout(state.agentConfig))
 	defer timer.Stop()
 	select {
 	case confirmed := <-reply:
@@ -171,7 +172,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 // carrying an error, or a timeout waiting for any response at all,
 // lowers sessionContinuation and falls back.
 func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, *domain.AgentError) {
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
 	var wireServers *[]mcpServer

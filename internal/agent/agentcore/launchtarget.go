@@ -358,9 +358,5 @@ func prependPreamble(preamble, stdin io.Reader) io.Reader {
 // AuxiliaryTimeout returns the bound for an auxiliary launch: twice
 // cfg.ReadTimeoutMS, capped at 30 seconds, and never non-positive.
 func AuxiliaryTimeout(cfg domain.AgentConfig) time.Duration {
-	readTimeout := time.Duration(cfg.ReadTimeoutMS) * time.Millisecond
-	if readTimeout <= 0 {
-		readTimeout = 30 * time.Second
-	}
-	return min(2*readTimeout, 30*time.Second)
+	return min(2*ReadTimeout(cfg), 30*time.Second)
 }

@@ -71,6 +71,12 @@ type sessionState struct {
 	// reads it when it builds each turn's own turnRuntime.
 	drainGrace time.Duration
 
+	// firstEventTimeout bounds each turn's wait for its first JSON event.
+	// opencode prints nothing before the model starts answering, so the
+	// wait carries the provider's latency. Written once by StartSession,
+	// or by a test before a session's first turn.
+	firstEventTimeout time.Duration
+
 	// turnConfigContent is the inline configuration document every turn
 	// carries through OPENCODE_CONFIG_CONTENT. Never empty, because the
 	// document always carries the title-agent switch. Set once in
@@ -156,6 +162,7 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		runStartedAtMS:         time.Now().UnixMilli(),
 		usage:                  agentcore.NewTurnEndUsage(),
 		drainGrace:             procutil.DefaultDrainGrace,
+		firstEventTimeout:      agentcore.FirstResponseTimeout(params.AgentConfig),
 		credentialVerification: params.CredentialVerification,
 	}
 
@@ -306,8 +313,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		params.OnEvent(event)
 	}
 
-	readTimeout := readTimeout(state)
-	readTimer := time.NewTimer(readTimeout)
+	readTimer := time.NewTimer(state.firstEventTimeout)
 	defer stopTimer(readTimer)
 
 	readTimeoutC := readTimer.C
@@ -336,7 +342,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 
 		if parsed.PlainText != "" {
 			if readTimeoutC != nil {
-				resetTimer(readTimer, readTimeout)
+				resetTimer(readTimer, state.firstEventTimeout)
 			}
 
 			plainText := redact.Truncate(parsed.PlainText, 500)
@@ -875,13 +881,6 @@ func stopTimer(timer *time.Timer) {
 func resetTimer(timer *time.Timer, timeout time.Duration) {
 	stopTimer(timer)
 	timer.Reset(timeout)
-}
-
-func readTimeout(state *sessionState) time.Duration {
-	if state.agentConfig.ReadTimeoutMS > 0 {
-		return time.Duration(state.agentConfig.ReadTimeoutMS) * time.Millisecond
-	}
-	return 30 * time.Second
 }
 
 func isPermissionWarning(line string) bool {

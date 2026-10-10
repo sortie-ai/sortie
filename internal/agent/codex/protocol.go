@@ -75,7 +75,7 @@ func initializeHandshake(ctx context.Context, state *sessionState) error {
 		},
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 	resp, err := state.conn.Call(callCtx, "initialize", params)
 	if err != nil {
@@ -96,7 +96,7 @@ func initializeHandshake(ctx context.Context, state *sessionState) error {
 // waiting for the login to complete; the thread id is not yet known at
 // this point in the handshake, so logger carries no session scope.
 func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog.Logger) error {
-	readCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 	resp, err := state.conn.Call(readCtx, "account/read", map[string]any{"refreshToken": false})
 	if err != nil {
@@ -123,7 +123,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 		return nil
 	}
 
-	loginCtx, loginCancel := context.WithTimeout(ctx, readTimeout(state))
+	loginCtx, loginCancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	loginResp, err := state.conn.Call(loginCtx, "account/login/start", map[string]any{
 		"type":   "apiKey",
 		"apiKey": apiKey,
@@ -141,7 +141,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 	}
 
 	// Wait for account/login/completed notification.
-	deadline := time.After(readTimeout(state))
+	deadline := time.After(agentcore.ReadTimeout(state.agentConfig))
 	for {
 		select {
 		case <-ctx.Done():
@@ -213,7 +213,7 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 		params["personality"] = pt.Personality
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	resp, callErr := state.conn.Call(callCtx, "thread/start", params)
 	cancel()
 	if callErr != nil {
@@ -234,7 +234,7 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	threadLogger := logging.WithSession(logger, threadID)
 
 	// Wait for thread/started notification.
-	deadline := time.After(readTimeout(state))
+	deadline := time.After(agentcore.ReadTimeout(state.agentConfig))
 	for {
 		select {
 		case <-ctx.Done():
@@ -268,7 +268,7 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 // fails to unmarshal does not turn a successful resume into a
 // failure: it returns an empty model and a nil error.
 func resumeThread(ctx context.Context, state *sessionState, threadID string) (model string, err error) {
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 	resp, callErr := state.conn.Call(callCtx, "thread/resume", map[string]any{
 		"threadId": threadID,
@@ -353,13 +353,4 @@ func denormalizeSandbox(s string) string {
 	default:
 		return s
 	}
-}
-
-// readTimeout returns the read timeout duration from the agent config,
-// defaulting to 30 seconds.
-func readTimeout(state *sessionState) time.Duration {
-	if state.agentConfig.ReadTimeoutMS > 0 {
-		return time.Duration(state.agentConfig.ReadTimeoutMS) * time.Millisecond
-	}
-	return 30 * time.Second
 }

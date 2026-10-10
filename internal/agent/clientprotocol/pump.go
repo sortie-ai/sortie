@@ -334,7 +334,7 @@ func (p *pumpState) handleReplayQuery(q *replayQuery) {
 		return
 	}
 	p.pendingReplayQuery = q
-	p.replayDeadlineC = time.After(readTimeout(p.state))
+	p.replayDeadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 }
 
 // finalizeReplayQueryOnDeadline ends a pending replay query once its bounded
@@ -497,7 +497,7 @@ func (p *pumpState) armWriteFailedDeadline() <-chan time.Time {
 	if p.activeTurn == nil {
 		return nil
 	}
-	return time.After(readTimeout(p.state))
+	return time.After(agentcore.ReadTimeout(p.state.agentConfig))
 }
 
 // handleWriteFailed ends the active turn with the send-failure outcome. It runs
@@ -626,7 +626,7 @@ func (p *pumpState) armDrain(turn *activeTurn, evidence agentcore.TurnEvidence, 
 	turn.drainEvidence = evidence
 	turn.draining = true
 	if turn.deadlineC == nil {
-		turn.deadlineC = time.After(readTimeout(p.state))
+		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 	}
 
 	reader := p.reader
@@ -907,7 +907,7 @@ func (p *pumpState) beginEndAttempt(kind turnEndKind, detail string) {
 		p.state.conn.Notify(methodSessionCancel, cancelNotification{SessionID: sessionId(p.sessionID)}) //nolint:errcheck,gosec // best-effort
 	}
 	if turn.deadlineC == nil {
-		turn.deadlineC = time.After(readTimeout(p.state))
+		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 	}
 }
 

@@ -12,11 +12,11 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 
-	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/opencode"
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -546,10 +546,14 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipIfNotEnabled(t)
 
+	defaults, err := config.NewServiceConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("config.NewServiceConfig(defaults) error = %v", err)
+	}
 	adapter := mustNewAdapter(t)
 	params := domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: int(agentcore.CredentialExchangeBound.Milliseconds())},
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: defaults.Agent.ReadTimeoutMS},
 		Settings:      integrationConfig(),
 	}
 	credentialtest.VerifyLiveUsage(t, "opencode", adapter, params, integrationConfig())

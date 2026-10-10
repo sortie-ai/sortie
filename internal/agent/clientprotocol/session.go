@@ -32,10 +32,6 @@ const clientProtocolMaxLineBytes = 10 * 1024 * 1024
 // no error for a version mismatch and leaves the disconnect to the client.
 const pinnedProtocolVersion = 1
 
-// defaultReadTimeout bounds a synchronous wait on the agent when
-// agent.read_timeout_ms is not set.
-const defaultReadTimeout = 30 * time.Second
-
 // errorCodeAuthRequired is the protocol's "Authentication required"
 // code, returned when the runtime refuses its credential.
 const errorCodeAuthRequired = -32000
@@ -224,13 +220,6 @@ type turnVerdict struct {
 type turnEnd struct {
 	result domain.TurnResult
 	err    *domain.AgentError
-}
-
-func readTimeout(state *sessionState) time.Duration {
-	if state.agentConfig.ReadTimeoutMS > 0 {
-		return time.Duration(state.agentConfig.ReadTimeoutMS) * time.Millisecond
-	}
-	return defaultReadTimeout
 }
 
 // startSession launches the runtime, performs the initialize handshake, and
@@ -534,7 +523,7 @@ func wrapPumpMessage(msg jsonrpc.Message) pumpItem {
 // doInitialize sends the initialize request and validates the pinned protocol
 // version.
 func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse, *domain.AgentError) {
-	callCtx, cancel := context.WithTimeout(ctx, max(readTimeout(state), agentcore.CredentialExchangeBound))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.FirstResponseTimeout(state.agentConfig))
 	defer cancel()
 
 	no := false
@@ -576,7 +565,7 @@ func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse
 // doNewSession sends session/new with the resolved cwd and filtered server
 // list.
 func doNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (*newSessionResponse, *domain.AgentError) {
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
 	req := newSessionRequest{Cwd: cwd, MCPServers: servers}
@@ -663,7 +652,7 @@ func runTurn(ctx context.Context, session domain.Session, params domain.RunTurnP
 
 	state.inbox.Put(pumpItem{control: &pumpControl{startTurn: ts}})
 
-	replyTimer := time.NewTimer(readTimeout(state))
+	replyTimer := time.NewTimer(agentcore.ReadTimeout(state.agentConfig))
 	var verdict turnVerdict
 	select {
 	case verdict = <-ts.reply:

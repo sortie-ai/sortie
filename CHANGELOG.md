@@ -49,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - On Windows, when Sortie could not place a command in a Job Object and cannot check one of the command's processes afterwards, it now logs `subprocess tree did not settle`, and that warning no longer lists processes that belong to other programs. A process in the Job Object of a command or agent session that Sortie cannot check no longer counts as gone: Sortie keeps terminating the job for up to 2 seconds, then logs `subprocess group termination failed after the launch returned`. ([#1098](https://github.com/sortie-ai/sortie/issues/1098))
 - A `codex` agent can now call Sortie's tools, which the agent runtime refused on every call before, and a tool from a server in its `mcp_config` is no longer refused for want of an approval nobody can give. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
 - A `codex` tool call that fails or is refused is now reported as a tool error instead of as a successful call. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
+- An `opencode` run no longer fails when the model takes more than five seconds to start answering: the wait for a turn's first output and for the start-up credential check is now at least 60 seconds, whatever `agent.read_timeout_ms` is set to. ([#1239](https://github.com/sortie-ai/sortie/issues/1239))
 
 ### Migrations
 
