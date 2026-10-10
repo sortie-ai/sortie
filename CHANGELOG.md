@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A `codex` agent can now call Sortie's tools, which the agent runtime refused on every call before, and a tool from a server in its `mcp_config` is no longer refused for want of an approval nobody can give. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
 - A `codex` tool call that fails or is refused is now reported as a tool error instead of as a successful call. ([#1262](https://github.com/sortie-ai/sortie/issues/1262))
 - An `opencode` run no longer fails when the model takes more than five seconds to start answering: the wait for a turn's first output and for the start-up credential check is now at least 60 seconds, whatever `agent.read_timeout_ms` is set to. ([#1239](https://github.com/sortie-ai/sortie/issues/1239))
+- The `sortie validate` warning for `opencode.dangerously_skip_permissions: false` now says only that the runtime refuses every permissioned tool call, no longer that an `opencode` turn ends at the first refusal, which it does not. ([#1215](https://github.com/sortie-ai/sortie/issues/1215))
 
 ### Migrations
 
