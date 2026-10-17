@@ -965,9 +965,9 @@ Fields:
 
 **Validation:** Setting `provider` while both `review_label` and `fix_label` are empty is a configuration error. Because the defaults are non-empty, this occurs only when the operator explicitly sets both labels to `""`. The rule is a config-shape check and surfaces offline via `sortie validate`. A `provider` naming an unregistered SCM adapter is also a `validate` error, reported under the check name `scm_adapter` by the activation checks that fold every active SCM reaction kind, `label_commands` included, into one provider set.
 
-**Operator prerequisite:** Enabling `review_label` requires the active prompt template to contain a `{{ if .label_review }}` branch that fetches the PR diff and posts review comments using the agent's own SCM tooling (see the `label_review` continuation key in Section 5.2). The orchestrator injects only the PR coordinates, never the diff text and never a posted comment, so without this branch a label-review dispatch runs the normal work prompt and posts no review. The orchestrator emits an info log at each dispatch; when a loaded workflow first lacks the `label_review` branch, the load records one warning, which `sortie validate` reports under `reactions.label_commands.review_branch_missing`, so the inert outcome is diagnosable.
+**Operator prerequisite:** A `{{ if .label_review }}` branch in the active prompt template is optional. Without it, a label-review dispatch runs Sortie's built-in review prompt, which asks the agent to fetch the diff of the pull request, review it, and post its review comments. A branch replaces the built-in prompt; it fetches the PR diff and posts review comments using the agent's own SCM tooling (see the `label_review` continuation key in Section 5.2, and [Built-in reaction prompts](#built-in-reaction-prompts) for how Sortie chooses between the branch and the built-in prompt). The orchestrator injects only the PR coordinates, never the diff text and never a posted comment. The orchestrator emits an info log at each dispatch.
 
-**Operator prerequisite (fix):** Enabling `fix_label` requires the active prompt template to contain a `{{ if .label_fix }}` branch that checks out `label_fix.branch`, fetches and addresses the outstanding review comments, pushes the fixes to that branch, posts a summary comment, and writes `.sortie/status` to signal completion (see the `label_fix` continuation key in Section 5.2). The completion signal matters more here than for review: a review is naturally one turn, but a fix is multi-turn, so without it a completed fix session runs to `agent.max_turns` and wastes turns. Unlike the review case, a missing `label_fix` branch is not a structural no-op: the fix command clones and checks out a real workspace with content-write scope, so an applied fix label without the template branch runs the normal work prompt against a real checkout that can push. The loaded configuration MUST (not SHOULD) carry the omission as an advisory when `label_commands` is active with a non-empty fix label but the template omits the `label_fix` token: recorded once when a loaded workflow first lacks the branch, and reported by `sortie validate` under `reactions.label_commands.fix_branch_missing`. The orchestrator also emits an info log at each fix dispatch, so the misconfiguration stays diagnosable.
+**Operator prerequisite (fix):** A `{{ if .label_fix }}` branch in the active prompt template is optional. Without it, a fix dispatch runs Sortie's built-in fix prompt, which asks the agent to check out the pull request's head branch, address the outstanding review comments, push the fixes to that branch, and post a summary comment. A branch replaces the built-in prompt; it checks out `label_fix.branch`, fetches and addresses the outstanding review comments, pushes the fixes to that branch, posts a summary comment, and writes `.sortie/status` to signal completion (see the `label_fix` continuation key in Section 5.2, and [Built-in reaction prompts](#built-in-reaction-prompts)). The completion signal matters more here than for review: a review is naturally one turn, but a fix is multi-turn, so without it a completed fix session runs to `agent.max_turns` and wastes turns. The built-in fix prompt asks for that signal. The orchestrator emits an info log at each fix dispatch.
 
 **Default-on activation:** `fix_label` defaults to `sortie:fix`, so shipping the fix command activates it for every deployment that already sets `provider` for `label_commands`, including a deployment that enabled only the review command. A review-only deployment MUST set `reactions.label_commands.fix_label: ""` to opt out.
 
@@ -4576,7 +4576,7 @@ template.New("prompt").
 
 ### 5.2 Template Input Variables
 
-The data map passed to `Execute` contains **four core top-level keys** (`issue`, `attempt`, `run`, `stage`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches. `review_comments` and `bot_review_comments` are also populated on turn 1 of a new run of an issue whose pull request holds comments no earlier run was given (see `reactions.review_comments` and `reactions.bot_review` in Section 2.9):
+The data map passed to `Execute` contains **four core top-level keys** (`issue`, `attempt`, `run`, `stage`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches. A reaction run is a run that a reaction starts, error retries included. Its key stays set on every turn of the run, so a `.run.is_continuation` test inside the key's branch tells the first turn from later ones (see Section 5.5). `review_comments` and `bot_review_comments` are also populated on turn 1 of a new run of an issue whose pull request holds comments no earlier run was given (see `reactions.review_comments` and `reactions.bot_review` in Section 2.9):
 
 #### `issue` — Normalized Issue Object
 
@@ -4636,7 +4636,7 @@ A retry or reaction continuation that keeps its rule renders the `previous` pair
 
 #### `ci_failure` — CI Failure Context (continuation key)
 
-Non-nil only on turn 1 of a CI-fix continuation dispatch. Contains CI failure details from `CIResult.ToTemplateMap()`:
+Non-nil on every turn of a CI-fix continuation run. Contains CI failure details from `CIResult.ToTemplateMap()`:
 
 | Field                     | Type            | Description                                              |
 | ------------------------- | --------------- | -------------------------------------------------------- |
@@ -4650,7 +4650,7 @@ When `nil` (default on non-CI dispatches), `{{ if .ci_failure }}` evaluates to `
 
 #### `review_comments` — Review Comment Context (continuation key)
 
-Non-nil only on turn 1 of a review-fix continuation dispatch, and on turn 1 of a new run of an issue whose pull request holds review comments no earlier run was given, when `reactions.review_comments` has no `triage` block and the template keeps all of its own text with the variable set. Contains a list of human review comments from `CHANGES_REQUESTED` PR reviews:
+Non-nil on every turn of a review-fix continuation run, and on turn 1 only of a new run of an issue whose pull request holds review comments no earlier run was given, when `reactions.review_comments` has no `triage` block and the template keeps all of its own text with the variable set. Contains a list of human review comments from `CHANGES_REQUESTED` PR reviews:
 
 | Field (per element)           | Type    | Description                                              |
 | ----------------------------- | ------- | -------------------------------------------------------- |
@@ -4661,7 +4661,7 @@ Non-nil only on turn 1 of a review-fix continuation dispatch, and on turn 1 of a
 | `.review_comments[].reviewer` | string  | Username of the comment author.                          |
 | `.review_comments[].body`     | string  | Comment text.                                            |
 
-When `nil` (default on other dispatches), `{{ if .review_comments }}` evaluates to `false`. Write the comments as an added block, as the pattern below does, so a new run keeps the rest of the prompt. A template whose other text changes when `review_comments` is set renders without the comments on a new run.
+When `nil` (default on other dispatches), `{{ if .review_comments }}` evaluates to `false`. Write the comments as an added block, as the pattern below does, so a new run keeps the rest of the prompt. A template whose other text changes when `review_comments` is set renders without the comments on a new run. [Built-in reaction prompts](#built-in-reaction-prompts) describes what each shape sends a review-fix run.
 
 **Template pattern for review comments:**
 
@@ -4682,7 +4682,7 @@ The following review comments were left on the PR. Address each one:
 
 #### `bot_review_comments` — Bot Review Comment Context (continuation key)
 
-Non-nil only on turn 1 of a bot-review-fix continuation dispatch, and on turn 1 of a new run of an issue whose pull request holds bot comments no earlier run was given, under the same conditions as `review_comments`. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.9). The per-element shape is identical to `review_comments`:
+Non-nil on every turn of a bot-review-fix continuation run, and on turn 1 only of a new run of an issue whose pull request holds bot comments no earlier run was given, under the same conditions as `review_comments`. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.9). The per-element shape is identical to `review_comments`:
 
 | Field (per element)               | Type    | Description                                              |
 | --------------------------------- | ------- | -------------------------------------------------------- |
@@ -4714,7 +4714,7 @@ The following comments were left on the PR by automated review tools. Address ea
 
 #### `merge_conflict` — Merge Conflict Context (continuation key)
 
-Non-nil only on turn 1 of a merge-conflict-resolution continuation dispatch. Contains the PR identity and the rebase target read live from the PR object (see `reactions.merge_conflicts` in Section 2.9):
+Non-nil on every turn of a merge-conflict-resolution continuation run. Contains the PR identity and the rebase target read live from the PR object (see `reactions.merge_conflicts` in Section 2.9):
 
 | Field                      | Type    | Description                                                                 |
 | -------------------------- | ------- | --------------------------------------------------------------------------- |
@@ -4745,7 +4745,7 @@ its base branch {{ .merge_conflict.base }}. Resolve them:
 
 #### `label_review` — Label Review Context (continuation key)
 
-Non-nil only on turn 1 of a read-only label-review dispatch, triggered when an operator applies the configured review label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to fetch the diff and post its review:
+Non-nil on every turn of a read-only label-review run, triggered when an operator applies the configured review label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to fetch the diff and post its review:
 
 | Field                        | Type    | Description                                         |
 | ---------------------------- | ------- | --------------------------------------------------- |
@@ -4755,7 +4755,7 @@ Non-nil only on turn 1 of a read-only label-review dispatch, triggered when an o
 | `.label_review.actor`        | string  | Login of the operator who applied the review label. |
 | `.label_review.requested_at` | string  | RFC 3339 timestamp of the confirmed labeling gesture. |
 
-The orchestrator injects only these coordinates. It never injects the PR diff text and never posts a comment itself; the agent fetches the diff and posts review comments using its own SCM tooling. A prompt template that omits the `{{ if .label_review }}` branch therefore produces no review on a label-review dispatch.
+The orchestrator injects only these coordinates. It never injects the PR diff text and never posts a comment itself; the agent fetches the diff and posts review comments using its own SCM tooling. A prompt template that omits the `{{ if .label_review }}` branch gets the built-in review prompt (see [Built-in reaction prompts](#built-in-reaction-prompts)).
 
 When `nil` (default on non-label-review dispatches), `{{ if .label_review }}` evaluates to `false`.
 
@@ -4776,7 +4776,7 @@ Produce a code review of pull request #{{ .label_review.pr_number }} in
 
 #### `label_fix`: Label Fix Context (continuation key)
 
-Non-nil only on turn 1 of a fix dispatch, triggered when an operator applies the configured fix label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to check out the head branch, address the review comments, and push:
+Non-nil on every turn of a fix run, triggered when an operator applies the configured fix label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to check out the head branch, address the review comments, and push:
 
 | Field                     | Type    | Description                                           |
 | ------------------------- | ------- | ------------------------------------------------------ |
@@ -4787,7 +4787,7 @@ Non-nil only on turn 1 of a fix dispatch, triggered when an operator applies the
 | `.label_fix.actor`        | string  | Login of the operator who applied the fix label.        |
 | `.label_fix.requested_at` | string  | RFC 3339 timestamp of the confirmed labeling gesture.    |
 
-The orchestrator injects only these coordinates. It never fetches the review comments, never applies changes, and never pushes or comments itself; the agent checks out `label_fix.branch`, addresses the comments, pushes the fixes, and posts the summary comment using its own SCM tooling. A prompt template that omits the `{{ if .label_fix }}` branch therefore runs the normal work prompt against a real checkout with push capability instead of producing a fix.
+The orchestrator injects only these coordinates. It never fetches the review comments, never applies changes, and never pushes or comments itself; the agent checks out `label_fix.branch`, addresses the comments, pushes the fixes, and posts the summary comment using its own SCM tooling. A prompt template that omits the `{{ if .label_fix }}` branch gets the built-in fix prompt (see [Built-in reaction prompts](#built-in-reaction-prompts)).
 
 When `nil` (default on non-label-fix dispatches), `{{ if .label_fix }}` evaluates to `false`.
 
@@ -4806,6 +4806,59 @@ Check out {{ .label_fix.branch }} for pull request #{{ .label_fix.pr_number }} i
 4. Write `needs-human-review` to `.sortie/status` to signal completion.
 {{ end }}
 ```
+
+#### Built-in reaction prompts
+
+Sortie ships a built-in prompt for each continuation key, so a reaction run always has instructions for its reaction. A branch in your template replaces the built-in prompt for its key. No setting changes the built-in text.
+
+Sortie chooses between the branch and the built-in prompt on every turn of a reaction run, against the template that run renders: the template a dispatch rule routes the run to, or the template the run was frozen with. The choice happens when the prompt is rendered, not when the workflow loads, so `sortie validate` has no missing-branch warning to give. Sortie renders the template twice, once with the run's reaction data and once without it:
+
+- When the render with the data is not blank and differs from the render without it, Sortie sends the render with the data. This is your branch.
+- Otherwise Sortie renders the built-in prompt for the key with the same data and sends that.
+
+These cases follow from the rule:
+
+- A branch that renders only whitespace counts as no branch, because it would give the agent no instructions.
+- A template that renders the same text with and without the data counts as no branch, because it does not react to the key.
+- A template that cannot render without the data, such as one that reads `{{ .label_fix.branch }}` outside any `{{ if .label_fix }}` block, counts as having a branch. Its render with the data is sent, and a failure of that render fails the run like any other template error.
+
+The built-in prompts ask for the following.
+
+- `ci_failure`: fix the failing CI checks, listing each check with the excerpt of the log of the first failing one, then commit and push the fix to the branch the checks ran on.
+- `review_comments`: address every review comment, each listed with its reviewer and location, then commit and push the changes to the pull request's branch.
+- `bot_review_comments`: the same for the comments that automated review tools left.
+- `merge_conflict`: fetch the base branch, rebase the pull request's branch onto it, resolve every conflict while keeping both the intent of the pull request and the base changes, and push.
+- `label_review`: fetch the diff of the pull request, review it, and post the review comments, without modifying the branch or pushing.
+- `label_fix`: check out the pull request's branch, fetch the outstanding review comments, address them, push to that branch only, and post a summary comment.
+
+Each first-turn built-in prompt ends by asking the agent to signal the outcome as the first-turn status instructions describe, so a run that finishes its task ends without using every turn. On later turns the built-in prompt sends the agent back to the instructions it received at the start of the session and adds no task. That text suits a session whose first turn came from your branch as well as one whose first turn came from the built-in prompt.
+
+A branch is rendered again on every turn, so it sends the same text each time unless it tests `.run.is_continuation`. Put that test inside the branch, as Section 5.5 shows, to send shorter resume text on later turns.
+
+**A reaction block inside the work prompt.** A block appended to the work prompt counts as your branch, because the render differs with the data. The run then receives the whole work prompt with the block on every turn, a label-fix run included. Sortie does not separate the block from the surrounding text; your branch always wins. To send only the reaction's instructions, put the branches in one exclusive chain, with the work prompt in the last `else`:
+
+```
+{{ if .label_review }}
+...review instructions...
+{{ else if .label_fix }}
+...fix instructions...
+{{ else if .merge_conflict }}
+...conflict instructions...
+{{ else }}
+...work prompt...
+{{ end }}
+```
+
+An appended block keeps the task description in front of the agent on a reaction run, which suits instructions that build on the work prompt. An exclusive chain keeps the work prompt out of a reaction run, which suits a fix on a checkout that can push. The shipped examples use the exclusive chain.
+
+**Review comments.** `review_comments` and `bot_review_comments` also reach turn 1 of a new run, and the shape of the branch decides what each kind of run receives:
+
+| Template shape | New run seeded with comments | Review-fix run |
+| --- | --- | --- |
+| An added block, as in the `review_comments` pattern above | The work prompt and the comments | The work prompt and the comments |
+| An exclusive branch, or no block | No comments | The comments in the branch's text or the built-in prompt, and no work prompt |
+
+A review-fix run counts every comment it carries as given to the agent, and the built-in prompt lists all of them.
 
 ### 5.3 Built-in Functions (FuncMap)
 
@@ -4876,11 +4929,39 @@ A previous attempt failed. Diagnose the root cause.
 - The full prompt template is rendered on **every** turn. The runtime always passes the full rendered result to the agent, regardless of turn number.
 - Workflow authors control what the agent receives on continuation turns by branching on `.run.is_continuation`. Without such branching, the agent receives identical instructions every turn.
 - After each turn, the worker re-checks the tracker issue state. If the issue is still active, another turn begins (up to `agent.max_turns`).
+- On a reaction run, the reaction's key stays set on every turn. A template that switches on `.run.is_continuation` at the top level, with the reaction branches only in the first-turn text, renders its resume text on later turns with and without the key. Sortie treats that as no branch for the key and sends the built-in continuation text, which points back to the instructions of the first turn:
+
+  ```
+  {{ if .run.is_continuation }}
+  <resume text>
+  {{ else }}
+  <prompt with reaction branches>
+  {{ end }}
+  ```
+
+  To send your own resume text on later turns of a reaction run, put the `.run.is_continuation` test inside the key's branch:
+
+  ```
+  {{ if .label_fix }}
+  {{ if .run.is_continuation }}
+  <fix resume text>
+  {{ else }}
+  <fix instructions>
+  {{ end }}
+  {{ else if .run.is_continuation }}
+  <resume text>
+  {{ else }}
+  <work prompt>
+  {{ end }}
+  ```
+
+  See [Built-in reaction prompts](#built-in-reaction-prompts) for the rule that chooses between a branch and the built-in prompt.
 
 ### 5.6 Fallback Prompt Behavior
 
-- On **continuation turns** (turn number > 1), if the rendered prompt is empty, the runtime substitutes a built-in default continuation prompt as a safety net. This covers templates that omit `{{ if .run.is_continuation }}` branching.
-- On the **first turn**, if the rendered prompt is empty, no fallback is applied — the empty string is passed to the agent as-is.
+- On **continuation turns** (turn number > 1) of a run that no reaction started, if the rendered prompt is empty, the runtime substitutes a built-in default continuation prompt as a safety net. This covers templates that omit `{{ if .run.is_continuation }}` branching.
+- On the **first turn** of a run that no reaction started, if the rendered prompt is empty, no fallback is applied; the empty string is passed to the agent as-is.
+- On a **reaction run**, a blank render, or one that ignores the reaction's key, yields the built-in prompt for the key on any turn. The default continuation prompt and the empty first-turn prompt apply to other runs only. See [Built-in reaction prompts](#built-in-reaction-prompts).
 - Workflow file read/parse failures are validation errors and do **not** silently fall back to a default prompt.
 
 ### 5.7 Common Patterns and Pitfalls
@@ -5206,7 +5287,7 @@ An empty `tracker.active_states` draws the warning `tracker.active_states.empty`
 
 **Advisory warnings vs. configuration errors:** An unknown key placed directly under `dispatch` (alongside `partials`, `rules`, `default`, and `max_consecutive_hops`) produces an `unknown_sub_key` advisory warning and does not block startup. Unknown keys nested deeper are rejected as configuration errors that fail the load: an unrecognized key inside a rule map (`dispatch.rules[*]`) that does not name a registered agent kind, inside `dispatch.default`, or inside a `match` block. The key that names a rule's own agent kind is its settings block and draws no `unknown_sub_key` warning. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key on a rule, is caught as an error so it cannot silently disable a rule, while a typo at the top `dispatch` level is flagged as a warning without preventing startup.
 
-**Template analysis in `sortie validate`.** `sortie validate` analyzes every prompt template of the workflow: the Markdown body, the default template, and each rule template. The analysis follows a call into a define block when the call passes the root data (`.` outside every `range` and `with` body, or `$`), so a variable that a partial reads and the data does not hold is reported as `unknown_var`. Each template warning starts with the file and the line that hold it, in the form `<file> (line <n>): <message>`, and a warning that sits in a partial names the partial. A define block of a partial that no prompt template calls draws an `unused_partial` warning, one for each such block. Template warnings never change the result or the exit status. A workflow that fails to load reports the load error and no template warnings. The `reactions.label_commands.review_branch_missing` and `reactions.label_commands.fix_branch_missing` advisories read the text of the partials the body template calls, so a `label_review` or `label_fix` branch inside such a partial counts.
+**Template analysis in `sortie validate`.** `sortie validate` analyzes every prompt template of the workflow: the Markdown body, the default template, and each rule template. The analysis follows a call into a define block when the call passes the root data (`.` outside every `range` and `with` body, or `$`), so a variable that a partial reads and the data does not hold is reported as `unknown_var`. Each template warning starts with the file and the line that hold it, in the form `<file> (line <n>): <message>`, and a warning that sits in a partial names the partial. A define block of a partial that no prompt template calls draws an `unused_partial` warning, one for each such block. Template warnings never change the result or the exit status. A workflow that fails to load reports the load error and no template warnings.
 
 **Adapter-specific tracker diagnostics.** A tracker adapter may contribute its own offline checks, which run during the same preflight without any network call. An `error`-severity diagnostic blocks dispatch like any other preflight error; a `warning`-severity diagnostic is advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
 
@@ -5232,8 +5313,6 @@ These offline checks never contact Linear and never log the API key value. State
 | `reactions.label_commands.poll_interval_ms.clamped`         | `reactions.label_commands` names a provider and its `poll_interval_ms` is below 30000.               |
 | `env_file.missing`                                          | An env file path is set (`--env-file` or `SORTIE_ENV_FILE`) and no file exists there.                |
 | `env_override.section_replaced`                             | A `SORTIE_*` override targets a section whose value is present and not a mapping.                    |
-| `reactions.label_commands.review_branch_missing`            | `reactions.label_commands` names a provider, the review label is non-empty, and the prompt template has no `label_review` branch. |
-| `reactions.label_commands.fix_branch_missing`               | `reactions.label_commands` names a provider, the fix label is non-empty, and the prompt template has no `label_fix` branch. |
 | `dispatch.next.max_sessions`                                | `agent.max_sessions` is above `0` and below the number of runs the longest stage chain needs. The text names both numbers and the chain; an issue on the chain exhausts its session budget before the chain ends. |
 | `agent.kind.deprecated`                                     | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) is registered as deprecated. |
 | `agent.kind.retired`                                        | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) was removed and converted onto its replacement kind. The warning names the converted fields, the launch the replacement kind performs, and the settings not carried, and states that the conversion is temporary. |

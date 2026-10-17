@@ -83,6 +83,45 @@ server:
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 
+{{ if .label_review }}
+
+## Review This Pull Request
+
+Produce a code review of pull request {{ .label_review.pr_number }} in
+{{ .label_review.owner }}/{{ .label_review.repo }}, requested by {{ .label_review.actor }}.
+
+1. Fetch the diff for this PR using your SCM tooling.
+2. Review the changes for correctness, clarity, and regressions.
+3. Post your review comments on the PR. Do not modify the branch or push commits.
+4. Write `needs-human-review` to `.sortie/status` to signal completion.
+
+{{ else if .label_fix }}
+
+## Fix This Pull Request
+
+Check out {{ .label_fix.branch }} for pull request {{ .label_fix.pr_number }} in
+{{ .label_fix.owner }}/{{ .label_fix.repo }}, requested by {{ .label_fix.actor }}.
+
+1. Fetch the outstanding review comments for this PR using your SCM tooling.
+2. Address the feedback and push the fixes to {{ .label_fix.branch }}.
+3. Post a summary comment on the PR describing the changes you made.
+4. Write `needs-human-review` to `.sortie/status` to signal completion.
+
+{{ else if .merge_conflict }}
+
+## Resolve Merge Conflicts
+
+Pull request {{ .merge_conflict.pr_number }} ({{ .merge_conflict.branch }}) has merge conflicts with
+its base branch {{ .merge_conflict.base }}. Resolve them now:
+
+1. Fetch the latest {{ .merge_conflict.base }} from the remote.
+2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
+3. Resolve every conflict, preserving both the intent of this PR and the base changes.
+4. Push the rebased branch.
+5. Write `needs-human-review` to `.sortie/status` to signal completion.
+
+{{ else }}
+
 ## Your task
 
 **{{ .issue.identifier }}**: {{ .issue.title }}
@@ -132,44 +171,6 @@ Review the current state of the workspace - check test output, lint results, and
 partial changes. Do not repeat work already completed. Proceed with the next step.
 {{ end }}
 
-{{ if .merge_conflict }}
-
-## Resolve Merge Conflicts
-
-PR #{{ .merge_conflict.pr_number }} ({{ .merge_conflict.branch }}) has merge conflicts with
-its base branch {{ .merge_conflict.base }}. Resolve them now:
-
-1. Fetch the latest {{ .merge_conflict.base }} from the remote.
-2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
-3. Resolve every conflict, preserving both the intent of this PR and the base changes.
-4. Push the rebased branch.
-{{ end }}
-
-{{ if .label_review }}
-
-## Review This Pull Request
-
-Produce a code review of pull request #{{ .label_review.pr_number }} in
-{{ .label_review.owner }}/{{ .label_review.repo }}, requested by {{ .label_review.actor }}.
-
-1. Fetch the diff for this PR using your SCM tooling.
-2. Review the changes for correctness, clarity, and regressions.
-3. Post your review comments on the PR. Do not modify the branch or push commits.
-{{ end }}
-
-{{ if .label_fix }}
-
-## Fix This Pull Request
-
-Check out {{ .label_fix.branch }} for pull request #{{ .label_fix.pr_number }} in
-{{ .label_fix.owner }}/{{ .label_fix.repo }}, requested by {{ .label_fix.actor }}.
-
-1. Fetch the outstanding review comments for this PR using your SCM tooling.
-2. Address the feedback and push the fixes to {{ .label_fix.branch }}.
-3. Post a summary comment on the PR describing the changes you made.
-4. Write `needs-human-review` to `.sortie/status` to signal completion.
-{{ end }}
-
 {{ if .attempt }}
 
 ## Retry
@@ -208,5 +209,6 @@ The following issues block this task. If any are unresolved, focus on preparatio
 that does not depend on the blocked functionality (tests, scaffolding, documentation).
 
 {{ range .issue.blocked_by }}- **{{ .identifier }}**{{ if .state }} ({{ .state }}){{ end }}
+{{ end }}
 {{ end }}
 {{ end }}

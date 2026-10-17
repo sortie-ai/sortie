@@ -569,11 +569,17 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       exit_cancelled()
 
-    if turn_number == 1:
+    if reaction_kind != "":
+      # a reaction run gets the operator's branch for its continuation key
+      # or the key's built-in prompt, on every turn
+      prompt = build_reaction_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns, continuation_context)
+      if turn_number == 1:
+        presented = the IDs of every comment continuation_context carries, per review kind
+    else if turn_number == 1:
       # presented holds, per review kind, the comment IDs this render showed
-      # the agent; a fresh run keeps a seeded render only when it contains
+      # the agent; a new run keeps a seeded render only when it contains
       # every line of the unseeded one, in order
-      prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context, fresh_run)
+      prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context)
     else:
       prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
     cancelled_at_ending = worker_ctx is done  // read immediately after the call, before any teardown below

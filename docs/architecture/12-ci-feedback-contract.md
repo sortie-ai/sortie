@@ -128,7 +128,7 @@ On a free slot with the gate proceeding:
 
 1. Read `reaction_attempts[issue_id:ci]`, the number of CI fixes dispatched. Persist a CI-failure run history entry (`status: ci_failed`). A pass over a standing escalation never reaches this step, so a recheck of a head that stays red appends no row that would count against `agent.max_sessions`.
 2. If the count has reached `reactions.ci_failure.max_retries`: escalate (Section 11A.7) with that count, and end the pass. The counter is not incremented.
-3. Otherwise increment `reaction_attempts[issue_id:ci]` and dispatch: a. Convert `CIResult` to a template map via `ToTemplateMap()`. b. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's `ContinuationContext` field carries the map through the timer to the worker goroutine. c. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
+3. Otherwise increment `reaction_attempts[issue_id:ci]` and dispatch: a. Convert `CIResult` to a template map via `ToTemplateMap()`. b. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's `ContinuationContext` field carries the map through the timer to the worker goroutine. c. The worker injects the context into the prompt on every turn of the reaction run via `prompt.WithContinuationContext`.
 
 CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than exponential backoff.
 

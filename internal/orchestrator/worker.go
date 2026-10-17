@@ -1249,6 +1249,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	var presentedComments map[string][]string
 
+	continuation := deps.ContinuationContext
+	if continuation == nil {
+		continuation = ContinuationFromContext(ctx)
+	}
+
 	for {
 		if ctx.Err() != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
@@ -1276,13 +1281,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		issueMap := issue.ToTemplateMap()
 		var rendered string
 		var err error
-		if turnNumber == 1 {
-			contCtx := deps.ContinuationContext
-			if contCtx == nil {
-				contCtx = ContinuationFromContext(ctx)
+		switch {
+		case deps.ReactionKind != "":
+			rendered, err = prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption)
+			if turnNumber == 1 {
+				presentedComments = carriedCommentIDs(continuation)
 			}
-			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, contCtx, deps.ReactionKind == "", stageOption)
-		} else {
+		case turnNumber == 1:
+			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, stageOption)
+		default:
 			rendered, err = prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
 		}
 		cancelledAtEnding = ctx.Err() != nil
@@ -1690,12 +1697,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 // reports, per reaction kind, the comment IDs that output presented to the
 // agent. A kind's IDs count as presented when rendering without that
 // kind's variable changes the output or fails, because the template then
-// showed the list to the agent. A fresh run's seeded continuation is kept
-// only when its render still contains every line of the unseeded render in
-// order; otherwise the unseeded render is returned and nothing is presented,
-// since a template that switches modes on the seed would lose its task text.
+// showed the list to the agent. The seeded continuation is kept only when
+// its render still contains every line of the unseeded render in order;
+// otherwise the unseeded render is returned and nothing is presented, since
+// a template that switches modes on the seed would lose its task text.
 // baseOpts apply to every render, the unseeded probes included.
-func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attempt, maxTurns int, continuation map[string]any, freshRun bool, baseOpts ...prompt.RenderOption) (string, map[string][]string, error) {
+func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attempt, maxTurns int, continuation map[string]any, baseOpts ...prompt.RenderOption) (string, map[string][]string, error) {
 	render := func(seed map[string]any) (string, error) {
 		opts := slices.Clone(baseOpts)
 		if seed != nil {
@@ -1704,50 +1711,52 @@ func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attem
 		return prompt.BuildTurnPrompt(tmpl, issueMap, attempt, 1, maxTurns, opts...)
 	}
 
-	if continuation == nil {
-		rendered, err := render(nil)
-		return rendered, nil, err
-	}
-
-	if freshRun {
-		unseeded, err := render(nil)
-		if err != nil {
-			return "", nil, err
-		}
-		seeded, seededErr := render(continuation)
-		if seededErr != nil || !keepsEveryLine(seeded, unseeded) {
-			return unseeded, nil, nil
-		}
-		return seeded, presentedComments(render, seeded, continuation), nil
-	}
-
-	rendered, err := render(continuation)
+	unseeded, err := render(nil)
 	if err != nil {
 		return "", nil, err
 	}
-	return rendered, presentedComments(render, rendered, continuation), nil
+	if continuation == nil {
+		return unseeded, nil, nil
+	}
+	seeded, seededErr := render(continuation)
+	if seededErr != nil || !keepsEveryLine(seeded, unseeded) {
+		return unseeded, nil, nil
+	}
+	return seeded, presentedComments(render, seeded, continuation), nil
+}
+
+// carriedCommentIDs returns the IDs of the review-family comments that
+// continuation carries, by kind. It returns nil when there are none.
+func carriedCommentIDs(continuation map[string]any) map[string][]string {
+	var carried map[string][]string
+	for _, kind := range []string{ReactionKindReview, ReactionKindBotReview} {
+		ids := continuationCommentIDs(kind, continuation)
+		if len(ids) == 0 {
+			continue
+		}
+		if carried == nil {
+			carried = make(map[string][]string)
+		}
+		carried[kind] = ids
+	}
+	return carried
 }
 
 // presentedComments returns the IDs of the review-family kinds whose
 // variable in continuation affects the rendered output. It returns nil when
 // no kind qualifies.
 func presentedComments(render func(map[string]any) (string, error), rendered string, continuation map[string]any) map[string][]string {
-	var presented map[string][]string
-	for _, kind := range []string{ReactionKindReview, ReactionKindBotReview} {
-		ids := continuationCommentIDs(kind, continuation)
-		if len(ids) == 0 {
-			continue
-		}
+	presented := carriedCommentIDs(continuation)
+	for kind := range presented {
 		withoutKind := maps.Clone(continuation)
 		withoutKind[commentTemplateKey(kind)] = nil
 		alternative, err := render(withoutKind)
 		if err == nil && alternative == rendered {
-			continue
+			delete(presented, kind)
 		}
-		if presented == nil {
-			presented = make(map[string][]string)
-		}
-		presented[kind] = ids
+	}
+	if len(presented) == 0 {
+		return nil
 	}
 	return presented
 }

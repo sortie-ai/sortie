@@ -9997,59 +9997,34 @@ func TestRenderFirstTurnPrompt(t *testing.T) {
 		body          string
 		attempt       int
 		continuation  map[string]any
-		freshRun      bool
 		wantPresented map[string][]string
 		wantRender    string
 		wantContains  string
 		wantErr       bool
 	}{
 		{
-			name:          "the added block presents review IDs on a continuation",
-			body:          referenceTemplate,
-			continuation:  reviewSeed,
-			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
-			wantContains:  "- a",
-		},
-		{
-			name:          "the added block presents bot-review IDs on a continuation",
-			body:          referenceTemplate,
-			continuation:  botSeed,
-			wantPresented: map[string][]string{ReactionKindBotReview: {"x"}},
-			wantContains:  "- x",
-		},
-		{
 			name:          "the added block presents both kinds on a fresh run",
 			body:          referenceTemplate,
 			continuation:  bothSeed,
-			freshRun:      true,
 			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}, ReactionKindBotReview: {"x"}},
 			wantContains:  "- x",
-		},
-		{
-			name:         "a template that never references the key presents nothing on a continuation",
-			body:         unreferenced,
-			continuation: reviewSeed,
-			wantRender:   "Resolve ISS-1.\n",
 		},
 		{
 			name:         "a template that never references the key presents nothing on a fresh run",
 			body:         unreferenced,
 			continuation: reviewSeed,
-			freshRun:     true,
 			wantRender:   "Resolve ISS-1.\n",
 		},
 		{
 			name:         "a reference only inside an attempt block presents nothing on a first attempt",
 			body:         attemptOnlyBlock,
 			continuation: reviewSeed,
-			freshRun:     true,
 			wantRender:   "task\n\n",
 		},
 		{
 			name:          "a reference behind the other kind's else-if presents only the shadowing kind",
 			body:          elseIfTemplate,
 			continuation:  bothSeed,
-			freshRun:      true,
 			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
 			wantRender:    "task\nR\n",
 		},
@@ -10057,47 +10032,29 @@ func TestRenderFirstTurnPrompt(t *testing.T) {
 			name:         "a fresh run whose seeded render drops a line gets the unseeded render",
 			body:         modeSwitch,
 			continuation: reviewSeed,
-			freshRun:     true,
 			wantRender:   "Do the task\n",
 		},
 		{
 			name:         "a fresh run whose seeded render fails gets the unseeded render",
 			body:         failsWhenSeeded,
 			continuation: reviewSeed,
-			freshRun:     true,
 			wantRender:   "task\n\n",
-		},
-		{
-			name:          "a continuation keeps a render that drops a line",
-			body:          modeSwitch,
-			continuation:  reviewSeed,
-			wantPresented: map[string][]string{ReactionKindReview: {"a", "b"}},
-			wantRender:    "Fix the comments\n",
-		},
-		{
-			name:         "a continuation whose render fails returns the error",
-			body:         failsWhenSeeded,
-			continuation: reviewSeed,
-			wantErr:      true,
 		},
 		{
 			name:         "a fresh run whose unseeded render fails returns the error",
 			body:         failsAlways,
 			continuation: reviewSeed,
-			freshRun:     true,
 			wantErr:      true,
 		},
 		{
 			name:         "no continuation renders the template alone",
 			body:         referenceTemplate,
-			freshRun:     true,
 			wantContains: "Resolve ISS-1.",
 		},
 		{
-			name:     "no continuation returns the render error",
-			body:     failsAlways,
-			freshRun: true,
-			wantErr:  true,
+			name:    "no continuation returns the render error",
+			body:    failsAlways,
+			wantErr: true,
 		},
 	}
 
@@ -10108,7 +10065,7 @@ func TestRenderFirstTurnPrompt(t *testing.T) {
 			tmpl := mustParseTemplate(t, tt.body)
 			issue := domain.Issue{ID: "1", Identifier: "ISS-1"}
 
-			rendered, presented, err := renderFirstTurnPrompt(tmpl, issue.ToTemplateMap(), tt.attempt, 3, tt.continuation, tt.freshRun)
+			rendered, presented, err := renderFirstTurnPrompt(tmpl, issue.ToTemplateMap(), tt.attempt, 3, tt.continuation)
 
 			if tt.wantErr {
 				var templateErr *prompt.TemplateError
@@ -10131,6 +10088,88 @@ func TestRenderFirstTurnPrompt(t *testing.T) {
 			}
 			if tt.wantContains != "" && !strings.Contains(rendered, tt.wantContains) {
 				t.Errorf("renderFirstTurnPrompt() rendered = %q, want it to contain %q", rendered, tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestRunWorkerAttempt_ReactionRunNeverSendsWorkPrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		kind          string
+		template      string
+		turns         int
+		continuation  map[string]any
+		wantContains  string
+		wantHandedOff []string
+	}{
+		{
+			name:         "label-fix turn 2 keeps the fix branch",
+			kind:         ReactionKindLabelFix,
+			template:     "{{ if .label_fix }}FIX{{ else }}WORK{{ end }}",
+			turns:        2,
+			continuation: map[string]any{"label_fix": map[string]any{"branch": "feature/x"}},
+			wantContains: "FIX",
+		},
+		{
+			name:     "review turn 1 shows the comment instead of the work prompt",
+			kind:     ReactionKindReview,
+			template: "WORK",
+			turns:    1,
+			continuation: map[string]any{"review_comments": buildReviewTemplateMap([]domain.ReviewComment{
+				{ID: "c1", Reviewer: "alice", FilePath: "main.go", StartLine: 3, EndLine: 3, Body: "Rename the helper to buildWidget"},
+			})},
+			wantContains:  "buildWidget",
+			wantHandedOff: []string{"c1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = tt.turns
+
+			var mu sync.Mutex
+			var prompts []string
+			ec := newExitCapture()
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &mockAgentAdapter{
+					runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+						mu.Lock()
+						prompts = append(prompts, params.Prompt)
+						mu.Unlock()
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					},
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, tt.template) },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+				Posture:                dispatchPostureForReactionKind(tt.kind),
+				ReactionKind:           tt.kind,
+				ContinuationContext:    tt.continuation,
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+			result := ec.waitResult(t)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(prompts) < tt.turns {
+				t.Fatalf("RunWorkerAttempt(kind=%q) ran %d turns, want at least %d", tt.kind, len(prompts), tt.turns)
+			}
+			got := prompts[tt.turns-1]
+			if !strings.Contains(got, tt.wantContains) || strings.Contains(got, "WORK") {
+				t.Errorf("RunWorkerAttempt(kind=%q) turn %d prompt = %q, want it to contain %q and not WORK", tt.kind, tt.turns, got, tt.wantContains)
+			}
+			if gotIDs := result.HandedOffComments[ReactionKindReview]; !slices.Equal(gotIDs, tt.wantHandedOff) {
+				t.Errorf("RunWorkerAttempt(kind=%q) HandedOffComments[%q] = %v, want %v", tt.kind, ReactionKindReview, gotIDs, tt.wantHandedOff)
 			}
 		})
 	}

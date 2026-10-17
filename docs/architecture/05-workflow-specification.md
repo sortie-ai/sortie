@@ -736,6 +736,7 @@ Define blocks and calls:
 Fallback prompt behavior:
 
 - If the workflow prompt body is empty, the runtime may use a minimal default prompt.
+- On a reaction run, a blank render, or one that ignores the run's continuation key, yields the built-in prompt of that key on any turn, and the minimal default prompt applies to other runs only.
 - Workflow file read/parse failures are configuration/validation errors and should not silently fall back to a prompt.
 
 ### 5.5 Workflow Validation and Error Surface

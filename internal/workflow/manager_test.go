@@ -1192,247 +1192,6 @@ Prompt.
 	}
 }
 
-// labelCommandsWorkflow returns a WORKFLOW.md with an active
-// reactions.label_commands block and the given prompt body.
-func labelCommandsWorkflow(promptBody string) []byte {
-	return fmt.Appendf(nil, "---\n"+
-		"reactions:\n"+
-		"  label_commands:\n"+
-		"    provider: github\n"+
-		"    review_label: \"sortie:review\"\n"+
-		"---\n"+
-		"%s\n", promptBody)
-}
-
-const labelReviewWarnMessage = "label_commands active but prompt template has no label_review branch"
-
-// hasAdvisoryMessage reports whether advisories carries one whose
-// Message equals message.
-func hasAdvisoryMessage(advisories []config.Advisory, message string) bool {
-	for _, a := range advisories {
-		if a.Message == message {
-			return true
-		}
-	}
-	return false
-}
-
-// TestManager_WarnsWhenLabelReviewTokenMissing asserts that with
-// label_commands active and a prompt body that never references
-// label_review, load emits a Warn; the same active block with a
-// {{ if .label_review }} branch in the prompt suppresses it; and an
-// inactive label_commands block suppresses it regardless of prompt
-// content. The warning is advisory only; NewManager never fails because
-// of it.
-func TestManager_WarnsWhenLabelReviewTokenMissing(t *testing.T) {
-	t.Parallel()
-
-	t.Run("missing token warns", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelCommandsWorkflow("Do the task for {{ .issue.title }}."))
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if !hasAdvisoryMessage(mgr.Config().Advisories(), labelReviewWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want the missing-token advisory", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("token present suppresses the warning", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelCommandsWorkflow("{{ if .label_review }}review this{{ end }}\nDo the task for {{ .issue.title }}."))
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if hasAdvisoryMessage(mgr.Config().Advisories(), labelReviewWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want no advisory when the prompt references label_review", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("feature inactive suppresses the warning regardless of prompt content", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, validWorkflow(5000)) // no reactions.label_commands block
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if hasAdvisoryMessage(mgr.Config().Advisories(), labelReviewWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want no advisory when label_commands is inactive", mgr.Config().Advisories())
-		}
-	})
-}
-
-// labelFixCommandsWorkflow returns a WORKFLOW.md with an active
-// reactions.label_commands block whose fix_label is set (review_label
-// left at its default) and the given prompt body.
-func labelFixCommandsWorkflow(promptBody string) []byte {
-	return fmt.Appendf(nil, "---\n"+
-		"reactions:\n"+
-		"  label_commands:\n"+
-		"    provider: github\n"+
-		"    fix_label: \"sortie:fix\"\n"+
-		"---\n"+
-		"%s\n", promptBody)
-}
-
-// labelFixDisabledWorkflow returns a WORKFLOW.md with an active
-// reactions.label_commands block whose fix_label is explicitly disabled
-// (review_label left at its default, keeping the block valid) and the
-// given prompt body.
-func labelFixDisabledWorkflow(promptBody string) []byte {
-	return fmt.Appendf(nil, "---\n"+
-		"reactions:\n"+
-		"  label_commands:\n"+
-		"    provider: github\n"+
-		"    fix_label: \"\"\n"+
-		"---\n"+
-		"%s\n", promptBody)
-}
-
-const labelFixWarnMessage = "label_commands active but prompt template has no label_fix branch"
-
-// TestManager_WarnsWhenLabelFixTokenMissing asserts that with
-// label_commands active and fix_label set, a prompt body that never
-// references label_fix produces a Warn on load; the same active block
-// with a {{ if .label_fix }} branch in the prompt suppresses it; and an
-// explicitly disabled fix_label suppresses it regardless of prompt
-// content. The warning is advisory only; NewManager never fails
-// because of it.
-func TestManager_WarnsWhenLabelFixTokenMissing(t *testing.T) {
-	t.Parallel()
-
-	t.Run("missing token warns", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelFixCommandsWorkflow("Do the task for {{ .issue.title }}."))
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if !hasAdvisoryMessage(mgr.Config().Advisories(), labelFixWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want the missing-token advisory", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("token present suppresses the warning", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelFixCommandsWorkflow("{{ if .label_fix }}check out {{ .label_fix.branch }}{{ end }}\nDo the task for {{ .issue.title }}."))
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if hasAdvisoryMessage(mgr.Config().Advisories(), labelFixWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want no advisory when the prompt references label_fix", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("fix_label empty suppresses the warning regardless of prompt content", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelFixDisabledWorkflow("Do the task for {{ .issue.title }}."))
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if hasAdvisoryMessage(mgr.Config().Advisories(), labelFixWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want no advisory when fix_label is disabled", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("feature inactive suppresses the warning regardless of prompt content", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, validWorkflow(5000)) // no reactions.label_commands block
-
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		mgr, err := NewManager(path, logger)
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		mgr.Stop()
-
-		if hasAdvisoryMessage(mgr.Config().Advisories(), labelFixWarnMessage) {
-			t.Errorf("Config().Advisories() = %+v, want no advisory when label_commands is inactive", mgr.Config().Advisories())
-		}
-	})
-
-	t.Run("warning never fails the load", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "WORKFLOW.md")
-		mustWriteFile(t, path, labelFixCommandsWorkflow("Do the task for {{ .issue.title }}."))
-
-		mgr, err := NewManager(path, testLogger())
-		if err != nil {
-			t.Fatalf("NewManager with missing label_fix token: %v, want success (advisory warning only)", err)
-		}
-		mgr.Stop()
-
-		if err := mgr.LastLoadError(); err != nil {
-			t.Errorf("LastLoadError() = %v, want nil", err)
-		}
-	})
-}
-
 func retiredFixtureLookup(kind string) (registry.RetiredAgent, bool) {
 	if kind != "legacy" {
 		return registry.RetiredAgent{}, false
@@ -1591,6 +1350,48 @@ func TestManager_ReloadRetainsOnConversionFaultAndMalformedList(t *testing.T) {
 			}
 			if mgr.PromptTemplate() != previousPrompt {
 				t.Error("PromptTemplate() changed after the failed reload, want the previous template")
+			}
+		})
+	}
+}
+
+func TestManager_LabelCommandsRecordsNoBranchAdvisory(t *testing.T) {
+	t.Parallel()
+
+	const exclusiveChain = "{{ if .label_review }}review{{ else if .label_fix }}fix{{ else }}work{{ end }}"
+
+	tests := []struct {
+		name         string
+		body         string
+		ruleTemplate string
+	}{
+		{name: "exclusive chain in a rule template, empty body", ruleTemplate: exclusiveChain},
+		{name: "no branch anywhere", body: "Do the task for {{ .issue.title }}."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			workflow := "---\nreactions:\n  label_commands:\n    provider: github\n    review_label: \"sortie:review\"\n    fix_label: \"sortie:fix\"\n"
+			if tt.ruleTemplate != "" {
+				mustWriteFile(t, filepath.Join(dir, "chain.md"), []byte(tt.ruleTemplate))
+				workflow += "dispatch:\n  rules:\n    - name: all\n      template: chain.md\n"
+			}
+			path := filepath.Join(dir, "WORKFLOW.md")
+			mustWriteFile(t, path, []byte(workflow+"---\n"+tt.body+"\n"))
+
+			mgr, err := NewManager(path, testLogger())
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			mgr.Stop()
+
+			for _, a := range mgr.Config().Advisories() {
+				if strings.HasPrefix(a.Check, "reactions.label_commands.") {
+					t.Errorf("Config().Advisories() has %q, want no label_commands advisory", a.Check)
+				}
 			}
 		})
 	}

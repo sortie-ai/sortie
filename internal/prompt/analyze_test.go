@@ -395,7 +395,7 @@ func TestTemplateFieldSchemaCoversRecognizedKeys(t *testing.T) {
 		want[k] = struct{}{}
 	}
 	for _, k := range continuationKeys {
-		want[k] = struct{}{}
+		want[k.name] = struct{}{}
 	}
 
 	for k := range want {
@@ -417,7 +417,8 @@ func TestTemplateFieldSchemaCoversRecognizedKeys(t *testing.T) {
 func TestContinuationKeysRecognizedBare(t *testing.T) {
 	t.Parallel()
 
-	for _, key := range continuationKeys {
+	for _, k := range continuationKeys {
+		key := k.name
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 

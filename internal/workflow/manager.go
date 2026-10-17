@@ -482,37 +482,6 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		return config.ServiceConfig{}, nil, nil, err
 	}
 
-	// Advisory: a label-review dispatch renders the frozen work template, so
-	// without a {{ if .label_review }} branch it posts no review. This scan
-	// is best-effort and never fails the load.
-	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != "" && !tmpl.Mentions("label_review") {
-		cfg.AddAdvisories(config.Advisory{
-			Check:   "reactions.label_commands.review_branch_missing",
-			Text:    "reactions.label_commands is active with a review label, but the prompt template has no {{ if .label_review }} branch; a label-review dispatch posts no review",
-			Message: "label_commands active but prompt template has no label_review branch",
-			Attrs: []slog.Attr{
-				slog.String("workflow", m.path),
-				slog.String("hint", "add a {{ if .label_review }} branch so label-review dispatches post a review"),
-			},
-		})
-	}
-
-	// Advisory: a label-fix dispatch clones the workspace and carries
-	// content-write scope, so without a {{ if .label_fix }} branch it runs
-	// the normal work prompt against a real checkout with push capability.
-	// This scan is best-effort and never fails the load.
-	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != "" && !tmpl.Mentions("label_fix") {
-		cfg.AddAdvisories(config.Advisory{
-			Check:   "reactions.label_commands.fix_branch_missing",
-			Text:    "reactions.label_commands is active with a fix label, but the prompt template has no {{ if .label_fix }} branch; a label-fix dispatch runs the normal work prompt against a checkout that can push",
-			Message: "label_commands active but prompt template has no label_fix branch",
-			Attrs: []slog.Attr{
-				slog.String("workflow", m.path),
-				slog.String("hint", "add a {{ if .label_fix }} branch so label-fix dispatches check out the branch, push fixes, and post a summary"),
-			},
-		})
-	}
-
 	if m.advisoryFunc != nil {
 		cfg.AddAdvisories(m.advisoryFunc(cfg)...)
 	}

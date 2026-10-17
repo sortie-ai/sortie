@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `sortie_tokens_total`, `sortie_agent_runtime_seconds_total`, and `sortie_worker_exits_total` now carry a `model` label, so a dashboard can show token use, agent runtime, and run outcomes per model: the model the agent reported, else the configured `model`, else `<none>`. A query that sums one of these metrics returns what it did before, but a panel or alert on raw series now gets one series per model, and the example Grafana dashboard's Agent Runtime panel plots one line per model. After each restart these metrics report `0` for every configured model and every model an earlier run reported; a query filtered to any other model returns no data until a run reports that model, so an alert on it needs `or vector(0)`. On a default Prometheus, `rate()` and `increase()` miss the first sample of a model sortie has never run before; Prometheus's experimental `created-timestamp-zero-ingestion` feature flag counts it. ([#1343](https://github.com/sortie-ai/sortie/issues/1343))
 
+- A pull request reaction whose branch is missing from the workflow prompt now gets Sortie's built-in instructions on every turn of the run, a branch you write still takes precedence, and a continuation switch outside the branch now gets Sortie's continuation text. The example workflows now keep each reaction's instructions apart from the work prompt. ([#1357](https://github.com/sortie-ai/sortie/issues/1357))
+
 ### Fixed
 
 - `claude-code` runs of more than one turn, and runs that continue an earlier session, no longer record a multiple of their token use, which overstated cost and reached `agent.max_tokens` early. Each turn now counts once and a continuing run counts only its own turns; runs already recorded keep their figures. ([#1399](https://github.com/sortie-ai/sortie/issues/1399))
@@ -23,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - When a person or the forge merges a pull request just before the auto-merge reaction's own merge call, Sortie now sends the `auto_merge.merged` notification, merge comment included, and deletes the head branch when `delete_branch` is `true`, as it does after a merge it made itself. ([#1328](https://github.com/sortie-ai/sortie/issues/1328))
 
 - On Gitea, the `auto_merge.merged` notification, merge comment included, no longer ends with an empty `Merge commit: .` line. ([#1328](https://github.com/sortie-ai/sortie/issues/1328))
+
+- Sortie no longer warns that a workflow is missing a `label_review` or `label_fix` branch, a warning that was wrong for prompts that test those keys with `{{ if .label_review }}` or `{{ if .label_fix }}`. ([#1357](https://github.com/sortie-ai/sortie/issues/1357))
 
 ## [1.28.0] - 2026-10-11
 

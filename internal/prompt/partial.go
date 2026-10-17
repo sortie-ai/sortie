@@ -38,7 +38,6 @@ type defineBlock struct {
 type partialBlock struct {
 	defineBlock
 	path string
-	body string
 }
 
 // Partials holds the define blocks of one load's partials. A nil value
@@ -114,7 +113,7 @@ func ParsePartials(files []PartialFile) (*Partials, error) {
 				return nil, parseError(f.Path, b.line, "template %q is already defined in %s", b.name, prev.path)
 			}
 			p.index[b.name] = len(p.blocks)
-			p.blocks = append(p.blocks, partialBlock{defineBlock: b, path: f.Path, body: f.Body})
+			p.blocks = append(p.blocks, partialBlock{defineBlock: b, path: f.Path})
 		}
 		p.paths[f.Name] = f.Path
 	}

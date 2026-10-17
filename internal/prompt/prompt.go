@@ -95,7 +95,6 @@ type Template struct {
 	tmpl             *template.Template
 	frontMatterLines int
 	source           string
-	body             string
 	partials         *Partials
 	reached          map[string]struct{}
 }
@@ -108,24 +107,6 @@ func (t *Template) Tree() *parse.Tree {
 		return nil
 	}
 	return t.tmpl.Tree
-}
-
-// Mentions reports whether s occurs in the body text the template was
-// parsed from, or in the Body of a partial that defines a block the
-// template reaches. A nil receiver mentions nothing.
-func (t *Template) Mentions(s string) bool {
-	if t == nil {
-		return false
-	}
-	if strings.Contains(t.body, s) {
-		return true
-	}
-	for name := range t.reached {
-		if owner, ok := t.partials.owner(name); ok && strings.Contains(owner.body, s) {
-			return true
-		}
-	}
-	return false
 }
 
 // Parse compiles a prompt template body with strict mode
@@ -173,7 +154,6 @@ func ParseWithPartials(body, source string, frontMatterLines int, partials *Part
 		tmpl:             set,
 		frontMatterLines: frontMatterLines,
 		source:           source,
-		body:             body,
 		partials:         partials,
 	}
 	if err := t.checkCalls(); err != nil {
@@ -193,16 +173,10 @@ func newSet(name string) *template.Template {
 // continuation data and [WithStage] to supply the stage chain position.
 type RenderOption func(m map[string]any)
 
-// continuationKeys lists all template variable names reserved for
-// reaction continuation context. Each key receives a nil default in
-// [Template.Render] so templates using missingkey=error do not reject
-// references to absent reaction types.
-var continuationKeys = []string{"ci_failure", "review_comments", "bot_review_comments", "merge_conflict", "label_review", "label_fix"}
-
 // isContinuationKey reports whether key is a registered continuation
 // template variable name.
 func isContinuationKey(key string) bool {
-	return slices.Contains(continuationKeys, key)
+	return slices.ContainsFunc(continuationKeys, func(k continuationKey) bool { return k.name == key })
 }
 
 // WithContinuationContext returns a [RenderOption] that merges each
@@ -249,7 +223,7 @@ func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opt
 		"stage":   stageContextToMap(StageContext{}),
 	}
 	for _, k := range continuationKeys {
-		templateVars[k] = nil
+		templateVars[k.name] = nil
 	}
 
 	for _, opt := range opts {

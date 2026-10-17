@@ -42,3 +42,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0034](0034-build-the-dashboard-as-an-embedded-react-application.md) | Build the Dashboard as a React Application Committed and Embedded in the Binary | Accepted |
 | [0035](0035-retain-agent-events-per-run-and-stream-them-on-the-change-stream.md) | Retain Agent Events per Run and Stream Them on the Change Stream | Accepted |
 | [0036](0036-label-usage-runtime-and-exit-counters-by-model.md) | Label Usage, Runtime and Exit Counters by Model | Accepted |
+| [0037](0037-supply-a-built-in-prompt-for-every-reaction-run.md) | Supply a Built-In Prompt for Every Reaction Run | Accepted |

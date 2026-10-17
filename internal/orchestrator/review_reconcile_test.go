@@ -599,9 +599,9 @@ Bot comments:
 {{ end }}
 {{ end }}`
 
-func presentedByTemplate(t *testing.T, body string, issue domain.Issue, continuation map[string]any, freshRun bool) map[string][]string {
+func presentedByTemplate(t *testing.T, body string, issue domain.Issue, continuation map[string]any) map[string][]string {
 	t.Helper()
-	_, presented, err := renderFirstTurnPrompt(mustParseTemplate(t, body), issue.ToTemplateMap(), 0, 3, continuation, freshRun)
+	_, presented, err := renderFirstTurnPrompt(mustParseTemplate(t, body), issue.ToTemplateMap(), 0, 3, continuation)
 	if err != nil {
 		t.Fatalf("renderFirstTurnPrompt: %v", err)
 	}
@@ -643,7 +643,7 @@ func dispatchRetry(t *testing.T, state *State, store RetryTimerStore, issueID st
 func completeContinuation(t *testing.T, state *State, store *fingerprintModelStore, issueID, kind string, reseeded *PendingReaction) {
 	t.Helper()
 	running := dispatchRetry(t, state, store, issueID)
-	presented := presentedByTemplate(t, commentsPromptTemplate, running.Issue, running.ContinuationContext, running.ReactionKind == "")
+	presented := presentedByTemplate(t, commentsPromptTemplate, running.Issue, running.ContinuationContext)
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:           issueID,
@@ -3141,7 +3141,7 @@ func (c *reactionCycle) freshRun(comments ...domain.ReviewComment) map[string]an
 		Identifier:        identifier,
 		ExitKind:          WorkerExitNormal,
 		WorkspacePath:     ws.Path,
-		HandedOffComments: presentedByTemplate(c.t, commentsPromptTemplate, issue, seed, true),
+		HandedOffComments: presentedByTemplate(c.t, commentsPromptTemplate, issue, seed),
 	}, exitParams)
 
 	CancelRetry(c.state, c.issueID)

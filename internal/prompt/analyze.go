@@ -59,7 +59,9 @@ var coreKeys = []string{"issue", "attempt", "run", "stage"}
 var topLevelOrder = func() []string {
 	order := make([]string, 0, len(coreKeys)+len(continuationKeys))
 	order = append(order, coreKeys...)
-	order = append(order, continuationKeys...)
+	for _, k := range continuationKeys {
+		order = append(order, k.name)
+	}
 	return order
 }()
 
