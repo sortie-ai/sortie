@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The new `pi` agent kind runs the Pi CLI, one `pi -p --mode json` process per turn, and resumes a session across turns. Its `pi` settings block takes `model`, `effort`, `project_trust`, and `mcp_config`. `effort` is not forwarded to pi, and a workflow that sets it draws the `agent.effort.not_forwarded` advisory. The prompt goes to pi on standard input. A `pi` session has no Sortie tool channel: Sortie's tools, and the servers `pi.mcp_config` names, are not delivered to it. Token usage is recorded per model, and a `pi` turn on an SSH worker carries the variables `worker.ssh_pass_env` lists.
+
 ### Changed
 
 - The dashboard shows an issue's status as one word with the same mark on every screen.

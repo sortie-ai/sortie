@@ -32,7 +32,7 @@ Sortie is that infrastructure.
 
 **Issue trackers:** GitHub Issues, GitLab Issues, Gitea Issues, Linear and Jira.
 
-**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro and Gemini.
+**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro, Gemini and Pi.
 
 ## Install
 

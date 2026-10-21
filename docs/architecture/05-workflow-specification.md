@@ -175,7 +175,7 @@ Fields:
 
 - `kind` (string)
   - Specifies which agent adapter to use. Default: `claude-code`.
-  - Other supported values: `copilot-cli`, `codex`, `opencode`, `mock`, and `agent-client-protocol`.
+  - Other supported values: `copilot-cli`, `codex`, `opencode`, `pi`, `mock`, and `agent-client-protocol`.
   - Other kinds (for example, HTTP-based adapters) are available only if you register them separately.
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.9 for the override mechanism.
@@ -277,7 +277,7 @@ Fields:
   - `0`, a negative value, and a value above the largest millisecond count whose conversion to a duration stays positive are rejected as a configuration error at parse time, so startup, `sortie validate`, and the reload fail-safe path all reject them.
   - Overridable through `SORTIE_AGENT_STOP_GRACE_MS`.
   - Takes effect for future worker attempts, not an in-flight session.
-  - In `claude-code`, `copilot-cli`, and `opencode`, the same value also bounds a cancelled turn's escalation to a force kill.
+  - In `claude-code`, `copilot-cli`, `opencode`, and `pi`, the same value also bounds a cancelled turn's escalation to a force kill.
 
 Adapter-specific pass-through config:
 

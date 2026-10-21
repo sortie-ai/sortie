@@ -13,6 +13,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
+	_ "github.com/sortie-ai/sortie/internal/agent/pi"
 )
 
 // TestUsageDispositionInvariants walks every registered agent kind's
