@@ -33,6 +33,8 @@ const (
 	conformanceArmEnv        = "FAKEMODEL_CONFORMANCE_ARM"
 	conformanceCommandKind   = "conformance-scripted-command"
 	conformancePlainKind     = "conformance-scripted-plain"
+	conformanceToolsKind     = "conformance-scripted-tools"
+	conformanceNoToolsKind   = "conformance-scripted-no-tools"
 	conformanceDeclaredToken = "CONFORMANCE_DECLARED_TOKEN"
 	conformanceNotice        = "tool call refused by the session policy"
 	conformanceServerTool    = "sortie_status"
@@ -283,6 +285,15 @@ func conformanceRegisterKinds() {
 			CredentialEnv:   registry.DeclareCredentialEnv(conformanceDeclaredToken),
 
 			VerificationContext: registry.DeclareVerificationContext(),
+		})
+		registry.Agents.RegisterWithMeta(conformanceToolsKind, refuse, registry.AgentMeta{
+			UsageSources: usage.Sources{Live: usage.Source{Category: usage.SourceOutput, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Shape: usage.SpendProcessCumulative}}},
+			MCPDialect:   registry.MCPDialectMCPServersJSON,
+		})
+		registry.Agents.RegisterWithMeta(conformanceNoToolsKind, refuse, registry.AgentMeta{
+			UsageSources:         usage.Sources{Live: usage.Source{Category: usage.SourceOutput, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Shape: usage.SpendProcessCumulative}}},
+			MCPDialect:           registry.MCPDialectNone,
+			MCPDialectNoneReason: "the conformance kind has no tool-server configuration",
 		})
 		registry.Agents.RegisterWithMeta(conformancePlainKind, refuse, registry.AgentMeta{
 			UsageSources: usage.Sources{
@@ -2037,6 +2048,31 @@ func TestConformanceIsolatedEnvironment(t *testing.T) {
 		if got := os.Getenv(name); got != value {
 			t.Errorf("os.Getenv(%q) = %q, want %q", name, got, value)
 		}
+	}
+}
+
+func TestToolServerScenario(t *testing.T) {
+	conformanceRegisterKinds()
+
+	tests := []struct {
+		name string
+		kind string
+		want bool
+	}{
+		{"kind that delivers tools", conformanceToolsKind, true},
+		{"kind with no tool delivery", conformanceNoToolsKind, false},
+		{"kind with an undeclared dialect", conformanceCommandKind, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, scenario := range []string{"tool server", "tool server over ssh", "tool server over ssh with forwarding refused"} {
+				ran := false
+				t.Run(scenario, toolServerScenario(Binding{Kind: tt.kind, SSH: &SSHVariant{}}, func(*testing.T) { ran = true }))
+				if ran != tt.want {
+					t.Errorf("%s ran = %t for kind %q, want %t", scenario, ran, tt.kind, tt.want)
+				}
+			}
+		})
 	}
 }
 
