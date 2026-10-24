@@ -14,17 +14,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 
+	"github.com/sortie-ai/sortie/tools/qualify/e2e"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup"
 )
 
 // probeStartedMarker is the file every probe executable creates. It
@@ -72,26 +72,29 @@ func (u *usageTracker) result() (measured bool, sessionID string) {
 	return u.measured, u.sessionID
 }
 
-// groupTracker is the run-owned registry of every process-group id a
-// graded launch starts. The process-cleanup inducer drains every group
-// it holds.
+// groupTracker is the run-owned registry of the launch record of every
+// process group a graded launch starts, never a group number. The
+// process-cleanup inducer drains every record it holds.
 type groupTracker struct {
-	mu    sync.Mutex
-	pgids []int
+	mu     sync.Mutex
+	groups []*procutil.Group
 }
 
-func (g *groupTracker) register(pgid int) {
+func (g *groupTracker) register(record *procutil.Group) {
+	if record == nil {
+		return
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !slices.Contains(g.pgids, pgid) {
-		g.pgids = append(g.pgids, pgid)
+	if !slices.Contains(g.groups, record) {
+		g.groups = append(g.groups, record)
 	}
 }
 
-func (g *groupTracker) all() []int {
+func (g *groupTracker) all() []*procutil.Group {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return slices.Clone(g.pgids)
+	return slices.Clone(g.groups)
 }
 
 // ownedSession is one protocol session this run started. stopped
@@ -100,7 +103,7 @@ func (g *groupTracker) all() []int {
 type ownedSession struct {
 	adapter domain.AgentAdapter
 	session domain.Session
-	pgid    int
+	group   *procutil.Group
 	stopped bool
 }
 
@@ -512,17 +515,31 @@ func (f *sharedFixture) launchDirs() []string {
 	return slices.Clone(f.launches)
 }
 
-// registerSession records session as one this run must account for and
-// adds its launch's process group to the tracker.
-func (f *sharedFixture) registerSession(adapter domain.AgentAdapter, session domain.Session) error {
-	pgid, err := strconv.Atoi(session.AgentPID)
+// registerSession records session as one this run must account for, adds
+// its launch record to the tracker, and returns the record, nil when the
+// session's launch was already released.
+func (f *sharedFixture) registerSession(adapter domain.AgentAdapter, session domain.Session) (*procutil.Group, error) {
+	g, err := bindSessionGroup(session)
 	if err != nil {
-		return fmt.Errorf("session agent_pid %q did not parse as a process id: %w", session.AgentPID, err)
+		return nil, err
 	}
 	f.ownershipMu.Lock()
-	f.sessions = append(f.sessions, &ownedSession{adapter: adapter, session: session, pgid: pgid})
+	f.sessions = append(f.sessions, &ownedSession{adapter: adapter, session: session, group: g})
 	f.ownershipMu.Unlock()
-	f.tracker.register(pgid)
+	f.tracker.register(g)
+	return g, nil
+}
+
+// groupOf returns the launch record registerSession kept for session, nil
+// when it kept none.
+func (f *sharedFixture) groupOf(session domain.Session) *procutil.Group {
+	f.ownershipMu.Lock()
+	defer f.ownershipMu.Unlock()
+	for _, owned := range f.sessions {
+		if owned.session.ID == session.ID {
+			return owned.group
+		}
+	}
 	return nil
 }
 
@@ -545,7 +562,7 @@ func (f *sharedFixture) stopOpenSessions(ctx context.Context) (int, error) {
 	open := f.claimOpenSessions()
 	var firstErr error
 	for _, owned := range open {
-		stopCtx, cancel := context.WithTimeout(ctx, procgroup.ShutdownDeadline)
+		stopCtx, cancel := context.WithTimeout(ctx, e2e.ShutdownDeadline)
 		err := owned.adapter.StopSession(stopCtx, owned.session)
 		cancel()
 		if err != nil && firstErr == nil {
@@ -572,14 +589,15 @@ const probeExecutionPollInterval = 100 * time.Millisecond
 
 // awaitProbeExecution reads the process table, not the started marker,
 // since a runtime could create that marker without running probePath.
-// Every snapshot folds into owned: the last traceable moment before
-// pgid is signalled.
+// Every reading folds into owned: the last traceable moment before
+// pgid is signalled. pgid matches only in a reading its record was held
+// through, since a released record's number may name another process.
 func awaitProbeExecution(owned *ownedDescendants, probePath string, pgid int, deadline time.Time) bool {
 	basename := filepath.Base(probePath)
 	for {
-		if snapshot, err := psSnapshot(); err == nil {
-			owned.observe(snapshot)
-			if launchRunsProgram(snapshot, pgid, basename) {
+		if snapshot, held, err := owned.readHeld(); err == nil {
+			owned.observe(snapshot, held)
+			if slices.Contains(held, pgid) && launchRunsProgram(snapshot, pgid, basename) {
 				return true
 			}
 		}

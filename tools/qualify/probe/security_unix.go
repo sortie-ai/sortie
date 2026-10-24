@@ -18,8 +18,9 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/tools/qualify/e2e"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup"
 )
 
 // processMember is one row of a ps snapshot.
@@ -134,14 +135,23 @@ func newOwnedDescendants(tracker *groupTracker) *ownedDescendants {
 	return &ownedDescendants{tracker: tracker, owned: map[int]bool{}}
 }
 
-// register records pgid as a process group a launch of this run leads,
-// admitting its members and whatever they start into the ledger.
-func (o *ownedDescendants) register(pgid int) {
-	o.tracker.register(pgid)
+// register records g as the launch record of a process group this run
+// leads, admitting its members and whatever they start into the ledger.
+func (o *ownedDescendants) register(g *procutil.Group) {
+	o.tracker.register(g)
 }
 
-func (o *ownedDescendants) groups() []int {
-	return o.tracker.all()
+// readHeld is the only place the process table is read for the ledger. A
+// record released before or during the reading is left out of held: its
+// number may already name another process.
+func (o *ownedDescendants) readHeld() (members []processMember, held []int, err error) {
+	kept := procutil.HeldThrough(o.tracker.all(), func() {
+		members, err = psSnapshot()
+	})
+	for _, g := range kept {
+		held = append(held, g.PID())
+	}
+	return members, held, err
 }
 
 // Each receipt names its program's own live children on exit, the
@@ -203,11 +213,10 @@ func recordedDescendants(receipt string) []int {
 	return pids
 }
 
-// observe folds one snapshot into the ownership set and returns every
-// owned process still running in it.
-func (o *ownedDescendants) observe(members []processMember) []processMember {
-	pgids := o.groups()
-
+// observe folds one snapshot into the ownership set, admitting the members
+// of every group in pgids, and returns every owned process still running
+// in it.
+func (o *ownedDescendants) observe(members []processMember, pgids []int) []processMember {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	running := make(map[int]bool, len(members))
@@ -255,12 +264,12 @@ func induceWorkspaceSecurity(t *testing.T, coords Coordinates, fixture *sharedFi
 		}
 	}
 
-	snapshot, err := psSnapshot()
+	snapshot, heldGroups, err := fixture.ownership().readHeld()
 	if err != nil {
 		return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the process-group membership query failed"}
 	}
 	observed := 0
-	for _, pgid := range fixture.tracker.all() {
+	for _, pgid := range heldGroups {
 		group := membersOfGroup(snapshot, pgid)
 		if !membersDescendFromLaunch(group, pgid) {
 			return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "an unexpected helper was observed in a launched process group"}
@@ -297,9 +306,9 @@ func observeProcessCleanup(fixture *sharedFixture, owned *ownedDescendants) evid
 	// Read while the sessions still run, so their descendants are seen
 	// while the parents they are traced through are still there for the
 	// shutdown path below to end.
-	beforeStop, snapshotErr := psSnapshot()
+	beforeStop, heldBefore, snapshotErr := owned.readHeld()
 	if snapshotErr == nil {
-		owned.observe(beforeStop)
+		owned.observe(beforeStop, heldBefore)
 	}
 
 	stopped, err := fixture.stopOpenSessions(context.Background())
@@ -309,21 +318,24 @@ func observeProcessCleanup(fixture *sharedFixture, owned *ownedDescendants) evid
 	if snapshotErr != nil {
 		return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the process-group membership query failed"}
 	}
-	groups := owned.groups()
-	if len(groups) == 0 {
+	checked := len(fixture.tracker.all())
+	if checked == 0 {
 		return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "the run registered no launch, so its teardown has no subject"}
 	}
 
 	deadline := time.Now().Add(cleanupSettleWindow)
 	for {
 		owned.ingestReceipts()
-		snapshot, snapErr := psSnapshot()
+		snapshot, held, snapErr := owned.readHeld()
 		if snapErr != nil {
 			return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the process-group membership query failed"}
 		}
-		survivors := owned.observe(snapshot)
+		survivors := owned.observe(snapshot, held)
 		if len(survivors) == 0 {
-			return evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: fmt.Sprintf("checked_groups=%d stopped_sessions=%d", len(groups), stopped)}
+			if failed := releasedWithCleanupError(fixture.tracker.all()); failed > 0 {
+				return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: fmt.Sprintf("%d launch(es) were released with a cleanup error", failed)}
+			}
+			return evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: fmt.Sprintf("checked_groups=%d stopped_sessions=%d", checked, stopped)}
 		}
 		if time.Now().After(deadline) {
 			return evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: fmt.Sprintf("%d process(es) the run launched, or that a launch of it started, were still running after their own shutdown path", len(survivors))}
@@ -332,20 +344,20 @@ func observeProcessCleanup(fixture *sharedFixture, owned *ownedDescendants) evid
 	}
 }
 
-// drainOwnedProcesses kills whatever the run left running, addressed
-// by pid, never by name or command pattern, so it reaches nothing the
-// run did not start.
+// drainOwnedProcesses kills whatever the run left running: each launch
+// through its record, an adopted descendant by pid, never by name or
+// command pattern, so it reaches nothing the run did not start.
 func drainOwnedProcesses(owned *ownedDescendants) {
-	deadline := time.Now().Add(procgroup.ShutdownDeadline)
+	deadline := time.Now().Add(e2e.ShutdownDeadline)
 	for {
-		for _, pgid := range owned.groups() {
-			_ = signalProcessGroup(pgid, syscall.SIGKILL)
+		for _, g := range owned.tracker.all() {
+			_ = g.Kill()
 		}
-		snapshot, err := psSnapshot()
+		snapshot, held, err := owned.readHeld()
 		if err != nil {
 			return
 		}
-		survivors := owned.observe(snapshot)
+		survivors := owned.observe(snapshot, held)
 		if len(survivors) == 0 {
 			return
 		}
@@ -357,4 +369,17 @@ func drainOwnedProcesses(owned *ownedDescendants) {
 		}
 		time.Sleep(cleanupPollInterval)
 	}
+}
+
+// releasedWithCleanupError counts the records whose reap reported a
+// cleanup error. A released record is out of every process-table read,
+// so a member that outlived its reap shows up only here.
+func releasedWithCleanupError(groups []*procutil.Group) int {
+	failed := 0
+	for _, g := range groups {
+		if released, cleanupErr := g.Released(); released && cleanupErr != nil {
+			failed++
+		}
+	}
+	return failed
 }

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
-	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/tools/qualify/profile"
 )
 
@@ -109,25 +108,18 @@ func TestCancellationProbeScriptExitsGracefullyOnSIGINT(t *testing.T) {
 
 	cmd := exec.Command(script) //nolint:gosec // script is this test's own fixture
 	cmd.Dir = dir
-	procutil.SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() error = %v, want nil", err)
-	}
-	pgid := cmd.Process.Pid
+	capture := startHeldLaunch(t, cmd)
 
 	deadline := time.Now().Add(30 * time.Second)
 	if !awaitProbeStarted(dir, deadline) {
-		_ = signalProcessGroup(pgid, syscall.SIGKILL)
-		_, _ = cmd.Process.Wait()
 		t.Fatal("cancellation-probe script never created its own started marker")
 	}
 
-	if err := signalProcessGroup(pgid, syscall.SIGINT); err != nil {
-		t.Fatalf("signalProcessGroup(pgid, SIGINT) error = %v, want nil", err)
+	if err := capture.Group().Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("Signal(SIGINT) error = %v, want nil", err)
 	}
-	waitErr := cmd.Wait()
-	if waitErr != nil {
-		t.Errorf("cmd.Wait() = %v, want a clean exit(0) after a graceful SIGINT trap", waitErr)
+	if waitErr := capture.Wait().WaitErr; waitErr != nil {
+		t.Errorf("Wait().WaitErr = %v, want a clean exit(0) after a graceful SIGINT trap", waitErr)
 	}
 }
 
@@ -139,32 +131,23 @@ func TestTransportProbeScriptRequiresForcefulTermination(t *testing.T) {
 
 	cmd := exec.Command(script) //nolint:gosec // script is this test's own fixture
 	cmd.Dir = dir
-	procutil.SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() error = %v, want nil", err)
-	}
-	pgid := cmd.Process.Pid
-	t.Cleanup(func() {
-		_ = signalProcessGroup(pgid, syscall.SIGKILL)
-		_, _ = cmd.Process.Wait()
-	})
+	capture := startHeldLaunch(t, cmd)
 
 	deadline := time.Now().Add(30 * time.Second)
 	if !awaitProbeStarted(dir, deadline) {
 		t.Fatal("transport-probe script never created its own started marker")
 	}
 
-	if err := signalProcessGroup(pgid, syscall.SIGKILL); err != nil {
-		t.Fatalf("signalProcessGroup(pgid, SIGKILL) error = %v, want nil", err)
+	if err := capture.Group().Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("Signal(SIGKILL) error = %v, want nil", err)
 	}
-	waitErr := cmd.Wait()
+	waitErr := capture.Wait().WaitErr
 	if !waitStatusSignaled(t, waitErr) {
-		t.Errorf("cmd.Wait() = %v, want the process to have been terminated by SIGKILL rather than exiting on its own", waitErr)
+		t.Errorf("Wait().WaitErr = %v, want the process to have been terminated by SIGKILL rather than exiting on its own", waitErr)
 	}
 }
 
 func TestLaunchEnvironmentAllowlist(t *testing.T) {
-	// Not parallel: uses t.Setenv.
 	t.Setenv("PROBE_TEST_AUTH_VAR", "auth-value")
 	t.Setenv("PROBE_TEST_AMBIENT_LEAK", "should-not-leak")
 

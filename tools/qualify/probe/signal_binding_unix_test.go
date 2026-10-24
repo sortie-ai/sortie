@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
-	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
 )
 
@@ -243,17 +242,11 @@ func TestAwaitProbeExecution(t *testing.T) {
 
 		cmd := exec.Command(probe) //nolint:gosec // probe is this test's own fixture
 		cmd.Dir = t.TempDir()
-		procutil.SetProcessGroup(cmd)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("cmd.Start() error = %v, want nil", err)
-		}
-		pgid := cmd.Process.Pid
-		t.Cleanup(func() {
-			_ = signalProcessGroup(pgid, syscall.SIGKILL)
-			_, _ = cmd.Process.Wait()
-		})
+		group := startHeldLaunch(t, cmd).Group()
+		tracker := &groupTracker{}
+		tracker.register(group)
 
-		if !awaitProbeExecution(newOwnedDescendants(&groupTracker{}), probe, pgid, time.Now().Add(30*time.Second)) {
+		if !awaitProbeExecution(newOwnedDescendants(tracker), probe, group.PID(), time.Now().Add(30*time.Second)) {
 			t.Error("awaitProbeExecution(...) = false, want true for a probe this launch is running")
 		}
 	})

@@ -268,6 +268,11 @@ func StartCapture(ctx context.Context, cmd *exec.Cmd, params CaptureParams) (*Ca
 	return c, nil
 }
 
+// Group returns the launch's record.
+func (c *Capture) Group() *Group {
+	return c.reaper.group
+}
+
 // Wait waits for the reap, which terminates the process tree, waits on
 // Windows for the Job Object to drain, waits up to DrainGrace for every
 // stream, and returns the result. A second call returns the first

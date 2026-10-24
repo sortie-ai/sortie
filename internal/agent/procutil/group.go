@@ -11,7 +11,9 @@ import (
 // only key: nothing in this package finds a record, a Job Object handle
 // or any other teardown state by process identifier, because the
 // operating system may give an identifier to another launch once its
-// holder has been reaped.
+// holder has been reaped. The one exception is HeldGroup, which matches
+// only a record not yet released: an unreaped direct child keeps its
+// identifier allocated to its own group.
 var groups sync.Map
 
 // lookupGroup returns the record of the launch cmd belongs to, or nil

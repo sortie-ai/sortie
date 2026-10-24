@@ -26,7 +26,6 @@ var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/tracker/file":   "the file tracker adapter the harness's fixture drives",
 	"github.com/sortie-ai/sortie/internal/workflow":       "the load-status type the harness's workflow manager double returns",
 
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup":    "the promoted shutdown bound and process-group primitives",
 	"github.com/sortie-ai/sortie/tools/qualify/evidence":     "the record vocabulary the harness's terminal-condition record uses",
 	"github.com/sortie-ai/sortie/tools/qualify/evidencetest": "the synthetic fixture timestamp the harness's terminal-condition record carries",
 }

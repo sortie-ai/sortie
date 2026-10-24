@@ -12,7 +12,6 @@ import (
 
 	"github.com/sortie-ai/sortie/tools/qualify/e2e"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup"
 )
 
 // endToEndTurnBound bounds the isolated end-to-end run's agent turn;
@@ -43,24 +42,20 @@ func buildProtocolLaunch(coords Coordinates) (string, domain.AgentAdapter, error
 }
 
 // teardownRun cancels the workflow, joins it within the shutdown deadline,
-// registers every process group the harness's adapter observer captured with
-// fixture's tracker, and reports whether every group exited clean and the
-// first actual protocol session id the observer saw.
+// registers every launch record the harness's adapter observer captured with
+// fixture's tracker, and reports whether every record was released with no
+// cleanup error and the first actual protocol session id the observer saw.
 func teardownRun(cancel func(), done <-chan struct{}, harness *e2e.Harness, fixture *sharedFixture) (groupClean bool, sessionID string) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(procgroup.ShutdownDeadline):
+	case <-time.After(e2e.ShutdownDeadline):
 	}
 
-	pgids := harness.Agent().PGIDs()
-	for _, pgid := range pgids {
-		fixture.tracker.register(pgid)
-	}
 	groupClean = true
-	for _, pgid := range pgids {
-		present, presentErr := procgroup.Present(pgid)
-		if presentErr != nil || present {
+	for _, g := range harness.Agent().Groups() {
+		fixture.tracker.register(g)
+		if released, cleanupErr := g.Released(); !released || cleanupErr != nil {
 			groupClean = false
 		}
 	}

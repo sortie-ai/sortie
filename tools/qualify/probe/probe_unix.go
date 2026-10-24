@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -24,29 +23,44 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 
+	"github.com/sortie-ai/sortie/tools/qualify/e2e"
 	"github.com/sortie-ai/sortie/tools/qualify/eval"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup"
 	"github.com/sortie-ai/sortie/tools/qualify/profile"
 )
 
-// signalProcessGroup sends sig to the process group led by pid. It
-// reports nil when the group no longer exists, since expiry is expected
-// during best-effort cleanup.
-func signalProcessGroup(pid int, sig syscall.Signal) error {
-	return procgroup.Signal(pid, sig)
+// requireTornDown fails t unless g's reap released it within the
+// shutdown deadline with no cleanup error. A leftover the reap terminated
+// is not a failure: the verdict is the release, never a later poll by
+// number.
+func requireTornDown(t *testing.T, g *procutil.Group) {
+	t.Helper()
+
+	deadline := time.Now().Add(e2e.ShutdownDeadline)
+	for {
+		released, cleanupErr := g.Released()
+		if released {
+			if cleanupErr != nil {
+				t.Fatalf("the launch's process group was released with a cleanup error: %v", cleanupErr)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the launch's process group was not released within %s", e2e.ShutdownDeadline)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
-// assertSessionGroupAbsent confirms the process group session's launch
-// produced is gone: a survivor is a leak, not a slow exit. Every live
-// session calls this after its own StopSession returns.
-func assertSessionGroupAbsent(t *testing.T, session domain.Session) {
-	t.Helper()
+// bindSessionGroup returns the held record of the launch session.AgentPID
+// names, or nil when that launch was already released. Call it right after
+// StartSession: once the session stops, its number no longer names it.
+func bindSessionGroup(session domain.Session) (*procutil.Group, error) {
 	pid, err := strconv.Atoi(session.AgentPID)
 	if err != nil {
-		t.Fatalf("session agent_pid %q did not parse as a process id: %v", session.AgentPID, err)
+		return nil, fmt.Errorf("session agent_pid %q did not parse as a process id: %w", session.AgentPID, err)
 	}
-	procgroup.AwaitAbsence(t, pid)
+	return procutil.HeldGroup(pid), nil
 }
 
 // nativeProbeBound bounds every native surface launch.
@@ -67,7 +81,7 @@ const nativeSignalBound = time.Minute
 // inherited write end would keep those alive and [exec.Cmd.Wait]
 // waiting forever.
 type boundedLaunch struct {
-	pgid   int
+	group  *procutil.Group
 	stdout *lineBoundedWriter
 	stderr *lineBoundedWriter
 	done   chan procutil.CaptureResult
@@ -105,7 +119,7 @@ func startBoundedLaunch(commandPath string, argv []string, dir string, env []str
 	}
 
 	launch := &boundedLaunch{
-		pgid:   cmd.Process.Pid,
+		group:  capture.Group(),
 		stdout: stdout,
 		stderr: stderr,
 		done:   make(chan procutil.CaptureResult, 1),
@@ -113,7 +127,7 @@ func startBoundedLaunch(commandPath string, argv []string, dir string, env []str
 		cancel: cancel,
 	}
 	if owned != nil {
-		owned.register(launch.pgid)
+		owned.register(launch.group)
 		go launch.observeOwnership(owned)
 	}
 	go func() {
@@ -141,8 +155,8 @@ func (l *boundedLaunch) observeOwnership(owned *ownedDescendants) {
 		case <-l.ended:
 			return
 		case <-ticker.C:
-			if snapshot, err := psSnapshot(); err == nil {
-				owned.observe(snapshot)
+			if snapshot, held, err := owned.readHeld(); err == nil {
+				owned.observe(snapshot, held)
 			}
 		}
 	}
@@ -173,7 +187,7 @@ func (l *boundedLaunch) terminate() (result procutil.CaptureResult, output strin
 }
 
 // launchNativeProbe launches one native surface's bounded probe,
-// captures its combined output, registers its process group with owned,
+// captures its combined output, registers its launch record with owned,
 // and drains it.
 func launchNativeProbe(t *testing.T, commandPath string, argv []string, dir string, env []string, owned *ownedDescendants) (string, error) {
 	t.Helper()
@@ -190,10 +204,10 @@ func launchNativeProbe(t *testing.T, commandPath string, argv []string, dir stri
 		if !ended {
 			return "", fmt.Errorf("native probe: %w: the launch did not end within %s of its own group being taken down", errNativeBoundExceeded, nativeDrainBound)
 		}
-		procgroup.AwaitAbsence(t, launch.pgid)
+		requireTornDown(t, launch.group)
 		return output, fmt.Errorf("native probe: %w", errNativeBoundExceeded)
 	}
-	procgroup.AwaitAbsence(t, launch.pgid)
+	requireTornDown(t, launch.group)
 	return output, result.WaitErr
 }
 
@@ -292,12 +306,16 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates, envWrapper strin
 	if err != nil {
 		t.Fatalf("published-posture probe argv %v: launch the session: %v; a resolved command that is not the runtime the sample publishes fails here", argv, err)
 	}
+	group, bindErr := bindSessionGroup(session)
 	t.Cleanup(func() {
 		if err := adapter.StopSession(context.Background(), session); err != nil {
 			t.Errorf("stop the published-posture probe session: %v", err)
 		}
-		assertSessionGroupAbsent(t, session)
+		requireTornDown(t, group)
 	})
+	if bindErr != nil {
+		t.Fatalf("published-posture probe session: %v", bindErr)
+	}
 
 	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "Reply with exactly SORTIE_PUBLISHED_POSTURE_OK and call no tool.",

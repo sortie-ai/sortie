@@ -16,8 +16,9 @@ import (
 // function. Every termination procutil performs on the launch's process
 // group (Unix) or Job Object (Windows) goes through it, so no teardown
 // can act on a process that later received the launch's process
-// identifier. Obtain one from [StartWithOwnedPipes]; the zero value is
-// not usable, and a nil *Group stands for a launch that never started.
+// identifier. Obtain one from [StartWithOwnedPipes], [HeldGroup] or
+// [Capture.Group]; the zero value is not usable, and a nil *Group stands
+// for a launch that never started.
 type Group struct {
 	cmd *exec.Cmd
 	// mu is held across every send addressed by group number and across
@@ -25,6 +26,13 @@ type Group struct {
 	mu            sync.Mutex
 	released      bool
 	reaperStarted bool
+	// pid is the direct child's process identifier, zero until Start
+	// has returned. It exists so [HeldGroup] and [Group.PID] never read
+	// cmd.Process, which Start assigns without holding mu.
+	pid int
+	// cleanupErr is the error the reap's group termination reported,
+	// final once released is set.
+	cleanupErr error
 	// stopped is set by the first stop that finds the direct child
 	// running before the release, and never cleared.
 	stopped bool
@@ -48,11 +56,18 @@ func newGroup(cmd *exec.Cmd) *Group {
 	return &Group{cmd: cmd}
 }
 
-// SignalGraceful sends SIGTERM to the launch's process group. It sends
-// nothing once the launch's reap has taken over, and treats a group
-// that is already gone or unsignalable as success. A nil receiver does
-// nothing.
+// SignalGraceful sends SIGTERM to the launch's process group through
+// [Group.Signal], so it sends nothing once the launch's reap has taken
+// over and treats a group that is already gone or unsignalable as
+// success. A nil receiver does nothing.
 func (g *Group) SignalGraceful() error {
+	return g.Signal(syscall.SIGTERM)
+}
+
+// Signal sends sig to the launch's process group. It sends nothing once
+// the launch's reap has taken over, and treats a group that is already
+// gone or unsignalable as success. A nil receiver does nothing.
+func (g *Group) Signal(sig syscall.Signal) error {
 	if g == nil {
 		return nil
 	}
@@ -62,11 +77,83 @@ func (g *Group) SignalGraceful() error {
 		return nil
 	}
 	g.markStopLocked()
-	err := groupKillFunc(-g.cmd.Process.Pid, syscall.SIGTERM)
+	err := groupKillFunc(-g.cmd.Process.Pid, sig)
 	if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.EPERM) {
 		return nil
 	}
 	return err
+}
+
+// PID returns the process identifier of the launch's direct child, which
+// is its process-group identifier. It is zero for a launch whose start
+// has not returned and for a nil receiver.
+func (g *Group) PID() int {
+	if g == nil {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pid
+}
+
+// Released reports whether the launch's reap has released the record
+// and, once it has, the error its group termination reported. A nil
+// receiver reports (true, nil).
+func (g *Group) Released() (released bool, cleanupErr error) {
+	if g == nil {
+		return true, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.released, g.cleanupErr
+}
+
+// HeldGroup returns the record of the launch whose direct child has
+// process identifier pid and whose reap has not released it, or nil.
+// Only a held record qualifies: its unreaped child keeps pid allocated
+// to that launch's group, so the match cannot name a later process.
+func HeldGroup(pid int) *Group {
+	var found *Group
+	groups.Range(func(_, v any) bool {
+		g, ok := v.(*Group)
+		if !ok {
+			return true
+		}
+		g.mu.Lock()
+		match := !g.released && g.pid != 0 && g.pid == pid
+		g.mu.Unlock()
+		if match {
+			found = g
+		}
+		return !match
+	})
+	return found
+}
+
+// HeldThrough runs read and returns the records among groups that were
+// held both before read started and after it returned, in input order.
+// A record held across the whole call kept its number allocated to its
+// own group for as long as read ran. Nil records are skipped.
+func HeldThrough(groups []*Group, read func()) []*Group {
+	before := make([]*Group, 0, len(groups))
+	for _, g := range groups {
+		if g != nil && !g.isReleased() {
+			before = append(before, g)
+		}
+	}
+	read()
+	held := before[:0]
+	for _, g := range before {
+		if !g.isReleased() {
+			held = append(held, g)
+		}
+	}
+	return held
+}
+
+func (g *Group) isReleased() bool {
+	released, _ := g.Released()
+	return released
 }
 
 // Kill sends SIGKILL to the launch's process group, resending it until
@@ -146,6 +233,7 @@ func (g *Group) reap() (waitErr error, leftover bool, cleanupErr error) {
 
 	g.mu.Lock()
 	g.released = true
+	g.cleanupErr = cleanupErr
 	g.mu.Unlock()
 
 	releaseSeam()

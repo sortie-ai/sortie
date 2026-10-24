@@ -177,7 +177,8 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 	if err != nil {
 		return adapter, domain.Session{}, err
 	}
-	if err := fixture.registerSession(adapter, session); err != nil {
+	group, err := fixture.registerSession(adapter, session)
+	if err != nil {
 		_ = adapter.StopSession(context.Background(), session)
 		t.Fatalf("account for the induction session: %v", err)
 	}
@@ -185,7 +186,7 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 		if _, err := fixture.stopOpenSessions(context.Background()); err != nil {
 			t.Errorf("stop induction session: %v", err)
 		}
-		assertSessionGroupAbsent(t, session)
+		requireTornDown(t, group)
 	})
 	return adapter, session, nil
 }

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
 	"github.com/sortie-ai/sortie/tools/qualify/evidencetest"
-	"github.com/sortie-ai/sortie/tools/qualify/procgroup"
 )
 
 func TestHarnessContract(t *testing.T) {
@@ -111,6 +111,25 @@ func TestHarnessContract(t *testing.T) {
 	})
 }
 
+func requireReleased(t *testing.T, g *procutil.Group) {
+	t.Helper()
+
+	deadline := time.Now().Add(ShutdownDeadline)
+	for {
+		released, cleanupErr := g.Released()
+		if released {
+			if cleanupErr != nil {
+				t.Fatalf("Released() cleanup error = %v, want nil", cleanupErr)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Released() = false after %s, want the launch's group released", ShutdownDeadline)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestTerminalOracle(t *testing.T) {
 	harness := NewHarness(t)
 
@@ -121,7 +140,7 @@ func TestTerminalOracle(t *testing.T) {
 		close(runDone)
 	}()
 
-	deadline := time.Now().Add(procgroup.ShutdownDeadline)
+	deadline := time.Now().Add(ShutdownDeadline)
 	var condition TerminalCondition
 	for {
 		condition = ObserveTerminalCondition(t, harness)
@@ -139,15 +158,16 @@ func TestTerminalOracle(t *testing.T) {
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(procgroup.ShutdownDeadline):
+	case <-time.After(ShutdownDeadline):
 		t.Fatal("the orchestrator did not drain within the shared shutdown bound")
 	}
 
-	if len(harness.Agent().PGIDs()) != 2 {
-		t.Fatalf("captured group count = %d, want 2 (the credential verification launch and the working session)", len(harness.Agent().PGIDs()))
+	groups := harness.Agent().Groups()
+	if len(groups) != 2 {
+		t.Fatalf("captured group count = %d, want 2 (the credential verification launch and the working session)", len(groups))
 	}
-	for _, pgid := range harness.Agent().PGIDs() {
-		procgroup.AwaitAbsence(t, pgid)
+	for _, g := range groups {
+		requireReleased(t, g)
 	}
 
 	rec := TerminalRecord(condition, true, evidencetest.FixtureSession(evidence.SurfaceProtocol, "e2e"), evidencetest.FixtureAgentName, evidencetest.FixtureAgentVer)
@@ -298,7 +318,7 @@ func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
 
 	cancel, runDone := StartWorkflow(t, harness)
 
-	deadline := time.Now().Add(procgroup.ShutdownDeadline)
+	deadline := time.Now().Add(ShutdownDeadline)
 	var condition TerminalCondition
 	for {
 		condition = ObserveTerminalCondition(t, harness)
@@ -316,7 +336,7 @@ func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(procgroup.ShutdownDeadline):
+	case <-time.After(ShutdownDeadline):
 		t.Fatal("the run goroutine did not return after cancellation")
 	}
 
@@ -352,7 +372,7 @@ func TestBudgetsWithDefaults(t *testing.T) {
 			ReadTimeoutMS:  5000,
 			TurnTimeoutMS:  10000,
 			StallTimeoutMS: 10000,
-			Observation:    procgroup.ShutdownDeadline,
+			Observation:    ShutdownDeadline,
 			MaxSessions:    1,
 			MaxTurns:       1,
 		}
@@ -385,15 +405,15 @@ func TestBudgetsWithDefaults(t *testing.T) {
 		if got.ReadTimeoutMS != 5000 || got.StallTimeoutMS != 10000 {
 			t.Errorf("unset bounds = read %d stall %d, want the fake agent's 5000 and 10000", got.ReadTimeoutMS, got.StallTimeoutMS)
 		}
-		if got.Observation != procgroup.ShutdownDeadline {
-			t.Errorf("Observation = %v, want %v", got.Observation, procgroup.ShutdownDeadline)
+		if got.Observation != ShutdownDeadline {
+			t.Errorf("Observation = %v, want %v", got.Observation, ShutdownDeadline)
 		}
 	})
 
 	t.Run("the deterministic harness reports the fake agent's observation bound", func(t *testing.T) {
 		t.Parallel()
-		if got := NewHarness(t).Observation(); got != procgroup.ShutdownDeadline {
-			t.Errorf("NewHarness().Observation() = %v, want %v", got, procgroup.ShutdownDeadline)
+		if got := NewHarness(t).Observation(); got != ShutdownDeadline {
+			t.Errorf("NewHarness().Observation() = %v, want %v", got, ShutdownDeadline)
 		}
 	})
 }

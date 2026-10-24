@@ -30,6 +30,9 @@ func startAndAssign(_ context.Context, cmd *exec.Cmd, _ *slog.Logger, _ bool) (*
 		groups.Delete(cmd)
 		return nil, 0, time.Time{}, processStartError(err)
 	}
+	g.mu.Lock()
+	g.pid = cmd.Process.Pid
+	g.mu.Unlock()
 	return g, 0, time.Now(), nil
 }
 
