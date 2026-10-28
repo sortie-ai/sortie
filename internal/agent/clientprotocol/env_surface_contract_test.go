@@ -28,6 +28,7 @@ var envSurfaceOwnedNames = map[string]bool{
 	"SORTIE_CLIENTPROTOCOL_HTTP_TOOLS":          true,
 	"SORTIE_CLIENTPROTOCOL_SSH_COMMAND":         true,
 	"SORTIE_CLIENTPROTOCOL_SSH_INSTALL":         true,
+	"SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION":   true,
 }
 
 // Matching the selector name alone covers t.Setenv as well as os.Setenv

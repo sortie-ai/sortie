@@ -72,6 +72,11 @@ const (
 	// one home and one workspace, each running one turn with the verification
 	// prompt.
 	ScenarioVerificationContext
+
+	// ScenarioKill scripts a read call, then one held answer; the driver kills
+	// the runtime with SIGKILL once the endpoint holds the request that
+	// follows the tool result.
+	ScenarioKill
 )
 
 // Binding is one agent kind's fixture for [AssertConformance]: how to reach
@@ -124,6 +129,30 @@ type Binding struct {
 	// ReportedModelPrefix precedes a served model's name in the name the
 	// runtime reports. Empty when the runtime reports the served name.
 	ReportedModelPrefix string
+
+	// Spend opts the binding into the usage component's contract and names the
+	// provenance of each spend source its runtime declares; nil runs the
+	// assertions a kind ran before its accounting moved onto the component.
+	Spend *SpendSources
+}
+
+// SpendSources holds, for each spend source a binding's runtime declares, the
+// source's Category and Strategy as its declaration gives them, and the
+// completeness the binding expects of a figure its Live source settles.
+type SpendSources struct {
+	Live    domain.UsageProvenance // settles a completed turn
+	Records domain.UsageProvenance // settles a turn cancelled or killed after the model served output
+
+	// LowerBound expects a figure the Live source settles to be a lower bound,
+	// SpendUnaccounted true; false, the zero value, expects it complete. The
+	// figure is exact per class either way.
+	LowerBound bool
+
+	// RecordsAtTurnEnd declares that the records source writes a request's
+	// record only when the turn ends, not when the request completes. Records
+	// written then cannot settle a killed turn: the binding expects that turn's
+	// amount to be unknown, never zero, with the spend flagged unaccounted.
+	RecordsAtTurnEnd bool
 }
 
 // SSHVariant is a binding's fixture for the SSH variant of the tool-server
@@ -148,6 +177,10 @@ type SSHVariant struct {
 
 	// Skip, when not empty, skips the variant with this reason.
 	Skip string
+
+	// ToolServerSkip, when not empty, skips the scenarios that deliver Sortie's
+	// tool server over SSH with this reason; the other SSH scenarios still run.
+	ToolServerSkip string
 }
 
 // PermissionRefusal is a binding's fixture for the permission refusal
@@ -281,7 +314,16 @@ func AssertConformance(t *testing.T, b Binding) {
 		t.Run("tool server over ssh", func(t *testing.T) { runSSHToolServer(t, b, false) })
 		t.Run("tool server over ssh with forwarding refused", func(t *testing.T) { runSSHToolServer(t, b, true) })
 		t.Run("turn cancellation over ssh", func(t *testing.T) { runInterruption(t, b, ScenarioCancellation, &remoteLaunch{variant: b.SSH}) })
+		if b.Spend != nil {
+			t.Run("turn cancellation after output over ssh", func(t *testing.T) {
+				runInterruption(t, b, ScenarioCancellationAfterOutput, &remoteLaunch{variant: b.SSH})
+			})
+			t.Run("turn kill over ssh", func(t *testing.T) { runInterruption(t, b, ScenarioKill, &remoteLaunch{variant: b.SSH}) })
+		}
 		t.Run("session stop over ssh", func(t *testing.T) { runInterruption(t, b, ScenarioStop, &remoteLaunch{variant: b.SSH}) })
+		if b.Spend != nil {
+			t.Run("session continuation over ssh", func(t *testing.T) { runContinuation(t, b, &remoteLaunch{variant: b.SSH}) })
+		}
 	}
 	if b.PermissionRefusal != nil {
 		t.Run("permission refusal", func(t *testing.T) { runPermissionRefusal(t, b) })
@@ -289,7 +331,10 @@ func AssertConformance(t *testing.T, b Binding) {
 	t.Run("turn cancellation", func(t *testing.T) { runInterruption(t, b, ScenarioCancellation, nil) })
 	t.Run("turn cancellation after output", func(t *testing.T) { runInterruption(t, b, ScenarioCancellationAfterOutput, nil) })
 	t.Run("session stop", func(t *testing.T) { runInterruption(t, b, ScenarioStop, nil) })
-	t.Run("session continuation", func(t *testing.T) { runContinuation(t, b) })
+	if b.Spend != nil {
+		t.Run("turn kill", func(t *testing.T) { runInterruption(t, b, ScenarioKill, nil) })
+	}
+	t.Run("session continuation", func(t *testing.T) { runContinuation(t, b, nil) })
 	t.Run("credential verification context", func(t *testing.T) { runVerificationContext(t, b) })
 }
 
@@ -353,6 +398,10 @@ func requireValidBinding(t *testing.T, b Binding) {
 		t.Fatalf("Binding.PermissionRefusal.Guarded is nil, want a function selecting the guarded tool")
 	case b.PermissionRefusal != nil && b.PermissionRefusal.Notice == "":
 		t.Fatalf("Binding.PermissionRefusal.Notice is empty, want the notification the adapter emits for the refusal")
+	case b.Spend != nil && b.Spend.Live.Source == "":
+		t.Fatalf("Binding.Spend.Live names no Source, want the category of the live spend source")
+	case b.Spend != nil && b.Spend.Records.Source == "":
+		t.Fatalf("Binding.Spend.Records names no Source, want the category of the records spend source")
 	}
 }
 
@@ -491,6 +540,9 @@ func runSSHToolServer(t *testing.T, b Binding, refused bool) {
 	t.Helper()
 
 	skipUnlessSSHVariant(t, b)
+	if b.SSH.ToolServerSkip != "" {
+		t.Skipf("%s: %s", b.Kind, b.SSH.ToolServerSkip)
+	}
 
 	workspace := newWorkspace(t)
 	_, file := writeScriptedFile(t, workspace)
@@ -543,17 +595,22 @@ type remoteLaunch struct {
 	refused bool
 }
 
+// startLab seeds the lab from home, so it must run after the binding's Launch
+// prepared that home.
+func (r remoteLaunch) startLab(t *testing.T, workspace, home string) agenttest.SSHLab {
+	t.Helper()
+
+	return agenttest.StartSSHLab(t, agenttest.SSHLabParams{
+		Install: labInstall(t, r.variant),
+		Dirs:    []string{workspace},
+		Seed:    []string{home},
+	})
+}
+
 // attach carries NO_PROXY to the remote run: it keeps the loopback model
 // endpoint off a proxy the runtime honors (claude-code sets HTTPS_PROXY for its
 // connection warm-up).
-func (r remoteLaunch) attach(t *testing.T, b Binding, d drive, env Environment, launch *Launch) (lab agenttest.SSHLab, host string, envNames []string) {
-	t.Helper()
-
-	lab = agenttest.StartSSHLab(t, agenttest.SSHLabParams{
-		Install: labInstall(t, r.variant),
-		Dirs:    []string{d.workspace},
-		Seed:    []string{env.Home},
-	})
+func (r remoteLaunch) attach(b Binding, lab agenttest.SSHLab, env Environment, launch *Launch) (host string, envNames []string) {
 	if r.variant.RemoteCommand != nil {
 		launch.Config.Command = r.variant.RemoteCommand(env)
 		launch.Config.CommandArgv = nil
@@ -567,9 +624,9 @@ func (r remoteLaunch) attach(t *testing.T, b Binding, d drive, env Environment, 
 	slices.Sort(names)
 	names = slices.Compact(names)
 	if r.refused {
-		return lab, lab.RefusedHost, names
+		return lab.RefusedHost, names
 	}
-	return lab, lab.Host, names
+	return lab.Host, names
 }
 
 func labInstall(t *testing.T, v *SSHVariant) string {
@@ -644,7 +701,8 @@ func prepareSession(t *testing.T, b Binding, d drive) preparedSession {
 	var sshEnvNames []string
 	var lab agenttest.SSHLab
 	if d.remote != nil {
-		lab, sshHost, sshEnvNames = d.remote.attach(t, b, d, environment, &launch)
+		lab = d.remote.startLab(t, d.workspace, home)
+		sshHost, sshEnvNames = d.remote.attach(b, lab, environment, &launch)
 	}
 	for _, key := range slices.Sorted(maps.Keys(launch.Env)) {
 		t.Setenv(key, launch.Env[key])
@@ -758,10 +816,13 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	if remote != nil {
 		skipUnlessSSHVariant(t, b)
 	}
+	if scenario == ScenarioKill && !livenessChecked {
+		t.Skip("this platform has no process liveness probe, so the kill has no process group to signal")
+	}
 
 	workspace := newWorkspace(t)
 	script, prompt := []Response{{Hold: true}}, "Reply with the word ready."
-	if scenario == ScenarioCancellationAfterOutput {
+	if scenario == ScenarioCancellationAfterOutput || scenario == ScenarioKill {
 		_, file := writeScriptedFile(t, workspace)
 		script = []Response{{Call: b.Read(file), Usage: firstTurnUsage}, {Hold: true}}
 		prompt = "Read the file " + file + " and report its contents."
@@ -838,10 +899,15 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 		in.returned = true
 	} else {
 		in.interrupted = true
-		if scenario == ScenarioStop {
+		switch scenario {
+		case ScenarioStop:
 			stopIssued = true
 			go func() { stopped <- stopSession() }()
-		} else {
+		case ScenarioKill:
+			if err := killRuntime(waittest.Context(t), p, remote, td); err != nil {
+				t.Fatalf("kill the runtime: %v", err)
+			}
+		default:
 			cancelTurn()
 		}
 		turn, in.returned = waittest.ReceiveWithin(outcome, interruptBound)
@@ -886,6 +952,15 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	t.Run("interrupted turn", func(t *testing.T) {
 		reportViolations(t, interruptedTurnViolations(run, in))
 	})
+	if b.Spend != nil && (scenario == ScenarioCancellationAfterOutput || scenario == ScenarioKill) {
+		t.Run("exact usage", func(t *testing.T) {
+			if scenario == ScenarioKill && b.Spend.RecordsAtTurnEnd {
+				reportViolations(t, killedBeforeRecordsViolations(run.Result))
+				return
+			}
+			AssertExactUsage(t, b, run)
+		})
+	}
 	t.Run("runtime gone", func(t *testing.T) {
 		if !livenessChecked {
 			t.Skip("this platform has no process liveness probe")
@@ -897,6 +972,15 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	}
 }
 
+// killRuntime sends SIGKILL to the runtime without going through the adapter,
+// so the adapter sees a crash rather than a stop it requested.
+func killRuntime(ctx context.Context, p preparedSession, remote *remoteLaunch, td teardown) error {
+	if remote != nil {
+		return p.lab.Kill(ctx)
+	}
+	return killHeldGroups(td.aliveWhileHeld)
+}
+
 type sessionRole string
 
 const (
@@ -906,11 +990,12 @@ const (
 )
 
 type continuedTurn struct {
-	role   sessionRole
-	prompt string // the marker the turn's prompt carries
-	answer string // the marker the turn's scripted answer carries
-	result domain.TurnResult
-	events []domain.AgentEvent
+	role      sessionRole
+	prompt    string // the marker the turn's prompt carries
+	answer    string // the marker the turn's scripted answer carries
+	result    domain.TurnResult
+	events    []domain.AgentEvent
+	exchanges []Exchange // everything the endpoint served to the turn's session until the turn returned
 }
 
 // The script entries of the continuation scenario that its checks single out.
@@ -933,17 +1018,35 @@ type continuation struct {
 	workspace string
 	home      string
 	sentinel  string
+	remote    *remoteLaunch // nil launches every session locally
+	lab       *agenttest.SSHLab
 }
 
-func runContinuation(t *testing.T, b Binding) {
+// continuationUsage gives each answer of the continuation scenario a figure no
+// other answer carries, so a turn that counts the wrong answer changes its
+// total. Their basis (Prompt plus Candidates) must stay above auxiliaryUsage's.
+var continuationUsage = [...]Usage{
+	{Prompt: 331, Candidates: 19, Thoughts: 4, CachedContent: 67, CacheWrite: 31},
+	{Prompt: 347, Candidates: 23, Thoughts: 9, CachedContent: 71, CacheWrite: 37},
+	{Prompt: 373, Candidates: 29, Thoughts: 11, CachedContent: 79, CacheWrite: 43},
+	{Prompt: 389, Candidates: 31, Thoughts: 6, CachedContent: 83, CacheWrite: 47},
+}
+
+func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 	t.Helper()
 
+	if remote != nil {
+		skipUnlessSSHVariant(t, b)
+	}
 	roles := []sessionRole{roleOrigin, roleOrigin, roleControl, roleResumed}
 	turns := make([]continuedTurn, len(roles))
 	script := make([]Response, len(roles))
 	for i, role := range roles {
 		turns[i] = continuedTurn{role: role, prompt: "nonce-" + randomHex(t, 8), answer: "nonce-" + randomHex(t, 8)}
 		script[i] = answerResponse(b, "Noted "+turns[i].answer+".")
+		if b.Spend != nil {
+			script[i].Usage = continuationUsage[i]
+		}
 	}
 
 	c := continuation{
@@ -952,6 +1055,7 @@ func runContinuation(t *testing.T, b Binding) {
 		workspace: newWorkspace(t),
 		home:      t.TempDir(),
 		sentinel:  "sortie-scripted-credential-" + randomHex(t, 16),
+		remote:    remote,
 	}
 	isolateEnvironment(t, b, c.home, c.sentinel)
 	newAdapter, err := registry.Agents.Get(b.Kind)
@@ -969,18 +1073,33 @@ func runContinuation(t *testing.T, b Binding) {
 	resumed, resumedEvents := c.drive(t, roleResumed, originID, turns[continuedEntry].result.ResumeUsage, turns[resumedEntry:])
 
 	run := Run{
-		Session:   resumed,
-		Result:    turns[resumedEntry].result,
-		Events:    slices.Concat(originEvents, controlEvents, resumedEvents),
-		Exchanges: c.server.Exchanges(),
-		Settings:  b.Passthrough,
+		Environment: Environment{Remote: remote != nil},
+		Session:     resumed,
+		Result:      turns[resumedEntry].result,
+		Events:      slices.Concat(originEvents, controlEvents, resumedEvents),
+		Exchanges:   c.server.Exchanges(),
+		Settings:    b.Passthrough,
 	}
 	t.Run("turn outcome", func(t *testing.T) {
 		reportViolations(t, turnOutcomeViolations(run, len(script)))
 	})
 	t.Run("continuation", func(t *testing.T) {
-		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges))
+		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges, b.Spend, remote != nil))
 	})
+	if b.Spend != nil {
+		for entry, turn := range turns {
+			t.Run(fmt.Sprintf("exact usage %s entry %d", turn.role, entry), func(t *testing.T) {
+				assertExactUsage(t, b, Run{
+					Environment: run.Environment,
+					Result:      turn.result,
+					Events:      turn.events,
+					Exchanges:   turn.exchanges,
+					Settings:    b.Passthrough,
+				}, fmt.Sprintf("%s entry %d", turn.role, entry), agenttest.AssertLiveUsageCase)
+			})
+		}
+		return
+	}
 	t.Run("resumed usage", func(t *testing.T) {
 		agenttest.AssertLiveUsageCase(t, b.Kind, agenttest.UsageReportingCase{
 			Name:        "resumed turn",
@@ -1001,19 +1120,30 @@ func runContinuation(t *testing.T, b Binding) {
 	})
 }
 
-// drive records each turn's result and events in turns.
-func (c continuation) drive(t *testing.T, role sessionRole, resumeID string, resumeUsage *domain.TokenUsage, turns []continuedTurn) (domain.Session, []domain.AgentEvent) {
+// drive records each turn's result, events and served exchanges in turns.
+func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, resumeUsage *domain.TokenUsage, turns []continuedTurn) (domain.Session, []domain.AgentEvent) {
 	t.Helper()
 
 	events := &eventCollector{}
-	launch := c.binding.Launch(t, Environment{
+	environment := Environment{
 		Scenario:  ScenarioContinuation,
 		URL:       c.server.URL(),
 		Home:      c.home,
 		Workspace: c.workspace,
 		Sentinel:  c.sentinel,
 		Events:    events.snapshot,
-	})
+		Remote:    c.remote != nil,
+	}
+	launch := c.binding.Launch(t, environment)
+	var sshHost string
+	var sshEnvNames []string
+	if c.remote != nil {
+		if c.lab == nil {
+			lab := c.remote.startLab(t, c.workspace, c.home)
+			c.lab = &lab
+		}
+		sshHost, sshEnvNames = c.remote.attach(c.binding, *c.lab, environment, &launch)
+	}
 	for _, key := range slices.Sorted(maps.Keys(launch.Env)) {
 		t.Setenv(key, launch.Env[key])
 	}
@@ -1022,12 +1152,15 @@ func (c continuation) drive(t *testing.T, role sessionRole, resumeID string, res
 	// below must run before the cancel.
 	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
 	defer cancel()
+	sessionStart := len(c.server.Exchanges())
 	session, err := c.adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:   c.workspace,
 		AgentConfig:     launch.Config,
 		Settings:        c.binding.Passthrough,
 		ResumeSessionID: resumeID,
 		ResumeUsage:     resumeUsage,
+		SSHHost:         sshHost,
+		SSHEnvNames:     sshEnvNames,
 	})
 	if err != nil {
 		t.Fatalf("%s session: StartSession() error = %v%s", role, err, exchangeLines(c.server.Exchanges()))
@@ -1051,6 +1184,7 @@ func (c continuation) drive(t *testing.T, role sessionRole, resumeID string, res
 		})
 		turns[i].result = result
 		turns[i].events = events.snapshot()[before:]
+		turns[i].exchanges = c.server.Exchanges()[sessionStart:]
 		if runErr != nil || result.ExitReason != domain.EventTurnCompleted {
 			t.Fatalf("%s session turn %d: RunTurn() error = %v, ExitReason = %q, want nil and %q%s",
 				role, i+1, runErr, result.ExitReason, domain.EventTurnCompleted, exchangeLines(c.server.Exchanges()))
@@ -1832,21 +1966,36 @@ func answersCall(answer Answer, result ToolResult) bool {
 // exactly, the usage the endpoint served in its turn and auxiliary answers, and
 // its per-model split matches the usage served per model, under the usage the
 // kind's registered disposition declares for the run's settings and host. A
-// disposition that reports no usage must produce none.
+// disposition that reports no usage must produce none. For a binding with
+// Spend, the turn's provenance and completeness must also match the source that
+// settled it.
 func AssertExactUsage(t *testing.T, b Binding, run Run) {
+	t.Helper()
+
+	assertExactUsage(t, b, run, "scripted turn", agenttest.AssertUsageReportingCase)
+}
+
+// assertExactUsage is AssertExactUsage with the per-case reporting check
+// injected: a text-only turn carries neither a tool result nor a second usage
+// event, which AssertUsageReportingCase requires to tell the arrivals apart.
+// It is the one place that reads the kind's disposition for a run.
+func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting func(*testing.T, string, agenttest.UsageReportingCase)) {
 	t.Helper()
 
 	meta, _ := registry.Agents.Meta(b.Kind)
 	arrival, attribution := meta.UsageDisposition(run.Settings, run.Environment.Remote)
 	if arrival == registry.UsageArrivalNone {
 		agenttest.AssertMeasurementAbsent(t, run.Events, run.Result)
+		if b.Spend != nil && run.Result.UsageProvenance != (domain.UsageProvenance{}) {
+			t.Errorf("Result.UsageProvenance = %+v, want none for a disposition that reports no usage", run.Result.UsageProvenance)
+		}
 		return
 	}
 	reportViolations(t, exactUsage(run, arrival, attribution,
-		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b)))
+		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b), b.Spend))
 	agenttest.AssertUsageContract(t, run.Events)
-	agenttest.AssertUsageReportingCase(t, b.Kind, agenttest.UsageReportingCase{
-		Name:        "scripted turn",
+	reporting(t, b.Kind, agenttest.UsageReportingCase{
+		Name:        name,
 		Passthrough: run.Settings,
 		Remote:      run.Environment.Remote,
 		Events:      run.Events,
@@ -1858,8 +2007,9 @@ func AssertExactUsage(t *testing.T, b Binding, run Run) {
 // equal to want, carried by the last usage event, arriving as the disposition
 // declares, and split per model as wantByModel when the disposition declares
 // per-model attribution. A disposition that reports no usage has none to check
-// here.
-func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.UsageAttribution, want domain.TokenUsage, wantByModel map[string]domain.TokenUsage) []string {
+// here. A non-nil spend adds the provenance and completeness the turn's exit
+// reason expects.
+func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.UsageAttribution, want domain.TokenUsage, wantByModel map[string]domain.TokenUsage, spend *SpendSources) []string {
 	v := &findings{property: "exact usage"}
 	if arrival == registry.UsageArrivalNone {
 		return v.items
@@ -1903,6 +2053,50 @@ func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.Usa
 		if !maps.Equal(split, wantByModel) {
 			v.add("the last event carrying usage splits %+v per model, want %+v, the usage served per model", split, wantByModel)
 		}
+	}
+	if spend != nil {
+		spendProvenanceViolations(v, run.Result, *spend)
+	}
+	return v.items
+}
+
+// spendProvenanceViolations adds the violations of a turn's settling source and
+// completeness: a completed turn settles from the live source, and a turn
+// cancelled or failed after output from the records, whose figure still misses
+// the request that was held.
+func spendProvenanceViolations(v *findings, result domain.TurnResult, spend SpendSources) {
+	var want domain.UsageProvenance
+	var wantLowerBound bool
+	switch result.ExitReason {
+	case domain.EventTurnCompleted:
+		want, wantLowerBound = spend.Live, spend.LowerBound
+	case domain.EventTurnCancelled, domain.EventTurnFailed:
+		want, wantLowerBound = spend.Records, true
+	default:
+		return
+	}
+	if result.UsageProvenance != want {
+		v.add("Result.UsageProvenance = %+v, want %+v for a %s turn", result.UsageProvenance, want, result.ExitReason)
+	}
+	if result.SpendUnaccounted != wantLowerBound {
+		v.add("Result.SpendUnaccounted = %v, want %v for a %s turn", result.SpendUnaccounted, wantLowerBound, result.ExitReason)
+	}
+}
+
+// killedBeforeRecordsViolations returns the violations of the honest outcome for
+// a turn killed while its runtime still held every record of the turn's spend:
+// spend occurred, its amount is unknown. A measured zero claims an amount, so
+// it fails like any measured figure.
+func killedBeforeRecordsViolations(result domain.TurnResult) []string {
+	v := &findings{property: "exact usage"}
+	if result.UsageMeasured {
+		v.add("Result.UsageMeasured is true with Usage %+v, want false for a turn killed before its records were written", result.Usage)
+	}
+	if !result.SpendUnaccounted {
+		v.add("Result.SpendUnaccounted is false, want true for a turn killed before its records were written")
+	}
+	if result.UsageProvenance != (domain.UsageProvenance{}) {
+		v.add("Result.UsageProvenance = %+v, want none for a turn killed before its records were written", result.UsageProvenance)
 	}
 	return v.items
 }
@@ -2104,6 +2298,13 @@ func interruptedTurnViolations(run Run, in interruption) []string {
 			if !isAgentErr || agentErr.Kind != domain.ErrTurnCancelled {
 				v.add("RunTurn returned error %v, want a *domain.AgentError of kind %q", run.Err, domain.ErrTurnCancelled)
 			}
+		case ScenarioKill:
+			if run.Result.ExitReason != domain.EventTurnFailed {
+				v.add("ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnFailed)
+			}
+			if !isAgentErr {
+				v.add("RunTurn returned error %v, want a *domain.AgentError", run.Err)
+			}
 		case ScenarioStop:
 			if run.Result.ExitReason != domain.EventTurnCancelled && run.Result.ExitReason != domain.EventTurnFailed {
 				v.add("ExitReason = %q, want %q or %q", run.Result.ExitReason, domain.EventTurnCancelled, domain.EventTurnFailed)
@@ -2112,7 +2313,7 @@ func interruptedTurnViolations(run Run, in interruption) []string {
 				v.add("RunTurn returned error %v, want a *domain.AgentError", run.Err)
 			}
 		}
-		if want := scenario == ScenarioCancellationAfterOutput; run.Result.SpendUnaccounted != want {
+		if want := scenario == ScenarioCancellationAfterOutput || scenario == ScenarioKill; run.Result.SpendUnaccounted != want {
 			v.add("Result.SpendUnaccounted = %v, want %v when the interrupt came %s the model served output", run.Result.SpendUnaccounted, want, afterOrBefore(want))
 		}
 	}
@@ -2188,7 +2389,12 @@ func reportedProcessIDs(run Run) []string {
 
 // continuationViolations checks a continuation run whose turns[i] answered
 // script entry i, in run order: origin, origin, control, resumed.
-func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange) []string {
+//
+// A non-nil spend leaves every turn's completeness to the provenance property,
+// which compares it with the completeness the binding expects. A remote run
+// launches unmeasured, so the resumed turn's measurement is required only of a
+// local run.
+func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources, remote bool) []string {
 	v := &findings{property: "continuation"}
 
 	checkContinuationIdentifiers(v, turns, resumed)
@@ -2211,10 +2417,10 @@ func continuationViolations(turns []continuedTurn, resumed domain.Session, excha
 		}
 	}
 
-	if first := turns[0].result; first.UsageMeasured && first.SpendUnaccounted {
+	if first := turns[0].result; spend == nil && first.UsageMeasured && first.SpendUnaccounted {
 		v.add("%s turn 1: Result.SpendUnaccounted is true, want false for a completed turn with a measured figure", roleOrigin)
 	}
-	if !turns[resumedEntry].result.UsageMeasured {
+	if !remote && !turns[resumedEntry].result.UsageMeasured {
 		v.add("%s turn: Result.UsageMeasured is false, want a measured figure", roleResumed)
 	}
 	return v.items

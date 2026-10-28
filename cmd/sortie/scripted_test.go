@@ -16,6 +16,8 @@ const (
 	scriptedModelAssertFuncName = "AssertConformance"
 )
 
+var scriptedModelSpendPending = []string{"claude-code", "codex", "copilot-cli", "opencode"}
+
 func TestEveryCommandKindHasScriptedModelCoverage(t *testing.T) {
 	t.Parallel()
 
@@ -38,12 +40,33 @@ func TestEveryCommandKindHasScriptedModelCoverage(t *testing.T) {
 	if len(delivering) == 0 {
 		t.Fatal("no command-requiring agent kind declares an MCP dialect that delivers tools, want at least one")
 	}
-	if noSSH := kindsMissingSSHVariant(delivering, mcpCompletenessAgentRoot, scriptedModelImportPath); len(noSSH) != 0 {
+	if noSSH := kindsMissingBindingKey(delivering, mcpCompletenessAgentRoot, scriptedModelImportPath, "SSH"); len(noSSH) != 0 {
 		t.Errorf("agent kind(s) %v deliver tools but their fakemodel.Binding declares no SSH variant, want an SSH field naming the runtime package, an install script or a skip reason", noSSH)
+	}
+
+	unopted, stale := spendRatchetViolations(kinds, scriptedModelSpendPending, mcpCompletenessAgentRoot, scriptedModelImportPath)
+	if len(unopted) != 0 {
+		t.Errorf("agent kind(s) %v have a fakemodel.Binding without a Spend field, want one naming the spend sources their runtime declares", unopted)
+	}
+	if len(stale) != 0 {
+		t.Errorf("agent kind(s) %v set Spend but are still in scriptedModelSpendPending, want them removed from the set", stale)
 	}
 }
 
-func kindsMissingSSHVariant(kinds []string, agentRoot, importPath string) []string {
+func spendRatchetViolations(kinds, pending []string, agentRoot, importPath string) (unopted, stale []string) {
+	lacking := kindsMissingBindingKey(kinds, agentRoot, importPath, "Spend")
+	for _, kind := range kinds {
+		switch isLacking, isPending := slices.Contains(lacking, kind), slices.Contains(pending, kind); {
+		case isLacking && !isPending:
+			unopted = append(unopted, kind)
+		case !isLacking && isPending:
+			stale = append(stale, kind)
+		}
+	}
+	return unopted, stale
+}
+
+func kindsMissingBindingKey(kinds []string, agentRoot, importPath, key string) []string {
 	fset := token.NewFileSet()
 	kindDirs, err := discoverKindDirectories(fset, agentRoot)
 	if err != nil {
@@ -60,7 +83,7 @@ func kindsMissingSSHVariant(kinds []string, agentRoot, importPath string) []stri
 		testFiles, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
 		declared := slices.ContainsFunc(testFiles, func(path string) bool {
 			file, parseErr := parser.ParseFile(fset, path, nil, 0)
-			return parseErr == nil && fileDeclaresSSHVariant(file, importPath)
+			return parseErr == nil && fileDeclaresBindingKey(file, importPath, key)
 		})
 		if !declared {
 			missing = append(missing, kind)
@@ -69,7 +92,7 @@ func kindsMissingSSHVariant(kinds []string, agentRoot, importPath string) []stri
 	return missing
 }
 
-func fileDeclaresSSHVariant(file *ast.File, importPath string) bool {
+func fileDeclaresBindingKey(file *ast.File, importPath, key string) bool {
 	alias := resolveTestImportName(file, importPath)
 	if alias == "" {
 		return false
@@ -90,7 +113,7 @@ func fileDeclaresSSHVariant(file *ast.File, importPath string) bool {
 				if !ok {
 					continue
 				}
-				if key, isIdent := kv.Key.(*ast.Ident); isIdent && key.Name == "SSH" && !isNilIdent(kv.Value) {
+				if name, isIdent := kv.Key.(*ast.Ident); isIdent && name.Name == key && !isNilIdent(kv.Value) {
 					declared = true
 				}
 			}
@@ -202,10 +225,55 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	kinds := []string{"ssh-install-kind", "ssh-skip-kind", "ssh-absent-kind", "ssh-nil-kind", "ssh-unregistered-kind"}
 
-	missing := kindsMissingSSHVariant(kinds, root, scriptedModelImportPath)
+	missing := kindsMissingBindingKey(kinds, root, scriptedModelImportPath, "SSH")
 
 	want := []string{"ssh-absent-kind", "ssh-nil-kind", "ssh-unregistered-kind"}
 	if !slices.Equal(missing, want) {
-		t.Errorf("kindsMissingSSHVariant(%v, %q) = %v, want %v", kinds, root, missing, want)
+		t.Errorf("kindsMissingBindingKey(%v, %q, \"SSH\") = %v, want %v", kinds, root, missing, want)
+	}
+}
+
+func TestSpendRatchetViolations(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, tt := range []struct{ dir, kind, body string }{
+		{"opted-dir", "opted-kind", `Spend: &fakemodel.SpendSources{}`},
+		{"nil-spend-dir", "nil-spend-kind", `Spend: nil`},
+		{"pending-dir", "pending-kind", `Kind: "pending-kind"`},
+		{"stale-dir", "stale-kind", `Spend: &fakemodel.SpendSources{}`},
+	} {
+		writeFixtureFile(t, filepath.Join(root, tt.dir), "register.go", `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.RegisterWithMeta("`+tt.kind+`", newAdapter, registry.AgentMeta{RequiresCommand: true})
+}
+`)
+		writeFixtureFile(t, filepath.Join(root, tt.dir), "integration_test.go", `package fixture
+
+import (
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
+)
+
+func TestIntegration_ScriptedModel(t *testing.T) {
+	fakemodel.AssertConformance(t, fakemodel.Binding{`+tt.body+`})
+}
+`)
+	}
+
+	kinds := []string{"opted-kind", "nil-spend-kind", "pending-kind", "stale-kind"}
+	pending := []string{"pending-kind", "stale-kind"}
+
+	unopted, stale := spendRatchetViolations(kinds, pending, root, scriptedModelImportPath)
+
+	if want := []string{"nil-spend-kind"}; !slices.Equal(unopted, want) {
+		t.Errorf("spendRatchetViolations(%v, %v) unopted = %v, want %v", kinds, pending, unopted, want)
+	}
+	if want := []string{"stale-kind"}; !slices.Equal(stale, want) {
+		t.Errorf("spendRatchetViolations(%v, %v) stale = %v, want %v", kinds, pending, stale, want)
 	}
 }

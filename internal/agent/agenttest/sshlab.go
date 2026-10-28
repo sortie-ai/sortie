@@ -66,17 +66,63 @@ type SSHLab struct {
 // Processes returns the command line of every process the login user runs on
 // the lab host, leaving out the sshd sessions that serve its connections.
 func (l SSHLab) Processes(ctx context.Context) ([]string, error) {
-	out, err := dockerOutput(ctx, "exec", l.container, "ps", "-e", "-o", "user=,args=")
+	procs, err := l.loginProcesses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]string, len(procs))
+	for i, proc := range procs {
+		args[i] = proc.args
+	}
+	return args, nil
+}
+
+// Kill sends SIGKILL, from inside the lab container, to every process
+// [SSHLab.Processes] lists, and returns once the signal is sent. The signal
+// does not go through ssh, so the remote runtime dies the way a local one does
+// and sshd closes the channel on its own.
+func (l SSHLab) Kill(ctx context.Context) error {
+	procs, err := l.loginProcesses(ctx)
+	if err != nil {
+		return err
+	}
+	if len(procs) == 0 {
+		return nil
+	}
+	// kill may be only a shell builtin in the image, so the signal goes through
+	// sh. A listed process can exit before its signal; only a failure that
+	// leaves the process alive is an error.
+	const script = `for p in "$@"; do kill -KILL "$p" 2>/dev/null || ! kill -0 "$p" 2>/dev/null || exit 1; done`
+	args := []string{"exec", l.container, "sh", "-c", script, "sh"}
+	for _, proc := range procs {
+		args = append(args, strconv.Itoa(proc.pid))
+	}
+	if out, err := dockerOutput(ctx, args...); err != nil {
+		return fmt.Errorf("kill the processes of SSH lab container %s: %w\n%s", l.container, err, tail(out))
+	}
+	return nil
+}
+
+type labProcess struct {
+	pid  int
+	args string
+}
+
+func (l SSHLab) loginProcesses(ctx context.Context) ([]labProcess, error) {
+	out, err := dockerOutput(ctx, "exec", l.container, "ps", "-e", "-o", "user=,pid=,args=")
 	if err != nil {
 		return nil, fmt.Errorf("list the processes of SSH lab container %s: %w\n%s", l.container, err, tail(out))
 	}
-	var procs []string
+	var procs []labProcess
 	for line := range strings.Lines(string(out)) {
-		user, args, _ := strings.Cut(strings.TrimSpace(line), " ")
+		user, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+		pidField, args, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		pid, err := strconv.Atoi(pidField)
 		args = strings.TrimSpace(args)
-		if user == sshLabUser && !strings.HasPrefix(args, "sshd") {
-			procs = append(procs, args)
+		if err != nil || user != sshLabUser || strings.HasPrefix(args, "sshd") {
+			continue
 		}
+		procs = append(procs, labProcess{pid: pid, args: args})
 	}
 	return procs, nil
 }

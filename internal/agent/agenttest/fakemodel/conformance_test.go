@@ -77,6 +77,7 @@ type conformanceUsageState struct {
 	run         Run
 	arrival     registry.UsageArrival
 	attribution registry.UsageAttribution
+	spend       *SpendSources
 }
 
 type conformanceContainmentState struct {
@@ -550,14 +551,14 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 	cancelled, stopped, gone := conformanceCancelledRun(), conformanceStoppedRun(), conformanceGoneRun()
 	continuation := conformanceContinuationRun()
 	got := map[string][]string{
-		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges),
+		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges, nil, false),
 		"interrupted turn, cancellation": interruptedTurnViolations(cancelled.run, cancelled.in),
 		"interrupted turn, stop":         interruptedTurnViolations(stopped.run, stopped.in),
 		"runtime gone":                   runtimeGoneViolations(gone.run, gone.probe, gone.td),
 		"turn outcome":                   turnOutcomeViolations(run, 2),
 		"deterministic tool path":        toolPathViolations(run, conformanceNonce),
 		"tool server":                    toolServerViolations(toolServer, conformanceServerTurn),
-		"exact usage":                    exactUsage(run, registry.UsageArrivalTurnEnd, registry.UsageAttributionNone, served(run.Exchanges, turnAndAuxiliary, Binding{}), nil),
+		"exact usage":                    exactUsage(run, registry.UsageArrivalTurnEnd, registry.UsageAttributionNone, served(run.Exchanges, turnAndAuxiliary, Binding{}), nil, nil),
 		"credential containment":         containmentViolations(run, streams),
 		"script exhaustion":              exhaustionViolations(exhaustion.run, Binding{}, conformanceNonce, false, exhaustion.failures),
 		"refused call":                   refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
@@ -655,7 +656,7 @@ func TestConformancePropertyContinuation(t *testing.T) {
 	conformanceRunCases(t, "continuation", cases,
 		conformanceContinuationRun,
 		func(s conformanceContinuationState) []string {
-			return continuationViolations(s.turns, s.resumed, s.exchanges)
+			return continuationViolations(s.turns, s.resumed, s.exchanges, nil, false)
 		},
 	)
 }
@@ -973,6 +974,14 @@ func TestConformancePropertyInterruptedTurn(t *testing.T) {
 			also:   []string{"after"},
 		},
 		{
+			name: "kill ending the turn as cancelled",
+			mutate: func(s *conformanceInterruptedState) {
+				s.run.Environment.Scenario = ScenarioKill
+				s.run.Result.SpendUnaccounted = true
+			},
+			want: []string{"ExitReason"},
+		},
+		{
 			name:   "I-1: the endpoint never held the request",
 			mutate: func(s *conformanceInterruptedState) { s.in.held = false },
 			want:   []string{"held"},
@@ -1184,6 +1193,15 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			want: []string{"per model, want"},
 		},
 		{
+			name: "lower bound expected of a completed turn reported complete",
+			mutate: func(s *conformanceUsageState) {
+				live := domain.UsageProvenance{Source: "protocol", Strategy: 1}
+				s.spend = &SpendSources{Live: live, Records: domain.UsageProvenance{Source: "journal", Strategy: 2}, LowerBound: true}
+				s.run.Result.UsageProvenance = live
+			},
+			want: []string{"SpendUnaccounted"},
+		},
+		{
 			name: "arrival none checks no figure",
 			mutate: func(s *conformanceUsageState) {
 				s.arrival = registry.UsageArrivalNone
@@ -1269,8 +1287,26 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 		},
 		func(s conformanceUsageState) []string {
 			return exactUsage(s.run, s.arrival, s.attribution,
-				served(s.run.Exchanges, turnAndAuxiliary, Binding{}), servedByModel(s.run.Exchanges, turnAndAuxiliary, Binding{}))
+				served(s.run.Exchanges, turnAndAuxiliary, Binding{}), servedByModel(s.run.Exchanges, turnAndAuxiliary, Binding{}), s.spend)
 		},
+	)
+}
+
+func TestConformancePropertyKilledBeforeRecords(t *testing.T) {
+	t.Parallel()
+
+	cases := []conformanceCase[domain.TurnResult]{
+		{name: "unmeasured and flagged"},
+		{
+			name:   "measured zero",
+			mutate: func(r *domain.TurnResult) { r.UsageMeasured = true },
+			want:   []string{"UsageMeasured is true"},
+		},
+	}
+
+	conformanceRunCases(t, "exact usage", cases,
+		func() domain.TurnResult { return domain.TurnResult{SpendUnaccounted: true} },
+		killedBeforeRecordsViolations,
 	)
 }
 
