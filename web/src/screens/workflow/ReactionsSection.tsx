@@ -89,8 +89,8 @@ function reactionRows(reactions: ShapeReactions): Row[] {
     );
     rows.push({
       kind: "label_commands",
-      limit: labels.length === 0 ? "—" : joinLabels(labels, " "),
-      escalation: "—",
+      limit: labels.length === 0 ? "–" : joinLabels(labels, " "),
+      escalation: "–",
     });
   }
   return rows;

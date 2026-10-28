@@ -121,7 +121,7 @@ export function escalationText(escalation: string, label: string | undefined): R
     case "label":
       return label === undefined ? "label" : <TrackerLabel>{label}</TrackerLabel>;
     case "none":
-      return "—";
+      return "–";
     default:
       return escalation;
   }
