@@ -60,7 +60,7 @@ interface RateCellProps {
 function RateCell({ rate, isMixed }: RateCellProps) {
   const words = rateWords(rate);
   return (
-    <TableCell look="number">
+    <TableCell look="number" isWrapping>
       {isMixed && rate.layer !== null ? <Hint hint={layerLabel(rate.layer)}>{words}</Hint> : words}
     </TableCell>
   );
@@ -79,7 +79,7 @@ function ModelRow({ row }: ModelRowProps) {
     <TableRow>
       <TableCell>{row.model === "" ? "Model not reported" : row.model}</TableCell>
       <TableCell>{row.agent_kind}</TableCell>
-      <TableCell>{pricedByText(row)}</TableCell>
+      <TableCell isWrapping>{pricedByText(row)}</TableCell>
       <RateCell rate={row.input} isMixed={isMixed} />
       <RateCell rate={row.output} isMixed={isMixed} />
       <RateCell rate={row.cache_read} isMixed={isMixed} />
@@ -178,16 +178,16 @@ export function ModelsTable({ rows }: ModelsTableProps) {
             Priced by
           </SortableHead>
           <SortableHead columnId="input" sort={sort} align="right">
-            Input per 1M
+            Input
           </SortableHead>
           <SortableHead columnId="output" sort={sort} align="right">
-            Output per 1M
+            Output
           </SortableHead>
           <SortableHead columnId="cache_read" sort={sort} align="right">
-            Cache read per 1M
+            Cache read
           </SortableHead>
           <SortableHead columnId="cache_write" sort={sort} align="right">
-            Cache write per 1M
+            Cache write
           </SortableHead>
           <SortableHead columnId="last_used" sort={sort}>
             Last used
@@ -209,6 +209,7 @@ export function ModelsTable({ rows }: ModelsTableProps) {
           ) : undefined}
         </TableBody>
       </Table>
+      <p className="text-body-sm text-ink-muted">Prices are per 1 million tokens.</p>
     </section>
   );
 }

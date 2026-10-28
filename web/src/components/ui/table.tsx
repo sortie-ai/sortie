@@ -192,13 +192,16 @@ export interface TableCellProps extends ComponentProps<"td"> {
   aside?: ReactNode;
   /** A muted second line under the content. */
   note?: ReactNode;
+  /** Lets a value that can run long wrap, so the table fits its frame instead of scrolling sideways. */
+  isWrapping?: boolean;
 }
 
-/** Renders a body cell; figures use tabular digits and no cell wraps. */
+/** Renders a body cell; figures use tabular digits and only an `isWrapping` cell wraps. */
 export function TableCell({
   look = "text",
   aside,
   note,
+  isWrapping = false,
   className,
   children,
   ...props
@@ -206,7 +209,8 @@ export function TableCell({
   return (
     <td
       className={cn(
-        "px-md py-sm align-baseline whitespace-nowrap tabular-nums",
+        "px-md py-sm align-baseline tabular-nums",
+        isWrapping ? "whitespace-normal" : "whitespace-nowrap",
         CELL_LOOK[look],
         className,
       )}

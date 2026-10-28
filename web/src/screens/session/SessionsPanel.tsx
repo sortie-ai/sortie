@@ -95,7 +95,7 @@ function SessionRowView({ row, identifier, isCurrent }: SessionRowViewProps) {
           </Link>
         )}
       </TableCell>
-      <TableCell className="whitespace-normal">
+      <TableCell isWrapping>
         {row.mark === null ? row.word : <StatusMark mark={row.mark} label={row.word} />}
       </TableCell>
       <TableCell look="number">
