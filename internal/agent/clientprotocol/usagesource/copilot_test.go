@@ -131,7 +131,7 @@ func TestCopilotReadRecordsRefusesUnsafeSessionID(t *testing.T) {
 	t.Parallel()
 
 	readRecords := mustCopilotDeclaration(t).ReadRecords
-	for _, id := range []string{"../escape", "a/b", `a\b`, ""} {
+	for _, id := range []string{"../escape", "a/b", `a\b`, "", ".", ".."} {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 

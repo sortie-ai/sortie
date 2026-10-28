@@ -37,9 +37,10 @@ const usageRecordType = "session.usage_record"
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // ValidSessionID reports whether id is safe to join into a journal path as one
-// segment.
+// segment. The dot-only names pass the pattern but name the current or parent
+// directory.
 func ValidSessionID(id string) bool {
-	return sessionIDPattern.MatchString(id)
+	return id != "." && id != ".." && sessionIDPattern.MatchString(id)
 }
 
 // EventsRel returns the journal's path relative to the runtime home, with
