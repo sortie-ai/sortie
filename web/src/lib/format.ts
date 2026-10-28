@@ -235,6 +235,15 @@ export function fmtDate(at: Instant): string {
   return `${WEEKDAY.format(date)} ${date.getDate()} ${MONTH.format(date)}`;
 }
 
+const WEEKDAY_SHORT = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+const MONTH_SHORT = new Intl.DateTimeFormat("en-US", { month: "short" });
+
+/** Writes a date as "Fri 23 Oct" in the browser's time zone, short enough for a table cell. */
+function fmtDay(at: number): string {
+  const date = new Date(at);
+  return `${WEEKDAY_SHORT.format(date)} ${date.getDate()} ${MONTH_SHORT.format(date)}`;
+}
+
 /** Writes the age of an instant as a duration under an hour, else as its clock time. */
 export function fmtAgo(since: Instant, at: number = now()): string {
   const date = toDate(since);
@@ -252,7 +261,7 @@ export function fmtStamp(at: string): string {
     return UNKNOWN;
   }
   const isToday = localMidnight(instant).getTime() === localMidnight(now()).getTime();
-  return isToday ? fmtClock(instant) : `${fmtDate(instant)}, ${fmtClock(instant)}`;
+  return isToday ? fmtClock(instant) : `${fmtDay(instant)}, ${fmtClock(instant)}`;
 }
 
 const UTC_WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
@@ -303,14 +312,14 @@ export function fmtUtcPeriodTick(start: string, period: "day" | "month"): string
     : `${UTC_MONTH_SHORT.format(date)} ${date.getUTCFullYear()}`;
 }
 
-/** Writes `HH:MM:SS` for an instant on the server's current day, else the date and `HH:MM:SS`, as fmtStamp does with `HH:MM`. */
+/** Writes `HH:MM:SS` for an instant on the server's current day, else the short date and `HH:MM:SS`, as fmtStamp does with `HH:MM`. */
 export function fmtStampSec(at: string): string {
   const instant = parseInstant(at);
   if (instant === null) {
     return UNKNOWN;
   }
   const isToday = localMidnight(instant).getTime() === localMidnight(now()).getTime();
-  return isToday ? fmtClockSec(instant) : `${fmtDate(instant)}, ${fmtClockSec(instant)}`;
+  return isToday ? fmtClockSec(instant) : `${fmtDay(instant)}, ${fmtClockSec(instant)}`;
 }
 
 const DESCRIBE_SUFFIX = /-\d+-g[0-9a-f]+(-dirty)?$/;

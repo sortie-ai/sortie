@@ -40,7 +40,7 @@ import type { IssueGroupResponse, RunResponse, SkillCall, StateResponse } from "
 const READ_FAILED = "Run history could not be read.";
 
 // The column takes the width the others leave.
-const SKILLS_WIDTH = "w-full min-w-48";
+const SKILLS_WIDTH = "w-full min-w-40";
 
 interface Columns {
   hasRule: boolean;

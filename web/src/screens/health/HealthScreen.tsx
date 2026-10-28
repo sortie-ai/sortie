@@ -142,7 +142,7 @@ function Checks({ health }: ChecksProps) {
 }
 
 function stampOrDash(at: string | null, format: (at: string) => string): string {
-  return at === null ? "—" : format(at);
+  return at === null ? "–" : format(at);
 }
 
 function nextPollText(nextPollAt: string | null, generatedAt: string): string {
