@@ -122,7 +122,7 @@ export function ChainFunnel({ funnel, config }: ChainFunnelProps) {
   const targets = handoffTargets(config);
 
   return (
-    <Table title={headingOf(stages)} className="table-fixed min-w-287">
+    <Table title={headingOf(stages)} className="table-fixed min-w-287" frozenColumns={2}>
       <TableHeader>
         <TableHead align="right" className={COLUMN_WIDTH.stageNumber}>
           #

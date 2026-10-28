@@ -32,7 +32,7 @@ export function DrawerPopup({ children, className, ...rest }: DrawerPopupProps) 
       <BaseDrawer.Viewport className="fixed inset-0 z-(--z-drawer) flex items-stretch justify-end">
         <BaseDrawer.Popup
           className={cn(
-            "h-full w-[500px] max-w-full overflow-y-auto overscroll-contain border-l border-overlay-line bg-overlay text-ink shadow-2xl outline-hidden max-md:w-full",
+            "h-full w-[500px] max-w-full overflow-y-auto overscroll-contain border-l border-transparent bg-canvas text-ink dark:border-line dark:bg-surface shadow-2xl outline-hidden max-md:w-full",
             "transform-[translateX(var(--drawer-swipe-movement-x,0px))] transition-transform duration-(--duration-enter) ease-enter",
             "data-swiping:duration-0 data-ending-style:duration-(--duration-exit) data-ending-style:ease-exit",
             "data-starting-style:transform-[translateX(100%)] data-ending-style:transform-[translateX(100%)]",

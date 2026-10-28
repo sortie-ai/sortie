@@ -71,7 +71,7 @@ export function HistoryScreen() {
         </div>
       ) : (
         <>
-          <Table isWide>
+          <Table isWide frozenColumns={1}>
             <HistoryTableHead state={state} />
             {groups.map((group) => (
               <IssueGroupRows

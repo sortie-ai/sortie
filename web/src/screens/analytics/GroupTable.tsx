@@ -200,7 +200,11 @@ export function GroupTable<Row extends Group>({
 
   return (
     <section className="flex flex-col gap-sm">
-      <Table title={title} className={hasRates ? "table-fixed min-w-264" : "table-fixed min-w-208"}>
+      <Table
+        title={title}
+        className={hasRates ? "table-fixed min-w-264" : "table-fixed min-w-208"}
+        frozenColumns={1}
+      >
         <TableHeader>
           {nameColumns.map((column, index) => (
             <SortableHead

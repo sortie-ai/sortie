@@ -93,7 +93,7 @@ export function StationHeader({ stations, tally }: StationHeaderProps) {
             >
               <div
                 aria-hidden="true"
-                className="mx-auto mb-xxs size-5 rounded-full border-[1.5px] border-track-todo bg-canvas"
+                className="mx-auto mb-xxs size-5 rounded-full border-[1.5px] border-ink-faint bg-canvas"
               />
               <div
                 className="mx-auto truncate text-body-sm font-medium text-ink-body"

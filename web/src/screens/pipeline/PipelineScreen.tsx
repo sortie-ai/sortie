@@ -89,13 +89,13 @@ function Legend({ hasReactions, hasChains }: LegendProps) {
   return (
     <div className="flex flex-wrap gap-md px-md pt-sm text-body-sm text-ink-muted">
       <span className="inline-flex items-center gap-xs">
-        <i aria-hidden="true" className={cn(swatch, "bg-track-done")} />
+        <i aria-hidden="true" className={cn(swatch, "bg-ink-body")} />
         passed
       </span>
       <span className="inline-flex items-center gap-xs">
         <i
           aria-hidden="true"
-          className={cn(swatch, "border-[1.5px] border-dashed border-track-done")}
+          className={cn(swatch, "border-[1.5px] border-dashed border-ink-body")}
         />
         waiting
       </span>
@@ -104,7 +104,10 @@ function Legend({ hasReactions, hasChains }: LegendProps) {
         retry scheduled
       </span>
       <span className="inline-flex items-center gap-xs">
-        <i aria-hidden="true" className={cn(swatch, "bg-warning-fill")} />
+        <i
+          aria-hidden="true"
+          className={cn(swatch, "border-[1.5px] border-warning bg-warning-container")}
+        />
         needs attention
       </span>
       <span className="inline-flex items-center gap-xs">
@@ -112,7 +115,7 @@ function Legend({ hasReactions, hasChains }: LegendProps) {
           aria-hidden="true"
           className={cn(
             swatch,
-            "border-2 border-track-done bg-[radial-gradient(circle,var(--color-track-done)_0_2.5px,var(--color-canvas)_2.5px)]",
+            "border-2 border-ink-body bg-[radial-gradient(circle,var(--color-ink-body)_0_2.5px,var(--color-canvas)_2.5px)]",
           )}
         />
         ended
@@ -121,7 +124,7 @@ function Legend({ hasReactions, hasChains }: LegendProps) {
         <span className="inline-flex items-center gap-xs">
           <i
             aria-hidden="true"
-            className={cn(swatch, "border-[1.5px] border-track-todo bg-canvas")}
+            className={cn(swatch, "border-[1.5px] border-ink-faint bg-canvas")}
           />
           no record
         </span>
@@ -130,7 +133,7 @@ function Legend({ hasReactions, hasChains }: LegendProps) {
         <span className="inline-flex items-center gap-xs">
           <i
             aria-hidden="true"
-            className="inline-block h-1 w-6 rounded-full bg-[linear-gradient(to_right,var(--color-track-done)_60%,var(--color-track-todo)_60%)]"
+            className="inline-block h-1 w-6 rounded-full bg-[linear-gradient(to_right,var(--color-ink-body)_60%,var(--color-ink-faint)_60%)]"
           />
           stages done
         </span>

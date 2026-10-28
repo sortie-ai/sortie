@@ -54,7 +54,7 @@ export function SkillTable({ report }: SkillTableProps) {
 
   return (
     <section className="flex flex-col gap-sm">
-      <Table title="By skill" className="table-fixed min-w-208">
+      <Table title="By skill" className="table-fixed min-w-208" frozenColumns={1}>
         <TableHeader>
           <SortableHead columnId="name" sort={sort} className={COLUMN_WIDTH.name}>
             Skill

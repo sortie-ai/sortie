@@ -30,11 +30,11 @@ export function BudgetMeter({ name, line, format, text, title }: BudgetMeterProp
         aria-hidden="true"
         className={cn(
           "col-span-2 h-1 overflow-hidden rounded-full",
-          isFull ? "bg-warning-container" : "bg-viz-1-track",
+          isFull ? "bg-warning-container" : "bg-surface-raised",
         )}
       >
         <span
-          className={cn("block h-full rounded-full", isFull ? "bg-warning-fill" : "bg-viz-1")}
+          className={cn("block h-full rounded-full", isFull ? "bg-warning-fill" : "bg-primary")}
           style={{ width: `${Math.min(100, (used / limit) * 100)}%` }}
         />
       </span>

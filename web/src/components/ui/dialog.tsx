@@ -31,7 +31,7 @@ export function DialogPopup({ children, className, ...rest }: DialogPopupProps) 
       <BaseDialog.Viewport className="fixed inset-0 z-(--z-dialog) flex items-start justify-center overflow-hidden px-sm pt-[12vh] pb-sm">
         <BaseDialog.Popup
           className={cn(
-            "flex max-h-full w-[min(36rem,100%)] flex-col overflow-hidden rounded-xl border border-overlay-line bg-overlay text-ink shadow-2xl outline-hidden",
+            "flex max-h-full w-[min(36rem,100%)] flex-col overflow-hidden rounded-xl border border-transparent bg-canvas text-ink dark:border-line dark:bg-surface shadow-2xl outline-hidden",
             "transition-[opacity,translate,scale] duration-(--duration-enter) ease-enter",
             "data-ending-style:duration-(--duration-exit) data-ending-style:ease-exit",
             "data-starting-style:translate-y-(--offset-centered) data-starting-style:scale-(--scale-dialog) data-starting-style:opacity-0",

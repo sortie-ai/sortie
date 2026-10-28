@@ -64,8 +64,8 @@ function AttentionBadge({ state }: AttentionBadgeProps) {
   }
   const attentionPhrase = pluralVerb(count, ["item", "items"], ["needs", "need"]);
   const tone = hasCriticalItem(state)
-    ? "bg-error-fill text-on-warning-fill"
-    : "bg-warning-fill text-on-warning-fill";
+    ? "border border-error-border bg-error-container text-error"
+    : "border border-warning-border bg-warning-container text-warning";
   return (
     <span
       title={`${attentionPhrase.subject} ${attentionPhrase.verb} attention`}

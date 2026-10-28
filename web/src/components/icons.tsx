@@ -461,16 +461,13 @@ export function XIcon(props: IconProps) {
   );
 }
 
-/**
- * Draws the needs-attention disc: filled so the one mark the operator must not
- * miss clears 3:1 where an amber outline measures 1.9:1.
- */
+/** Draws the needs-attention disc: the warning chip's ground, ringed and marked in the warning ink. */
 export function CircleAlertFilledIcon(props: IconProps) {
   return (
     <Svg {...props}>
-      <circle cx="12" cy="12" r="10" className="fill-warning-fill stroke-warning-fill" />
-      <line x1="12" x2="12" y1="8" y2="12" className="stroke-on-warning-fill" />
-      <line x1="12" x2="12.01" y1="16" y2="16" className="stroke-on-warning-fill" />
+      <circle cx="12" cy="12" r="10" className="fill-warning-container stroke-warning" />
+      <line x1="12" x2="12" y1="8" y2="12" className="stroke-warning" />
+      <line x1="12" x2="12.01" y1="16" y2="16" className="stroke-warning" />
     </Svg>
   );
 }

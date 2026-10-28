@@ -4,7 +4,7 @@ import { HelpHint } from "@/components/ui/hint";
 import { cn } from "@/lib/cn";
 
 import type { TableSort } from "@/components/use-table-sort";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, ReactNode, UIEvent } from "react";
 
 /** Props of {@link Table}. */
 export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
@@ -14,6 +14,18 @@ export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
   isWide?: boolean;
   /** Narrows the side padding of every cell, for a table in a narrow column. */
   isCompact?: boolean;
+  /** How many leading columns name the row and stay in view while the table scrolls sideways. */
+  frozenColumns?: 1 | 2;
+}
+
+/** Marks a scrolled frame, which draws the frozen edge, and records where a second frozen column starts. */
+function onFrozenScroll(event: UIEvent<HTMLDivElement>) {
+  const frame = event.currentTarget;
+  const lead = frame.querySelector("th");
+  if (lead !== null) {
+    frame.style.setProperty("--frozen-lead", `${lead.offsetWidth}px`);
+  }
+  frame.toggleAttribute("data-scrolled", frame.scrollLeft > 0);
 }
 
 /**
@@ -25,12 +37,17 @@ export function Table({
   title,
   isWide = false,
   isCompact = false,
+  frozenColumns,
   className,
   ...props
 }: TableProps) {
   return (
     <Card title={title}>
-      <div className="overflow-x-auto">
+      <div
+        className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
+        data-frozen={frozenColumns}
+        onScroll={frozenColumns === undefined ? undefined : onFrozenScroll}
+      >
         <table
           className={cn(
             "w-full text-left text-body-md text-ink-body",

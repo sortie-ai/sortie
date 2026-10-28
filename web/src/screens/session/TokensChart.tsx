@@ -71,7 +71,7 @@ function BarSlot({ bar, top, hasLabel }: BarSlotProps) {
         <div
           className={cn(
             "w-[max(1px,calc(100%-4px))] max-w-10 rounded-t",
-            bar.inProgress ? "border border-viz-1 bg-viz-1-track" : "bg-viz-1",
+            bar.inProgress ? "border border-primary bg-surface-raised" : "bg-primary",
           )}
           style={{ height: `${(bar.tokens / top) * 100}%` }}
         />
@@ -111,12 +111,15 @@ export function TokensLegend({ hasInProgress }: TokensLegendProps) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-md gap-y-xxs">
       <span className="inline-flex items-center gap-xs">
-        <span aria-hidden="true" className="size-sm rounded bg-viz-1" />
+        <span aria-hidden="true" className="size-sm rounded bg-primary" />
         Completed turn
       </span>
       {hasInProgress ? (
         <span className="inline-flex items-center gap-xs">
-          <span aria-hidden="true" className="size-sm rounded border border-viz-1 bg-viz-1-track" />
+          <span
+            aria-hidden="true"
+            className="size-sm rounded border border-primary bg-surface-raised"
+          />
           In progress
         </span>
       ) : undefined}

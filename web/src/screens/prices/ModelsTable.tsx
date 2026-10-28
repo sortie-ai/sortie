@@ -166,7 +166,7 @@ export function ModelsTable({ rows }: ModelsTableProps) {
       <div className="flex justify-end">
         <ModelSearch query={query} onQueryChange={setQuery} />
       </div>
-      <Table title="Models">
+      <Table title="Models" frozenColumns={1}>
         <TableHeader>
           <SortableHead columnId="model" sort={sort}>
             Model

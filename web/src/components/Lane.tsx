@@ -17,36 +17,36 @@ import type {
 const SEGMENT_LIMIT = 12;
 
 const MARKER: Record<LaneMarker, string> = {
-  running: "size-3.5 bg-track-done",
-  current: "size-3.5 bg-track-done",
-  waiting: "size-2.75 border-[1.5px] border-dashed border-track-done bg-canvas",
-  approval: "size-2.75 border-[1.5px] border-dashed border-track-done bg-canvas",
+  running: "size-3.5 bg-ink-body",
+  current: "size-3.5 bg-ink-body",
+  waiting: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
+  approval: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
   retry: "size-3.5 border-2 border-ink-muted bg-canvas",
   held: "size-3.5 border-[1.5px] border-dashed border-ink-muted bg-canvas",
   stopped: "size-3.5 border-[1.5px] border-dashed border-ink-muted bg-canvas",
   needs: "size-4 text-warning-fill",
-  handed: "size-2.75 border-[1.5px] border-dashed border-track-done bg-canvas",
-  succeeded: "size-3.5 bg-track-done",
+  handed: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
+  succeeded: "size-3.5 bg-ink-body",
   failed: "size-3.5 border-2 border-error-fill bg-canvas",
   degraded: "size-3.5 border-2 border-error-fill bg-canvas",
-  clear: "size-3.5 bg-track-done",
+  clear: "size-3.5 bg-ink-body",
   ended:
-    "size-3.5 border-2 border-track-done bg-[radial-gradient(circle,var(--color-track-done)_0_3px,var(--color-canvas)_3px)]",
+    "size-3.5 border-2 border-ink-body bg-[radial-gradient(circle,var(--color-ink-body)_0_3px,var(--color-canvas)_3px)]",
 };
 
 // A reaction station reads the same filled dot whatever Sortie did there; only a standing
 // escalation, which needs a person, takes the attention fill.
 const DOT: Record<StationState, string> = {
-  passed: "border-track-done bg-track-done",
-  acted: "border-track-done bg-track-done",
-  quiet: "border-track-done bg-track-done",
-  escalated: "border-track-done bg-track-done",
+  passed: "border-ink-body bg-ink-body",
+  acted: "border-ink-body bg-ink-body",
+  quiet: "border-ink-body bg-ink-body",
+  escalated: "border-ink-body bg-ink-body",
   needs: "border-warning-fill bg-warning-fill",
-  current: "border-track-done bg-track-done",
-  waiting: "border-dashed border-track-done bg-canvas",
-  approval: "border-dashed border-track-done bg-canvas",
-  ahead: "border-track-todo bg-canvas",
-  idle: "border-track-todo bg-canvas",
+  current: "border-ink-body bg-ink-body",
+  waiting: "border-dashed border-ink-body bg-canvas",
+  approval: "border-dashed border-ink-body bg-canvas",
+  ahead: "border-ink-faint bg-canvas",
+  idle: "border-ink-faint bg-canvas",
 };
 
 /** Gives the share of the track width, in percent, where the station at `index` of `count` stands. */
@@ -124,17 +124,17 @@ export function StageMeter({ position, progress, needs, atAgent, caption }: Stag
                 className={cn(
                   "min-w-0 flex-1 rounded-[1px]",
                   stage <= done
-                    ? "bg-track-done"
+                    ? "bg-ink-body"
                     : focus?.kind === "current" && stage === k
                       ? currentTone
-                      : "bg-track-todo",
+                      : "bg-ink-faint",
                 )}
               />
             ))}
           </div>
         ) : (
-          <Meter.Track className="relative block h-1 overflow-hidden rounded-full bg-track-todo">
-            <Meter.Indicator className="block h-full bg-track-done" />
+          <Meter.Track className="relative block h-1 overflow-hidden rounded-full bg-ink-faint">
+            <Meter.Indicator className="block h-full bg-ink-body" />
             {focus?.kind === "current" ? (
               <span
                 aria-hidden="true"
@@ -236,14 +236,14 @@ export function Lane({
       )}
     >
       <div
-        className="absolute top-1/2 h-px bg-track-todo"
+        className="absolute top-1/2 h-px bg-ink-faint"
         style={{
           left: `${stationX(0, count)}%`,
           right: `${100 - stationX(count - 1, count)}%`,
         }}
       />
       <div
-        className="absolute top-[calc(50%-1px)] h-0.75 rounded-full bg-track-done"
+        className="absolute top-[calc(50%-1px)] h-0.75 rounded-full bg-ink-body"
         style={{ left: `${stationX(0, count)}%`, width: `${reached}%` }}
       />
       {stations.map((station, index) => {
