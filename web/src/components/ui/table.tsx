@@ -4,7 +4,7 @@ import { HelpHint } from "@/components/ui/hint";
 import { cn } from "@/lib/cn";
 
 import type { TableSort } from "@/components/use-table-sort";
-import type { ComponentProps, ReactNode, UIEvent } from "react";
+import type { ComponentProps, FocusEvent, ReactNode, UIEvent } from "react";
 
 /** Props of {@link Table}. */
 export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
@@ -18,14 +18,25 @@ export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
   frozenColumns?: 1 | 2;
 }
 
-/** Marks a scrolled frame, which draws the frozen edge, and records where a second frozen column starts. */
+/** Records where a second frozen column starts and how far a focused cell must stay from the leading edge to clear them all. */
+function measureFrozen(frame: HTMLDivElement) {
+  const heads = [...frame.querySelectorAll("thead th")].slice(0, Number(frame.dataset.frozen));
+  const widths = heads.map((head) => (head as HTMLElement).offsetWidth);
+  frame.style.setProperty("--frozen-lead", `${widths[0] ?? 0}px`);
+  frame.style.setProperty("--frozen-width", `${widths.reduce((sum, width) => sum + width, 0)}px`);
+}
+
+/** Marks a scrolled frame, which draws the frozen edge. */
 function onFrozenScroll(event: UIEvent<HTMLDivElement>) {
   const frame = event.currentTarget;
-  const lead = frame.querySelector("th");
-  if (lead !== null) {
-    frame.style.setProperty("--frozen-lead", `${lead.offsetWidth}px`);
-  }
+  measureFrozen(frame);
   frame.toggleAttribute("data-scrolled", frame.scrollLeft > 0);
+}
+
+/** A cell the browser counts as in view can still sit under a frozen column; scrolling it again with the frozen width as scroll padding brings it clear. */
+function onFrozenFocus(event: FocusEvent<HTMLDivElement>) {
+  measureFrozen(event.currentTarget);
+  event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /**
@@ -47,6 +58,7 @@ export function Table({
         className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
         data-frozen={frozenColumns}
         onScroll={frozenColumns === undefined ? undefined : onFrozenScroll}
+        onFocus={frozenColumns === undefined ? undefined : onFrozenFocus}
       >
         <table
           className={cn(

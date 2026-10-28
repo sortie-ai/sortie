@@ -35,6 +35,7 @@
   .frozen-table {
     overflow-x: auto;
     container-type: inline-size;
+    scroll-padding-inline-start: var(--frozen-width);
 
     & tr > :first-child:not([colspan]),
     &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
