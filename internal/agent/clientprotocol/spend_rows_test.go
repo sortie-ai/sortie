@@ -73,9 +73,17 @@ func TestUnnamedSpendDeclarationsNamesDeclarationWithoutRow(t *testing.T) {
 		return true
 	})
 
-	got := unnamedSpendDeclarations(t, withoutVariable)
+	named := declarationsNamedByRows(shipped)
+	delete(named, "")
+	want := slices.Sorted(maps.Keys(named))
+	if len(want) == 0 {
+		t.Fatalf("no nightly row names a spend declaration in %s", spendDeclarationEnv)
+	}
 
-	if want := []string{"Copilot"}; !slices.Equal(got, want) {
+	got := unnamedSpendDeclarations(t, withoutVariable)
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
 		t.Errorf("unnamedSpendDeclarations(rows without %s) = %q, want %q", spendDeclarationColumn, got, want)
 	}
 }
