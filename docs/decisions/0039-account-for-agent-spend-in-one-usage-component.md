@@ -32,9 +32,10 @@ This record settles where every kind's spend figure comes from, what normalizes 
 4. **Interrupted work is billed.** The completed requests of a cancelled or killed turn cost money whether or not a live report covers them, and the runtime's records on disk are the channel that keeps them.
 5. **Sortie does not switch on agent telemetry.** ADR-0019 states that Sortie sets no variable that enables a launched agent's telemetry. Telemetry also travels outside the session's standard streams, to a file or a network collector, and a killed process loses whatever it had not flushed.
 6. **One money figure compares across agents.** Operator rates and negotiated discounts apply only to a figure Sortie computes from its own price tables, and only such a figure means the same on every kind. Yet a model those tables cannot price left a run with no money figure even when the runtime had stated a dollar amount.
-7. **A credit is neither a dollar nor a token.** A unit the runtime's vendor defines has no rate Sortie can vouch for, and adding it to dollars or tokens corrupts both.
-8. **A figure states its origin.** A reader and a budget must tell a live figure from one read off disk, a price-table amount from a reported one, and a complete figure from a lower bound.
-9. **Accounting is proven on exact numbers.** The fake-model bench scripts the usage of every response, and the SSH lab runs the same runtime on a remote host. Before this decision the remote variant of the conformance run asserted nothing about usage.
+7. **Pricing needs the served model.** A price table rates a model, so a turn's spend is priced only where the model that served each request is known. Copilot CLI's `auto` selection picks a model per request and bills each request at the served model's rate, yet in its protocol mode nothing on the live channel names the served model: the session's model selector reports `auto`, and only its per-request journal records name the model. The `copilot-cli` kind already attributed spend per served model from that journal at every turn end.
+8. **A credit is neither a dollar nor a token.** A unit the runtime's vendor defines has no rate Sortie can vouch for, and adding it to dollars or tokens corrupts both.
+9. **A figure states its origin.** A reader and a budget must tell a live figure from one read off disk, a price-table amount from a reported one, and a complete figure from a lower bound.
+10. **Accounting is proven on exact numbers.** The fake-model bench scripts the usage of every response, and the SSH lab runs the same runtime on a remote host. Before this decision the remote variant of the conformance run asserted nothing about usage.
 
 ## Considered Options
 
@@ -82,11 +83,13 @@ The generic protocol kind attaches the protocol messages as its live source. Wha
 
 ### Records on disk settle what the live source did not
 
-The fallback source is the runtime's own records on disk. The component reads them only for a turn the live source did not settle: a cancelled turn, a killed process, a missing final report. For a kind whose runtime has no live source, that is every turn. For such a turn the records' figure replaces whatever the live source reported for it, and the two MUST NOT be added together. When the records hold no figure for the turn, whatever the live source reported for it stands as a lower bound.
+The fallback source is the runtime's own records on disk. The component reads them to settle a turn the live source left unsettled: a cancelled turn, a killed process, a missing final report. For a kind whose runtime has no live source, that is every turn. For such a turn the records' figure replaces whatever the live source reported for it, and the two MUST NOT be added together. When the records hold no figure for the turn, whatever the live source reported for it stands as a lower bound.
+
+A source may declare that its live reports name no model, or name only the selector the session requested, such as `auto`, while its records name the model that served each request. For such a source the component also reads the records at the end of a turn the live source settled, solely to attribute that turn's amount to the models that served it. That read never changes an amount: the live amount stands, the records only split it by model, the figure's strategy stays live, and the two figures MUST NOT be added together. A read that fails, and records that hold nothing for the turn, leave the turn's amount settled and unsplit, never unknown. Without this read a run on such a selector carries no model a table can price.
 
 A local session reads its records directly. A remote session MUST read them through one shared remote-read operation built on the SSH launch the session itself used: the same host, options, and environment preamble, running a read-only command with every argument quoted for the remote shell. The operation resolves the runtime's home on the remote host, never from the local host's environment, and applies to the bytes it receives the same size limit a local read applies to a file. A kind MUST NOT build its own remote read.
 
-A record that does not parse yields an unknown amount, never zero. A turn that issued a model request no figure covers stays a lower bound, as before this decision. The fallback does not depend on what the protocol carries: a process that dies leaves its last turn unsettled however complete the protocol's counters become, so this source does not retire when the protocol gains counters.
+In a turn the records settle, a record that does not parse yields an unknown amount, never zero. A turn that issued a model request no figure covers stays a lower bound, as before this decision. The fallback does not depend on what the protocol carries: a process that dies leaves its last turn unsettled however complete the protocol's counters become, so this source does not retire when the protocol gains counters.
 
 ### Telemetry is not a source
 
@@ -184,18 +187,19 @@ One conformance contract runs for every kind that launches a runtime, on the fak
 - The completed requests of a cancelled or killed turn are counted wherever the runtime recorded them.
 - The accounting rules exist once, and one contract proves them on exact figures on both sides of an SSH connection.
 - Sortie switches on no agent telemetry.
+- A run whose runtime picks its model per request is priced at the models that served it, even where the live channel names only the requested selector.
 - A model the tables cannot price no longer erases a run's money figure when the runtime reported one in dollars.
 - A reader and a budget see where every figure came from and whether it is complete.
 
 ### Negative
 
-- **Records on disk are undocumented formats that change between releases.** Copilot CLI's session journal gained a per-request usage record between releases. A change that breaks parsing yields unknown amounts and lower bounds, but a change that keeps a record parseable while changing what a field means undercounts silently until the gated contract or an operator notices.
+- **Records on disk are undocumented formats that change between releases.** Copilot CLI's session journal gained a per-request usage record between releases. A change that breaks parsing yields unknown amounts and lower bounds, or an unsplit amount where the records only attribute a settled turn, but a change that keeps a record parseable while changing what a field means undercounts silently until the gated contract or an operator notices.
 - **A turn killed before the runtime wrote its record stays a lower bound.** A Claude Code process killed immediately after a request can leave no journal entry for it.
 - **Declarations for the generic kind are manual work.** Each runtime's semantics are measured and declared by hand, and a runtime without a declaration stays unmeasured.
 - **A reported amount follows the runtime's price list.** A money total that includes one mixes Sortie's rates with that runtime's prices for the models Sortie cannot price, and provenance names every such share.
 - **Vendor units stay outside every token and money ceiling.** Only the session, turn, time, and absence ceilings bound a run that spends only in credits.
 - **Long-lived cache writes are understated.** They are priced at the cache-write rate for as long as no table carries a rate for them.
-- **A remote fallback read costs an SSH connection.** Each unsettled turn of a remote session, and every turn of a remote session whose runtime has no live source, opens a connection with its own handshake unless the operator's SSH configuration shares connections.
+- **A remote read of records costs an SSH connection.** Each unsettled turn of a remote session, every turn of a remote session whose runtime has no live source, and every turn end of a remote session whose source names the served model only in its records opens a connection with its own handshake unless the operator's SSH configuration shares connections.
 - **Persistence gains provenance.** Run records and per-model shares gain provenance and the reported amount; rows written earlier carry none and show their provenance as unknown.
 - **The bench cannot script an amount a vendor's service computes.** Kiro CLI's credits come from its vendor's service, so the contract cannot verify them.
 - **A pulled window costs a request when every turn ends, and can trail the work.** The turn ends after the pull, within its bound. A remote pull that runs a command or reads a file opens an SSH connection. A vendor's figure can lag the work it counts by minutes, and a runtime that answers from a cached copy reports the window as of that copy.
@@ -218,3 +222,4 @@ The decision is satisfied when all of the following hold:
 12. A run that a provider usage limit refused with a future reset time, and whose token figure records no output token, does not count toward `agent.max_sessions`. Every other run a provider usage limit refused counts, including one whose spend is known only in vendor units and one with no figure.
 13. No adapter package normalizes a window report, builds a window's display name, or merges window reports; a search finds these operations only in the usage component. A share, status, or reset that a report does not carry is unknown wherever the window is shown, never zero.
 14. Every window source declares whether it is live or pull. A pull runs only when a turn that reached the runtime ends, never for a cancelled turn or a credential-verification session; it reads a credential only from the environment Sortie launches the runtime with or from the runtime's own files on its host, sends it only to the endpoint the runtime itself calls, and never stores, logs, refreshes, or rewrites it. A remote session's pull reaches the remote host only through the session's own connection, its own SSH launch, or the shared remote-read operation.
+15. A turn the live source settled reads records only for a source that declares its live reports name no served model, or only the requested selector, and whose records name the served model. That read splits the live amount by served model and changes no amount, the records' figure is never added to the live one, and a failed or missing read leaves the turn's amount settled and unsplit, never unknown.
