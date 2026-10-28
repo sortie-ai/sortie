@@ -79,6 +79,15 @@ type activeTurn struct {
 	// meanwhile waits in held for the pull's result.
 	pullPending bool
 	held        *heldEnd
+
+	// spendEnd and spendLive are what the ledger settles the turn on while its
+	// records read is in flight, so a turn that ends meanwhile settles on them.
+	// spendSettled latches once the ledger has settled the turn, which keeps a
+	// held turn from being settled a second time.
+	spendEnd       usage.TurnEnd
+	spendLive      *usage.SpendReading
+	recordsPending bool
+	spendSettled   bool
 }
 
 // heldEnd is the disposition and drained figure a turn ends on once its pull
@@ -121,6 +130,12 @@ type pumpState struct {
 	drainProven bool
 
 	declaration usagesource.Declaration
+
+	// ledger is the session's spend accounting, set at the handshake and never
+	// dropped; a session with one has no reader. figureSeen latches once a turn
+	// produced a figure.
+	ledger     *usage.Ledger
+	figureSeen bool
 
 	// pullInFlight keeps a second pull from starting while an earlier one holds
 	// the puller, which is not safe for concurrent use.
@@ -279,7 +294,11 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		p.reader = ctrl.handshake.reader
 		p.declaration = ctrl.handshake.declaration
 		p.puller = ctrl.handshake.puller
+		p.ledger = ctrl.handshake.ledger
 		p.applyHandshakeCapabilityLowering(ctrl.handshake)
+		if p.ledger != nil {
+			p.state.caps.tokenCounts = capabilityOurs
+		}
 
 	case ctrl.sessionID != "":
 		p.sessionID = ctrl.sessionID
@@ -314,6 +333,9 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 
 	case ctrl.pulled != nil:
 		p.handlePullResult(ctrl.pulled)
+
+	case ctrl.records != nil:
+		p.handleRecordsRead(ctrl.records)
 
 	case ctrl.answerOpen != nil:
 		p.handleAnswerOpen()
@@ -387,7 +409,8 @@ func (p *pumpState) observeReplay() {
 
 // applyHandshakeCapabilityLowering lowers capability entries from what the
 // initialize response advertised. It never raises one, and precedes the
-// once-per-session notice.
+// once-per-session notice. The raise of the token-counts entry for a session
+// with a ledger follows it in handleControl.
 func (p *pumpState) applyHandshakeCapabilityLowering(facts *handshakeFacts) {
 	if !facts.agentInfoPresent {
 		p.lowerCapability(&p.state.caps.agentVersion, capabilityLabelAgentVersion)
@@ -469,7 +492,12 @@ func (p *pumpState) handleAbandonment() {
 	if p.activeTurn == nil {
 		return
 	}
-	p.finalizeTurn(streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), nil))
+	ev := streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), nil)
+	if p.ledger != nil {
+		p.endUnreplied(ev)
+		return
+	}
+	p.finalizeTurn(ev)
 }
 
 // releaseAbandoned reports whether the release gave up on the reader, even
@@ -594,6 +622,11 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		turn.spend.MarkModelReached()
 	}
 
+	if p.ledger != nil {
+		p.settleReply(turn, evidence, resp.StopReason == stopReasonCancelled, p.declaration.PromptSpend(msg.Result))
+		return
+	}
+
 	// A forced outcome already has a disposition and, when cancelled, no figure
 	// to wait for.
 	if p.reader == nil || bound <= 0 || turn.pendingEnd != turnEndNone {
@@ -658,6 +691,107 @@ func contextUntilStop(stop <-chan struct{}) (context.Context, context.CancelFunc
 		}
 	}()
 	return ctx, cancel
+}
+
+// settleReply settles a turn whose prompt result arrived through the ledger. The
+// live reading comes from the raw result because the generated response type
+// carries no usage member, and the ledger alone decides whether the records are
+// needed.
+func (p *pumpState) settleReply(turn *activeTurn, evidence agentcore.TurnEvidence, cancelled bool, live *usage.SpendReading) {
+	end := usage.TurnEnd{Replied: true, Cancelled: cancelled, ModelReached: turn.spend.ModelReached()}
+	if p.ledger.NeedsRecords(end, live) {
+		p.startRecordsRead(turn, evidence, end, live)
+		return
+	}
+	p.settleTurn(evidence, p.settleSpend(turn, end, live, usage.RecordsRead{}))
+}
+
+// startRecordsRead reads the runtime's records for turn on its own goroutine: the
+// read touches the host's disk, and a blocked pump would stop answering the
+// runtime meanwhile. The result returns through the inbox, so the ledger stays
+// on the pump goroutine.
+func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEvidence, end usage.TurnEnd, live *usage.SpendReading) {
+	turn.drainEvidence = evidence
+	turn.draining = true
+	turn.recordsPending = true
+	turn.spendEnd = end
+	turn.spendLive = live
+	if turn.deadlineC == nil {
+		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
+	}
+
+	readRecords := p.declaration.ReadRecords
+	runtime := pullRuntime{state: p.state}
+	inbox := p.state.inbox
+	stop := p.state.stopCh
+
+	go func() {
+		ctx, cancel := contextUntilStop(stop)
+		defer cancel()
+
+		readings, err := readRecords(ctx, runtime)
+		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, readings: readings, err: err}}})
+	}()
+}
+
+// handleRecordsRead settles the turn a records read was started for, discarding
+// the result of a turn that already ended or was settled without it.
+func (p *pumpState) handleRecordsRead(result *recordsResult) {
+	turn := p.activeTurn
+	if turn == nil || turn != result.turn || !turn.recordsPending {
+		return
+	}
+	if result.err != nil {
+		p.state.logger.Debug("usage records read failed", slog.Any("error", result.err))
+	}
+	read := usage.RecordsRead{Readings: result.readings, OK: result.err == nil}
+	p.settleTurn(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, read))
+}
+
+// settleSpend runs the ledger over turn and applies the settlement to the turn's
+// spend evidence. Completeness stays unknown: the settlement already says
+// whether the turn is settled.
+func (p *pumpState) settleSpend(turn *activeTurn, end usage.TurnEnd, live *usage.SpendReading, read usage.RecordsRead) *usageObserved {
+	settlement := p.ledger.Settle(end, live, read)
+	turn.recordsPending = false
+	turn.spendSettled = true
+	p.noteSpendFigure(end, settlement)
+	return &usageObserved{turn: turn, recovered: turn.spend.ApplySettlement(settlement)}
+}
+
+// noteSpendFigure lowers the token-counts entry when the first turn that reached
+// the model ends with no figure and no earlier turn had one.
+func (p *pumpState) noteSpendFigure(end usage.TurnEnd, settlement usage.Settlement) {
+	if settlement.Figure {
+		p.figureSeen = true
+		return
+	}
+	if end.ModelReached && !p.figureSeen {
+		p.lowerCapability(&p.state.caps.tokenCounts, capabilityLabelTokenCounts)
+	}
+}
+
+// endUnreplied settles a turn that ends without a prompt result. A turn whose
+// records read is in flight settles at once on the end and reading it stored,
+// without waiting for the read.
+func (p *pumpState) endUnreplied(ev agentcore.TurnEvidence) {
+	turn := p.activeTurn
+	switch {
+	case turn == nil:
+		return
+	case turn.spendSettled:
+		p.settleTurn(ev, nil)
+	case turn.recordsPending:
+		p.settleTurn(ev, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
+	default:
+		end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
+		if p.ledger.NeedsRecords(end, nil) {
+			turn.endSettled = true
+			p.startRecordsRead(turn, ev, end, nil)
+			return
+		}
+		p.settleTurn(ev, p.settleSpend(turn, end, nil, usage.RecordsRead{}))
+	}
 }
 
 // startPull runs one usage pull on its own goroutine for a turn whose prompt
@@ -1058,6 +1192,10 @@ func (p *pumpState) recoverThenFinalize(ev agentcore.TurnEvidence) {
 	if turn == nil {
 		return
 	}
+	if p.ledger != nil {
+		p.endUnreplied(ev)
+		return
+	}
 	if p.reader == nil || !turn.spend.ModelReached() || turn.draining {
 		p.settleTurn(ev, nil)
 		return
@@ -1099,11 +1237,27 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 		p.finalizeTurnWithUsage(held.evidence, held.observed)
 		return
 	}
+	if turn.recordsPending {
+		p.finalizeTurnWithUsage(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
+		return
+	}
 	if turn.draining {
 		p.finalizeTurn(turn.drainEvidence)
 		return
 	}
-	p.finalizeTurn(agentcore.TurnEvidence{Terminal: agentcore.TerminalFailure, TerminalErrorKind: domain.ErrTurnFailed})
+	ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalFailure, TerminalErrorKind: domain.ErrTurnFailed}
+	if p.ledger == nil || turn.spendSettled {
+		p.finalizeTurn(ev)
+		return
+	}
+	end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
+	if p.ledger.NeedsRecords(end, nil) {
+		// The elapsed wait is spent; the read gets a wait of its own.
+		turn.deadlineC = nil
+		p.startRecordsRead(turn, ev, end, nil)
+		return
+	}
+	p.finalizeTurnWithUsage(ev, p.settleSpend(turn, end, nil, usage.RecordsRead{}))
 }
 
 // handlePermissionRequest answers a session/request_permission request and, when

@@ -20,7 +20,7 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
-The adapter opens the runtime's session-state tree only by a known ID, and it validates that ID against a path-segment character set before joining it into a path. Both properties are security boundaries, not stylistic choices.
+The adapter opens the runtime's session-state tree only by a known ID, and it validates that ID against a path-segment character set before joining it into a path. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.
 
 ## Preflight, and the fake-binary trap
 
@@ -38,7 +38,7 @@ The practical rule: a usage figure from this adapter is run-cumulative and never
 
 The registered kind declares `turn_end` arrival and `per_model` attribution: the figure and the model both come from the shutdown record, reported through the shared turn-end report in `agentcore`. A `UsageSessionRules` entry narrows a remote launch to `none`/`none`, mirroring the journal read's own SSH-mode skip above.
 
-There is a third source worth knowing about even though the adapter does not read it. This CLI can export OpenTelemetry, and its spans carry the per-request input and output token counts that the JSON stream does not. An operator who exports the relevant variables into Sortie's environment gets them in the subprocess too, since it inherits that environment, and ends up with a token breakdown the adapter itself cannot see. That is the answer to give when someone needs per-request accounting today rather than a change here.
+Besides the shutdown record, the journal carries one `session.usage_record` line per model request. The runtime writes it before the reply, with the request's token counts, the model that served it, and an opaque request identity under `data.usage`. The `agent-client-protocol` kind reads these lines, and this kind does not. The checkpoint and shutdown totals cover the same tokens as those lines, so a reader takes one or the other for a span of tokens, never both.
 
 The model name is the shutdown record's `modelMetrics` key whose token count grew the most since the previous record, breaking a tie by whichever trimmed name sorts first. A record naming no model, or one where no key grew, leaves the field blank rather than falling back to the operator-configured `copilot-cli.model` passthrough value, which is the model requested rather than the model the runtime reported using. The usage event also carries the newest shutdown record's `modelMetrics` per model, under the shared resume baseline seeded from the source of the combined seed.
 

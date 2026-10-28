@@ -2,8 +2,8 @@ package agentcore
 
 import (
 	"maps"
-	"strings"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -36,8 +36,8 @@ func NewRunUsage() *RunUsage {
 // the new provisional contribution), raised against the highest
 // snapshot returned so far.
 func (u *RunUsage) SetTurnProvisional(turn domain.TokenUsage) domain.TokenUsage {
-	u.provisional = clamp(turn)
-	return u.raise(add(u.settled, u.provisional))
+	u.provisional = usage.Subtract(turn, domain.TokenUsage{})
+	return u.raise(usage.Add(u.settled, u.provisional))
 }
 
 // SetRunCumulative replaces the settled total with run outright, clears
@@ -45,7 +45,7 @@ func (u *RunUsage) SetTurnProvisional(turn domain.TokenUsage) domain.TokenUsage 
 // settled total, raised against the highest snapshot returned so far.
 // It also records runByModel, normalized, as the settled per-model split.
 func (u *RunUsage) SetRunCumulative(run domain.TokenUsage, runByModel map[string]domain.TokenUsage) domain.TokenUsage {
-	u.settled = clamp(run)
+	u.settled = usage.Subtract(run, domain.TokenUsage{})
 	u.provisional = domain.TokenUsage{}
 	u.byModel = NormalizeUsageByModel(runByModel)
 	return u.raise(u.settled)
@@ -99,9 +99,9 @@ func NewResumeBaseline(resume *domain.TokenUsage, resumeByModel map[string]domai
 	if resume == nil {
 		return &ResumeBaseline{}
 	}
-	start := clamp(*resume)
+	start := usage.Subtract(*resume, domain.TokenUsage{})
 	b := &ResumeBaseline{baseline: start, latest: start, known: true}
-	if isZeroReading(start) {
+	if usage.IsZero(start) {
 		b.modelBaseline, b.modelLatest, b.modelKnown = map[string]domain.TokenUsage{}, map[string]domain.TokenUsage{}, true
 		return b
 	}
@@ -131,7 +131,7 @@ func NewResumeBaseline(resume *domain.TokenUsage, resumeByModel map[string]domai
 // readingByModel on an unseeded per-model baseline fixes it and claims no
 // spend, so an unusable seed cannot inflate the run.
 func (b *ResumeBaseline) Observe(reading domain.TokenUsage, readingByModel map[string]domain.TokenUsage, own *domain.TokenUsage) (run domain.TokenUsage, runByModel map[string]domain.TokenUsage, estimated bool) {
-	if isZeroReading(reading) {
+	if usage.IsZero(reading) {
 		run, runByModel = b.Run()
 		return run, runByModel, false
 	}
@@ -139,7 +139,7 @@ func (b *ResumeBaseline) Observe(reading domain.TokenUsage, readingByModel map[s
 	if perModel == nil {
 		perModel = map[string]domain.TokenUsage{}
 	}
-	if !b.known || fellBelow(reading, b.latest) {
+	if !b.known || usage.FellBelow(reading, b.latest) {
 		b.beforeReset, b.modelBeforeReset = b.Run()
 		if b.modelBeforeReset == nil {
 			b.modelBeforeReset = map[string]domain.TokenUsage{}
@@ -149,7 +149,7 @@ func (b *ResumeBaseline) Observe(reading domain.TokenUsage, readingByModel map[s
 			b.baseline = SubtractUsage(reading, *own)
 		}
 		b.known = true
-		estimated = !isZeroReading(b.baseline)
+		estimated = !usage.IsZero(b.baseline)
 		b.modelBaseline, b.modelLatest, b.modelKnown = perModel, maps.Clone(perModel), true
 	} else if readingByModel != nil {
 		if !b.modelKnown {
@@ -200,43 +200,18 @@ func (b *ResumeBaseline) Resume() (*domain.TokenUsage, map[string]domain.TokenUs
 // merged, counts floored at zero, and empty names and zero entries
 // dropped; nil when no entry remains.
 func NormalizeUsageByModel(m map[string]domain.TokenUsage) map[string]domain.TokenUsage {
-	var normalized map[string]domain.TokenUsage
-	for name, usage := range m {
-		name = strings.TrimSpace(name)
-		usage = clamp(usage)
-		if name == "" || isZeroReading(usage) {
-			continue
-		}
-		if normalized == nil {
-			normalized = make(map[string]domain.TokenUsage, len(m))
-		}
-		normalized[name] = AddUsage(normalized[name], usage)
-	}
-	return normalized
+	return usage.NormalizeByModel(m)
 }
 
 // AddUsageByModel returns the per-name sum of a and b as a new map; nil
 // when both are nil.
 func AddUsageByModel(a, b map[string]domain.TokenUsage) map[string]domain.TokenUsage {
-	if a == nil && b == nil {
-		return nil
-	}
-	sum := make(map[string]domain.TokenUsage, len(a)+len(b))
-	for _, part := range []map[string]domain.TokenUsage{a, b} {
-		for name, usage := range part {
-			sum[name] = AddUsage(sum[name], usage)
-		}
-	}
-	return sum
+	return usage.AddByModel(a, b)
 }
 
 // SumUsage returns the sum of every entry of parts.
 func SumUsage(parts map[string]domain.TokenUsage) domain.TokenUsage {
-	var total domain.TokenUsage
-	for _, usage := range parts {
-		total = AddUsage(total, usage)
-	}
-	return total
+	return usage.Sum(parts)
 }
 
 func sameCounted(a, b domain.TokenUsage) bool {
@@ -244,66 +219,21 @@ func sameCounted(a, b domain.TokenUsage) bool {
 		a.CacheReadTokens == b.CacheReadTokens && a.CacheWriteTokens == b.CacheWriteTokens
 }
 
-func isZeroReading(usage domain.TokenUsage) bool {
-	return usage.InputTokens == 0 && usage.OutputTokens == 0 &&
-		usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0
-}
-
-func fellBelow(reading, latest domain.TokenUsage) bool {
-	return reading.InputTokens < latest.InputTokens ||
-		reading.OutputTokens < latest.OutputTokens ||
-		reading.CacheReadTokens < latest.CacheReadTokens ||
-		reading.CacheWriteTokens < latest.CacheWriteTokens
-}
-
-// clamp floors every negative component of usage at zero and recomputes
-// TotalTokens as InputTokens plus OutputTokens.
-func clamp(usage domain.TokenUsage) domain.TokenUsage {
-	return SubtractUsage(usage, domain.TokenUsage{})
-}
-
-// add returns the componentwise sum of a and b, with TotalTokens
-// recomputed as InputTokens plus OutputTokens.
-func add(a, b domain.TokenUsage) domain.TokenUsage {
-	return AddUsage(a, b)
-}
-
 // SubtractUsage returns the componentwise difference a minus b, floored
 // at zero in every component, with TotalTokens recomputed as
 // InputTokens plus OutputTokens.
 func SubtractUsage(a, b domain.TokenUsage) domain.TokenUsage {
-	diff := domain.TokenUsage{
-		InputTokens:      max(a.InputTokens-b.InputTokens, 0),
-		OutputTokens:     max(a.OutputTokens-b.OutputTokens, 0),
-		CacheReadTokens:  max(a.CacheReadTokens-b.CacheReadTokens, 0),
-		CacheWriteTokens: max(a.CacheWriteTokens-b.CacheWriteTokens, 0),
-	}
-	diff.TotalTokens = diff.InputTokens + diff.OutputTokens
-	return diff
+	return usage.Subtract(a, b)
 }
 
 // MaxUsage returns the componentwise maximum of a and b, with
 // TotalTokens recomputed as InputTokens plus OutputTokens.
 func MaxUsage(a, b domain.TokenUsage) domain.TokenUsage {
-	result := domain.TokenUsage{
-		InputTokens:      max(a.InputTokens, b.InputTokens),
-		OutputTokens:     max(a.OutputTokens, b.OutputTokens),
-		CacheReadTokens:  max(a.CacheReadTokens, b.CacheReadTokens),
-		CacheWriteTokens: max(a.CacheWriteTokens, b.CacheWriteTokens),
-	}
-	result.TotalTokens = result.InputTokens + result.OutputTokens
-	return result
+	return usage.Max(a, b)
 }
 
 // AddUsage returns the componentwise sum of a and b, with TotalTokens
 // recomputed as InputTokens plus OutputTokens.
 func AddUsage(a, b domain.TokenUsage) domain.TokenUsage {
-	sum := domain.TokenUsage{
-		InputTokens:      a.InputTokens + b.InputTokens,
-		OutputTokens:     a.OutputTokens + b.OutputTokens,
-		CacheReadTokens:  a.CacheReadTokens + b.CacheReadTokens,
-		CacheWriteTokens: a.CacheWriteTokens + b.CacheWriteTokens,
-	}
-	sum.TotalTokens = sum.InputTokens + sum.OutputTokens
-	return sum
+	return usage.Add(a, b)
 }

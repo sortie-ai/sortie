@@ -193,7 +193,8 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/scm/cilog":                       {reason: "shared CI log excerpt assembly for the forge CI providers; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/procutil":                  {reason: "shared subprocess group handling, Windows process containment, and bounded output capture; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/usage":                     {reason: "shared usage normalization and merge for provider usage windows; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/usage":                     {reason: "shared usage normalization and merge for provider usage windows, and spend accounting; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate":      {reason: "shared Copilot CLI journal location, read caps, and record parser; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/sshutil":                   {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/toolrelay":                 {reason: "shared HTTP tool-server relay lifecycle and delivery decision; registers no kind and holds no adapter", coreImportable: false},
@@ -235,6 +236,9 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleLIFECYCLE:   "owns the fork-per-turn lifecycle built on the process-start primitives",
 		ruleREADTIMEOUT: "owns ReadTimeout and FirstResponseTimeout, the readers of the field",
 		ruleUSAGESUM:    "owns AddUsage, the one place the counters are summed",
+	},
+	"usage": {
+		ruleUSAGESUM: "owns Add, the one place the counters are summed; agentcore.AddUsage delegates to it",
 	},
 	"agenttest": {
 		ruleCAPTURE:  "test-support package that cmd/sortie does not link",

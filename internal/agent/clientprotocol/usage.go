@@ -13,10 +13,10 @@ import (
 )
 
 // usageReader supplies token measurements read outside the wire, for a runtime
-// whose protocol carries no spend counter. A reader that fails to claim the
-// launch target, recognize the handshake's runtime name, or produce a record on
-// its first drain is dropped, leaving the session unmeasured and the token
-// ceiling inactive.
+// without a spend declaration. A reader that fails to claim the launch target,
+// recognize the handshake's runtime name, or produce a record on its first
+// drain is dropped, leaving the session unmeasured and the token ceiling
+// inactive.
 //
 // Drain reports whether a measurement exists; Completeness grades how far the
 // figure it just returned was proven to reach.
@@ -168,6 +168,10 @@ func (r pullRuntime) LaunchEnv(name string) (string, bool) {
 
 func (r pullRuntime) ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error) {
 	return r.state.target.ReadRuntimeFile(ctx, r.state.launchEnv, homeVar, rel, limit)
+}
+
+func (r pullRuntime) ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
+	return r.state.target.ScanRuntimeFile(ctx, r.state.launchEnv, homeVar, rel, limit, lineLimit, fn)
 }
 
 func (r pullRuntime) RemoteHost() bool {

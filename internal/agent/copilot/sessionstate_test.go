@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -191,7 +192,7 @@ func TestReadSessionUsage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("os.Create: %v", err)
 		}
-		if err := f.Truncate(maxSessionStateFileBytes + 1); err != nil {
+		if err := f.Truncate(sessionstate.MaxFileBytes + 1); err != nil {
 			t.Fatalf("Truncate: %v", err)
 		}
 		if err := f.Close(); err != nil {
@@ -207,7 +208,7 @@ func TestReadSessionUsage(t *testing.T) {
 	t.Run("single line exceeding the line cap is rejected", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		longLine := strings.Repeat("x", maxSessionStateLineBytes+1)
+		longLine := strings.Repeat("x", sessionstate.MaxLineBytes+1)
 		path := writeEventsFile(t, dir, longLine+"\n")
 
 		_, _, _, _, err := readSessionUsage(path)

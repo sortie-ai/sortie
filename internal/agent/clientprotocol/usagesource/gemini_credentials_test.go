@@ -46,6 +46,19 @@ func (r geminiStoreRuntime) ReadHomeFile(_ context.Context, _, rel string, _ int
 	return []byte(content), nil
 }
 
+func (r geminiStoreRuntime) ScanHomeFile(_ context.Context, _, rel string, _, _ int64, fn func(line []byte) error) error {
+	content, ok := r.files[rel]
+	if !ok {
+		return fs.ErrNotExist
+	}
+	for line := range strings.Lines(content) {
+		if err := fn([]byte(strings.TrimRight(line, "\r\n"))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r geminiStoreRuntime) RunHostCommand(_ context.Context, _ string, args ...string) ([]byte, error) {
 	switch script := args[len(args)-1]; {
 	case script == geminiKeychainScript && r.keychain == "":

@@ -17,11 +17,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -51,10 +51,6 @@ func placeMCPConfig(d mcpconfig.Delivery) sshutil.LatePreamble {
 	}
 	return sshutil.LatePreamble{Args: []string{"--additional-mcp-config", string(d.Document)}}
 }
-
-// sessionIDPattern is the safe path-segment character set a session id must
-// match before it is joined into a session-state path.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // copilotToolDeniedCode is the tool.execution_complete error code the CLI
 // reports when its own non-interactive permission policy refuses a tool
@@ -176,7 +172,7 @@ func (s *sessionState) logger() *slog.Logger {
 func (s *sessionState) recoverUsage(logger *slog.Logger) (recovered *agentcore.RecoveredUsage, estimated bool, resume *domain.TokenUsage, resumeByModel map[string]domain.TokenUsage) {
 	remote := s.target.RemoteCommand != ""
 	sessionID := s.copilotSessionID
-	validID := sessionID != "" && sessionIDPattern.MatchString(sessionID)
+	validID := sessionID != "" && sessionstate.ValidSessionID(sessionID)
 
 	if remote || !validID {
 		if sessionID != "" && !validID && !s.sessionIDRejectionLogged {
@@ -237,7 +233,7 @@ func seedResumeBaseline(params domain.StartSessionParams, target agentcore.Launc
 		return *agentcore.NewResumeBaseline(&domain.TokenUsage{}, nil)
 	case params.ResumeUsage != nil:
 		return *agentcore.NewResumeBaseline(params.ResumeUsage, params.ResumeUsageByModel)
-	case target.RemoteCommand != "" || !sessionIDPattern.MatchString(sessionID):
+	case target.RemoteCommand != "" || !sessionstate.ValidSessionID(sessionID):
 		return agentcore.ResumeBaseline{}
 	}
 	return *agentcore.NewResumeBaseline(journalResumeUsage(sessionID, logger))

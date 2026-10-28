@@ -24,9 +24,13 @@ import (
 
 const geminiTestToken = "ya29.a0-test-access-token"
 
-type geminiRuntime struct{ env map[string]string }
+type geminiRuntime struct {
+	env       map[string]string
+	sessionID string
+	scans     *int
+}
 
-func (geminiRuntime) SessionID() string { return "" }
+func (r geminiRuntime) SessionID() string { return r.sessionID }
 
 func (geminiRuntime) Request(context.Context, string, any) (json.RawMessage, error) {
 	return nil, errors.New("unexpected session request")
@@ -39,6 +43,13 @@ func (r geminiRuntime) LaunchEnv(name string) (string, bool) {
 
 func (r geminiRuntime) ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error) {
 	return agentcore.LaunchTarget{}.ReadRuntimeFile(ctx, []string{homeVar + "=" + r.env[homeVar]}, homeVar, rel, limit)
+}
+
+func (r geminiRuntime) ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
+	if r.scans != nil {
+		*r.scans++
+	}
+	return agentcore.LaunchTarget{}.ScanRuntimeFile(ctx, []string{homeVar + "=" + r.env[homeVar]}, homeVar, rel, limit, lineLimit, fn)
 }
 
 func (geminiRuntime) RemoteHost() bool { return false }
@@ -105,7 +116,7 @@ func runGeminiPull(t *testing.T, signIn string, project string, quotaStatus int)
 		env["GOOGLE_CLOUD_PROJECT"] = project
 	}
 
-	readings, pullErr := declaration.PullWindows(t.Context(), geminiRuntime{env})
+	readings, pullErr := declaration.PullWindows(t.Context(), geminiRuntime{env: env})
 
 	after, _ := os.ReadFile(path)
 	mu.Lock()

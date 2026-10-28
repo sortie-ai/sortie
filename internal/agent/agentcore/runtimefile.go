@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -47,6 +48,46 @@ func (t LaunchTarget) ReadRuntimeFile(ctx context.Context, env []string, homeVar
 		return t.readRemoteFile(ctx, homeVar, rel, limit)
 	}
 	return t.readLocalFile(ctx, env, homeVar, rel, limit)
+}
+
+// ScanRuntimeFile reads rel as [LaunchTarget.ReadRuntimeFile] locates it and
+// calls fn with each line in file order, without its terminator; the last
+// line needs none. The slice is valid only during the call. A local session
+// holds one line at a time, never the file; a remote session scans the bytes
+// its SSH read returns.
+//
+// A missing file wraps [fs.ErrNotExist], and a remote SSH connection failure
+// wraps [sshutil.ErrConnectionFailed]. A file above limit bytes, a line above
+// lineLimit bytes, an ended context, and an error from fn stop the scan and
+// return an error; fn may already have seen the lines before the stop.
+//
+// The lines may carry a credential: ScanRuntimeFile neither logs them nor puts
+// them in an error, and the caller must do the same.
+func (t LaunchTarget) ScanRuntimeFile(ctx context.Context, env []string, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
+	if t.RemoteCommand != "" {
+		data, err := t.readRemoteFile(ctx, homeVar, rel, limit)
+		if err != nil {
+			return err
+		}
+		return scanLines(ctx, bytes.NewReader(data), rel, limit, lineLimit, fn)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f, err := t.openLocalFile(env, homeVar, rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat runtime file: %w", err)
+	}
+	if info.Size() > limit {
+		return fmt.Errorf("runtime file %q exceeds %d bytes", rel, limit)
+	}
+	return scanLines(ctx, f, rel, limit, lineLimit, fn)
 }
 
 // RunHostCommand runs one command on the session's host and returns its
@@ -102,6 +143,16 @@ func (t LaunchTarget) readLocalFile(ctx context.Context, env []string, homeVar, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	f, err := t.openLocalFile(env, homeVar, rel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	return readWithin(f, limit, rel)
+}
+
+func (t LaunchTarget) openLocalFile(env []string, homeVar, rel string) (*os.File, error) {
 	home, _ := t.RuntimeEnv(env, homeVar)
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -114,9 +165,7 @@ func (t LaunchTarget) readLocalFile(ctx context.Context, env []string, homeVar, 
 	if err != nil {
 		return nil, fmt.Errorf("open runtime file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-
-	return readWithin(f, limit, rel)
+	return f, nil
 }
 
 func (t LaunchTarget) readRemoteFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error) {
@@ -191,4 +240,52 @@ func readWithin(r io.Reader, limit int64, rel string) ([]byte, error) {
 		return nil, fmt.Errorf("runtime file %q exceeds %d bytes", rel, limit)
 	}
 	return data, nil
+}
+
+// countingReader counts the bytes read through it, which lets a scan notice a
+// file that grew past its cap after the size check.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// scanLines calls fn with each line of r. It reads at most limit+1 bytes, so
+// a file that outgrew the cap is seen without being streamed whole.
+func scanLines(ctx context.Context, r io.Reader, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
+	counted := &countingReader{r: io.LimitReader(r, limit+1)}
+	scanner := bufio.NewScanner(counted)
+	// The extra two bytes let a line of exactly lineLimit bytes be seen with
+	// its "\r\n" terminator; the explicit check below enforces the cap.
+	scanner.Buffer(make([]byte, 0, 64*1024), int(lineLimit)+2)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if counted.n > limit {
+			return fmt.Errorf("runtime file %q exceeds %d bytes", rel, limit)
+		}
+		line := scanner.Bytes()
+		if int64(len(line)) > lineLimit {
+			return fmt.Errorf("runtime file %q has a line above %d bytes", rel, lineLimit)
+		}
+		if err := fn(line); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("runtime file %q has a line above %d bytes", rel, lineLimit)
+		}
+		return fmt.Errorf("scan runtime file: %w", err)
+	}
+	if counted.n > limit {
+		return fmt.Errorf("runtime file %q exceeds %d bytes", rel, limit)
+	}
+	return nil
 }
