@@ -8,10 +8,7 @@ import { attentionKey, endedKey, markRead } from "@/lib/unread";
 
 import type { IssueDetailRow } from "@/components/IssueDetail";
 
-/**
- * Gives what the lists already know of an issue and reads the issue: its
- * attention items and its ended entry count as read while it is shown.
- */
+/** Its attention items and its ended entry count as read while it is shown. */
 export function useIssueSummary(identifier: string): IssueDetailRow | undefined {
   const { data: state } = useStateQuery();
   const { data: pages } = useEndedQuery(localMidnight(now()).toISOString());

@@ -61,12 +61,10 @@ const LABEL_TONE: Record<Tone, string> = {
   error: "text-error",
 };
 
-/** Returns the word a status mark stands for. */
 export function markWord(mark: Mark): string {
   return STATUS[mark].word;
 }
 
-/** Props of {@link StatusMark}. */
 export interface StatusMarkProps {
   mark: Mark;
   /** Visible text beside the glyph; without it the mark names itself to screen readers and a tooltip. */
@@ -76,7 +74,6 @@ export interface StatusMarkProps {
   className?: string;
 }
 
-/** Draws the glyph of a status, with a visible label or a screen-reader word. The running glyph turns unless the reader prefers reduced motion. */
 export function StatusMark({ mark, label, title, className }: StatusMarkProps) {
   const { Glyph, word, tone } = STATUS[mark];
   const isSpinning = mark === "running";

@@ -16,28 +16,21 @@ import type { TallyLine } from "@/lib/tally";
 const LINK =
   "text-link underline underline-offset-2 hover:text-link-hover focus-visible:outline-2 focus-visible:outline-focus-ring active:text-link-active";
 
-/** Why the section has no rows to list. */
 export type EndedEmpty = "unavailable" | "first-run" | "none" | "loading";
 
-/** Props of {@link EndedToday}. */
 export interface EndedTodayProps {
-  /** Every issue that ended today, newest ending first. */
   rows: readonly EndedIssue[];
   /** Issue ids of the rows the reader has not read; those rows carry the unread dot. */
   unreadIds: ReadonlySet<string>;
   /** Why the list is empty when it is; ignored while `rows` holds issues. */
   empty: EndedEmpty;
-  /** The tally line, or `undefined` while it is unavailable. */
   tally: TallyLine | undefined;
-  /** The hover of the tally's cost. */
   tallyTitle?: string;
-  /** Navigation key of the selected item, or `undefined`. */
   selectedKey: string | undefined;
   showSelection: boolean;
   onOpen: (issue: EndedIssue) => void;
 }
 
-/** Renders the Ended today section: the tally line and every ending of the day. */
 export function EndedToday({
   rows,
   unreadIds,

@@ -77,7 +77,15 @@ function ModelRow({ row }: ModelRowProps) {
   const isMixed = layers.size > 1;
   return (
     <TableRow>
-      <TableCell>{row.model === "" ? "Model not reported" : row.model}</TableCell>
+      <TableCell>
+        {row.model === "" ? (
+          "Model not reported"
+        ) : (
+          <span className="block max-w-[208px] truncate" title={row.model}>
+            {row.model}
+          </span>
+        )}
+      </TableCell>
       <TableCell>{row.agent_kind}</TableCell>
       <TableCell isWrapping>{pricedByText(row)}</TableCell>
       <RateCell rate={row.input} isMixed={isMixed} />
@@ -148,12 +156,10 @@ function ModelSearch({ query, onQueryChange }: ModelSearchProps) {
   );
 }
 
-/** Props of {@link ModelsTable}. */
 export interface ModelsTableProps {
   rows: readonly ModelPriceResponse[];
 }
 
-/** Renders the rates the next run of each agent kind and model gets, in the order served until a column is sorted. */
 export function ModelsTable({ rows }: ModelsTableProps) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
@@ -166,7 +172,7 @@ export function ModelsTable({ rows }: ModelsTableProps) {
       <div className="flex justify-end">
         <ModelSearch query={query} onQueryChange={setQuery} />
       </div>
-      <Table title="Models">
+      <Table title="Models" frozenColumns={1}>
         <TableHeader>
           <SortableHead columnId="model" sort={sort}>
             Model

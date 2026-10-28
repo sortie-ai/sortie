@@ -23,7 +23,6 @@ import type {
 } from "@/api/types.gen";
 import type { InfiniteData, UseInfiniteQueryResult, UseQueryResult } from "@tanstack/react-query";
 
-/** The span of run history the Analytics screen reports. */
 export type AnalyticsRange = "24h" | "7d" | "30d" | "90d" | "all";
 
 /** The one cache of server data in a tab; a change signal, not a timer, decides when data is stale. */
@@ -49,15 +48,10 @@ export const queryKeys = {
   prices: () => ["prices"] as const,
 };
 
-/** Issues per History page and runs per page of an expanded group. */
 export const HISTORY_PAGE_SIZE = 20;
 export const HISTORY_RUNS_PAGE_SIZE = 50;
 
-/**
- * The least time between two refetches a change signal may cause. A History
- * refetch rereads every loaded page and an Analytics refetch rescans every run
- * in its range, both through the orchestrator's store.
- */
+/** The least time between two change-signal refetches: a History refetch rereads every loaded page and an Analytics refetch rescans every run in its range. */
 export const HISTORY_REFETCH_FLOOR_MS = 5_000;
 export const STATS_REFETCH_FLOOR_MS = 30_000;
 
@@ -114,7 +108,6 @@ export function useStateQuery(): UseQueryResult<StateResponse> {
   return useQuery({ queryKey: queryKeys.state(), queryFn: ({ signal }) => fetchState(signal) });
 }
 
-/** Reads one issue; it stays idle while no issue is shown. */
 export function useIssueQuery(identifier: string | undefined): UseQueryResult<IssueDetailResponse> {
   return useQuery({
     queryKey: queryKeys.issue(identifier ?? ""),
@@ -123,7 +116,6 @@ export function useIssueQuery(identifier: string | undefined): UseQueryResult<Is
   });
 }
 
-/** Reads every page of runs that ended since the instant. */
 export function useEndedQuery(midnight: string): UseQueryResult<RunsResponse[]> {
   return useQuery({
     queryKey: queryKeys.ended(midnight),
@@ -131,7 +123,6 @@ export function useEndedQuery(midnight: string): UseQueryResult<RunsResponse[]> 
   });
 }
 
-/** Reads the run statistics since the instant. */
 export function useTallyQuery(midnight: string): UseQueryResult<Report> {
   return useQuery({
     queryKey: queryKeys.tally(midnight),
@@ -139,11 +130,7 @@ export function useTallyQuery(midnight: string): UseQueryResult<Report> {
   });
 }
 
-/**
- * Tells whether no run is on record: `true` while none is, `undefined` until
- * the first answer. Once a run exists the query is disabled for the rest of
- * the page's life, so no change signal refetches it.
- */
+/** `true` while no run is on record, `undefined` until the first answer; once a run exists the query is disabled for the rest of the page's life. */
 export function useFirstRunQuery(): boolean | undefined {
   const client = useQueryClient();
   const hasRun = client.getQueryData<boolean>(queryKeys.firstRun()) === true;
@@ -155,7 +142,6 @@ export function useFirstRunQuery(): boolean | undefined {
   return data === undefined ? undefined : !data;
 }
 
-/** Reads History pages of issues, newest finished run first; the next page continues from the last one's `next_cursor`. */
 export function useHistoryQuery(
   filter: HistoryFilter,
 ): UseInfiniteQueryResult<InfiniteData<IssueGroupsResponse, string | undefined>> {
@@ -169,7 +155,6 @@ export function useHistoryQuery(
   });
 }
 
-/** Reads the runs of one expanded group page by page; it stays idle until `enabled`. */
 export function useHistoryRunsQuery(
   issueId: string,
   filter: HistoryFilter,
@@ -196,7 +181,6 @@ export function useHistoryRunsQuery(
   });
 }
 
-/** Reads the finished issues whose key or title contains the query, ignoring case; it stays idle while the query is empty. */
 export function useIssueLookupQuery(query: string): UseQueryResult<IssueGroupResponse[]> {
   return useQuery({
     queryKey: queryKeys.issueLookup(query),
@@ -206,11 +190,7 @@ export function useIssueLookupQuery(query: string): UseQueryResult<IssueGroupRes
   });
 }
 
-/**
- * Reads the run statistics of a range. The range is part of the key and no
- * previous data stands in while another range loads, so a range never shows
- * the figures of the one before it.
- */
+/** No previous data stands in while another range loads, so a range never shows the figures of the one before it. */
 export function useStatsQuery(range: AnalyticsRange): UseQueryResult<Report> {
   return useQuery({
     queryKey: queryKeys.stats(range),
@@ -219,11 +199,7 @@ export function useStatsQuery(range: AnalyticsRange): UseQueryResult<Report> {
   });
 }
 
-/**
- * Reads the rates in force and the price sources. Stale at once, so every
- * opening of the screen asks the route again; the marker keeps a change signal
- * from doing so, which would rerun its history read on every poll tick.
- */
+/** Stale at once so every opening of the screen asks again; the marker keeps a change signal from doing so, which would rerun its history read on every poll tick. */
 export function usePricesQuery(): UseQueryResult<PricesResponse> {
   return useQuery({
     queryKey: queryKeys.prices(),

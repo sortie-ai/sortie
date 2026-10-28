@@ -7,16 +7,10 @@ import { fmtClock, fmtDate } from "@/lib/format";
 
 import { RANGE_OPTIONS, useAnalyticsRange } from "./analytics-range";
 
-/** Props of {@link RangePicker}. */
 export interface RangePickerProps {
   className?: string;
 }
 
-/**
- * Renders the select-style trigger that names the Analytics range and opens a
- * menu of the ranges, the current one checked. Its tooltip gives the start the
- * report covers.
- */
 export function RangePicker({ className }: RangePickerProps) {
   const [range, setRange] = useAnalyticsRange();
   const since = useStatsQuery(range).data?.since;

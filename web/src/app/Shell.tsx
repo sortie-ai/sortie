@@ -218,18 +218,11 @@ function ShellFrame({ screens }: ShellFrameProps) {
   );
 }
 
-/** Props of {@link Shell}. */
 export interface ShellProps {
   screens: ScreenEntry[];
 }
 
-/**
- * Renders the application frame around the routed screen: rail, narrow-screen
- * bar, sticky header, breadcrumb, degraded banner, the loading and not-answering states, the
- * peek, the palette and shortcut map, and the toaster. It owns the shortcuts
- * that act on every route. It must sit inside the query client, live-update,
- * and router providers.
- */
+/** Must sit inside the query client, live-update, and router providers. */
 export function Shell({ screens }: ShellProps) {
   return (
     <>

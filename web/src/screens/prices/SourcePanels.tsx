@@ -98,12 +98,10 @@ function FailureRows({ source }: SourceProps) {
   );
 }
 
-/** Props of {@link PricesInForcePanel}. */
 export interface PricesInForcePanelProps {
   table: TableInForceResponse | null;
 }
 
-/** Renders the table that prices first and how old it is. */
 export function PricesInForcePanel({ table }: PricesInForcePanelProps) {
   return (
     <Panel title="Prices in force">
@@ -126,12 +124,10 @@ function entriesText(source: TokenRatesSourceResponse): string {
   return parts.length === 0 ? "Not set" : parts.join(", ");
 }
 
-/** Props of {@link TokenRatesPanel}. */
 export interface TokenRatesPanelProps {
   source: TokenRatesSourceResponse;
 }
 
-/** Renders how many `token_rates` entries are in force. */
 export function TokenRatesPanel({ source }: TokenRatesPanelProps) {
   return (
     <Panel title="Token rates">
@@ -145,7 +141,6 @@ export function TokenRatesPanel({ source }: TokenRatesPanelProps) {
   );
 }
 
-/** Renders the operator's own price table, from a file or an address. */
 export function OperatorTablePanel({ source }: SourceProps) {
   const isFile = source.file !== null;
   return (
@@ -171,7 +166,6 @@ export function OperatorTablePanel({ source }: SourceProps) {
   );
 }
 
-/** Renders the table Sortie downloads. */
 export function DownloadedTablePanel({ source }: SourceProps) {
   return (
     <Panel title="Downloaded prices">
@@ -194,7 +188,6 @@ export function DownloadedTablePanel({ source }: SourceProps) {
   );
 }
 
-/** Renders the table built into the binary. */
 export function EmbeddedTablePanel({ source }: SourceProps) {
   return (
     <Panel title="Built-in prices">

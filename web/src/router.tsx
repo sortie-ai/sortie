@@ -15,7 +15,7 @@ import {
 
 import type { ScreenEntry } from "@/app/Rail";
 
-/** The screens the rail lists and the palette and `G` chords reach; each screen registers itself here. */
+/** Each screen registers itself here. */
 export const screens: ScreenEntry[] = [
   { key: "o", label: "Overview", path: "/", group: 0, icon: InboxIcon },
   { key: "p", label: "Pipeline", path: "/pipeline", group: 0, icon: ChartGanttIcon },
@@ -26,7 +26,6 @@ export const screens: ScreenEntry[] = [
   { key: "r", label: "Prices", path: "/prices", group: 1, icon: TagIcon },
 ];
 
-/** The application's routes under the `/ui` base. */
 export const router = createBrowserRouter(
   [
     {

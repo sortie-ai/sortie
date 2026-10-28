@@ -4,33 +4,56 @@ import { HelpHint } from "@/components/ui/hint";
 import { cn } from "@/lib/cn";
 
 import type { TableSort } from "@/components/use-table-sort";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, FocusEvent, ReactNode, UIEvent } from "react";
 
-/** Props of {@link Table}. */
 export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
   /** The heading over the table, drawn as a title bar; leave it out when the table sits under a heading that covers more than the table. */
   title?: ReactNode;
   /** Keeps the table from narrowing below a width that fits its columns, so it scrolls sideways instead. */
   isWide?: boolean;
-  /** Narrows the side padding of every cell, for a table in a narrow column. */
   isCompact?: boolean;
+  /** How many leading columns name the row and stay in view while the table scrolls sideways. */
+  frozenColumns?: 1 | 2;
 }
 
-/**
- * Renders every table of the dashboard: a rounded frame with an optional title bar around a
- * sideways-scrolling `<table>`. Every other prop reaches the `<table>`. A look a table needs
- * that the parts below lack is added to them, never drawn on a screen.
- */
+/** Records where a second frozen column starts and how far a focused cell must stay from the leading edge to clear them all. */
+function measureFrozen(frame: HTMLDivElement) {
+  const heads = [...frame.querySelectorAll("thead th")].slice(0, Number(frame.dataset.frozen));
+  const widths = heads.map((head) => (head as HTMLElement).offsetWidth);
+  frame.style.setProperty("--frozen-lead", `${widths[0] ?? 0}px`);
+  frame.style.setProperty("--frozen-width", `${widths.reduce((sum, width) => sum + width, 0)}px`);
+}
+
+/** Marks a scrolled frame, which draws the frozen edge. */
+function onFrozenScroll(event: UIEvent<HTMLDivElement>) {
+  const frame = event.currentTarget;
+  measureFrozen(frame);
+  frame.toggleAttribute("data-scrolled", frame.scrollLeft > 0);
+}
+
+/** A cell the browser counts as in view can still sit under a frozen column; scrolling it again with the frozen width as scroll padding brings it clear. */
+function onFrozenFocus(event: FocusEvent<HTMLDivElement>) {
+  measureFrozen(event.currentTarget);
+  event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+/** Every other prop reaches the `<table>`. A look a table needs that the parts below lack is added to them, never drawn on a screen. */
 export function Table({
   title,
   isWide = false,
   isCompact = false,
+  frozenColumns,
   className,
   ...props
 }: TableProps) {
   return (
     <Card title={title}>
-      <div className="overflow-x-auto">
+      <div
+        className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
+        data-frozen={frozenColumns}
+        onScroll={frozenColumns === undefined ? undefined : onFrozenScroll}
+        onFocus={frozenColumns === undefined ? undefined : onFrozenFocus}
+      >
         <table
           className={cn(
             "w-full text-left text-body-md text-ink-body",
@@ -45,12 +68,10 @@ export function Table({
   );
 }
 
-/** Props of {@link TableHeader}. */
 export interface TableHeaderProps {
   children: ReactNode;
 }
 
-/** Renders the single header row; its children are {@link TableHead} or {@link SortableHead}. */
 export function TableHeader({ children }: TableHeaderProps) {
   return (
     <thead className="bg-surface text-body-sm font-medium text-ink-muted">
@@ -72,13 +93,11 @@ const ROW_LOOK = {
   group: "cursor-pointer bg-surface",
 } as const;
 
-/** Props of {@link TableRow}. */
 export interface TableRowProps extends ComponentProps<"tr"> {
   /** `link` opens something; `group` is that on a row that heads a body's rows. Every row tints under the pointer. */
   look?: keyof typeof ROW_LOOK;
 }
 
-/** Renders a body row. */
 export function TableRow({ look = "plain", className, ...props }: TableRowProps) {
   return (
     <tr
@@ -92,17 +111,14 @@ export function TableRow({ look = "plain", className, ...props }: TableRowProps)
   );
 }
 
-/** Props of {@link TableHead}. */
 export interface TableHeadProps {
   align?: "left" | "right";
-  /** The column's definition, shown as a tooltip. */
   title?: string;
   /** Carries the column's width only. */
   className?: string;
   children: ReactNode;
 }
 
-/** Renders the header cell of a column that does not sort. */
 export function TableHead({ align = "left", title, className, children }: TableHeadProps) {
   return (
     <th
@@ -119,16 +135,13 @@ export function TableHead({ align = "left", title, className, children }: TableH
   );
 }
 
-/** Props of {@link SortableHead}. */
 export interface SortableHeadProps extends TableHeadProps {
-  /** The column's id in the sort. */
   columnId: string;
   sort: TableSort;
   /** A note behind a question-mark icon after the header, for a definition too long for the header itself. */
   help?: string;
 }
 
-/** Renders the header cell of a column that sorts: a button that sorts by the column, with `aria-sort` on the cell. */
 export function SortableHead({
   columnId,
   sort,
@@ -184,19 +197,16 @@ const CELL_LOOK = {
   "number-muted": "text-right text-ink-muted",
 } as const;
 
-/** Props of {@link TableCell}. */
 export interface TableCellProps extends ComponentProps<"td"> {
   /** `number` right-aligns a figure; `muted` and `number-muted` quiet a cell that holds nothing worth reading, such as a zero. */
   look?: keyof typeof CELL_LOOK;
   /** A muted fact after the content on its line, such as the reason beside a count. */
   aside?: ReactNode;
-  /** A muted second line under the content. */
   note?: ReactNode;
   /** Lets a value that can run long wrap, so the table fits its frame instead of scrolling sideways. */
   isWrapping?: boolean;
 }
 
-/** Renders a body cell; figures use tabular digits and only an `isWrapping` cell wraps. */
 export function TableCell({
   look = "text",
   aside,
@@ -230,16 +240,12 @@ export function TableCell({
   );
 }
 
-/** Props of {@link TableSpanCell}. */
 export interface TableSpanCellProps {
-  /** The number of columns the table has. */
   colSpan: number;
-  /** Trims the block padding for a cell that holds a button. */
   isCompact?: boolean;
   children: ReactNode;
 }
 
-/** Renders a cell across the whole row that lays out its own content, such as a group's heading. */
 export function TableSpanCell({ colSpan, isCompact = false, children }: TableSpanCellProps) {
   return (
     <td colSpan={colSpan} className={cn("px-md", isCompact ? "py-xs" : "py-sm")}>

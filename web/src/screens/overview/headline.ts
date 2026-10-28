@@ -9,7 +9,6 @@ export interface Segment {
   emphasis?: "strong" | "critical";
 }
 
-/** The page's heading and the lede sentence under it. */
 export interface Headline {
   heading: Segment[];
   lede: Segment[];
@@ -29,7 +28,6 @@ function kindWord(configKey: string): string {
   return KIND_WORDS.get(configKey) ?? configKey.replaceAll("_", " ");
 }
 
-/** Joins words with commas and a last "or" or "and". */
 function joinWords(words: readonly string[], conjunction: "and" | "or"): string {
   const last = words.at(-1);
   if (last === undefined || words.length === 1) {
@@ -117,13 +115,7 @@ function firstRunLede(state: StateResponse): string {
   return `${started}${subject} picked up, with no finished runs yet.`;
 }
 
-/**
- * Words the Overview heading and its lede from the served state.
- *
- * A first run, with no run on record, reads as picking up only while an agent
- * runs and nothing needs attention or waits on a person; a failing health
- * check or a critical item reads as degraded.
- */
+/** A first run, with no run on record, reads as picking up only while an agent runs and nothing needs attention or waits on a person; a failing health check or a critical item reads as degraded. */
 export function buildHeadline(state: StateResponse, isFirstRun: boolean): Headline {
   const items = (state.attention ?? []).filter((item) => item.acknowledged_at === null);
   const acknowledged = (state.attention ?? []).length - items.length;

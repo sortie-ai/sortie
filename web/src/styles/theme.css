@@ -10,6 +10,7 @@
   --color-ink: #1a1c1d;
   --color-ink-body: #454749;
   --color-ink-muted: #5f6163;
+  --color-ink-faint: #b2b3b5;
   --color-canvas: #ffffff;
   --color-surface: #f9f9f9;
   --color-surface-raised: #edeeee;
@@ -32,10 +33,11 @@
   --color-warning: #7c5010;
   --color-warning-container: #ffeec9;
   --color-warning-fill: #eab308;
-  --color-on-warning-fill: #241402;
+  --color-warning-border: #f9bf09;
   --color-error: #9e2a2a;
   --color-error-container: #fce8e6;
   --color-error-fill: #ef4444;
+  --color-error-border: #f5a7a0;
   --color-disabled: #f9f9f9;
   --color-on-disabled: #b2b3b5;
   --color-link: #4f6380;
@@ -50,16 +52,6 @@
   --color-scrim: rgb(13 14 15 / 0.45);
   --color-shadow-tint: 26 28 29;
   --color-focus-ring: #36455a;
-  --color-overlay: #ffffff;
-  --color-overlay-line: transparent;
-  --color-track-done: #454749;
-  --color-track-todo: #cfd0d1;
-  --color-viz-1: #4f6380;
-  --color-viz-1-track: #e3e8ee;
-  --color-outcome-ok: #7d7f81;
-  --color-outcome-stopped: #aa7403;
-  --color-outcome-failed: #9e2a2a;
-  --color-outcome-cancelled: #3b82f6;
 
   --font-heading:
     "Work Sans", "Avenir Next", "Segoe UI Variable Display", "Segoe UI", "Inter Display", Ubuntu,
@@ -167,6 +159,7 @@
     --color-ink: #edeeee;
     --color-ink-body: #cfd0d1;
     --color-ink-muted: #b2b3b5;
+    --color-ink-faint: #5f6163;
     --color-canvas: #252628;
     --color-surface: #2f3032;
     --color-surface-raised: #3a3c3e;
@@ -189,9 +182,11 @@
     --color-warning: #ffd67b;
     --color-warning-container: #382204;
     --color-warning-fill: #eab308;
+    --color-warning-border: #c08805;
     --color-error: #f5a7a0;
     --color-error-container: #541212;
     --color-error-fill: #f05d58;
+    --color-error-border: #f1726a;
     --color-disabled: #2f3032;
     --color-on-disabled: #5f6163;
     --color-link: #ced6e2;
@@ -206,16 +201,6 @@
     --color-scrim: rgb(6 7 8 / 0.6);
     --color-shadow-tint: 10 11 12;
     --color-focus-ring: #f8f9fb;
-    --color-overlay: #2f3032;
-    --color-overlay-line: rgb(237 238 238 / 0.16);
-    --color-track-done: #cfd0d1;
-    --color-track-todo: #525456;
-    --color-viz-1: #90a4bf;
-    --color-viz-1-track: #2a3748;
-    --color-outcome-ok: #97999b;
-    --color-outcome-stopped: #eab308;
-    --color-outcome-failed: #f05d58;
-    --color-outcome-cancelled: #508ff7;
     --shadow-lg: 0 2px 4px -1px rgb(var(--color-shadow-tint) / 0.36);
     --shadow-2xl: 0 8px 12px rgb(var(--color-shadow-tint) / 0.36);
   }
@@ -230,6 +215,7 @@
   --color-ink: #edeeee;
   --color-ink-body: #cfd0d1;
   --color-ink-muted: #b2b3b5;
+  --color-ink-faint: #5f6163;
   --color-canvas: #252628;
   --color-surface: #2f3032;
   --color-surface-raised: #3a3c3e;
@@ -252,9 +238,11 @@
   --color-warning: #ffd67b;
   --color-warning-container: #382204;
   --color-warning-fill: #eab308;
+  --color-warning-border: #c08805;
   --color-error: #f5a7a0;
   --color-error-container: #541212;
   --color-error-fill: #f05d58;
+  --color-error-border: #f1726a;
   --color-disabled: #2f3032;
   --color-on-disabled: #5f6163;
   --color-link: #ced6e2;
@@ -269,16 +257,6 @@
   --color-scrim: rgb(6 7 8 / 0.6);
   --color-shadow-tint: 10 11 12;
   --color-focus-ring: #f8f9fb;
-  --color-overlay: #2f3032;
-  --color-overlay-line: rgb(237 238 238 / 0.16);
-  --color-track-done: #cfd0d1;
-  --color-track-todo: #525456;
-  --color-viz-1: #90a4bf;
-  --color-viz-1-track: #2a3748;
-  --color-outcome-ok: #97999b;
-  --color-outcome-stopped: #eab308;
-  --color-outcome-failed: #f05d58;
-  --color-outcome-cancelled: #508ff7;
   --shadow-lg: 0 2px 4px -1px rgb(var(--color-shadow-tint) / 0.36);
   --shadow-2xl: 0 8px 12px rgb(var(--color-shadow-tint) / 0.36);
 }

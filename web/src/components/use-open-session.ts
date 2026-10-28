@@ -5,11 +5,7 @@ import { getIssue } from "@/api/client";
 import { queryKeys, useStateQuery } from "@/api/queries";
 import { latestSessionOf, sessionLinkOf } from "@/lib/issue-link";
 
-/**
- * Gives a function that opens an issue's running session, else its newest
- * session, and does nothing when the issue has none or its read fails. An
- * issue not yet cached is fetched once.
- */
+/** Does nothing when the issue has none or its read fails; an issue not yet cached is fetched once. */
 export function useOpenLatestSession(): (identifier: string) => void {
   const { data: state } = useStateQuery();
   const queryClient = useQueryClient();

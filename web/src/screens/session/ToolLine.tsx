@@ -39,12 +39,10 @@ function foldKindOf(call: RunEventResponse): FoldKind {
   }
 }
 
-/** Props of {@link ToolText}. */
 export interface ToolTextProps {
   text: string;
 }
 
-/** Renders a tool text on one line, cut at its container's width, with the whole text on hover. */
 export function ToolText({ text }: ToolTextProps) {
   return (
     <span title={text} className="block min-w-0 truncate">
@@ -53,12 +51,10 @@ export function ToolText({ text }: ToolTextProps) {
   );
 }
 
-/** Props of {@link ToolLine}. */
 export interface ToolLineProps {
   call: RunEventResponse;
 }
 
-/** Renders one tool result as its kind icon, its served tool line, and its duration; a failed call draws the line inside the failed mark. */
 export function ToolLine({ call }: ToolLineProps) {
   const line = <ToolText text={call.tool_line ?? ""} />;
 
@@ -79,7 +75,6 @@ export function ToolLine({ call }: ToolLineProps) {
   );
 }
 
-/** Words a group of tool results as one phrase per kind, in the order the kinds first appear. */
 export function foldPhraseOf(calls: readonly RunEventResponse[]): string {
   const counts = new Map<FoldKind, number>();
   for (const call of calls) {

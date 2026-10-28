@@ -3,7 +3,6 @@ import type { IssueDetailResponse } from "@/api/types.gen";
 const ISSUE_ROUTE_PREFIX = "/issues/";
 const FALLBACK_BACK = "/";
 
-/** The router state an issue link carries: the in-app path the issue page returns to. */
 export interface IssueRouteState {
   back: string;
 }
@@ -19,11 +18,7 @@ function withoutPeek(pathname: string, search: string): string {
   return text === "" ? pathname : `${pathname}?${text}`;
 }
 
-/**
- * Gives the back target stored in a router state, or `/` when the state holds
- * none or one that leaves the dashboard: history state is writable by any
- * script of the origin and by the address bar of a restored session.
- */
+/** History state is writable by any script of the origin and by the address bar of a restored session, so a target that leaves the dashboard falls back to `/`. */
 export function backOf(state: unknown): string {
   const back = (state as { back?: unknown } | null | undefined)?.back;
   if (
@@ -37,11 +32,7 @@ export function backOf(state: unknown): string {
   return FALLBACK_BACK;
 }
 
-/**
- * Gives the target and router state of a link to an issue page opened from
- * `from`. An issue page opened from another issue page keeps that page's back
- * target, so `Esc` never walks a chain of issues.
- */
+/** An issue page opened from another issue page keeps that page's back target, so `Esc` never walks a chain of issues. */
 export function issueLinkOf(
   identifier: string,
   from: { pathname: string; search: string; state: unknown },
@@ -52,7 +43,6 @@ export function issueLinkOf(
   return { to: `${ISSUE_ROUTE_PREFIX}${encodeURIComponent(identifier)}`, state: { back } };
 }
 
-/** Gives the target and router state of a link to a session opened from `from`; its back target is the one {@link issueLinkOf} gives. */
 export function sessionLinkOf(
   identifier: string,
   dispatchId: string,
@@ -62,11 +52,7 @@ export function sessionLinkOf(
   return { to: `${to}/sessions/${dispatchId}`, state };
 }
 
-/**
- * Names the session an issue opens by default: the running one, else the
- * newest run that recorded a dispatch ID. It returns `null` for an issue
- * with neither.
- */
+/** The running session, else the newest run that recorded a dispatch ID; `null` for an issue with neither. */
 export function latestSessionOf(
   detail: IssueDetailResponse,
 ): { dispatchId: string; isLive: boolean } | null {

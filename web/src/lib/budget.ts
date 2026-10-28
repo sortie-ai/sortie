@@ -7,13 +7,11 @@ import type {
   StateResponse,
 } from "@/api/types.gen";
 
-/** An estimated cost and the served status that says how far to trust it. */
 export interface CostFigure {
   usd: number | null;
   status: string;
 }
 
-/** One budgeted figure: what was used, the limit, and whether the limit is known at all. */
 export interface BudgetLine {
   used: number | null;
   limit: number | null;
@@ -21,7 +19,6 @@ export interface BudgetLine {
   limitKnown: boolean;
 }
 
-/** The budget of one issue: sessions, tokens, money, and the estimated cost of the spend. */
 export interface BudgetFigures {
   sessions: BudgetLine;
   tokens: BudgetLine & { complete: boolean };
@@ -107,19 +104,12 @@ function figuresOf(detail: IssueDetailResponse, config: ConfigResponse | undefin
   };
 }
 
-/**
- * Reports whether a rate source is available, which the state response says by
- * carrying `cost_unpriced_running`. Every cost figure and column gates on it.
- */
+/** Reports whether a rate source is available, which the state response says by carrying `cost_unpriced_running`. */
 export function hasRateSource(state: StateResponse | undefined): boolean {
   return state?.cost_unpriced_running !== undefined;
 }
 
-/**
- * Gives the budget figures of an issue from the source its status names: the
- * running entry, the budget stop, or the recorded runs and the configured
- * limits. A figure Sortie does not know stays null, never zero.
- */
+/** A figure Sortie does not know stays null, never zero. */
 export function budgetOf(
   detail: IssueDetailResponse,
   state: StateResponse | undefined,
@@ -128,11 +118,7 @@ export function budgetOf(
   return hasRateSource(state) ? figures : { ...figures, cost: null };
 }
 
-/**
- * Words the issue's estimated cost against its money limit, marked "at least"
- * while the cost is a lower bound. Gives undefined when no cost meter applies:
- * no cost shown, no money limit, or no cost figure.
- */
+/** Marked "at least" while the cost is a lower bound; undefined when no cost meter applies. */
 export function moneyBudgetText({ cost, money }: BudgetFigures): string | undefined {
   if (cost === null || money.limit === null || money.limit <= 0 || money.used === null) {
     return undefined;

@@ -34,7 +34,6 @@ import type { Binding } from "@/app/keys";
 import type { ActiveRow } from "@/lib/active-rows";
 import type { EndedEmpty } from "./EndedToday";
 
-/** One item the keyboard selection can rest on. */
 interface NavItem {
   key: string;
   /** The `issue_identifier` the peek opens for, or `null` for an item with no issue. */
@@ -352,10 +351,7 @@ function OverviewBody({ state }: OverviewBodyProps) {
   );
 }
 
-/**
- * Renders Overview: Needs attention, Active, and Ended today. While a peek is
- * open it renders the data as it was when the peek opened.
- */
+/** While a peek is open it renders the data as it was when the peek opened. */
 export function OverviewScreen() {
   const { data: state } = useStateQuery();
   return state === undefined ? undefined : <OverviewBody state={state} />;

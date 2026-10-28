@@ -39,7 +39,6 @@ import type { IssueGroupResponse, RunResponse, SkillCall, StateResponse } from "
 
 const READ_FAILED = "Run history could not be read.";
 
-// The column takes the width the others leave.
 const SKILLS_WIDTH = "w-full min-w-40";
 
 interface Columns {
@@ -54,12 +53,10 @@ function columnsOf(state: StateResponse | undefined): Columns {
   return { hasRule, hasCost, span: 7 + (hasRule ? 1 : 0) + (hasCost ? 1 : 0) };
 }
 
-/** Props of {@link HistoryTableHead}. */
 export interface HistoryTableHeadProps {
   state: StateResponse | undefined;
 }
 
-/** Renders the header row of the run table; its columns follow the workflow. */
 export function HistoryTableHead({ state }: HistoryTableHeadProps) {
   const { hasRule, hasCost } = columnsOf(state);
   return (
@@ -210,19 +207,13 @@ function RunRow({ run, columns }: RunRowProps) {
   );
 }
 
-/** Props of {@link IssueGroupRows}. */
 export interface IssueGroupRowsProps {
   group: IssueGroupResponse;
   filter: HistoryFilter;
   state: StateResponse | undefined;
 }
 
-/**
- * Renders one issue of History as a row group: a header row for the issue, its
- * newest runs, and a "Show more runs" row that swaps the served runs for pages
- * read from the run list. Mount it with a key that changes with the filter so
- * an expansion resets then.
- */
+/** Mount it with a key that changes with the filter so an expansion resets then. */
 export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
   const navigate = useNavigate();
   const location = useLocation();

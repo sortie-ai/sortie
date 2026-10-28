@@ -62,10 +62,6 @@ function secondsBetween(from: number | null, to: number | null): number | null {
   return from === null || to === null || to < from ? null : (to - from) / 1000;
 }
 
-/**
- * Merges the served runs with the loaded older pages into one list without
- * repeats, oldest first.
- */
 export function storyRunsOf(
   served: readonly RunResponse[],
   pages: readonly RunsResponse[],
@@ -415,7 +411,6 @@ interface ChapterBodyProps {
   identifier: string;
   now: number;
   hasEstimates: boolean;
-  /** The served sentence the current chapter ends on. */
   nowLine?: { text: string; time: string; needsAttention: boolean };
 }
 
@@ -448,7 +443,6 @@ function ChapterBeats({ chapter, identifier, now, hasEstimates, nowLine }: Chapt
   );
 }
 
-/** Props of {@link IssueStory}. */
 export interface IssueStoryProps {
   detail: IssueDetailResponse;
   position: StagePosition | null;
@@ -457,13 +451,6 @@ export interface IssueStoryProps {
   needsAttention: boolean;
 }
 
-/**
- * Renders the story of one issue as chapters, one per stage or per run of work
- * on its pull request, each a timeline of its run cards. A chained issue opens
- * with the stage summary and folds every chapter but the current one. The
- * current chapter closes on the issue's served sentence. Older runs load on
- * request.
- */
 export function IssueStory({ detail, position, progress, needsAttention }: IssueStoryProps) {
   const now = useNow();
   const { data: state } = useStateQuery();

@@ -156,7 +156,6 @@ const THEME_COMMANDS: { choice: ThemeChoice; label: string }[] = [
   { choice: "dark", label: "Theme: Dark" },
 ];
 
-/** Props of {@link CommandPalette}. */
 export interface CommandPaletteProps {
   screens: ScreenEntry[];
   open: boolean;
@@ -167,7 +166,6 @@ export interface CommandPaletteProps {
   onOpenShortcuts: () => void;
 }
 
-/** Renders the command palette: a dialog with a search field over "Go to" entries for the registered screens and the global commands. */
 export function CommandPalette({
   screens,
   open,

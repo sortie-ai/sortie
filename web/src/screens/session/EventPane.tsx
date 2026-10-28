@@ -265,11 +265,8 @@ function GapLine({ missing }: { missing: number }) {
   );
 }
 
-/** How a finished session ended. */
 export interface PaneEnd {
-  /** The run's persisted status. */
   status: string;
-  /** The run's declared outcome. */
   declared_outcome: string | null;
 }
 
@@ -322,7 +319,6 @@ interface FollowState {
   newestSeq: number;
 }
 
-/** Props of {@link EventPane}. */
 export interface EventPaneProps {
   timeline: Timeline;
   /** How a finished session ended; `null` while the session is live. */
@@ -330,16 +326,10 @@ export interface EventPaneProps {
   /** Whether the stream answered that the run's events are not retained. */
   isNotRetained: boolean;
   isPaused: boolean;
-  /** The running row's `last_event_at`. */
   lastEventAt: string | null;
 }
 
-/**
- * Renders the event lines of one session in a scrolling pane, with the jump
- * control and the foot line. A live session follows its newest event until the
- * reader scrolls up; a finished one opens at the top. Holds follow and
- * expansion state for one session, so key it by the session.
- */
+/** Holds follow and expansion state for one session, so key it by the session. */
 export function EventPane({ timeline, end, isNotRetained, isPaused, lastEventAt }: EventPaneProps) {
   const isLive = end === null;
   const paneRef = useRef<HTMLDivElement>(null);

@@ -10,18 +10,14 @@ const ALL_VALUE = "__all__";
 const CHIP =
   "inline-flex h-(--size-chip) items-center gap-xxs rounded-full border border-line-medium bg-surface-raised px-sm text-body-sm font-medium whitespace-nowrap text-ink-body select-none cursor-pointer transition-colors duration-(--duration-feedback) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring not-data-pressed:hover:bg-[linear-gradient(var(--color-state-hover),var(--color-state-hover))] not-data-pressed:active:bg-[linear-gradient(var(--color-state-pressed),var(--color-state-pressed))] data-pressed:border-primary data-pressed:bg-primary data-pressed:text-on-primary data-pressed:hover:bg-primary-hover data-pressed:active:bg-primary-active";
 
-/** One chip of a {@link ChipGroup}. */
 export interface ChipGroupItem {
   /** Never the empty string, which stands for the leading "all" chip. */
   value: string;
   label: ReactNode;
 }
 
-/** Props of {@link ChipGroup}. */
 export interface ChipGroupProps {
-  /** Accessible name of the group. */
   label: string;
-  /** Content of the leading chip that clears the choice. */
   allLabel: ReactNode;
   items: readonly ChipGroupItem[];
   /** The chosen item's value; the empty string chooses the leading chip. */
@@ -30,10 +26,7 @@ export interface ChipGroupProps {
   className?: string;
 }
 
-/**
- * Renders a row of filter chips where exactly one is chosen: the leading "all"
- * chip or one item. Pressing the chosen item again returns to "all".
- */
+/** Pressing the chosen item again returns to "all". */
 export function ChipGroup({
   label,
   allLabel,

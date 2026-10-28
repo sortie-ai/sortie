@@ -10,7 +10,6 @@ import type { ConfigResponse, ModelUsageResponse, SkillCall, TokenInfo } from "@
 import type { SessionRun } from "@/components/use-session-run";
 import type { ReactNode } from "react";
 
-/** A session that resolved, live or finished. */
 export type ResolvedSession = Extract<SessionRun, { kind: "live" | "finished" }>;
 
 function figureText(n: number | null): string {
@@ -40,12 +39,10 @@ function freshInputOf(tokens: TokenInfo): number | null {
   return Math.max(0, input - read - write);
 }
 
-/** Props of {@link UsagePanel}. */
 export interface UsagePanelProps {
   session: ResolvedSession;
 }
 
-/** Renders the tokens and the estimated cost of one session. */
 export function UsagePanel({ session }: UsagePanelProps) {
   const source = session.kind === "live" ? session.running : session.run;
   const { tokens } = source;
@@ -74,12 +71,10 @@ export function UsagePanel({ session }: UsagePanelProps) {
   );
 }
 
-/** Props of {@link ModelCostPanel}. */
 export interface ModelCostPanelProps {
   parts: readonly ModelUsageResponse[];
 }
 
-/** Renders the tokens and the estimated cost of a finished run for each model it spent tokens on. */
 export function ModelCostPanel({ parts }: ModelCostPanelProps) {
   return (
     <Panel title="Cost per model">
@@ -107,12 +102,10 @@ export function ModelCostPanel({ parts }: ModelCostPanelProps) {
   );
 }
 
-/** Props of {@link SkillsPanel}. */
 export interface SkillsPanelProps {
   skills: readonly SkillCall[];
 }
 
-/** Renders every skill call of a run in order, each under its position, a failed call inside the failed mark. */
 export function SkillsPanel({ skills }: SkillsPanelProps) {
   return (
     <Panel title="Skills">
@@ -138,14 +131,12 @@ export function SkillsPanel({ skills }: SkillsPanelProps) {
   );
 }
 
-/** Props of {@link SessionPanel}. */
 export interface SessionPanelProps {
   session: ResolvedSession;
   /** The state's configuration; absent until the state loads. */
   config: ConfigResponse | undefined;
 }
 
-/** Renders a long identifier by its tail or head in mono, the whole value on hover. */
 function ShortValue({ full, shown }: { full: string; shown: string }) {
   return (
     <span title={full} className="font-mono text-body-sm">
@@ -158,7 +149,6 @@ function lastSegmentOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
-/** Renders the models, host, workspace, session ID, workflow, and stall timeout of one session. */
 export function SessionPanel({ session, config }: SessionPanelProps) {
   const isLive = session.kind === "live";
   const source = isLive ? session.running : session.run;

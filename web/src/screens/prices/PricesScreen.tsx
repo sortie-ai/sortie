@@ -16,7 +16,6 @@ function isUnavailable(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503 && error.code === "history_unavailable";
 }
 
-/** Renders Prices: the rates the next run of each model gets and the state of every price source. */
 export function PricesScreen() {
   const prices = usePricesQuery();
   const { data } = prices;

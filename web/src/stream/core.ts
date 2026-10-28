@@ -5,7 +5,6 @@ import type {
   RunResetFrame,
 } from "@/api/types.gen";
 
-/** The state of the change stream connection. */
 export type StreamStatus = "connecting" | "open" | "closed";
 
 /** One retained event, or the run's events fromSeq..toSeq the server reported as not retained. */
@@ -19,9 +18,7 @@ export interface RunLog {
   items: RunItem[];
   /** Highest seq any item covers; 0 before the first. */
   lastSeq: number;
-  /** A `run_ended` frame arrived. */
   ended: boolean;
-  /** A `not_retained` reset arrived. */
   notRetained: boolean;
 }
 
@@ -34,7 +31,6 @@ export interface RunMessage {
   notRetained: boolean;
 }
 
-/** A message from the stream to the tab: a connection status, a change signal carrying the state revision, or the items of a subscribed run. */
 export type StreamMessage =
   | { kind: "status"; status: StreamStatus }
   | { kind: "change"; revision: string }
@@ -46,13 +42,13 @@ export interface ShowMessage {
   dispatchId: string | null;
 }
 
-/** RUN_EVENT_LIMIT reports the most events a run log holds; it mirrors the server's retained-event count bound. */
+/** The most events a run log holds; mirrors the server's retained-event count bound. */
 export const RUN_EVENT_LIMIT = 1_000;
 
-/** MAX_RUN_SUBSCRIPTIONS reports the most `run` parameters the stream route accepts. */
+/** The most `run` parameters the stream route accepts. */
 export const MAX_RUN_SUBSCRIPTIONS = 16;
 
-/** RUN_FLUSH_MS reports the longest a run's merged items wait for the `RunMessage` that carries them. */
+/** The longest a run's merged items wait for the `RunMessage` that carries them. */
 export const RUN_FLUSH_MS = 50;
 
 const EVENTS_PATH = "/api/v1/events";
@@ -66,7 +62,6 @@ export function isDispatchId(value: string): boolean {
   return DISPATCH_ID_PATTERN.test(value);
 }
 
-/** Returns a log holding nothing. */
 export function emptyRunLog(): RunLog {
   return { items: [], lastSeq: 0, ended: false, notRetained: false };
 }
@@ -86,12 +81,7 @@ function dropOldestBeyondLimit(items: RunItem[]): RunItem[] {
   return items;
 }
 
-/**
- * Merges items into a run log by `seq`: an item at or below `lastSeq` is
- * ignored, a gap is clamped to start above `lastSeq`, and events beyond
- * `RUN_EVENT_LIMIT` fold into the leading gap. Returns `log` itself when the
- * merge changes nothing, so a replay of what a tab holds does not render.
- */
+/** An item at or below `lastSeq` is ignored, a gap is clamped to start above `lastSeq`, and events beyond `RUN_EVENT_LIMIT` fold into the leading gap. Returns `log` itself when the merge changes nothing, so a replay of what a tab holds does not render. */
 export function mergeRun(
   log: RunLog,
   change: Pick<RunMessage, "items" | "ended" | "notRetained">,
@@ -126,17 +116,7 @@ function frameOf<T>(event: Event): T {
   return JSON.parse((event as MessageEvent<string>).data) as T;
 }
 
-/**
- * Creates the change stream: one `EventSource` that reopens with a doubling
- * delay and is dropped after 45 s without an event. `post` receives every
- * status change, change signal, and the merged items of each watched run, at
- * most one `RunMessage` per run every `RUN_FLUSH_MS`. The worker and the in-tab
- * fallback both run this module.
- *
- * `watch` sets the runs to subscribe, oldest request first, and reopens the
- * connection only when that changes the runs the URL names. `snapshot` returns
- * what a watched run holds so a new receiver starts from it.
- */
+/** One `EventSource` that reopens with a doubling delay and is dropped after 45 s without an event; `post` gets at most one `RunMessage` per run every `RUN_FLUSH_MS`. `watch` reopens the connection only when it changes the runs the URL names; `snapshot` returns what a watched run holds so a new receiver starts from it. */
 export function createStream(post: (m: StreamMessage) => void): {
   open(): void;
   watch(dispatchIds: readonly string[]): void;

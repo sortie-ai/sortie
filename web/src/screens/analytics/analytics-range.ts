@@ -5,7 +5,6 @@ import type { AnalyticsRange } from "@/api/queries";
 const RANGE_PARAM = "range";
 const DEFAULT_RANGE: AnalyticsRange = "7d";
 
-/** The ranges of the Analytics report in the order the picker lists them. */
 export const RANGE_OPTIONS: readonly { value: AnalyticsRange; label: string }[] = [
   { value: "24h", label: "Last 24 hours" },
   { value: "7d", label: "Last 7 days" },
@@ -19,7 +18,6 @@ export function rangeOf(value: string | null): AnalyticsRange {
   return RANGE_OPTIONS.find((option) => option.value === value)?.value ?? DEFAULT_RANGE;
 }
 
-/** Reads the chosen range from the URL and returns it with a setter that keeps the other parameters. */
 export function useAnalyticsRange(): [AnalyticsRange, (range: AnalyticsRange) => void] {
   const [params, setParams] = useSearchParams();
 

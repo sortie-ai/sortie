@@ -5,25 +5,18 @@ import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Combobox}. */
 export type ComboboxProps<Value> = Omit<
   BaseCombobox.Root.Props<Value, false, Value>,
   "open" | "inline" | "multiple"
 >;
 
-/**
- * Holds the query and the single choice of a searchable list that is always open
- * and renders in place, as the content of a popover. Narrow the list through
- * `filteredItems` and `inputValue` when the match rule is not a plain substring.
- */
+/** Narrow the list through `filteredItems` and `inputValue` when the match rule is not a plain substring. */
 export function Combobox<Value>(props: ComboboxProps<Value>) {
   return <BaseCombobox.Root open inline {...props} />;
 }
 
-/** Props of {@link ComboboxInput}. */
 export type ComboboxInputProps = Omit<BaseCombobox.Input.Props, "className">;
 
-/** Renders the search field with its icon and a bottom hairline. */
 export function ComboboxInput(props: ComboboxInputProps) {
   return (
     <div className="flex items-center gap-xs border-b border-line bg-field px-md text-ink-muted">
@@ -36,10 +29,8 @@ export function ComboboxInput(props: ComboboxInputProps) {
   );
 }
 
-/** Props of {@link ComboboxList}. */
 export type ComboboxListProps = Omit<BaseCombobox.List.Props, "className">;
 
-/** Renders the scrolling list of options. */
 export function ComboboxList(props: ComboboxListProps) {
   return (
     <BaseCombobox.List
@@ -49,20 +40,16 @@ export function ComboboxList(props: ComboboxListProps) {
   );
 }
 
-/** Props of {@link ComboboxGroup}. */
 export type ComboboxGroupProps = Omit<BaseCombobox.Group.Props, "className">;
 
-/** Groups options under a {@link ComboboxGroupLabel}. */
 export function ComboboxGroup(props: ComboboxGroupProps) {
   return <BaseCombobox.Group {...props} />;
 }
 
-/** Props of {@link ComboboxGroupLabel}. */
 export interface ComboboxGroupLabelProps {
   children: ReactNode;
 }
 
-/** Renders the caption of a group of options. */
 export function ComboboxGroupLabel({ children }: ComboboxGroupLabelProps) {
   return (
     <BaseCombobox.GroupLabel className="px-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted">
@@ -71,16 +58,11 @@ export function ComboboxGroupLabel({ children }: ComboboxGroupLabelProps) {
   );
 }
 
-/** Props of {@link ComboboxItem}. */
 export interface ComboboxItemProps extends Omit<BaseCombobox.Item.Props, "className"> {
   /** Indents the option under the option above it, as a stage under its chain. */
   indented?: boolean;
 }
 
-/**
- * Renders one option with a check column. Children fill the row to the right of
- * the check, so a label and a trailing count can sit at its two ends.
- */
 export function ComboboxItem({ indented = false, children, ...rest }: ComboboxItemProps) {
   return (
     <BaseCombobox.Item
@@ -100,12 +82,10 @@ export function ComboboxItem({ indented = false, children, ...rest }: ComboboxIt
   );
 }
 
-/** Props of {@link ComboboxEmpty}. */
 export interface ComboboxEmptyProps {
   children: ReactNode;
 }
 
-/** Renders its children only while no option matches the query. */
 export function ComboboxEmpty({ children }: ComboboxEmptyProps) {
   return (
     <BaseCombobox.Empty className="px-md py-lg text-body-md text-ink-muted empty:hidden">

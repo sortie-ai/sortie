@@ -2,11 +2,7 @@ import { Link } from "react-router";
 
 import { Button, buttonStyles } from "@/components/ui/button";
 
-/**
- * Renders in place of a screen that failed to load or render, keeping the
- * shell around it. A screen chunk fails to load when an upgraded binary has
- * replaced the assets an open tab was built against, and a reload fixes that.
- */
+/** A screen chunk fails to load when an upgraded binary has replaced the assets an open tab was built against, and a reload fixes that. */
 export function RouteError() {
   return (
     <div className="grid justify-items-start gap-md">

@@ -17,10 +17,8 @@ import type { Deciding, Filterable } from "@/lib/active-rows";
 import type { EndedIssue } from "@/lib/ended";
 import type { LaneMarker, LaneStation, StagePosition, StageProgress, Station } from "@/lib/lane";
 
-/** The lane count above which the Pipeline compresses its lanes by station. */
 export const PIPELINE_COMPRESS_AFTER = 24;
 
-/** One issue on the Pipeline: its identity, the standing every lane variant draws, and what the filters read. */
 export interface PipelineLane extends Filterable {
   issueId: string;
   identifier: string;
@@ -29,12 +27,10 @@ export interface PipelineLane extends Filterable {
   /** The rule the lane names when it draws no stage meter, or `null`. */
   route: string | null;
   agentKind: string | null;
-  /** The one word the row gives for where the issue is. */
   word: string;
   statusTextFull: string;
   marker: LaneMarker;
   stations: LaneStation[];
-  /** The key of the station the issue stands at. */
   station: string;
   position: StagePosition | null;
   progress: StageProgress | null;
@@ -43,10 +39,7 @@ export interface PipelineLane extends Filterable {
   live: boolean;
 }
 
-/**
- * Counts the lanes per station key. A station is `hot` while a lane at it is
- * marked as needing attention. A station no lane stands at has no entry.
- */
+/** A station is `hot` while a lane at it is marked as needing attention; a station no lane stands at has no entry. */
 export function stationTally(
   lanes: readonly PipelineLane[],
 ): Map<string, { count: number; hot: boolean }> {
@@ -188,12 +181,7 @@ function endedLanes(
   return lanes;
 }
 
-/**
- * Builds the Pipeline lanes: one per active issue in the served order, then
- * one per issue that ended today by ending time. `pages` undefined means
- * today's endings are not loaded, and only active lanes come back. A state
- * without `config` has no stations and so no lanes.
- */
+/** `pages` undefined means today's endings are not loaded, and only active lanes come back; a state without `config` has no stations and so no lanes. */
 export function pipelineLanes(
   state: StateResponse,
   pages: readonly RunsResponse[] | undefined,
@@ -207,7 +195,6 @@ export function pipelineLanes(
   return pages === undefined ? active : [...active, ...endedLanes(state, pages, stations, now)];
 }
 
-/** Gives the keyboard-selection key of a Pipeline lane. */
 export function laneNavKey(issueId: string): string {
   return `lane:${issueId}`;
 }

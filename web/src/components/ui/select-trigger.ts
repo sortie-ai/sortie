@@ -1,3 +1,2 @@
-/** The classes of a select-style trigger: a bordered field that shows the chosen value and opens a list. */
 export const SELECT_TRIGGER =
   "inline-flex h-(--size-control) items-center gap-xs rounded-lg border border-line bg-field px-sm text-body-md font-medium whitespace-nowrap text-ink-body select-none cursor-pointer transition-colors duration-(--duration-feedback) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring hover:border-line-medium active:bg-[linear-gradient(var(--color-state-pressed),var(--color-state-pressed))]";

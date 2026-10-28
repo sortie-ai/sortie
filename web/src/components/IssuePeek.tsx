@@ -14,10 +14,7 @@ function PeekBody({ identifier }: PeekBodyProps) {
   return <IssueDetail identifier={identifier} row={row} peek />;
 }
 
-/**
- * Renders the drawer over the page while the `peek` search parameter names an
- * issue. It keeps showing the last issue while it slides out.
- */
+/** It keeps showing the last issue while it slides out. */
 export function IssuePeek() {
   const { identifier, close } = usePeek();
   const [shown, setShown] = useState<string | null>(null);

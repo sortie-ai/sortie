@@ -17,9 +17,7 @@ export interface FilterOption {
   label: string;
 }
 
-/** Props of {@link FilterMenu}. */
 export interface FilterMenuProps {
-  /** The menu's name, shown on the trigger and as the popup's accessible name. */
   label: string;
   /** What the trigger shows as the chosen option; it can word a value no option carries. */
   valueText: string;
@@ -29,7 +27,6 @@ export interface FilterMenuProps {
   onChange: (value: string) => void;
 }
 
-/** Renders a select-style filter field that opens a searchable list of options with the chosen one checked. */
 export function FilterMenu({ label, valueText, options, value, onChange }: FilterMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");

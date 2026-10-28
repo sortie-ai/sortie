@@ -18,11 +18,11 @@ import type { CSSProperties, RefObject } from "react";
 
 type Period = "day" | "month";
 
-// Both stripe tones stay in the viz-1 hue and stay filled, so a bar that is only
+// Both stripe tones stay in the primary hue and stay filled, so a bar that is only
 // a lower bound never reads as empty.
 const LOWER_BOUND_FILL: CSSProperties = {
   backgroundImage:
-    "repeating-linear-gradient(135deg, var(--color-viz-1) 0 3px, color-mix(in srgb, var(--color-viz-1) 55%, var(--color-canvas)) 3px 6px)",
+    "repeating-linear-gradient(135deg, var(--color-primary) 0 3px, color-mix(in srgb, var(--color-primary) 55%, var(--color-canvas)) 3px 6px)",
 };
 
 const LABEL_CHAR_PX = 7;
@@ -141,7 +141,7 @@ function SpendSlot({ bucket, bar, period, from, tick }: SpendSlotProps) {
           <div
             className={cn(
               "w-[max(1px,calc(100%-4px))] max-w-10 rounded-t",
-              bar.kind === "estimated" && "bg-viz-1",
+              bar.kind === "estimated" && "bg-primary",
             )}
             style={{
               height: bar.height,
@@ -166,18 +166,13 @@ function SpendSlot({ bucket, bar, period, from, tick }: SpendSlotProps) {
   );
 }
 
-/** Props of {@link SpendChart}. */
 export interface SpendChartProps {
   spend: Spend;
   /** The report's lower bound, which cuts the first bucket short while it lies inside it. */
   since: string | null;
 }
 
-/**
- * Draws the estimated cost of each served UTC period as a bar chart, with a
- * tooltip on every slot that names the period and says in words what its bar
- * means. Every date and time it writes is in UTC.
- */
+/** Every date and time it writes is in UTC. */
 export function SpendChart({ spend, since }: SpendChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotWidth = useWidth(plotRef);

@@ -10,14 +10,11 @@ const TONE: Record<StateTone, string> = {
   done: "border-success-border bg-success-container text-success",
 };
 
-/** Props of {@link StateBadge}. */
 export interface StateBadgeProps {
-  /** The tracker state as the tracker names it. */
   state: string;
   className?: string;
 }
 
-/** Renders a tracker state as a square lozenge colored by where the state sits in the workflow. */
 export function StateBadge({ state, className }: StateBadgeProps) {
   const { data } = useStateQuery();
   const tone = stateToneOf(state, data?.config?.tracker);

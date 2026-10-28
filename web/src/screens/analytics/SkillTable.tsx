@@ -36,16 +36,11 @@ function Bounded({ hint, children }: BoundedProps) {
   return hint === undefined ? children : <Hint hint={hint}>{children}</Hint>;
 }
 
-/** Props of {@link SkillTable}. */
 export interface SkillTableProps {
   report: SkillCallReport;
 }
 
-/**
- * Renders the skill calls of a report: per skill, the runs that called it, its
- * calls, and its failed calls, 20 rows at a time, sortable by any column. Mount
- * it with a key that changes with the range.
- */
+/** Mount it with a key that changes with the range. */
 export function SkillTable({ report }: SkillTableProps) {
   const rows = report.by_skill ?? [];
   const hint = report.unrecorded_runs > 0 ? LOWER_BOUND : undefined;
@@ -54,7 +49,7 @@ export function SkillTable({ report }: SkillTableProps) {
 
   return (
     <section className="flex flex-col gap-sm">
-      <Table title="By skill" className="table-fixed min-w-208">
+      <Table title="By skill" className="table-fixed min-w-208" frozenColumns={1}>
         <TableHeader>
           <SortableHead columnId="name" sort={sort} className={COLUMN_WIDTH.name}>
             Skill

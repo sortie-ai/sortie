@@ -23,11 +23,6 @@ function subscribe(onChange: () => void): () => void {
   return () => observer.disconnect();
 }
 
-/**
- * Renders the icon button that shows the current theme and opens a menu of the
- * three choices, the current one checked. It opens downward, aligned to the
- * button's end, and follows the page theme.
- */
 export function ThemeMenu() {
   const choice = useSyncExternalStore(subscribe, getTheme);
   const current = CHOICES.find((entry) => entry.value === choice) ?? CHOICES[0];

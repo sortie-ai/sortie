@@ -3,9 +3,7 @@ import { useSearchParams } from "react-router";
 
 const PEEK_PARAM = "peek";
 
-/** The peek of the current location and the calls that change it. */
 export interface PeekControls {
-  /** The `issue_identifier` in the `peek` search parameter, or `null` while no peek is open. */
   identifier: string | null;
   /** Opens the peek and pushes a history entry, so Back closes it. */
   open: (identifier: string) => void;
@@ -15,7 +13,6 @@ export interface PeekControls {
   close: () => void;
 }
 
-/** Reads and writes the `peek` search parameter, leaving every other parameter as it is. */
 export function usePeek(): PeekControls {
   const [params, setParams] = useSearchParams();
   const value = params.get(PEEK_PARAM);

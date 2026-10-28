@@ -37,12 +37,10 @@ function statusLabel(state: StateResponse): string | ReactElement {
   }
 }
 
-/** Props of {@link NarrowBar}. */
 export interface NarrowBarProps {
   onOpenPalette: () => void;
 }
 
-/** Renders the sticky bar that replaces the rail below 768 px: brand, condition, and the Menu button. */
 export function NarrowBar({ onOpenPalette }: NarrowBarProps) {
   const { data } = useStateQuery();
   const project = data?.config?.tracker.project;

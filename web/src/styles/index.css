@@ -1,6 +1,19 @@
 @import "tailwindcss";
 @import "./theme.css";
 
+/* Matches exactly where theme.css applies its dark map: an explicit dark choice, or the OS when no choice is made. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
 @layer base {
   html {
     @media (min-width: 48rem) {
@@ -14,5 +27,64 @@
     font: var(--font-weight-regular) var(--text-body-md) / var(--text-body-md--line-height)
       var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Table's frozenColumns. The selectors reach every row's leading cells, which no cell component knows it is. */
+@layer components {
+  .frozen-table {
+    overflow-x: auto;
+    container-type: inline-size;
+    scroll-padding-inline-start: var(--frozen-width);
+
+    & tr > :first-child:not([colspan]),
+    &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
+      position: sticky;
+      left: 0;
+      background: var(--color-canvas);
+    }
+
+    &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
+      left: var(--frozen-lead);
+    }
+
+    & thead tr > :first-child:not([colspan]),
+    &[data-frozen="2"] thead tr > :nth-child(2):not([colspan]) {
+      background: var(--color-surface);
+    }
+
+    /* The row's hover tints a frozen cell from underneath its content, in step with the rest of the row. */
+    & tbody tr > td:first-child:not([colspan])::before,
+    &[data-frozen="2"] tbody tr > td:nth-child(2):not([colspan])::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background: var(--color-state-hover);
+      opacity: 0;
+      transition: opacity var(--duration-feedback);
+    }
+
+    & tbody tr:hover > td:first-child:not([colspan])::before,
+    &[data-frozen="2"] tbody tr:hover > td:nth-child(2):not([colspan])::before {
+      opacity: 1;
+    }
+
+    &[data-scrolled][data-frozen="1"] tr > :first-child:not([colspan])::after,
+    &[data-scrolled][data-frozen="2"] tr > :nth-child(2):not([colspan])::after {
+      content: "";
+      position: absolute;
+      inset-block: 0;
+      left: 100%;
+      width: 1px;
+      background: var(--color-line);
+    }
+
+    /* A cell across the whole row, such as a group heading, keeps its content in the frame. */
+    & td[colspan] > * {
+      position: sticky;
+      left: var(--spacing-md);
+      max-width: calc(100cqw - 2 * var(--spacing-md));
+    }
   }
 }

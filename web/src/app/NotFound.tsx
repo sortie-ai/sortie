@@ -2,7 +2,6 @@ import { Link } from "react-router";
 
 import { buttonStyles } from "@/components/ui/button";
 
-/** Renders the state for an unknown path under the application's base path. */
 export function NotFound() {
   return (
     <div className="grid justify-items-start gap-md">

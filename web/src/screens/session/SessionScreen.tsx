@@ -33,7 +33,6 @@ interface EndNoticeProps {
   nextStep: string | null;
 }
 
-/** Renders why a finished session ended, what its agent said, and what happens next, alarmed only when the run failed. */
 function EndNotice({ run, nextStep }: EndNoticeProps) {
   const statement = agentStatement(run);
   const hasError = !!run.error;
@@ -261,11 +260,6 @@ function SessionView({ identifier, dispatchId }: SessionViewProps) {
   );
 }
 
-/**
- * Renders the session view of one agent run at
- * `/issues/{identifier}/sessions/{dispatchId}`: the header facts, the retained
- * then live events, tokens per turn, and the usage and session panels.
- */
 export function SessionScreen() {
   const { identifier, dispatchId } = useParams();
   return identifier === undefined || dispatchId === undefined ? undefined : (

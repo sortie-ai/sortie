@@ -13,7 +13,6 @@ import type {
   RunningEntryResponse,
 } from "@/api/types.gen";
 
-/** What an address `/issues/{identifier}/sessions/{dispatchId}` resolves to. */
 export type SessionRun =
   | { kind: "loading" }
   | { kind: "unknown_issue" }
@@ -94,11 +93,7 @@ function isHistoryDown(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503 && error.code === "history_unavailable";
 }
 
-/**
- * Resolves the session an address names from the issue read alone, loading
- * older runs only when the session is not among the served ones. Only the caller that passes `drivePages` loads pages; the
- * others read what it has cached.
- */
+/** Loads older runs only when the session is not among the served ones, and only for the caller that passes `drivePages`; the others read what it has cached. */
 export function useSessionRun(
   identifier: string,
   dispatchId: string,

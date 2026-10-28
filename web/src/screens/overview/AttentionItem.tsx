@@ -11,30 +11,20 @@ import type { MouseEvent } from "react";
 
 import type { AttentionItemResponse } from "@/api/types.gen";
 
-/** Props of {@link AttentionItem}. */
 export interface AttentionItemProps {
   item: AttentionItemResponse;
-  /** Key of the item in the keyboard selection. */
   navKey: string;
   /** Server-clock time in epoch milliseconds that the item's age measures against. */
   now: number;
-  /** Whether this is the selected item. */
   isSelected: boolean;
   /** Whether the selected-row look shows, which it does from the first navigation key on. */
   showSelection: boolean;
-  /** Whether the item's acknowledge request is running. */
   isPending: boolean;
   onOpen: (item: AttentionItemResponse) => void;
   onAcknowledge: (item: AttentionItemResponse) => void;
-  /** Called when the reader follows the link of the item's action. */
   onAction: (item: AttentionItemResponse) => void;
 }
 
-/**
- * Renders one attention item: its reason, title and key on one line, why it
- * exists, what clears it, and its age above its actions at the right.
- * A click outside its buttons opens the peek of its issue.
- */
 export function AttentionItem({
   item,
   navKey,

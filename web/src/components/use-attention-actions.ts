@@ -12,7 +12,6 @@ import type { AttentionItemResponse } from "@/api/types.gen";
 const NO_ANSWER = "Sortie did not answer. Nothing changed.";
 const CLEARED = "This item cleared before it was acknowledged.";
 
-/** The link an attention item's action opens in a new tab. */
 export interface LinkAction {
   url: string;
   label: string;
@@ -42,7 +41,6 @@ export function linkActionOf(item: AttentionItemResponse): LinkAction | null {
   return null;
 }
 
-/** Gives the toast text for a failed call: the served message, or the no-answer text. */
 export function failureMessage(error: unknown): string {
   if (!(error instanceof ApiError) || error.status === 0) {
     return NO_ANSWER;
@@ -53,19 +51,13 @@ export function failureMessage(error: unknown): string {
   return error.serverMessage ?? NO_ANSWER;
 }
 
-/** The calls that act on an attention item and which items have a request running. */
 export interface AttentionActions {
-  /** Ids of the items whose acknowledge request is running. */
   pending: ReadonlySet<string>;
   acknowledge: (item: AttentionItemResponse) => Promise<void>;
-  /** Opens the link of the item's action, or acknowledges it when the action is Acknowledge. */
   runAction: (item: AttentionItemResponse) => void;
 }
 
-/**
- * Provides acknowledging and running the action of attention items. Acknowledging
- * refetches the state after the response, paused or not, and toasts the outcome.
- */
+/** Acknowledging refetches the state after the response, paused or not, and toasts the outcome. */
 export function useAttentionActions(): AttentionActions {
   const client = useQueryClient();
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());

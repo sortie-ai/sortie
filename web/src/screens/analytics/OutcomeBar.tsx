@@ -12,14 +12,14 @@ interface Segment {
 
 function segmentsOf(summary: Summary): Segment[] {
   return [
-    { label: "Succeeded", count: summary.succeeded, fill: "bg-outcome-ok" },
+    { label: "Succeeded", count: summary.succeeded, fill: "bg-success-fill" },
     {
       label: "Stopped",
       count: summary.stopped,
-      fill: "bg-outcome-stopped",
+      fill: "bg-warning-fill",
     },
-    { label: "Cancelled", count: summary.cancelled, fill: "bg-outcome-cancelled" },
-    { label: "Failed", count: summary.failed, fill: "bg-outcome-failed" },
+    { label: "Cancelled", count: summary.cancelled, fill: "bg-info-fill" },
+    { label: "Failed", count: summary.failed, fill: "bg-error-fill" },
   ].filter((segment) => segment.count > 0);
 }
 
@@ -33,15 +33,11 @@ function roundingOf(index: number, count: number): string | undefined {
   return index === count - 1 ? "rounded-r" : undefined;
 }
 
-/** Props of {@link OutcomeBar}. */
 export interface OutcomeBarProps {
   summary: Summary;
 }
 
-/**
- * Renders how the runs of a range ended as a legend and a stacked bar, one segment per outcome
- * that has runs. Renders nothing while no outcome has runs.
- */
+/** Renders nothing while no outcome has runs. */
 export function OutcomeBar({ summary }: OutcomeBarProps) {
   const segments = segmentsOf(summary);
   if (segments.length === 0) {

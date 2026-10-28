@@ -3,16 +3,13 @@ import { useSearchParams } from "react-router";
 /** What a column sorts by; `null` is a value Sortie does not know, which sorts last in both directions. */
 export type SortValue = number | string | null;
 
-/** The direction a header announces through `aria-sort`. */
 export type SortDirection = "ascending" | "descending";
 
-/** One sortable column: its id in the address and the typed value a row sorts by. */
 export interface SortColumn<Row> {
   id: string;
   value: (row: Row) => SortValue;
 }
 
-/** What a {@link SortableHead} reads and writes. */
 export interface TableSort {
   directionOf: (id: string) => SortDirection | undefined;
   toggle: (id: string) => void;
@@ -65,11 +62,7 @@ function sorted<Row>(
   });
 }
 
-/**
- * Orders rows by one column and keeps the choice in the address under `param`, as `<id>.asc` or
- * `<id>.desc`, so it survives a reload and the screen's other params. The first press on a column
- * sorts ascending, the next descending. Until a column is pressed the rows keep their order.
- */
+/** Keeps the choice in the address under `param`, as `<id>.asc` or `<id>.desc`, so it survives a reload and the screen's other params. The first press on a column sorts ascending, the next descending; until a column is pressed the rows keep their order. */
 export function useTableSort<Row>(
   rows: readonly Row[],
   columns: readonly SortColumn<Row>[],

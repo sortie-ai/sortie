@@ -3,7 +3,6 @@ import { parseInstant } from "@/lib/format";
 import type { RunEventResponse, RunningEntryResponse, TokenInfo } from "@/api/types.gen";
 import type { RunItem } from "@/stream/core";
 
-/** One line of the event pane. */
 export type TimelineLine =
   | { kind: "event"; key: string; event: RunEventResponse }
   | { kind: "tools"; key: string; calls: RunEventResponse[] }
@@ -20,7 +19,6 @@ export type TimelineLine =
     }
   | { kind: "gap"; key: string; missing: number };
 
-/** The lines of a run's events and the figures the next turn builds on. */
 export interface Timeline {
   lines: TimelineLine[];
   /** The run's uncached tokens as of the last turn end with nothing missing after it. */
@@ -29,7 +27,6 @@ export interface Timeline {
   nextTurn: number | null;
 }
 
-/** One bar of the tokens-per-turn chart. */
 export interface TurnBar {
   turn: number | null;
   at: string | null;
@@ -54,13 +51,7 @@ function uncachedOf(usage: TokenInfo | null): number | null {
   return Math.max(0, usage.total_tokens - usage.cache_read_tokens);
 }
 
-/**
- * Arranges retained events into lines: consecutive tool results fold into one
- * except skill calls, which each stand alone, a gap becomes a count of missing
- * events, and a turn end carries its number, its own tokens, and its duration.
- * A figure is set only when no event it counts is missing, so nothing is
- * attributed across a gap.
- */
+/** A figure is set only when no event it counts is missing, so nothing is attributed across a gap. */
 export function timelineOf(items: readonly RunItem[]): Timeline {
   const lines: TimelineLine[] = [];
   let group: RunEventResponse[] = [];
@@ -123,10 +114,7 @@ export function timelineOf(items: readonly RunItem[]): Timeline {
   return { lines, baseline, nextTurn: turn === null ? null : turn + 1 };
 }
 
-/**
- * Returns one bar per turn whose tokens are known, then, for a live session
- * whose usage arrives as it happens, a bar for the turn in progress.
- */
+/** Returns one bar per turn whose tokens are known, plus a bar for the turn in progress of a live session whose usage arrives as it happens. */
 export function turnBarsOf(timeline: Timeline, running: RunningEntryResponse | null): TurnBar[] {
   const bars: TurnBar[] = [];
   for (const line of timeline.lines) {

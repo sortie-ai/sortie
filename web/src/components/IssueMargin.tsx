@@ -201,7 +201,6 @@ function triesText(row: PendingReactionResponse): string | undefined {
     : `${row.used_attempts} of ${row.max_attempts} fixes used`;
 }
 
-/** Words where a watch stands, from its last check, and the mark that word carries. */
 function watchState(
   row: PendingReactionResponse,
   detail: IssueDetailResponse,
@@ -336,7 +335,6 @@ interface NextOutcomesProps {
   outcomes: readonly NextOutcomeResponse[];
 }
 
-/** Lists the served next outcomes as condition and sentence pairs. */
 export function NextOutcomes({ outcomes }: NextOutcomesProps) {
   return (
     <ul className="flex flex-col gap-xs">
@@ -560,18 +558,12 @@ function IssuePanel({ detail }: IssuePanelProps) {
   );
 }
 
-/** Props of {@link IssueMargin}. */
 export interface IssueMarginProps {
   detail: IssueDetailResponse;
   state: StateResponse | undefined;
   position: StagePosition | null;
 }
 
-/**
- * Renders the column beside an issue's story: its attention items with their
- * actions, a scheduled retry with Retry now, what happens next, the pull
- * requests with Check now, the budget and cost, the route, and the issue.
- */
 export function IssueMargin({ detail, state, position }: IssueMarginProps) {
   const now = useNow();
   const attention = (state?.attention ?? []).filter((item) => item.issue_id === detail.issue_id);

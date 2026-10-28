@@ -107,12 +107,10 @@ function AgentsStatus() {
   );
 }
 
-/** Props of {@link PageBreadcrumb}. */
 export interface PageBreadcrumbProps {
   screens: ScreenEntry[];
 }
 
-/** Renders the breadcrumb line of the issue and session routes at 768 px and wider, and nothing on other routes. */
 export function PageBreadcrumb({ screens }: PageBreadcrumbProps) {
   const identifier = useMatch("/issues/:identifier")?.params.identifier;
   const sessionParams = useMatch("/issues/:identifier/sessions/:dispatchId")?.params;
@@ -138,9 +136,7 @@ export function PageBreadcrumb({ screens }: PageBreadcrumbProps) {
   );
 }
 
-/** Props of {@link TopBar}. */
 export interface TopBarProps {
-  /** Classes that give the row the page column's padding and width. */
   className: string;
   /** True while the peek holds Overview still. */
   isHolding: boolean;
@@ -148,7 +144,6 @@ export interface TopBarProps {
   onOpenPalette: () => void;
 }
 
-/** Renders the sticky header at 768 px and wider: the search trigger, the agents count, the live indicator, the Analytics range picker on that route, and the theme menu. */
 export function TopBar({ className, isHolding, onTogglePause, onOpenPalette }: TopBarProps) {
   const isAnalytics = useMatch("/analytics") !== null;
 

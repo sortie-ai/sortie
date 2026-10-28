@@ -4,25 +4,19 @@ import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Popover}. */
 export type PopoverProps = BasePopover.Root.Props;
 
-/** Holds the open state of a popover; control it with `open` and `onOpenChange`. */
 export function Popover(props: PopoverProps) {
   return <BasePopover.Root {...props} />;
 }
 
-/** Props of {@link PopoverTrigger}. */
 export type PopoverTriggerProps = BasePopover.Trigger.Props;
 
-/** Renders the button that opens the popover. */
 export function PopoverTrigger(props: PopoverTriggerProps) {
   return <BasePopover.Trigger {...props} />;
 }
 
-/** Props of {@link PopoverPopup}. */
 export interface PopoverPopupProps {
-  /** Accessible name of the popup. */
   "aria-label"?: string;
   children: ReactNode;
   side?: BasePopover.Positioner.Props["side"];
@@ -30,10 +24,6 @@ export interface PopoverPopupProps {
   className?: string;
 }
 
-/**
- * Renders the floating panel below its trigger by default; it rises 4 px from the
- * trigger's side on entry.
- */
 export function PopoverPopup({
   children,
   side = "bottom",
