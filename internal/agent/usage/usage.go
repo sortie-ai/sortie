@@ -15,7 +15,7 @@ import (
 )
 
 // Strategy is how a source's reports reach the adapter.
-type Strategy int
+type Strategy = domain.UsageStrategy
 
 const (
 	// StrategyLive reads the runtime's own output or protocol messages as
@@ -28,6 +28,13 @@ const (
 	StrategyRecords
 )
 
+const (
+	// SourceProtocol is the agent protocol's own messages on the session's standard streams.
+	SourceProtocol domain.UsageSource = "protocol"
+	// SourceJournal is the runtime's own session records on its host, an entry per model request.
+	SourceJournal domain.UsageSource = "journal"
+)
+
 // ErrPullUnsupported marks a pull the runtime cannot answer in this
 // session.
 var ErrPullUnsupported = errors.New("usage pull unsupported")
@@ -36,6 +43,10 @@ var ErrPullUnsupported = errors.New("usage pull unsupported")
 // the declaration of what its reports mean. Each adapter defines its
 // sources beside the parser that reads them.
 type Source struct {
+	// Category is the source's vendor-neutral category, named as the
+	// provenance of every figure the source settles.
+	Category domain.UsageSource
+
 	// Strategy is how the source's reports reach the adapter.
 	Strategy Strategy
 
@@ -45,6 +56,11 @@ type Source struct {
 	// Spend declares how the source reports spend; the zero value leaves it
 	// unread.
 	Spend SpendDeclaration
+
+	// WrittenAtTurnEnd declares that the runtime writes a request's record only
+	// when the turn ends, not when the request completes. Such records cannot
+	// settle a killed turn: that turn's amount is unknown, never zero.
+	WrittenAtTurnEnd bool
 }
 
 // WindowDeclaration is a source's declaration of its usage-window fields.

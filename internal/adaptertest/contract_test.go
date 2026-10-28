@@ -245,7 +245,8 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleMCPMODEL: "test-support package that cmd/sortie does not link",
 	},
 	"fakemodel": {
-		ruleCAPTURE: "test-support package that cmd/sortie does not link",
+		ruleCAPTURE:     "test-support package that cmd/sortie does not link",
+		ruleGROUPSIGNAL: "test-support package that cmd/sortie does not link; it kills a held launch's group to simulate a crash, which Group's own signals would record as a requested stop",
 	},
 	"probe": {
 		ruleCAPTURE: "test-support package that cmd/sortie does not link",

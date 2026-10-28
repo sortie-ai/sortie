@@ -102,6 +102,10 @@ type Settlement struct {
 	// CoversSession is true when the figure holds every earlier turn of the
 	// session.
 	CoversSession bool
+
+	// Provenance is the settling source's Category and Strategy; zero when
+	// Figure is false.
+	Provenance domain.UsageProvenance
 }
 
 // ErrSpendUnsupported marks a spend declaration the ledger does not
@@ -114,6 +118,9 @@ type Ledger struct {
 	live    SpendDeclaration
 	records SpendDeclaration
 	hasRecs bool
+
+	liveProvenance    domain.UsageProvenance
+	recordsProvenance domain.UsageProvenance
 
 	run     domain.TokenUsage
 	byModel map[string]domain.TokenUsage
@@ -136,15 +143,19 @@ func NewLedger(live, records Source) (*Ledger, error) {
 	if !declares(live, StrategyLive, SpendProcessCumulative) {
 		return nil, fmt.Errorf("live source: %w", ErrSpendUnsupported)
 	}
-	l := &Ledger{live: live.Spend}
+	l := &Ledger{live: live.Spend, liveProvenance: provenanceOf(live)}
 	if reflect.ValueOf(records).IsZero() {
 		return l, nil
 	}
 	if !declares(records, StrategyRecords, SpendPerRequest) {
 		return nil, fmt.Errorf("records source: %w", ErrSpendUnsupported)
 	}
-	l.records, l.hasRecs = records.Spend, true
+	l.records, l.hasRecs, l.recordsProvenance = records.Spend, true, provenanceOf(records)
 	return l, nil
+}
+
+func provenanceOf(src Source) domain.UsageProvenance {
+	return domain.UsageProvenance{Source: src.Category, Strategy: src.Strategy}
 }
 
 func declares(src Source, strategy Strategy, shape SpendShape) bool {
@@ -176,6 +187,9 @@ func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 	if !l.hasRecs {
 		return false
 	}
+	if end.Cancelled && end.ModelReached {
+		return true
+	}
 	if !l.evalLive(end, live).settles {
 		return true
 	}
@@ -186,6 +200,14 @@ func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 // never lowers the run total or a per-model entry.
 func (l *Ledger) Settle(end TurnEnd, live *SpendReading, read RecordsRead) Settlement {
 	arm := l.evalLive(end, live)
+	// A cancelled reply's live reading and the records cover the same
+	// requests, so the records replace the reading instead of adding to it.
+	if end.Cancelled && end.ModelReached && arm.normalized && !arm.reset {
+		if recs := l.recordsView(read); recs.usable && l.hasUncounted(recs) {
+			l.lastLive = arm.reading
+			return l.settleRecords(end, recs)
+		}
+	}
 	if arm.normalized {
 		l.lastLive = arm.reading
 		l.covered = arm.covered
@@ -227,13 +249,21 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 		Spent:         arm.delta.InputTokens+arm.delta.OutputTokens > 0,
 		Complete:      complete,
 		CoversSession: complete,
+		Provenance:    l.liveProvenance,
 	}, added)
+}
+
+// hasUncounted reports whether the known records hold input or output beyond
+// what the ledger already covers.
+func (l *Ledger) hasUncounted(recs recordsView) bool {
+	amount := Subtract(recs.positions[len(recs.known)], l.covered)
+	return amount.InputTokens != 0 || amount.OutputTokens != 0
 }
 
 func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) Settlement {
 	top := recs.positions[len(recs.known)]
 	amount := Subtract(top, l.covered)
-	if amount.InputTokens == 0 && amount.OutputTokens == 0 {
+	if !l.hasUncounted(recs) {
 		return l.settlement(Settlement{}, nil)
 	}
 	_, exact := recs.at(l.covered)
@@ -248,9 +278,10 @@ func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) Settlement {
 	}
 	l.addByModel(added)
 	return l.settlement(Settlement{
-		Figure:   true,
-		Spent:    true,
-		Complete: end.Replied && !end.Cancelled && exact,
+		Figure:     true,
+		Spent:      true,
+		Complete:   end.Replied && !end.Cancelled && exact,
+		Provenance: l.recordsProvenance,
 	}, added)
 }
 

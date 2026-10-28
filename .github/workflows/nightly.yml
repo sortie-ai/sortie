@@ -122,6 +122,7 @@ jobs:
             clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
             clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
+            clientprotocol_spend_declaration: Copilot
 
           - name: OpenCode - ACP
             adapter: acp-opencode
@@ -321,6 +322,7 @@ jobs:
           SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS: ${{ matrix.clientprotocol_user_instructions }}
           SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT: ${{ matrix.clientprotocol_model_document }}
           SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT_PATH: ${{ matrix.clientprotocol_model_document_path }}
+          SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: ${{ matrix.clientprotocol_spend_declaration }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is

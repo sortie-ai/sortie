@@ -35,3 +35,21 @@ func heldLaunches(pids []int) []func() (released bool, cleanupErr error) {
 	}
 	return launches
 }
+
+// killHeldGroups sends SIGKILL to the process group of each held launch record
+// whose direct child is among pids. The signal is raw: procutil.Group.Signal
+// and Kill record the exit as Sortie's own stop, which would make a crash
+// indistinguishable from a requested shutdown.
+func killHeldGroups(pids []int) error {
+	var errs []error
+	for _, pid := range pids {
+		group := procutil.HeldGroup(pid)
+		if group == nil {
+			continue
+		}
+		if err := syscall.Kill(-group.PID(), syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			errs = append(errs, fmt.Errorf("kill process group %d: %w", group.PID(), err))
+		}
+	}
+	return errors.Join(errs...)
+}

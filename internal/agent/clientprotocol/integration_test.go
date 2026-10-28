@@ -53,7 +53,8 @@
 //	SORTIE_CLIENTPROTOCOL_HTTP_TOOLS  1 when the runtime advertises
 //	                                  mcpCapabilities.http: the local tool-server
 //	                                  case must then reach the relay over
-//	                                  loopback HTTP, and the SSH cases run
+//	                                  loopback HTTP, and the tool-server SSH
+//	                                  cases run
 //	SORTIE_CLIENTPROTOCOL_SSH_COMMAND the launch command on the SSH lab host,
 //	                                  which has only what
 //	                                  SORTIE_CLIENTPROTOCOL_SSH_INSTALL
@@ -61,6 +62,12 @@
 //	SORTIE_CLIENTPROTOCOL_SSH_INSTALL POSIX shell script that installs the
 //	                                  runtime into the lab image as root, for
 //	                                  instance with npm install -g
+//	SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION
+//	                                  the handshake name of the usage declaration
+//	                                  whose spend sources the scripted model
+//	                                  cases prove: exact figure, settling source
+//	                                  and strategy, and the kill; unset leaves
+//	                                  spend unproven
 //
 // Run:
 //
@@ -85,6 +92,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -544,13 +552,35 @@ func sshVariant() *fakemodel.SSHVariant {
 			return os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_COMMAND")
 		},
 	}
-	switch {
-	case os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") != "1":
-		variant.Skip = "set SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1 when the runtime advertises mcpCapabilities.http; without the advertisement Sortie declares a tool-server gap and delivers nothing"
-	case os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_COMMAND") == "":
+	if os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_COMMAND") == "" {
 		variant.Skip = "the runtime's launch command on the lab host is unset: set SORTIE_CLIENTPROTOCOL_SSH_COMMAND"
 	}
+	if os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") != "1" {
+		variant.ToolServerSkip = "set SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1 when the runtime advertises mcpCapabilities.http; without the advertisement Sortie declares a tool-server gap and delivers nothing"
+	}
 	return variant
+}
+
+func spendSources(t *testing.T) *fakemodel.SpendSources {
+	t.Helper()
+
+	const variable = "SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION"
+	name := os.Getenv(variable)
+	if name == "" {
+		return nil
+	}
+	declaration, err := usagesource.Declarations.Get(name)
+	if err != nil {
+		t.Fatalf("%s = %q, want the handshake name of a registered usage declaration: %v", variable, name, err)
+	}
+	if declaration.Live.Spend.Shape == usage.SpendUndeclared || declaration.Records.Spend.Shape == usage.SpendUndeclared {
+		t.Fatalf("%s = %q, want a declaration whose live and records sources both declare spend", variable, name)
+	}
+	return &fakemodel.SpendSources{
+		Live:             domain.UsageProvenance{Source: declaration.Live.Category, Strategy: declaration.Live.Strategy},
+		Records:          domain.UsageProvenance{Source: declaration.Records.Category, Strategy: declaration.Records.Strategy},
+		RecordsAtTurnEnd: declaration.Records.WrittenAtTurnEnd,
+	}
 }
 
 func TestIntegration_ScriptedModel(t *testing.T) {
@@ -585,6 +615,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		Kind:                "agent-client-protocol",
 		LocalToolsOverHTTP:  os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") == "1",
 		SSH:                 sshVariant(),
+		Spend:               spendSources(t),
 		Passthrough:         map[string]any{},
 		CredentialEnv:       credentialNames,
 		UserInstructions:    os.Getenv("SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS"),
@@ -599,7 +630,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			command := os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")
 			expect := turnExpect
 			switch env.Scenario {
-			case fakemodel.ScenarioExhaustion, fakemodel.ScenarioCancellation, fakemodel.ScenarioCancellationAfterOutput, fakemodel.ScenarioStop:
+			case fakemodel.ScenarioExhaustion, fakemodel.ScenarioCancellation, fakemodel.ScenarioCancellationAfterOutput, fakemodel.ScenarioKill, fakemodel.ScenarioStop:
 				expect = expectHandshakeOnly
 			case fakemodel.ScenarioContinuation, fakemodel.ScenarioVerificationContext:
 				expect = expectCompletedTurn

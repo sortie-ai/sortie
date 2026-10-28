@@ -154,6 +154,23 @@ type AgentEvent struct {
 	ToolError bool
 }
 
+// UsageSource is the vendor-neutral category of a channel through which a
+// runtime reports spend. The usage component declares its members; the zero
+// value names none.
+type UsageSource string
+
+// UsageStrategy is how a source's reports reach the usage component. The
+// usage component declares its members; read it only beside a non-empty
+// UsageSource.
+type UsageStrategy int
+
+// UsageProvenance names the source and strategy that settled one turn's
+// figure. An empty Source states that the usage component settled none.
+type UsageProvenance struct {
+	Source   UsageSource
+	Strategy UsageStrategy
+}
+
 // UsageWindowStatus is how near a usage window is to its limit, as the
 // runtime reported it.
 type UsageWindowStatus string
@@ -423,6 +440,12 @@ type TurnResult struct {
 	// ResumeUsageByModel is the per-model split of ResumeUsage, handed to a
 	// later run as StartSessionParams.ResumeUsageByModel; nil when none.
 	ResumeUsageByModel map[string]TokenUsage
+
+	// UsageProvenance names the source and strategy whose figure settled this
+	// turn; its Source is empty when the turn settled no figure or its adapter
+	// does not account through the usage component. Completeness stays in
+	// UsageMeasured and SpendUnaccounted.
+	UsageProvenance UsageProvenance
 }
 
 // AgentAdapter is the contract every coding-agent integration must
