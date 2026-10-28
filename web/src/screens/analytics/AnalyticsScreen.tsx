@@ -160,7 +160,6 @@ function Breakdowns({ report, hasRules, hasRates }: BreakdownsProps) {
   );
 }
 
-/** Renders Analytics: the run statistics report of a range with its summary and breakdowns. */
 export function AnalyticsScreen() {
   const { data: state } = useStateQuery();
   const config = state?.config;

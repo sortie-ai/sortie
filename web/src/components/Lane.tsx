@@ -13,7 +13,6 @@ import type {
   StationState,
 } from "@/lib/lane";
 
-/** The longest chain the meter draws one segment per stage for; a longer chain draws one bar. */
 const SEGMENT_LIMIT = 12;
 
 const MARKER: Record<LaneMarker, string> = {
@@ -88,11 +87,9 @@ function countLineOf(station: LaneStation, variant: LaneVariant): string {
   return reactionCountLabel(station.key, station.continuations);
 }
 
-/** Props of {@link StageMeter}. */
 export interface StageMeterProps {
   position: StagePosition;
   progress: StageProgress;
-  /** Draws the current stage in the attention color. */
   needs: boolean;
   /** Whether the issue stands at the agent station; elsewhere the meter shows only the stages done. */
   atAgent: boolean;
@@ -100,11 +97,6 @@ export interface StageMeterProps {
   caption: boolean;
 }
 
-/**
- * Draws the stages of a chain as segments, or as one bar past twelve stages.
- * At the agent station the caption names the stage and its place; elsewhere it
- * counts the stages done.
- */
 export function StageMeter({ position, progress, needs, atAgent, caption }: StageMeterProps) {
   const { k, n, done } = progress;
   const focus = atAgent ? progress.focus : null;
@@ -161,7 +153,6 @@ export function StageMeter({ position, progress, needs, atAgent, caption }: Stag
 /** How much of the lane a {@link Lane} draws: the issue page card, the peek track, a Pipeline lane, or a compressed Pipeline lane. */
 export type LaneVariant = "page" | "peek" | "lane" | "dense";
 
-/** Props of {@link Lane}. */
 export interface LaneProps {
   stations: LaneStation[];
   position: StagePosition | null;
@@ -188,12 +179,7 @@ const METER_MARGIN: Record<LaneVariant, string | undefined> = {
   dense: undefined,
 };
 
-/**
- * Draws the stations an issue can stand at as one track, the current station
- * marked with its time above it. The stage meter sits under the agent station,
- * which holds all agent work whatever stage the issue is on. Positions are
- * shares of the width, so the track never scrolls sideways.
- */
+/** The stage meter sits under the agent station, which holds all agent work whatever stage the issue is on; positions are shares of the width, so the track never scrolls sideways. */
 export function Lane({
   stations,
   position,
@@ -356,7 +342,6 @@ export function Lane({
   );
 }
 
-/** Props of {@link StandingMark}. */
 export interface StandingMarkProps {
   marker: LaneMarker;
   className?: string;
@@ -386,7 +371,6 @@ interface StationMarkProps {
 }
 
 interface StationDotProps extends StationMarkProps {
-  /** The count line the station shows, or an empty string; the tooltip repeats it. */
   countLine: string;
 }
 

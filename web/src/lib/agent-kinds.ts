@@ -1,6 +1,5 @@
 import type { ConfigResponse } from "@/api/types.gen";
 
-/** Lists every agent kind the configuration can dispatch to, sorted by kind, each with its usage arrival. */
 export function usageByKind(config: ConfigResponse): [string, string][] {
   const byKind = new Map<string, string>([[config.agent.kind, config.agent.usage_arrival]]);
   const { dispatch } = config;

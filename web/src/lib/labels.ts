@@ -119,11 +119,7 @@ export function hopReason(result: string): string {
   return worded(HOP_NOT_MADE_REASONS, result);
 }
 
-/**
- * Words a stage hop as a lower-case phrase, such as "moved to review" or "hop to
- * review not made: the limit on automatic hops in a row was reached". A result the
- * client has no wording for reads as served.
- */
+/** Words a stage hop as a lower-case phrase, such as "moved to review"; a result the client has no wording for reads as served. */
 export function hopLabel(target: string, result: string | undefined): string {
   const rule = ruleLabel(target);
   switch (result) {

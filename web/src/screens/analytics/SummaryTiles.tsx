@@ -38,14 +38,12 @@ function Tile({ label, value, hint, valueHint }: TileProps) {
   );
 }
 
-/** Props of {@link SummaryTiles}. */
 export interface SummaryTilesProps {
   report: Report;
   /** Whether a rate source is available, which adds the cost tile. */
   hasCost: boolean;
 }
 
-/** Renders the success-rate hero beside a borderless row of summary figures. */
 export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
   const { summary, schema_tier: tier } = report;
   const hasSucceeded = summary.succeeded > 0;

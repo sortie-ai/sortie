@@ -84,12 +84,10 @@ function withQuery(path: string, query: Record<string, string | number | undefin
   return text === "" ? path : `${path}?${text}`;
 }
 
-/** Fetches the runtime state snapshot. */
 export function getState(signal?: AbortSignal): Promise<StateResponse> {
   return getJson<StateResponse>("state", signal);
 }
 
-/** Fetches one issue by its `issue_identifier`. */
 export function getIssue(identifier: string, signal?: AbortSignal): Promise<IssueDetailResponse> {
   return getJson<IssueDetailResponse>(encodeURIComponent(identifier), signal);
 }
@@ -102,7 +100,6 @@ export interface HistoryFilter {
   stage?: string;
 }
 
-/** Fetches a page of run history, newest first. */
 export function getRuns(
   q: {
     issue_id?: string;
@@ -118,7 +115,6 @@ export function getRuns(
   return getJson<RunsResponse>(withQuery("runs", q), signal);
 }
 
-/** Fetches a page of issues with their newest finished runs, newest first. */
 export function getIssueGroups(
   q: HistoryFilter & { q?: string; cursor?: string; limit?: number },
   signal?: AbortSignal,
@@ -131,7 +127,6 @@ export function getStats(q: { since?: string }, signal?: AbortSignal): Promise<R
   return getJson<Report>(withQuery("stats", q), signal);
 }
 
-/** Fetches the rates the next run of each model gets and the state of every price source. */
 export function getPrices(signal?: AbortSignal): Promise<PricesResponse> {
   return getJson<PricesResponse>("prices", signal);
 }

@@ -6,7 +6,6 @@ import { queryKeys } from "@/api/queries";
 import { toast } from "@/components/toaster";
 import { failureMessage } from "@/components/use-attention-actions";
 
-/** The calls that act on a scheduled retry or a pending reaction and which of them have a request running. */
 export interface IssueActions {
   retryNow(identifier: string): void;
   checkNow(identifier: string, kind: string): void;
@@ -22,12 +21,7 @@ function checkKey(identifier: string, kind: string): string {
   return JSON.stringify(["check", identifier, kind]);
 }
 
-/**
- * Provides Retry now and Check now. Each toasts the outcome the server words,
- * or the failure, and refetches the issue and the state after any answer,
- * paused or not. A request for a key already running is ignored, so a double
- * activation sends one request.
- */
+/** A request for a key already running is ignored, so a double activation sends one request; any answer refetches the issue and the state, paused or not. */
 export function useIssueActions(): IssueActions {
   const client = useQueryClient();
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());

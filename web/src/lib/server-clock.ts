@@ -14,7 +14,6 @@ export function now(): number {
   return Date.now() + offsetMs;
 }
 
-/** Returns the start of the calendar day holding the instant, in the browser's time zone. */
 export function localMidnight(at: number): Date {
   const day = new Date(at);
   return new Date(day.getFullYear(), day.getMonth(), day.getDate());

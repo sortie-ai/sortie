@@ -144,12 +144,10 @@ function valueTextOf(value: string, options: readonly FilterOption[], anyText: s
   return value.startsWith(RULE_PREFIX) ? value.slice(RULE_PREFIX.length) : value;
 }
 
-/** Props of {@link HistoryFilters}. */
 export interface HistoryFiltersProps {
   config: ConfigResponse | undefined;
 }
 
-/** Renders the History filter row: issue key, rule, run status, and stage hop. Each control writes its URL parameter with a replace navigation. */
 export function HistoryFilters({ config }: HistoryFiltersProps) {
   const [params, setParams] = useSearchParams();
   const rule = params.get(RULE_PARAM) ?? "";

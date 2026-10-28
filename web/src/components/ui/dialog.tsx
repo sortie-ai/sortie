@@ -4,15 +4,12 @@ import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Dialog}. */
 export type DialogProps = BaseDialog.Root.Props;
 
-/** Holds the open state of a dialog; control it with `open` and `onOpenChange`. */
 export function Dialog(props: DialogProps) {
   return <BaseDialog.Root {...props} />;
 }
 
-/** Props of {@link DialogPopup}. */
 export interface DialogPopupProps {
   /** Accessible name when the content holds no {@link DialogTitle}. */
   "aria-label"?: string;
@@ -20,10 +17,6 @@ export interface DialogPopupProps {
   className?: string;
 }
 
-/**
- * Renders the dialog over a blurred scrim, near the top of the viewport. It rises
- * 8 px from a 0.98 scale on entry and leaves faster than it came.
- */
 export function DialogPopup({ children, className, ...rest }: DialogPopupProps) {
   return (
     <BaseDialog.Portal>
@@ -48,13 +41,11 @@ export function DialogPopup({ children, className, ...rest }: DialogPopupProps) 
   );
 }
 
-/** Props of {@link DialogTitle}. */
 export interface DialogTitleProps {
   children: ReactNode;
   className?: string;
 }
 
-/** Names the dialog for assistive technology. */
 export function DialogTitle({ children, className }: DialogTitleProps) {
   return (
     <BaseDialog.Title className={cn("text-h7 font-semibold text-ink", className)}>

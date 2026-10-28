@@ -33,15 +33,11 @@ function roundingOf(index: number, count: number): string | undefined {
   return index === count - 1 ? "rounded-r" : undefined;
 }
 
-/** Props of {@link OutcomeBar}. */
 export interface OutcomeBarProps {
   summary: Summary;
 }
 
-/**
- * Renders how the runs of a range ended as a legend and a stacked bar, one segment per outcome
- * that has runs. Renders nothing while no outcome has runs.
- */
+/** Renders nothing while no outcome has runs. */
 export function OutcomeBar({ summary }: OutcomeBarProps) {
   const segments = segmentsOf(summary);
   if (segments.length === 0) {

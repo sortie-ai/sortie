@@ -1,6 +1,5 @@
 import type { RunResponse } from "@/api/types.gen";
 
-/** The status marks a row, an outcome, or a run line can carry. */
 export type Mark =
   | "running"
   | "current"
@@ -36,7 +35,6 @@ const STATE_WORDS: Record<StateMark, string> = {
   clear: "Clear",
 };
 
-/** Gives the one word a status column shows for where work stands. */
 export function stateWord(mark: StateMark): string {
   return STATE_WORDS[mark];
 }
@@ -51,14 +49,9 @@ const RUN_STATUSES: Record<string, { word: string; mark: Mark | null }> = {
   cancelled: { word: "Cancelled", mark: null },
 };
 
-/** The persisted run statuses the dashboard words, in the order a menu lists them. */
 export const RUN_STATUS_NAMES: readonly string[] = Object.keys(RUN_STATUSES);
 
-/**
- * Gives the word and mark of a persisted run status. A run row serves its status
- * and no wording for it, so the client words the persisted statuses and shows any
- * other value as served with no mark.
- */
+/** A run row serves its status and no wording for it, so the client words the persisted statuses and shows any other value as served with no mark. */
 export function runStatus(status: string): { word: string; mark: Mark | null } {
   return Object.hasOwn(RUN_STATUSES, status) ? RUN_STATUSES[status] : { word: status, mark: null };
 }
@@ -69,12 +62,7 @@ const DECLARED_OUTCOMES: Record<string, { word: string; mark: Mark }> = {
   "no-change-needed": { word: "No change needed", mark: "succeeded" },
 };
 
-/**
- * Gives the word and mark of a finished run: the outcome its agent declared when
- * the run is recorded as succeeded, else the word of its recorded status. Any
- * other status wins over a declaration, so a run whose handoff was withheld still
- * reads as failed.
- */
+/** A succeeded run reads as the outcome its agent declared; any other status wins over a declaration, so a run whose handoff was withheld still reads as failed. */
 export function runOutcome(run: Pick<RunResponse, "status" | "declared_outcome">): {
   word: string;
   mark: Mark | null;
@@ -90,7 +78,6 @@ export function runOutcome(run: Pick<RunResponse, "status" | "declared_outcome">
   return runStatus(run.status);
 }
 
-/** Gives the statement the agent wrote with its declared outcome, or null when there is none to show. */
 export function agentStatement(run: Pick<RunResponse, "agent_text">): string | null {
   const text = run.agent_text;
   return text === null || text.trim() === "" ? null : text;

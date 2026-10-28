@@ -24,17 +24,12 @@ export function buttonStyles(variant: ButtonVariant, className?: string): string
   return cn(BASE, VARIANTS[variant], className);
 }
 
-/**
- * Props of {@link Button}. To render a link, pass `render={<a href={url} />}` with
- * `nativeButton={false}`.
- */
+/** To render a link, pass `render={<a href={url} />}` with `nativeButton={false}`. */
 export interface ButtonProps extends Omit<BaseButton.Props, "className"> {
-  /** Defaults to `secondary`. */
   variant?: ButtonVariant;
   className?: string;
 }
 
-/** Renders a 32 px button in one of the three variants. */
 export function Button({ variant = "secondary", className, type, ...rest }: ButtonProps) {
   return (
     <BaseButton type={type ?? "button"} className={buttonStyles(variant, className)} {...rest} />

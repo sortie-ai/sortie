@@ -22,7 +22,6 @@ function isFiltered(filter: HistoryFilter): boolean {
   return Object.keys(filter).length > 0;
 }
 
-/** Renders History: finished runs grouped by issue, newest ending first, paged on the server and filtered by issue key, rule, run status, and stage hop. */
 export function HistoryScreen() {
   const { data: state } = useStateQuery();
   const config = state?.config;

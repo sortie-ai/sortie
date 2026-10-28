@@ -1,14 +1,11 @@
 import type { ReactNode } from "react";
 
-/** Props of {@link Panel}. */
 export interface PanelProps {
   title: string;
-  /** Text at the end of the heading line. */
   right?: ReactNode;
   children: ReactNode;
 }
 
-/** Renders one titled panel of a screen, set off by a rule above it. */
 export function Panel({ title, right, children }: PanelProps) {
   const heading = <h2 className="font-heading text-h7 font-semibold text-ink">{title}</h2>;
 
@@ -27,12 +24,10 @@ export function Panel({ title, right, children }: PanelProps) {
   );
 }
 
-/** Props of {@link Pairs}. */
 export interface PairsProps {
   children: ReactNode;
 }
 
-/** Lays out {@link Pair}s as a label column and a value column. */
 export function Pairs({ children }: PairsProps) {
   return (
     <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-md gap-y-xs text-body-md">
@@ -41,13 +36,11 @@ export function Pairs({ children }: PairsProps) {
   );
 }
 
-/** Props of {@link Pair}. */
 export interface PairProps {
   label: string;
   children: ReactNode;
 }
 
-/** Renders one label and its value. */
 export function Pair({ label, children }: PairProps) {
   return (
     <>

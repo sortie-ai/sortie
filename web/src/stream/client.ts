@@ -63,16 +63,7 @@ function connectWorker(
   };
 }
 
-/**
- * Connects the tab to the change stream and returns a disconnect and `show`.
- * It calls `onMessage` with the current status at once, then with every
- * message. A shared worker holds the single connection of the browser; where
- * one cannot be built the tab runs the stream itself.
- *
- * `show` names the run whose events the tab receives, or null for none. The
- * run's held items arrive first, then its new ones; the tab merges them by
- * `seq`.
- */
+/** Calls `onMessage` with the current status at once, then with every message. A shared worker holds the single connection of the browser; where one cannot be built the tab runs the stream itself. `show` names the run whose events the tab receives, or null for none. */
 export function connectChangeStream(onMessage: (m: StreamMessage) => void): Connection {
   let shown: string | null = null;
   onMessage({ kind: "status", status: "connecting" });

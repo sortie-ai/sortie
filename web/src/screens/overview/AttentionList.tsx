@@ -3,12 +3,10 @@ import { attentionNavKey } from "./rows";
 
 import type { AttentionItemResponse } from "@/api/types.gen";
 
-/** Props of {@link AttentionList}. */
 export interface AttentionListProps {
   /** The unacknowledged items in the order the server serves them. */
   items: readonly AttentionItemResponse[];
   now: number;
-  /** Navigation key of the selected item, or `undefined`. */
   selectedKey: string | undefined;
   showSelection: boolean;
   pending: ReadonlySet<string>;
@@ -17,7 +15,7 @@ export interface AttentionListProps {
   onAction: (item: AttentionItemResponse) => void;
 }
 
-/** Renders the Needs attention section: its items in served order, never reordered by the client. */
+/** Its items in served order, never reordered by the client. */
 export function AttentionList({
   items,
   now,

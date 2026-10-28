@@ -196,7 +196,6 @@ function hasReactions(config: ConfigResponse): boolean {
   return Object.values(config.reactions).some((reaction) => reaction !== undefined);
 }
 
-/** Renders Workflow: the configuration in effect as the state route serves it, under a standfirst that names a failed load of the file. */
 export function WorkflowScreen(): ReactNode {
   const { data } = useStateQuery();
   if (data === undefined) {

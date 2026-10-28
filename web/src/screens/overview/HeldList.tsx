@@ -4,16 +4,14 @@ import { HeldItem } from "./HeldItem";
 
 import type { HeldIssueResponse } from "@/api/types.gen";
 
-/** Props of {@link HeldList}. */
 export interface HeldListProps {
-  /** The held issues in the order the server serves them. */
   rows: readonly HeldIssueResponse[];
   /** `counts.held` as served. */
   count: number;
   now: number;
 }
 
-/** Renders the Not dispatched section: the held issues in served order, never sorted or filtered by the client. */
+/** The held issues in served order, never sorted or filtered by the client. */
 export function HeldList({ rows, count, now }: HeldListProps) {
   if (rows.length === 0) {
     return undefined;

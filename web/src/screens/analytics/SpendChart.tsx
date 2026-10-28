@@ -166,18 +166,13 @@ function SpendSlot({ bucket, bar, period, from, tick }: SpendSlotProps) {
   );
 }
 
-/** Props of {@link SpendChart}. */
 export interface SpendChartProps {
   spend: Spend;
   /** The report's lower bound, which cuts the first bucket short while it lies inside it. */
   since: string | null;
 }
 
-/**
- * Draws the estimated cost of each served UTC period as a bar chart, with a
- * tooltip on every slot that names the period and says in words what its bar
- * means. Every date and time it writes is in UTC.
- */
+/** Every date and time it writes is in UTC. */
 export function SpendChart({ spend, since }: SpendChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotWidth = useWidth(plotRef);

@@ -1,6 +1,5 @@
 import { cn } from "@/lib/cn";
 
-/** Gives the classes every selectable row shares: hover, press, and the keyboard-selected bar. */
 export function rowStyles(isSelected: boolean, isOpenable: boolean): string {
   return cn(
     "scroll-mt-20 scroll-mb-md transition-colors duration-(--duration-feedback)",

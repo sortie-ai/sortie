@@ -7,7 +7,6 @@ import type { FocusEvent, MouseEvent } from "react";
 
 type ToastVariant = "success" | "error" | "info";
 
-/** Reports why a toast started to leave. */
 export type ToastCloseCause = "undo" | "dismiss" | "timeout";
 
 /** A labelled control in the slot that Undo uses; pressing it leaves the toast open. */
@@ -16,7 +15,7 @@ export interface ToastAction {
   onSelect: () => void;
 }
 
-/** Options of {@link toast}. A toast takes `undo` or `action`, not both. */
+/** A toast takes `undo` or `action`, not both. */
 export type ToastOptions = {
   /** Defaults to `success`. */
   variant?: ToastVariant;
@@ -76,13 +75,7 @@ function removeToast(id: number): void {
   });
 }
 
-/**
- * Adds a toast to the bottom of the stack. Call it from an event handler, an
- * effect, or an async callback, never during render; the {@link Toaster} must be
- * mounted for it to show.
- *
- * When the reader presses Undo, `onClose` runs after `undo`.
- */
+/** Call it from an event handler, an effect, or an async callback, never during render; the {@link Toaster} must be mounted for it to show. When the reader presses Undo, `onClose` runs after `undo`. */
 export function toast(title: string, message = "", options: ToastOptions = {}): void {
   nextId += 1;
   toasts = [
@@ -334,12 +327,7 @@ function ToastView({ item, onLeave, onRemove }: ToastViewProps) {
   );
 }
 
-/**
- * Renders the stack of toasts in the bottom-right corner, in a polite live
- * region. Mount it once; Alt+T focuses the newest toast. When a focused toast
- * leaves, focus moves to the nearest toast that stays, or back to where it was
- * before the stack took it.
- */
+/** Mount it once; Alt+T focuses the newest toast. */
 export function Toaster() {
   const items = useSyncExternalStore(subscribe, getSnapshot);
   const regionRef = useRef<HTMLElement>(null);

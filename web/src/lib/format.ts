@@ -78,25 +78,20 @@ function millions(n: number): string {
   return `${whole}.${String(frac).padStart(2, "0")}M`;
 }
 
-/** Writes an integer with comma-separated thousands. */
 export function fmtCount(n: number): string {
   const digits = String(Math.abs(Math.trunc(n)));
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return n < 0 ? `-${grouped}` : grouped;
 }
 
-/** Writes the count and the noun form the count calls for. */
 export function plural(n: number, one: string, many: string): string {
   return `${fmtCount(n)} ${n === 1 ? one : many}`;
 }
 
-/** A count with the noun form and the verb form the count calls for. */
 export interface Agreement {
-  /** The count as written, with thousands separators. */
   count: string;
   noun: string;
   verb: string;
-  /** The count and the noun, as `plural` writes them. */
   subject: string;
 }
 
@@ -110,11 +105,7 @@ export function pluralVerb(
   return { count: fmtCount(n), noun, verb, subject: plural(n, nouns[0], nouns[1]) };
 }
 
-/**
- * Writes dollars with two decimals below $100 and as whole dollars with
- * thousands separators from $100. A cost above zero and below one cent reads
- * "under $0.01", so only a cost of zero reads "$0.00".
- */
+/** Two decimals below $100, whole dollars with thousands separators from $100; a cost above zero and below one cent reads "under $0.01", so only a cost of zero reads "$0.00". */
 export function fmtMoney(usd: number): string {
   if (usd > 0 && usd < 0.01) {
     return "under $0.01";
@@ -138,22 +129,13 @@ function exactDigits(usd: number): { value: number; whole: string; fraction: str
   return { value: Number(plain), whole, fraction };
 }
 
-/**
- * Writes the exact amount of a cost in plain decimal with thousands separators
- * and at least two fraction digits: 4.2 reads "$4.20", 4.203125 "$4.203125",
- * 0.0045000000000000005 "$0.0045", 1234.5 "$1,234.50".
- */
+/** Writes the exact amount of a cost in plain decimal with thousands separators and at least two fraction digits: 4.2 reads "$4.20", 4.203125 "$4.203125", 0.0045000000000000005 "$0.0045", 1234.5 "$1,234.50". */
 export function fmtMoneyExact(usd: number): string {
   const { whole, fraction } = exactDigits(usd);
   return `$${fmtCount(Number(whole))}.${fraction.padEnd(2, "0")}`;
 }
 
-/**
- * Writes the amount of a lower-bound cost cut, never rounded up, so the text
- * never exceeds the spend it bounds. Below one cent the cut falls after the
- * first non-zero digit ("$0.004"), below $100 after two fraction digits (4.205
- * reads "$4.20"), and from $100 before the decimal point (149.6 reads "$149").
- */
+/** Cut, never rounded up, so the text never exceeds the spend it bounds: below one cent after the first non-zero digit ("$0.004"), below $100 after two fraction digits (4.205 reads "$4.20"), from $100 before the decimal point (149.6 reads "$149"). */
 export function fmtMoneyCut(usd: number): string {
   const { value, whole, fraction } = exactDigits(usd);
   const grouped = fmtCount(Number(whole));
@@ -166,7 +148,6 @@ export function fmtMoneyCut(usd: number): string {
   return `$${grouped}.${fraction.padEnd(2, "0").slice(0, 2)}`;
 }
 
-/** Words a cost that is a lower bound: "at least" before the amount `fmtMoneyCut` writes. */
 export function fmtMoneyAtLeast(usd: number): string {
   return `at least ${fmtMoneyCut(usd)}`;
 }
@@ -191,10 +172,7 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/**
- * Writes a share of runs as a whole percent. A ratio strictly between 0 and 1
- * never rounds to either end, so "100%" means every run and "0%" none.
- */
+/** A ratio strictly between 0 and 1 never rounds to either end, so "100%" means every run and "0%" none. */
 export function fmtPercent(ratio: number): string {
   const percent = Math.round(ratio * 100);
   const isPartial = ratio > 0 && ratio < 1;

@@ -11,14 +11,12 @@ import { laneNavKey } from "./lanes";
 import type { Station } from "@/lib/lane";
 import type { PipelineLane } from "./lanes";
 
-/** How many issue keys a collapsed station group lists before it counts the rest. */
 const GROUP_KEY_LIMIT = 12;
 
 function laneGridStyles(): string {
   return "grid grid-cols-[minmax(0,1fr)_auto] [grid-template-areas:'ident_snt'_'trk_trk'] items-baseline gap-x-lg px-md py-xs max-md:grid-cols-[minmax(0,1fr)] max-md:[grid-template-areas:'ident'_'trk'_'snt']";
 }
 
-/** Props of {@link LaneRow}. */
 export interface LaneRowProps {
   lane: PipelineLane;
   variant: "lane" | "dense";
@@ -28,11 +26,6 @@ export interface LaneRowProps {
   onOpen: (lane: PipelineLane) => void;
 }
 
-/**
- * Renders one issue as a row of two lines: its identity beside its served
- * sentence, then its lane across the stations. A click opens the peek of the
- * issue.
- */
 export function LaneRow({ lane, variant, isSelected, showSelection, onOpen }: LaneRowProps) {
   const isLook = isSelected && showSelection;
   const isNeeds = lane.marker === "needs";
@@ -90,10 +83,8 @@ export function LaneRow({ lane, variant, isSelected, showSelection, onOpen }: La
   );
 }
 
-/** Props of {@link StationGroup}. */
 export interface StationGroupProps {
   station: Station;
-  /** The lanes standing at the station, in served order. */
   lanes: readonly PipelineLane[];
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
@@ -102,10 +93,6 @@ export interface StationGroupProps {
   onOpenLane: (lane: PipelineLane) => void;
 }
 
-/**
- * Renders the lanes of one station as a single line that lists their issue
- * keys and opens to the lanes themselves, dense, in served order.
- */
 export function StationGroup({
   station,
   lanes,

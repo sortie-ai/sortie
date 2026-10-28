@@ -1,4 +1,3 @@
-/** Draws the Sortie logomark in the ink color of the theme scope it sits in. */
 export function BrandMark() {
   return (
     <svg

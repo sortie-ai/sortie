@@ -14,7 +14,6 @@ import type {
 } from "@/api/types.gen";
 import type { StateMark } from "@/lib/run-status";
 
-/** The row list of the state that decided a row. */
 export type RowKind =
   | "running"
   | "retrying"
@@ -23,7 +22,6 @@ export type RowKind =
   | "pending_reactions"
   | "between_stages";
 
-/** The lifecycle phase a row belongs to; the Active chips filter on it. */
 export type Phase =
   | "running"
   | "pull_request"
@@ -32,7 +30,6 @@ export type Phase =
   | "needs_attention"
   | "ended_today";
 
-/** Lists every phase in the order the chips appear. */
 export const PHASES: readonly Phase[] = [
   "running",
   "pull_request",
@@ -42,13 +39,11 @@ export const PHASES: readonly Phase[] = [
   "ended_today",
 ];
 
-/** What the lifecycle chips and the Rule menu read of a row, whichever screen draws it. */
 export interface Filterable {
   phase: Phase;
   rule: string | null;
 }
 
-/** One issue in Active, built from a served `active` entry. */
 export interface ActiveRow {
   issueId: string;
   identifier: string;
@@ -75,7 +70,6 @@ export interface RuleOption {
   group: string | null;
 }
 
-/** The state row that decided an issue, tagged with the list it came from. */
 export type Deciding =
   | { kind: "running"; entry: RunningEntryResponse }
   | { kind: "retrying"; entry: RetryEntryResponse }
@@ -112,7 +106,6 @@ export function phaseOf(kind: RowKind, escalatedAt: string | null): Phase {
   }
 }
 
-/** Tells whether the deciding row is a review watch whose pull request waits only on a required approval. */
 export function awaitsApproval(deciding: Deciding | undefined): boolean {
   return (
     deciding?.kind === "pending_reactions" &&
@@ -121,7 +114,6 @@ export function awaitsApproval(deciding: Deciding | undefined): boolean {
   );
 }
 
-/** Tells whether an active issue's deciding row awaits a required approval. */
 export function issueAwaitsApproval(state: StateResponse | undefined, issueId: string): boolean {
   const entry = state?.active?.find((active) => active.issue_id === issueId);
   return state !== undefined && entry !== undefined && awaitsApproval(decidingRowOf(state, entry));
@@ -150,7 +142,6 @@ export function rowMark(
   return awaitingApproval ? "approval" : "waiting";
 }
 
-/** Words a row's place in a chain or its rule, or `null` when neither is worth showing. */
 export function routeText(entry: RuleSource, config: ConfigResponse | undefined): string | null {
   const position = entry.stage_position;
   if (position !== null) {
@@ -165,7 +156,6 @@ export function routeText(entry: RuleSource, config: ConfigResponse | undefined)
   return hasRules && isNamedRule(entry.rule_name) ? entry.rule_name : null;
 }
 
-/** Gives the value the Rule menu filters a row on. */
 export function ruleOf(entry: RuleSource): string | null {
   if (entry.stage_position !== null) {
     return entry.stage_position.current;
@@ -173,7 +163,6 @@ export function ruleOf(entry: RuleSource): string | null {
   return isNamedRule(entry.rule_name) ? entry.rule_name : null;
 }
 
-/** Gives the instant a deciding entry's time is counted from or to. */
 export function timeBaseOf(deciding: Deciding): string | null {
   switch (deciding.kind) {
     case "running":
@@ -191,7 +180,6 @@ export function timeBaseOf(deciding: Deciding): string | null {
   }
 }
 
-/** Reports whether a served status is one an active row stands for. */
 export function isRowKind(value: string): value is RowKind {
   switch (value) {
     case "running":
@@ -275,7 +263,6 @@ function toRow(entry: ActiveIssueResponse, kind: RowKind, state: StateResponse):
   };
 }
 
-/** Builds the Active row of one served `active` entry, or `undefined` for a status that names no list. */
 export function activeRowOf(
   state: StateResponse,
   entry: ActiveIssueResponse,
@@ -283,7 +270,6 @@ export function activeRowOf(
   return isRowKind(entry.status) ? toRow(entry, entry.status, state) : undefined;
 }
 
-/** Builds the Active rows from the served `active` entries, in the served order. */
 export function activeRows(state: StateResponse): ActiveRow[] {
   return (state.active ?? []).flatMap((entry) => {
     const row = activeRowOf(state, entry);
@@ -291,7 +277,7 @@ export function activeRows(state: StateResponse): ActiveRow[] {
   });
 }
 
-/** Words the time of a deciding entry on the server clock: time left for a retry, time elapsed otherwise. */
+/** Time left for a retry, time elapsed otherwise. */
 export function timeText(kind: RowKind, timeBase: string | null, now: number): string {
   const base = parseInstant(timeBase);
   if (base === null) {
@@ -300,7 +286,6 @@ export function timeText(kind: RowKind, timeBase: string | null, now: number): s
   return kind === "retrying" ? fmtDue((base - now) / 1000) : fmtDuration((now - base) / 1000);
 }
 
-/** Words the time cell of a row on the server clock. */
 export function timeCell(row: ActiveRow, now: number): string {
   return timeText(row.kind, row.timeBase, now);
 }
@@ -341,11 +326,7 @@ function filterOptions(options: RuleOption[], query: string): RuleOption[] {
   );
 }
 
-/**
- * Builds the Rule menu options with the row count of each, narrowed by a
- * case-insensitive substring query. It returns nothing while the workflow
- * holds no rules.
- */
+/** Returns nothing while the workflow holds no rules. */
 export function ruleOptions(
   config: ConfigResponse | undefined,
   rows: readonly Filterable[],
@@ -426,7 +407,6 @@ export function ruleOptions(
   return filterOptions(options, query);
 }
 
-/** Reports whether a search parameter value names a phase. */
 export function isPhase(value: string | null): value is Phase {
   return PHASES.some((phase) => phase === value);
 }

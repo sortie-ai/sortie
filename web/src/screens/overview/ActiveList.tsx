@@ -20,7 +20,6 @@ const TALLY: readonly { word: string; phases: readonly Phase[] }[] = [
   { word: "held", phases: ["needs_attention"] },
 ];
 
-/** Words how many rows stand in each state, leaving out the states that have none. */
 function tallyOf(rows: readonly ActiveRowModel[]): string {
   return TALLY.map(({ word, phases }) => ({
     word,
@@ -31,7 +30,6 @@ function tallyOf(rows: readonly ActiveRowModel[]): string {
     .join(", ");
 }
 
-/** Props of {@link ActiveList}. */
 export interface ActiveListProps {
   /** The served `active` rows in served order, before any filter. */
   rows: readonly ActiveRowModel[];
@@ -39,16 +37,12 @@ export interface ActiveListProps {
   visibleRows: readonly ActiveRowModel[];
   config: ConfigResponse | undefined;
   now: number;
-  /** Navigation key of the selected item, or `undefined`. */
   selectedKey: string | undefined;
   showSelection: boolean;
   onOpen: (row: ActiveRowModel) => void;
 }
 
-/**
- * Renders the Active section: the lifecycle chips, the Rule menu, and one row
- * per active issue. The rows keep the order they arrive in.
- */
+/** The rows keep the order they arrive in. */
 export function ActiveList({
   rows,
   visibleRows,

@@ -5,32 +5,26 @@ import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Menu}. */
 export type MenuProps = BaseMenu.Root.Props;
 
-/** Holds the open state of a menu; compose it with the parts below. */
 export function Menu(props: MenuProps) {
   return <BaseMenu.Root {...props} />;
 }
 
-/** Props of {@link MenuTrigger}. */
 export type MenuTriggerProps = BaseMenu.Trigger.Props;
 
-/** Renders the button that opens the menu. */
 export function MenuTrigger(props: MenuTriggerProps) {
   return <BaseMenu.Trigger {...props} />;
 }
 
-/** Props of {@link MenuPopup}. */
 export interface MenuPopupProps {
   children: ReactNode;
-  /** The side of the trigger the popup opens toward; it rises 4 px from that side. */
   side?: BaseMenu.Positioner.Props["side"];
   align?: BaseMenu.Positioner.Props["align"];
   className?: string;
 }
 
-/** Renders the floating list of a menu above the page, outside any dark ancestor such as the rail. */
+/** Renders above the page, outside any dark ancestor such as the rail. */
 export function MenuPopup({
   children,
   side = "bottom",
@@ -63,14 +57,12 @@ export function MenuPopup({
   );
 }
 
-/** Props of {@link MenuRadioGroup}. */
 export interface MenuRadioGroupProps<Value extends string> {
   value: Value;
   onValueChange: (value: Value) => void;
   children: ReactNode;
 }
 
-/** Groups radio items so that exactly one is checked. */
 export function MenuRadioGroup<Value extends string>({
   value,
   onValueChange,
@@ -83,13 +75,11 @@ export function MenuRadioGroup<Value extends string>({
   );
 }
 
-/** Props of {@link MenuRadioItem}. */
 export interface MenuRadioItemProps {
   value: string;
   children: ReactNode;
 }
 
-/** Renders a choice of a radio group, with the check beside the chosen one. */
 export function MenuRadioItem({ value, children }: MenuRadioItemProps) {
   return (
     <BaseMenu.RadioItem

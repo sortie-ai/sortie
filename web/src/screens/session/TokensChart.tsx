@@ -100,13 +100,10 @@ function BarSlot({ bar, top, hasLabel }: BarSlotProps) {
   );
 }
 
-/** Props of {@link TokensLegend}. */
 export interface TokensLegendProps {
-  /** Whether a bar for the turn in progress is drawn. */
   hasInProgress: boolean;
 }
 
-/** Names the fills of the tokens chart: completed turns, and the turn in progress while one is drawn. */
 export function TokensLegend({ hasInProgress }: TokensLegendProps) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-md gap-y-xxs">
@@ -127,13 +124,11 @@ export function TokensLegend({ hasInProgress }: TokensLegendProps) {
   );
 }
 
-/** Props of {@link TokensChart}. */
 export interface TokensChartProps {
   /** One bar per turn in timeline order; at least one. */
   bars: readonly TurnBar[];
 }
 
-/** Draws the tokens of each turn as a bar chart, with a tooltip of turn, tokens, and duration on every bar. */
 export function TokensChart({ bars }: TokensChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotWidth = useWidth(plotRef);

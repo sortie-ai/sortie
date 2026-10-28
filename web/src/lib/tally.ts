@@ -3,18 +3,15 @@ import { fmtCount, fmtTokens, plural } from "@/lib/format";
 
 import type { Summary } from "@/api/types.gen";
 
-/** The tally line of Ended today: the figures, and the cost apart so it can carry its own hover. */
+/** The cost is apart so it can carry its own hover. */
 export interface TallyLine {
-  /** Every part but the cost. */
   parts: string[];
-  /** The cost part; undefined when no run finished or no cost is shown. */
   cost: string | undefined;
 }
 
 // The tally reads a report that records cost, so the base tier never applies.
 const RECORDED_TIER = "full";
 
-/** Words the tally line of Ended today from the stats summary of today's runs. */
 export function tallyLine(summary: Summary, endedCount: number, hasCost: boolean): TallyLine {
   if (summary.runs === 0) {
     return { parts: ["No run finished today."], cost: undefined };
@@ -35,7 +32,6 @@ export function tallyLine(summary: Summary, endedCount: number, hasCost: boolean
   return { parts, cost: hasCost ? costPart(summary) : undefined };
 }
 
-/** Gives the hover of the tally cost, or undefined while it has no amount to state. */
 export function tallyCostTitle(summary: Summary, hasCost: boolean): string | undefined {
   return hasCost && summary.cost_usd !== null ? statsCostTitle(summary, RECORDED_TIER) : undefined;
 }

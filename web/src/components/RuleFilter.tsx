@@ -36,19 +36,12 @@ function describe(value: string, options: readonly RuleOption[]): string {
   return value.slice(value.indexOf(":") + 1);
 }
 
-/** Props of {@link RuleFilter}. */
 export interface RuleFilterProps {
   config: ConfigResponse | undefined;
   /** Every row before any filter; the option counts read them. */
   rows: readonly Filterable[];
 }
 
-/**
- * Renders the Rule menu: a chip that opens a searchable list of the workflow's
- * rules grouped by stage chain, each with its row count. It renders nothing
- * while the workflow holds no rules. The choice lives in the `rule` search
- * parameter.
- */
 export function RuleFilter({ config, rows }: RuleFilterProps) {
   const [params, setParams] = useSearchParams();
   const [isOpen, setIsOpen] = useState(false);

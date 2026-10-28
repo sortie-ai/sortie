@@ -27,9 +27,7 @@ import type { ReactNode } from "react";
 
 const PAGE_ROWS = 20;
 
-/** What {@link usePaging} hands a table. */
 export interface Paging<Row> {
-  /** The rows shown so far. */
   visible: readonly Row[];
   hasMore: boolean;
   /** Goes on the table body's `ref`, so focus can move to the first row a page adds. */
@@ -37,10 +35,7 @@ export interface Paging<Row> {
   handleShowMore: () => void;
 }
 
-/**
- * Shows rows 20 at a time. The shown count lives in state, so mount the table
- * with a key that changes with the range.
- */
+/** The shown count lives in state, so mount the table with a key that changes with the range. */
 export function usePaging<Row>(rows: readonly Row[]): Paging<Row> {
   const [shown, setShown] = useState(PAGE_ROWS);
   const body = useRef<HTMLTableSectionElement | null>(null);
@@ -73,13 +68,11 @@ export function usePaging<Row>(rows: readonly Row[]): Paging<Row> {
   };
 }
 
-/** Props of {@link ShowMore}. */
 export interface ShowMoreProps {
   hasMore: boolean;
   onShowMore: () => void;
 }
 
-/** Renders the button that shows the next page of rows, until none is left. */
 export function ShowMore({ hasMore, onShowMore }: ShowMoreProps) {
   return hasMore ? (
     <div>
@@ -88,11 +81,7 @@ export function ShowMore({ hasMore, onShowMore }: ShowMoreProps) {
   ) : undefined;
 }
 
-/**
- * Column widths every Analytics table shares, so the columns line up from table
- * to table; Duration takes the rest. A chain table splits the name width into
- * its stage number and stage name, so its Runs column lines up too.
- */
+/** Column widths every Analytics table shares, so the columns line up from table to table; Duration takes the rest. A chain table splits the name width into its stage number and stage name, so its Runs column lines up too. */
 export const COLUMN_WIDTH = {
   name: "w-nav-rail",
   nameText: "max-w-[208px]",
@@ -124,7 +113,6 @@ function NotedFigure({ note, children }: NotedFigureProps) {
   return note === undefined ? children : <Hint hint={note}>{children}</Hint>;
 }
 
-/** One name column of a {@link GroupTable}. */
 export interface NameColumn<Row> {
   header: string;
   cell: (row: Row) => ReactNode;
@@ -132,14 +120,11 @@ export interface NameColumn<Row> {
   sortText: (row: Row) => string;
 }
 
-/** Props of {@link GroupTable}. */
 export interface GroupTableProps<Row extends Group> {
   title: string;
-  /** The address param that keeps this table's sort. */
   sortParam: string;
   nameColumns: readonly NameColumn<Row>[];
   rows: readonly Row[];
-  /** The report's `schema_tier`. */
   tier: string;
   /** Whether a rate source is available, which adds the cost column. */
   hasRates: boolean;
@@ -177,11 +162,7 @@ function sortColumns<Row extends Group>(
   ];
 }
 
-/**
- * Renders one breakdown of a report: name columns, then the figure columns,
- * 20 rows at a time, sortable by any column. The shown count lives in state, so
- * mount the table with a key that changes with the range.
- */
+/** The shown count lives in state, so mount the table with a key that changes with the range. */
 export function GroupTable<Row extends Group>({
   title,
   sortParam,

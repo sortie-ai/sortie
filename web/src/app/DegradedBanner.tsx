@@ -54,7 +54,6 @@ function failingChecks(state: StateResponse): CheckLine[] {
   return checks.filter((check) => check.status === "fail");
 }
 
-/** Renders one line per failing health check under the top bar, or nothing while every check passes. */
 export function DegradedBanner() {
   const { data } = useStateQuery();
   const isOnHealth = useMatch("/health") !== null;

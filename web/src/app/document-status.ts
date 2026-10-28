@@ -59,12 +59,7 @@ function iconLink(): HTMLLinkElement {
   return link;
 }
 
-/**
- * Sets the document title and favicon from the condition, the attention count,
- * and the tracked project. Pass `undefined` for the condition before the first
- * state response and for the project while the state serves none. While live
- * updates are paused the last title and icon stay.
- */
+/** Pass `undefined` for the condition before the first state response and for the project while the state serves none; while live updates are paused the last title and icon stay. */
 export function useDocumentStatus(
   condition: Condition | undefined,
   attention: number,

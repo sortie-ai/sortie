@@ -49,14 +49,12 @@ function everywhereShortcuts(screens: ScreenEntry[]): Shortcut[] {
   ];
 }
 
-/** Props of {@link ShortcutsDialog}. */
 export interface ShortcutsDialogProps {
   screens: ScreenEntry[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/** Renders the dialog that lists the keys acting on the current route. */
 export function ShortcutsDialog({ screens, open, onOpenChange }: ShortcutsDialogProps) {
   const isOverview = useMatch("/") !== null;
   const isPipeline = useMatch("/pipeline") !== null;

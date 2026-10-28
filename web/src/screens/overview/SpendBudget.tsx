@@ -41,21 +41,18 @@ const SPEND_LABELS: Record<keyof SpendCeilingResponse, string> = {
 // Object.keys widens to string[]; the keys are exactly those of SPEND_LABELS.
 const SPEND_WINDOWS = Object.keys(SPEND_LABELS) as (keyof SpendCeilingResponse)[];
 
-/** Lists the configured instance spend windows, shortest first; empty while no ceiling is set. */
 export function spendWindows(
   ceiling: SpendCeilingResponse | undefined,
 ): (keyof SpendCeilingResponse)[] {
   return ceiling === undefined ? [] : SPEND_WINDOWS.filter((key) => ceiling[key] !== null);
 }
 
-/** Props of {@link SpendBudget}. */
 export interface SpendBudgetProps {
   ceiling: SpendCeilingResponse;
   /** Whether to say the figures are estimated at API prices, which matters once an agent reports a plan's limits. */
   isEstimateNoted: boolean;
 }
 
-/** Renders the operator's spend ceilings: one meter per configured window, shortest window first. */
 export function SpendBudget({ ceiling, isEstimateNoted }: SpendBudgetProps) {
   return (
     <div className="flex flex-col gap-sm rounded-lg border border-line bg-canvas p-md">

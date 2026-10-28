@@ -6,18 +6,13 @@ import { safeHttpUrl } from "@/lib/links";
 
 import type { HeldIssueResponse } from "@/api/types.gen";
 
-/** Props of {@link HeldItem}. */
 export interface HeldItemProps {
   row: HeldIssueResponse;
   /** Server-clock time in epoch milliseconds that the hold's age measures against. */
   now: number;
 }
 
-/**
- * Renders one held issue: its title and key, why Sortie holds it back, what
- * releases it, and how long it has been held beside a link to the tracker.
- * It opens nothing inside the dashboard.
- */
+/** It opens nothing inside the dashboard. */
 export function HeldItem({ row, now }: HeldItemProps) {
   const key = row.display_identifier || row.issue_identifier;
   const url = safeHttpUrl(row.issue_url);

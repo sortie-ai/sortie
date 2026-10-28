@@ -110,13 +110,11 @@ function headingOf(stages: readonly FunnelStage[]): ReactNode {
   );
 }
 
-/** Props of {@link ChainFunnel}. */
 export interface ChainFunnelProps {
   funnel: Funnel;
   config: ConfigResponse | undefined;
 }
 
-/** Renders one chain definition of the report: a row per stage with the passes that reached it and how each one left it. */
 export function ChainFunnel({ funnel, config }: ChainFunnelProps) {
   const stages = funnel.stages ?? [];
   const targets = handoffTargets(config);

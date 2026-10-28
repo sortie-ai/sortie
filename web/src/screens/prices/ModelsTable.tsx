@@ -156,12 +156,10 @@ function ModelSearch({ query, onQueryChange }: ModelSearchProps) {
   );
 }
 
-/** Props of {@link ModelsTable}. */
 export interface ModelsTableProps {
   rows: readonly ModelPriceResponse[];
 }
 
-/** Renders the rates the next run of each agent kind and model gets, in the order served until a column is sorted. */
 export function ModelsTable({ rows }: ModelsTableProps) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();

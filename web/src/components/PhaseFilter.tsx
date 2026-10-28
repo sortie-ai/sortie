@@ -17,17 +17,11 @@ const LABELS: Record<Phase, string> = {
   ended_today: "Ended today",
 };
 
-/** Props of {@link PhaseFilter}. */
 export interface PhaseFilterProps {
   /** The rows the rule menu already narrowed; the counts and the "All" chip read them. */
   rows: readonly Filterable[];
 }
 
-/**
- * Renders the lifecycle chips above a list of rows. The choice lives in the
- * `phase` search parameter; a chip shows while it has rows or is chosen, and the
- * row of chips shows while more than one phase is present or one is chosen.
- */
 export function PhaseFilter({ rows }: PhaseFilterProps) {
   const [params, setParams] = useSearchParams();
   const raw = params.get(PHASE_PARAM);

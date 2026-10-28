@@ -12,7 +12,6 @@ import type { IconProps } from "@/components/icons";
 import type { EndedIssue } from "@/lib/ended";
 import type { Mark } from "@/lib/run-status";
 
-/** Props of {@link CalmState}. */
 export interface CalmStateProps {
   /** Whether nothing waits on a person, acknowledged items included; only then does the calm line show. */
   allClear: boolean;
@@ -20,7 +19,6 @@ export interface CalmStateProps {
   runningSince: readonly string[];
   /** The global agent cap, or `undefined` while the config is not served. */
   maxAgents: number | undefined;
-  /** Today's ended issues, newest first. */
   ended: readonly EndedIssue[];
   /** `config.tracker.terminal_states` as served; empty while the config is not served. */
   terminalStates: readonly string[];
@@ -131,7 +129,6 @@ function runsNote(runs: Summary): ReactNode {
   );
 }
 
-/** Renders the calm line and the stat tiles that follow the headline while nothing needs attention; each tile opens the screen that explains its figure. */
 export function CalmState({
   allClear,
   runningSince,

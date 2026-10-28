@@ -12,7 +12,6 @@ const LOOP_MARGIN = 3;
 // Their full labels do not fit a name box at any width.
 const ALWAYS_SHORT = new Set(["merge_completion", "label_commands"]);
 
-/** Props of {@link StationHeader}. */
 export interface StationHeaderProps {
   stations: readonly Station[];
   /** The lanes per station key; a station without an entry holds none. */
@@ -40,13 +39,7 @@ function StationName({ station }: StationNameProps) {
   );
 }
 
-/**
- * Renders the stations above the Pipeline lanes, each with the count of lanes
- * standing at it written under its name, so a count of any length fits. It places each station with {@link stationX}, as the lane
- * tracks do, so the names stand over the dots. A name box never grows past its
- * share of the width; a reaction station shows its short form once the share
- * drops below the room the full name needs.
- */
+/** Stations are placed with {@link stationX}, as the lane tracks do, so the names stand over the dots; the count sits under the name so a count of any length fits. */
 export function StationHeader({ stations, tally }: StationHeaderProps) {
   const count = stations.length;
   const reactions = stations.flatMap((station, index) =>

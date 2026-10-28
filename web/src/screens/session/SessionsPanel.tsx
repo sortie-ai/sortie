@@ -109,18 +109,12 @@ function SessionRowView({ row, identifier, isCurrent }: SessionRowViewProps) {
   );
 }
 
-/** Props of {@link SessionsPanel}. */
 export interface SessionsPanelProps {
   identifier: string;
   /** The dispatch ID of the session on screen, whose row is not a link. */
   dispatchId: string;
 }
 
-/**
- * Renders every session of the issue, newest first, each named by the run
- * number the issue page gives it. It draws nothing while the issue has a
- * single session. Older runs load on request.
- */
 export function SessionsPanel({ identifier, dispatchId }: SessionsPanelProps) {
   const { data: detail } = useIssueQuery(identifier);
   const [wanted, setWanted] = useState(0);

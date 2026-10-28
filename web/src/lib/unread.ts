@@ -6,7 +6,6 @@ const STORAGE_VERSION = 1;
 const listeners = new Set<() => void>();
 let current: ReadonlySet<string> | undefined;
 
-/** Returns the read key of an attention item. */
 export function attentionKey(id: string): string {
   return `a:${id}`;
 }
@@ -88,7 +87,6 @@ export function markRead(keys: Iterable<string>): void {
   }
 }
 
-/** Reports whether the key is in the read set. */
 export function isRead(key: string): boolean {
   return snapshot().has(key);
 }

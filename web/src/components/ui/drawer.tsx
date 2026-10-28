@@ -5,15 +5,12 @@ import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Drawer}. */
 export type DrawerProps = Omit<BaseDrawer.Root.Props, "swipeDirection">;
 
-/** Holds the open state of a drawer that enters from the right edge and is swiped away to the right. */
 export function Drawer(props: DrawerProps) {
   return <BaseDrawer.Root swipeDirection="right" {...props} />;
 }
 
-/** Props of {@link DrawerPopup}. */
 export interface DrawerPopupProps {
   /** Accessible name when the content holds no {@link DrawerTitle}. */
   "aria-label"?: string;
@@ -21,10 +18,6 @@ export interface DrawerPopupProps {
   className?: string;
 }
 
-/**
- * Renders the panel over a scrim: 500 px wide, the full width below 768 px. It
- * travels in on the enter duration and leaves on the shorter exit duration.
- */
 export function DrawerPopup({ children, className, ...rest }: DrawerPopupProps) {
   return (
     <BaseDrawer.Portal>
@@ -47,13 +40,11 @@ export function DrawerPopup({ children, className, ...rest }: DrawerPopupProps) 
   );
 }
 
-/** Props of {@link DrawerTitle}. */
 export interface DrawerTitleProps {
   children: ReactNode;
   className?: string;
 }
 
-/** Names the drawer for assistive technology. */
 export function DrawerTitle({ children, className }: DrawerTitleProps) {
   return (
     <BaseDrawer.Title className={cn("text-h7 font-semibold text-ink", className)}>
@@ -62,12 +53,10 @@ export function DrawerTitle({ children, className }: DrawerTitleProps) {
   );
 }
 
-/** Props of {@link DrawerClose}. */
 export interface DrawerCloseProps extends Omit<BaseDrawer.Close.Props, "className"> {
   className?: string;
 }
 
-/** Renders a secondary-style button that closes the drawer. */
 export function DrawerClose({ className, ...rest }: DrawerCloseProps) {
   return <BaseDrawer.Close className={buttonStyles("secondary", className)} {...rest} />;
 }

@@ -49,7 +49,6 @@ interface CheckRowProps {
   check: HealthCheckResponse;
   /** The line once the check has run; the check's error, when it has one, follows it. */
   line: ReactNode;
-  /** The line before the check's first run. */
   unrunLine?: ReactNode;
 }
 
@@ -194,7 +193,6 @@ function ProcessPanel({ state, health }: AsideProps) {
   );
 }
 
-/** Renders Health: one row per check of Sortie itself, then the poll loop and the process beside them. */
 export function HealthScreen(): ReactNode {
   const { data } = useStateQuery();
   if (data === undefined) {

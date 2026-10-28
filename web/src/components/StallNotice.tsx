@@ -1,14 +1,12 @@
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
 
-/** Props of {@link StallNotice}. */
 export interface StallNoticeProps {
   text: string;
   /** Whether the session is quiet; a notice of a session that is not carries no mark. */
   isStalled: boolean;
 }
 
-/** Renders the served stall sentence under a page head, marked while the session is quiet. */
 export function StallNotice({ text, isStalled }: StallNoticeProps) {
   return (
     <p className="mb-lg rounded-xl border border-solid border-line-strong bg-surface px-md py-sm text-body-md text-ink-body">

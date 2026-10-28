@@ -2,28 +2,22 @@ import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Tooltip}. */
 export type TooltipProps = BaseTooltip.Root.Props;
 
-/** Holds the open state of a tooltip, which opens on hover and on keyboard focus of its trigger. */
 export function Tooltip(props: TooltipProps) {
   return <BaseTooltip.Root {...props} />;
 }
 
-/** Props of {@link TooltipTrigger}. */
 export type TooltipTriggerProps = BaseTooltip.Trigger.Props;
 
-/** Renders the element the tooltip describes; pass `render` to put the trigger on an existing control. */
 export function TooltipTrigger(props: TooltipTriggerProps) {
   return <BaseTooltip.Trigger {...props} />;
 }
 
-/** Props of {@link TooltipPopup}. */
 export interface TooltipPopupProps {
   children: ReactNode;
 }
 
-/** Renders the short text floating above its trigger. */
 export function TooltipPopup({ children }: TooltipPopupProps) {
   return (
     <BaseTooltip.Portal>

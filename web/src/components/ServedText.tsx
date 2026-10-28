@@ -1,13 +1,8 @@
-/** Props of {@link ServedText}. */
 export interface ServedTextProps {
   text: string;
 }
 
-/**
- * Renders a sentence the server wrote as text, never as markup. Text between a
- * pair of backticks becomes inline code without the backticks; a backtick with no
- * partner renders as itself.
- */
+/** Renders a sentence the server wrote as text, never as markup; text between a pair of backticks becomes inline code. */
 export function ServedText({ text }: ServedTextProps) {
   const segments = text.split("`");
   const last = segments.length - 1;

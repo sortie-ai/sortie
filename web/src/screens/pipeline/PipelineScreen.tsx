@@ -416,11 +416,7 @@ function PipelineBody({ state }: PipelineBodyProps) {
   );
 }
 
-/**
- * Renders the Pipeline: every active issue and every issue that ended today as
- * one lane across the stations of the workflow. While a peek is open it
- * renders the data as it was when the peek opened.
- */
+/** While a peek is open it renders the data as it was when the peek opened. */
 export function PipelineScreen() {
   const { data: state } = useStateQuery();
   return state === undefined ? undefined : <PipelineBody state={state} />;

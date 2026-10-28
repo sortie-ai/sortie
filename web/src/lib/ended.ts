@@ -9,10 +9,7 @@ import type {
   StateResponse,
 } from "@/api/types.gen";
 
-/**
- * Gives the one word a status column shows for an ending: the tracker state the
- * issue reached, as the operator configured it with a capital first letter, or Merged.
- */
+/** The tracker state the issue reached, as the operator configured it with a capital first letter, or Merged. */
 export function endingWord(outcome: IssueOutcomeResponse): string {
   switch (outcome.kind) {
     case "merged":
@@ -27,7 +24,6 @@ export function endingWord(outcome: IssueOutcomeResponse): string {
   }
 }
 
-/** Reports whether the workflow lists two or more terminal states. */
 export function hasSeveralTerminalStates(
   terminalStates: readonly string[] | null | undefined,
 ): boolean {
@@ -69,11 +65,7 @@ function activeIssueIds(state: StateResponse): Set<string> {
   return new Set(lists.flatMap((list) => (list ?? []).map((entry) => entry.issue_id)));
 }
 
-/**
- * Builds today's ended set from the run pages, which serve runs newest first:
- * the newest run of each issue that has an outcome and is in no row list of
- * the state, newest ending first.
- */
+/** Runs are served newest first; the newest run of each issue that has an outcome and is in no row list of the state, newest ending first. */
 export function buildEnded(pages: RunsResponse[], state: StateResponse): EndedIssue[] {
   const active = activeIssueIds(state);
   const newest = new Map<string, RunResponse>();

@@ -113,7 +113,6 @@ function UsageKindBlock({ kind, usage, windows, now }: UsageKindBlockProps) {
   );
 }
 
-/** Props of {@link Usage}. */
 export interface UsageProps {
   ceiling: StateResponse["spend_ceiling"];
   rateLimits: StateResponse["rate_limits"];
@@ -123,10 +122,7 @@ export interface UsageProps {
   now: number;
 }
 
-/**
- * Renders the Usage section: the operator's spend ceilings, then each listed agent kind's current plan
- * windows. A kind with no current window, and the section with nothing to show, render nothing.
- */
+/** A kind with no current window, and the section with nothing to show, render nothing. */
 export function Usage({ ceiling, rateLimits, kinds, now }: UsageProps) {
   const reported = kinds.flatMap((kind) => {
     const usage = rateLimits[kind];

@@ -4,17 +4,12 @@ import { CircleHelpIcon } from "@/components/icons";
 
 import type { ReactNode } from "react";
 
-/** Props of {@link Hint}. */
 export interface HintProps {
   hint: ReactNode;
   children: ReactNode;
 }
 
-/**
- * Renders text with a dotted underline that opens a short note on hover, on
- * keyboard activation and on tap. It is a popover rather than a tooltip because
- * touch devices never open a tooltip.
- */
+/** A popover rather than a tooltip, because touch devices never open a tooltip. */
 export function Hint({ hint, children }: HintProps) {
   return (
     <BasePopover.Root>
@@ -29,14 +24,11 @@ export function Hint({ hint, children }: HintProps) {
   );
 }
 
-/** Props of {@link HelpHint}. */
 export interface HelpHintProps {
   hint: ReactNode;
-  /** Names the icon for a screen reader. */
   label: string;
 }
 
-/** Renders a small question-mark icon that opens a short note the way {@link Hint} does. */
 export function HelpHint({ hint, label }: HelpHintProps) {
   return (
     <BasePopover.Root>

@@ -123,7 +123,6 @@ function StatusSummary({ state }: StatusSummaryProps) {
   );
 }
 
-/** Renders the rail's link to Overview: a dot and headline for the condition, the failing checks when degraded, and how many agents run. */
 export function StatusCard() {
   const { data } = useStateQuery();
 

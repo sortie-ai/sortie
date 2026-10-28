@@ -21,12 +21,7 @@ import type { StateResponse } from "@/api/types.gen";
 import type { IconProps } from "@/components/icons";
 import type { KeyboardEvent, ReactNode } from "react";
 
-/**
- * One screen the shell can open. `key` is the letter pressed after `G`, `path`
- * is relative to the application's base path, and screens with the same `group`
- * sit together, with a divider between groups in ascending order. The screen at
- * path `/` is Overview, which carries the attention badge.
- */
+/** `key` is the letter pressed after `G`, `path` is relative to the application's base path, and screens with the same `group` sit together; the screen at `/` is Overview, which carries the attention badge. */
 export interface ScreenEntry {
   key: string;
   label: string;
@@ -92,7 +87,6 @@ interface NavFilterProps {
   onQueryChange: (query: string) => void;
 }
 
-// Enter opens the first match, so typing a few letters is enough to move.
 function NavFilter({ query, firstMatch, onQueryChange }: NavFilterProps) {
   const navigate = useNavigate();
 
@@ -137,13 +131,11 @@ function NavFilter({ query, firstMatch, onQueryChange }: NavFilterProps) {
   );
 }
 
-/** Props of {@link Rail}. */
 export interface RailProps {
   screens: ScreenEntry[];
   onOpenShortcuts: () => void;
 }
 
-/** Renders the dark navigation rail: brand, screen filter, one entry per matching screen, the status card, the documentation and repository links, and the shortcuts button. */
 export function Rail({ screens, onOpenShortcuts }: RailProps) {
   const { data } = useStateQuery();
   const [query, setQuery] = useState("");

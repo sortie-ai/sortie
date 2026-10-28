@@ -55,9 +55,7 @@ export interface IssueDetailRow {
   statusTextFull: string;
 }
 
-/** Props of {@link IssueDetail}. */
 export interface IssueDetailProps {
-  /** The `issue_identifier` that addresses the issue. */
   identifier: string;
   row?: IssueDetailRow;
   /** Renders the drawer layout with "Open page" and "Close" instead of the page. */
@@ -405,12 +403,6 @@ function SubHeading({ children }: { children: ReactNode }) {
   return <h3 className="mt-lg mb-sm text-body-sm font-medium text-ink-muted">{children}</h3>;
 }
 
-/**
- * Renders one issue. The page shows the state and type over the title,
- * the served sentence, the external links, the lane, then the story beside a
- * margin from 1280 px. The peek shows the same head over the facts, what
- * happens next, and the last runs.
- */
 export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps) {
   const { data, error } = useIssueQuery(identifier);
   const { data: state } = useStateQuery();
