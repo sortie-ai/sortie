@@ -376,8 +376,16 @@ var spendFieldNames = map[string]bool{
 	"CoversSession":    true,
 }
 
+// spendFieldWriterDirs names the directories that may touch a spend field
+// by name: agentcore writes the turn-result fields, and the usage ledger's
+// settlement carries a field of the same name as its input to that rule.
+var spendFieldWriterDirs = map[string]bool{
+	"agentcore": true,
+	"usage":     true,
+}
+
 func checkSpendFieldWriters(fset *token.FileSet, pkg usageContractPackage) []usageContractViolation {
-	if pkg.dirName == "agentcore" {
+	if spendFieldWriterDirs[pkg.dirName] {
 		return nil
 	}
 

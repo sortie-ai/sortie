@@ -2,7 +2,8 @@
 // protocol cannot express: measurement sources read outside the wire,
 // credential-verification additions that drop a runtime's agent context, and
 // usage declarations (what a runtime's protocol messages report about provider
-// usage windows, and how to pull those windows when a turn ends).
+// usage windows and spend, how to pull those windows when a turn ends, and how
+// to read the runtime's own per-request spend records).
 //
 // The transport names no runtime. It asks each source three questions in
 // order: does it claim this launch, does the handshake report the runtime's
@@ -52,6 +53,22 @@ type Declaration struct {
 	// usage.ErrPullUnsupported when the runtime cannot answer in this session.
 	PullWindows func(ctx context.Context, rt PullRuntime) ([]usage.WindowReading, error)
 
+	// PromptSpend reads the spend a session/prompt result reports, under
+	// Live.Spend. It returns nil when the result carries no usage, and a count
+	// is nil wherever its member is absent, null, or not a JSON integer. Nil
+	// exactly when Live.Spend.Shape is usage.SpendUndeclared.
+	PromptSpend func(result json.RawMessage) *usage.SpendReading
+
+	// Records is the runtime's records source: the per-request spend records
+	// on its host.
+	Records usage.Source
+
+	// ReadRecords reads every spend record of the session from the runtime's
+	// host, in the order the runtime wrote them. A missing journal returns no
+	// readings and no error; any other failure returns an error and no
+	// readings. Nil exactly when Records.Spend.Shape is usage.SpendUndeclared.
+	ReadRecords func(ctx context.Context, rt PullRuntime) ([]usage.SpendReading, error)
+
 	// Launches reports whether target starts this runtime. It selects the
 	// declaration for a launch whose handshake name matches no registered
 	// declaration, including a handshake that reports no name. Nil when the
@@ -59,7 +76,7 @@ type Declaration struct {
 	Launches func(target agentcore.LaunchTarget) bool
 }
 
-// PullRuntime is what a pull may use to reach one session's runtime. The
+// PullRuntime is what a declaration may use to reach one session's runtime. The
 // transport implements it.
 type PullRuntime interface {
 	// SessionID returns the protocol session's ID when the pull started.
@@ -78,6 +95,13 @@ type PullRuntime interface {
 	// directory. A missing file wraps fs.ErrNotExist; a file above limit
 	// bytes is an error.
 	ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error)
+
+	// ScanHomeFile scans rel as ReadHomeFile locates it, calling fn with each
+	// line in file order, without its terminator. The line is valid only
+	// during the call. A missing file wraps fs.ErrNotExist; a file above
+	// limit bytes, a line above lineLimit bytes, an ended context, and an
+	// error from fn stop the scan and return an error.
+	ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error
 
 	// RemoteHost reports whether the runtime runs on another host, reached
 	// over SSH, rather than on Sortie's own.

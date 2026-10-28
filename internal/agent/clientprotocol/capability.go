@@ -40,8 +40,9 @@ type capabilityRecord struct {
 // newCapabilityRecord builds a session's capability record with its stage-one
 // states. measured reports whether a measurement source claimed the launch.
 //
-// tokenCounts never reaches protocol because the wire carries no spend counter.
-// toolServers starts at protocol: the opening notice lowers it.
+// tokenCounts never reaches protocol because the protocol's stable line carries
+// no spend counter; a measurement source or a spend declaration raises it to
+// ours. toolServers starts at protocol: the opening notice lowers it.
 func newCapabilityRecord(measured bool) *capabilityRecord {
 	tokenCounts := capabilityGap
 	if measured {

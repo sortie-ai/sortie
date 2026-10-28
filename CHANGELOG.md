@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Agents on SSH worker hosts can now use Sortie's tools and the HTTP tool servers configured under `mcp_config`. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - When an agent's provider usage limit runs out, Sortie now waits for the reported reset instead of retrying, and keeps dispatching work to other agents and models in the meantime. ([#1523](https://github.com/sortie-ai/sortie/issues/1523))
 - The dashboard Overview page now shows each agent's plan usage limits, such as 5-hour, weekly, or monthly limits, with how much is used and when each resets, for Claude Code, Codex, Copilot CLI, OpenCode, Gemini CLI, and Kiro CLI, in one 'Usage' section with the spend budget. The JSON API serves them as `rate_limits`. ([#1388](https://github.com/sortie-ai/sortie/issues/1388))
+- Copilot CLI on the `agent-client-protocol` agent kind now reports its token usage and the models that served it on local runs, so `agent.max_tokens` and the cost limits apply to it. ([#1483](https://github.com/sortie-ai/sortie/issues/1483))
 
 ### Changed
 

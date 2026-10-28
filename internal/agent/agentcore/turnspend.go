@@ -1,6 +1,9 @@
 package agentcore
 
-import "github.com/sortie-ai/sortie/internal/domain"
+import (
+	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/domain"
+)
 
 // TurnSpend is one turn's evidence for the shared spend rule. The zero
 // value is a turn that has observed nothing. Whoever starts a turn owns
@@ -38,6 +41,24 @@ func (s *TurnSpend) MarkSessionTotal() {
 // resume baseline.
 func (s *TurnSpend) MarkEstimated() {
 	s.estimated = true
+}
+
+// ApplySettlement marks the turn's evidence from a ledger settlement and
+// returns the figure it produced, or nil when the settlement has none.
+func (s *TurnSpend) ApplySettlement(settlement usage.Settlement) *RecoveredUsage {
+	if settlement.Spent {
+		s.MarkModelReached()
+	}
+	if settlement.Complete {
+		s.MarkSettled()
+	}
+	if settlement.CoversSession {
+		s.MarkSessionTotal()
+	}
+	if !settlement.Figure {
+		return nil
+	}
+	return &RecoveredUsage{Run: settlement.Run, ByModel: settlement.ByModel, Model: settlement.Model}
 }
 
 // ModelReached reports whether the runtime served this turn output.

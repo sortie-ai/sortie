@@ -2,7 +2,9 @@
 // runtime-neutral form. It names no runtime and no runtime format, and it
 // registers no kind: each adapter declares its sources and parses its own
 // reports, then hands the readings here. The component runs every pull, so
-// a pulled source supplies only the request that fetches its readings.
+// a pulled source supplies only the request that fetches its readings. It
+// also accounts a session's spend through Ledger, from the live and
+// records sources a runtime declares.
 package usage
 
 import (
@@ -22,6 +24,8 @@ const (
 	// StrategyPull makes a request when a turn ends, to the runtime or the
 	// endpoint it calls, with the runtime's own credential.
 	StrategyPull
+	// StrategyRecords reads the runtime's own records on its host when a turn ends.
+	StrategyRecords
 )
 
 // ErrPullUnsupported marks a pull the runtime cannot answer in this
@@ -37,6 +41,10 @@ type Source struct {
 
 	// Windows declares how the source reports provider usage windows.
 	Windows WindowDeclaration
+
+	// Spend declares how the source reports spend; the zero value leaves it
+	// unread.
+	Spend SpendDeclaration
 }
 
 // WindowDeclaration is a source's declaration of its usage-window fields.

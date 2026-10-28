@@ -10,19 +10,8 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/domain"
-)
-
-const (
-	// maxSessionStateFileBytes is the maximum size of a session-state
-	// events.jsonl file readSessionUsage will read. Larger files are
-	// rejected without being opened.
-	maxSessionStateFileBytes = 64 * 1024 * 1024
-
-	// maxSessionStateLineBytes is the maximum size of a single line
-	// readSessionUsage will scan, matching the stdout scanner cap the
-	// fork-per-turn skeleton already uses.
-	maxSessionStateLineBytes = 10 * 1024 * 1024
 )
 
 // errSessionStateCapExceeded wraps the error readSessionUsage returns
@@ -39,14 +28,14 @@ var errSessionStateCapExceeded = errors.New("session-state read exceeds cap")
 // "session-state") otherwise. env and home let callers substitute
 // os.Getenv and os.UserHomeDir in production and fixed values in tests.
 func sessionStateRoot(env func(string) string, home func() (string, error)) (string, error) {
-	if v := env("COPILOT_HOME"); v != "" {
+	if v := env(sessionstate.HomeVar); v != "" {
 		return filepath.Join(v, "session-state"), nil
 	}
 	dir, err := home()
 	if err != nil {
 		return "", fmt.Errorf("resolve user home directory: %w", err)
 	}
-	return filepath.Join(dir, ".copilot", "session-state"), nil
+	return filepath.Join(dir, sessionstate.DefaultHome, "session-state"), nil
 }
 
 // readSessionUsage scans the session-state events journal at path and
@@ -66,9 +55,9 @@ func readSessionUsage(path string) (current domain.TokenUsage, byModel map[strin
 	if statErr != nil {
 		return domain.TokenUsage{}, nil, "", false, statErr
 	}
-	if info.Size() > maxSessionStateFileBytes {
+	if info.Size() > sessionstate.MaxFileBytes {
 		return domain.TokenUsage{}, nil, "", false,
-			fmt.Errorf("session-state events file exceeds %d bytes: %w", maxSessionStateFileBytes, errSessionStateCapExceeded)
+			fmt.Errorf("session-state events file exceeds %d bytes: %w", sessionstate.MaxFileBytes, errSessionStateCapExceeded)
 	}
 
 	f, openErr := os.Open(path) //nolint:gosec // path is derived from a validated session id, not user input
@@ -78,7 +67,7 @@ func readSessionUsage(path string) (current domain.TokenUsage, byModel map[strin
 	defer f.Close() //nolint:errcheck // read-only handle
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxSessionStateLineBytes)
+	scanner.Buffer(make([]byte, 0, 64*1024), sessionstate.MaxLineBytes)
 
 	var records []shutdownEvent
 	for scanner.Scan() {
@@ -97,7 +86,7 @@ func readSessionUsage(path string) (current domain.TokenUsage, byModel map[strin
 	if scanErr := scanner.Err(); scanErr != nil {
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			return domain.TokenUsage{}, nil, "", false,
-				fmt.Errorf("session-state events file line exceeds %d bytes: %w", maxSessionStateLineBytes, errSessionStateCapExceeded)
+				fmt.Errorf("session-state events file line exceeds %d bytes: %w", sessionstate.MaxLineBytes, errSessionStateCapExceeded)
 		}
 		return domain.TokenUsage{}, nil, "", false, fmt.Errorf("scan session-state events file: %w", scanErr)
 	}

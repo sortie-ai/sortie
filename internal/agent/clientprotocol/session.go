@@ -150,8 +150,9 @@ type pumpControl struct {
 
 	// usage and pulled are published by the goroutine that ran the drain or the
 	// pull, so the usage accumulator is touched only on the pump's goroutine.
-	usage  *usageObserved
-	pulled *pullResult
+	usage   *usageObserved
+	pulled  *pullResult
+	records *recordsResult
 
 	// answerOpen, when non-nil, tells the pump to answer every request still
 	// open; the pump closes it once handleAnswerOpen returns.
@@ -168,6 +169,15 @@ type usageObserved struct {
 	recovered    *agentcore.RecoveredUsage
 	source       string
 	completeness usagesource.Completeness
+}
+
+// recordsResult is one turn's records read outcome; turn lets a result arriving
+// after that turn ended be dropped. A non-nil err means the read did not
+// complete.
+type recordsResult struct {
+	turn     *activeTurn
+	readings []usage.SpendReading
+	err      error
 }
 
 // pullResult is one turn's usage pull outcome; turn lets a result arriving after
@@ -206,6 +216,11 @@ type handshakeFacts struct {
 	// puller is nil when the declaration has no pull or the session verifies a
 	// credential.
 	puller *usage.Puller
+
+	// ledger is nil when the declaration declares no spend, the launch is
+	// remote, or the declaration is unsupported; a session with a ledger has no
+	// reader.
+	ledger *usage.Ledger
 }
 
 // turnStart is what RunTurn publishes to start one turn.
@@ -469,7 +484,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 }
 
 // finishSession completes the final start; verdict.confirmed's source, or nil,
-// is the only source the pump receives.
+// is the only reader the pump receives, and none when the session has a ledger.
 func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, verdict usageVerdict) (domain.Session, error) {
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	teardownOnFailure := func() {
@@ -526,7 +541,8 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
 	}
-	if verdict.confirmed != nil {
+	facts.ledger = newSessionLedger(ctx, state, facts.declaration)
+	if facts.ledger == nil && verdict.confirmed != nil {
 		facts.reader = verdict.confirmed.source
 	}
 
@@ -544,6 +560,36 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		NoToolChannel: state.tools.NoToolChannel(),
 		Internal:      state,
 	}, nil
+}
+
+// newSessionLedger returns the session's spend ledger, or nil when the launch is
+// remote, the declaration declares no spend, or the ledger refuses it. The
+// records already on the host are read here, before the first prompt, so none of
+// them is counted as this run's spend.
+func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration) *usage.Ledger {
+	if state.target.RemoteCommand != "" {
+		return nil
+	}
+	if decl.Live.Spend.Shape == usage.SpendUndeclared && decl.Records.Spend.Shape == usage.SpendUndeclared {
+		return nil
+	}
+	ledger, err := usage.NewLedger(decl.Live, decl.Records)
+	if err != nil {
+		state.logger.Warn("spend declaration unsupported", slog.Any("error", err))
+		return nil
+	}
+	if decl.ReadRecords == nil {
+		return ledger
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
+	defer cancel()
+	readings, err := decl.ReadRecords(readCtx, pullRuntime{state: state})
+	if err != nil {
+		state.logger.Debug("usage records read failed", slog.Any("error", err))
+	}
+	ledger.Boundary(usage.RecordsRead{Readings: readings, OK: err == nil})
+	return ledger
 }
 
 // settleToolDelivery returns the tool servers for the session-creation

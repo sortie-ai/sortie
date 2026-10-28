@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/waittest"
@@ -722,11 +724,15 @@ func loadPulledUsageRuntime(t *testing.T) pulledUsageRuntime {
 
 func newPulledUsageSession(t *testing.T, info *implementation, target agentcore.LaunchTarget) (*sessionState, *outboundReader, *io.PipeWriter) {
 	t.Helper()
+	return newDeclaredSession(t, resolveDeclaration(usagesource.Declarations, info, target), nil)
+}
+
+func newDeclaredSession(t *testing.T, declaration usagesource.Declaration, ledger *usage.Ledger) (*sessionState, *outboundReader, *io.PipeWriter) {
+	t.Helper()
 
 	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
 	state.sessionID = "sess-test"
-	declaration := resolveDeclaration(usagesource.Declarations, info, target)
-	facts := &handshakeFacts{declaration: declaration, puller: newSessionPuller(declaration, state, false)}
+	facts := &handshakeFacts{declaration: declaration, puller: newSessionPuller(declaration, state, false), ledger: ledger}
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
 	markSessionKnown(state)
 	return state, newOutboundReader(outPr), inPw
@@ -746,6 +752,12 @@ func answerUsageRequests(t *testing.T, out *outboundReader, inPw io.Writer, repl
 
 func runPulledUsageTurn(t *testing.T, state *sessionState, out *outboundReader, inPw io.Writer, replies ...usageReply) []domain.AgentEvent {
 	t.Helper()
+	events, _ := runPulledUsageTurnResult(t, state, out, inPw, replies...)
+	return events
+}
+
+func runPulledUsageTurnResult(t *testing.T, state *sessionState, out *outboundReader, inPw io.Writer, replies ...usageReply) ([]domain.AgentEvent, domain.TurnResult) {
+	t.Helper()
 
 	var events []domain.AgentEvent
 	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
@@ -754,10 +766,11 @@ func runPulledUsageTurn(t *testing.T, state *sessionState, out *outboundReader, 
 	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
 	answerUsageRequests(t, out, inPw, replies)
 
-	if outcome := waittest.Receive(t, outcomeCh, "turn outcome"); outcome.err != nil {
+	outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+	if outcome.err != nil {
 		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
 	}
-	return events
+	return events, outcome.result
 }
 
 func assertNoOutboundLine(t *testing.T, out *outboundReader) {
@@ -813,46 +826,41 @@ func TestPumpPulledUsage(t *testing.T) {
 
 	runtime := loadPulledUsageRuntime(t)
 
-	t.Run("the engine named at handshake answers its usage command", func(t *testing.T) {
-		t.Parallel()
-
-		state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t, "pulled_usage_agent.json"), agentcore.LaunchTarget{})
-
-		events := runPulledUsageTurn(t, state, out, inPw, usageReply{runtime.Execute, "execute_result.json"})
-
-		assertMonthlyCreditWindowBeforeMessage(t, events)
-	})
-
-	nameless := []struct {
-		name   string
-		target agentcore.LaunchTarget
-		pulled bool
+	pulledAgent := loadAgentInfoFixture(t, "pulled_usage_agent.json")
+	fallbackReplies := []usageReply{{method: runtime.Execute}, {method: runtime.GetUsage, fixture: "get_usage_result.json"}}
+	tests := []struct {
+		name       string
+		info       *implementation
+		target     agentcore.LaunchTarget
+		replies    []usageReply
+		wantWindow bool
 	}{
-		{"a local launch", runtime.Launch, true},
-		{"an ssh launch of the bare executable", sshLaunch(runtime.RemoteLaunches[0]), true},
-		{"an ssh launch of the executable by path", sshLaunch(runtime.RemoteLaunches[1]), true},
-		{"an ssh launch of another runtime", sshLaunch(runtime.OtherRemoteLaunch), false},
+		{
+			name:       "the engine named at handshake answers its usage command",
+			info:       pulledAgent,
+			replies:    []usageReply{{method: runtime.Execute, fixture: "execute_result.json"}},
+			wantWindow: true,
+		},
+		{name: "a nameless handshake and a local launch", target: runtime.Launch, replies: fallbackReplies, wantWindow: true},
+		{name: "a nameless handshake and an ssh launch of the bare executable", target: sshLaunch(runtime.RemoteLaunches[0]), replies: fallbackReplies, wantWindow: true},
+		{name: "a nameless handshake and an ssh launch of the executable by path", target: sshLaunch(runtime.RemoteLaunches[1]), replies: fallbackReplies, wantWindow: true},
+		{name: "a nameless handshake and an ssh launch of another runtime", target: sshLaunch(runtime.OtherRemoteLaunch)},
 	}
-	for _, tt := range nameless {
-		t.Run("a nameless handshake and "+tt.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state, out, inPw := newPulledUsageSession(t, nil, tt.target)
+			state, out, inPw := newPulledUsageSession(t, tt.info, tt.target)
 
-			if !tt.pulled {
-				events := runPulledUsageTurn(t, state, out, inPw)
+			events := runPulledUsageTurn(t, state, out, inPw, tt.replies...)
 
+			if !tt.wantWindow {
 				assertNoOutboundLine(t, out)
 				if got := len(windowEvents(events)); got != 0 {
 					t.Errorf("events carrying windows for %+v = %d, want 0", tt.target, got)
 				}
 				return
 			}
-
-			events := runPulledUsageTurn(t, state, out, inPw,
-				usageReply{method: runtime.Execute},
-				usageReply{runtime.GetUsage, "get_usage_result.json"})
-
 			assertMonthlyCreditWindowBeforeMessage(t, events)
 		})
 	}
@@ -912,6 +920,118 @@ func TestPumpPulledUsage(t *testing.T) {
 			t.Errorf("events carrying windows = %d, want 0", got)
 		}
 	})
+}
+
+func spendReading(input, output, cacheRead int64, model, identity string) usage.SpendReading {
+	cacheWrite := int64(0)
+	return usage.SpendReading{Input: &input, Output: &output, CacheRead: &cacheRead, CacheWrite: &cacheWrite, Model: model, Identity: identity}
+}
+
+func scriptedSpendDeclaration(live *usage.SpendReading, records []usage.SpendReading, readErr error) usagesource.Declaration {
+	return usagesource.Declaration{
+		Live: usage.Source{
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true},
+		},
+		PromptSpend: func(json.RawMessage) *usage.SpendReading { return live },
+		Records: usage.Source{
+			Strategy: usage.StrategyRecords,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, CacheInInput: true, ReasoningInOutput: true, ServedModel: true},
+		},
+		ReadRecords: func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
+			return records, readErr
+		},
+	}
+}
+
+func TestPumpSpendLedgerSettlesTurn(t *testing.T) {
+	t.Parallel()
+
+	liveReading := spendReading(1000, 70, 400, "", "")
+	tests := []struct {
+		name            string
+		live            *usage.SpendReading
+		records         []usage.SpendReading
+		readErr         error
+		wantUnaccounted bool
+		wantUsage       *domain.TokenUsage
+		wantByModel     map[string]domain.TokenUsage
+		wantModel       string
+		wantTokenCounts capabilityState
+	}{
+		{
+			name:            "no live reading and a failed records read",
+			readErr:         errors.New("journal unreadable"),
+			wantUnaccounted: true,
+			wantTokenCounts: capabilityGap,
+		},
+		{
+			name: "a live reading and readable records",
+			live: &liveReading,
+			records: []usage.SpendReading{
+				spendReading(600, 30, 200, "model-a", "u1"),
+				spendReading(400, 40, 200, "model-b", "u2"),
+			},
+			wantUsage: &domain.TokenUsage{InputTokens: 1000, OutputTokens: 70, TotalTokens: 1070, CacheReadTokens: 400},
+			wantByModel: map[string]domain.TokenUsage{
+				"model-a": {InputTokens: 600, OutputTokens: 30, TotalTokens: 630, CacheReadTokens: 200},
+				"model-b": {InputTokens: 400, OutputTokens: 40, TotalTokens: 440, CacheReadTokens: 200},
+			},
+			wantModel:       "model-a",
+			wantTokenCounts: capabilityOurs,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			declaration := scriptedSpendDeclaration(tt.live, tt.records, tt.readErr)
+			ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+			if err != nil {
+				t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+			}
+			ledger.Boundary(usage.RecordsRead{OK: true})
+			state, out, inPw := newDeclaredSession(t, declaration, ledger)
+
+			events, result := runPulledUsageTurnResult(t, state, out, inPw)
+
+			var usageEvents []domain.AgentEvent
+			usageAt, endAt := -1, -1
+			for i, e := range events {
+				switch e.Type {
+				case domain.EventTokenUsage:
+					usageEvents = append(usageEvents, e)
+					usageAt = i
+				case domain.EventTurnCompleted:
+					endAt = i
+				}
+			}
+			if result.SpendUnaccounted != tt.wantUnaccounted {
+				t.Errorf("RunTurn() SpendUnaccounted = %v, want %v", result.SpendUnaccounted, tt.wantUnaccounted)
+			}
+			if state.caps.tokenCounts != tt.wantTokenCounts {
+				t.Errorf("tokenCounts = %q, want %q", state.caps.tokenCounts, tt.wantTokenCounts)
+			}
+			if tt.wantUsage == nil {
+				if len(usageEvents) != 0 {
+					t.Errorf("token_usage events = %+v, want none", usageEvents)
+				}
+				return
+			}
+			if len(usageEvents) != 1 {
+				t.Fatalf("token_usage events = %d, want 1", len(usageEvents))
+			}
+			got := usageEvents[0]
+			if got.Usage != *tt.wantUsage || got.Model != tt.wantModel || !maps.Equal(got.UsageByModel, tt.wantByModel) {
+				t.Errorf("token_usage event = {Usage %+v, Model %q, ByModel %+v}, want {%+v, %q, %+v}",
+					got.Usage, got.Model, got.UsageByModel, *tt.wantUsage, tt.wantModel, tt.wantByModel)
+			}
+			if endAt < 0 || usageAt > endAt {
+				t.Errorf("token_usage at %d, turn completed at %d, want the figure first", usageAt, endAt)
+			}
+		})
+	}
 }
 
 func TestPumpAgentMessageBufferIsBounded(t *testing.T) {

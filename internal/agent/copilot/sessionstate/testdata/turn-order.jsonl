@@ -1,0 +1,14 @@
+{"type":"user.message"}
+{"type":"system.message"}
+{"type":"assistant.turn_start"}
+{"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-5.5","inputTokens":40352,"outputTokens":4,"cacheReadTokens":0,"cacheWriteTokens":40348,"accounting":{"usageId":"msg_011StandInRequestAAAAA01"}}}}
+{"type":"assistant.message"}
+{"type":"assistant.turn_end"}
+{"type":"session.usage_checkpoint"}
+{"type":"user.message"}
+{"type":"assistant.turn_start"}
+{"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-5.5","inputTokens":40405,"outputTokens":4,"cacheReadTokens":40348,"cacheWriteTokens":53,"accounting":{"usageId":"msg_011StandInRequestAAAAA02"}}}}
+{"type":"assistant.message"}
+{"type":"assistant.turn_end"}
+{"type":"session.usage_checkpoint"}
+{"type":"session.shutdown"}

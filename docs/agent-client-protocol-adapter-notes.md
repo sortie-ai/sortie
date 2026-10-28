@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's Agent Client Protocol adapter in `internal/agent/clientprotocol`.
 
-Last updated: 2026-10-10
+Last updated: 2026-10-28
 
 This kind names no default runtime. The operator's `agent.command` picks the binary and the flag or subcommand that puts it into protocol mode, so these notes cover several runtimes. A runtime's version is never pinned here; the adapter records it per session from the `initialize` handshake. Runtime-specific traps live in `docs/gemini-adapter-notes.md` and `docs/kiro-adapter-notes.md`.
 
@@ -22,7 +22,7 @@ What each runtime showed in its `initialize` handshake:
 |---|---|---|
 | `gemini` | `--acp` (`--experimental-acp` is deprecated) | Driven end to end by the gated suite. Advertises no `sessionCapabilities` object. |
 | `kiro-cli` | `acp` subcommand, listed only under `--help-all` | Driven end to end. Empty `sessionCapabilities`; `mcpCapabilities.sse` is false. |
-| `copilot` | `--acp` | Handshake only. `sessionCapabilities` has `close` and `list`, not `resume`. |
+| `copilot` | `--acp` | `agentInfo.name` is `Copilot`. The gated suite's scripted-model run asserts exact usage per token class and per model on a local launch, and its SSH variant asserts the remote launch stays unmeasured. `sessionCapabilities` has `close` and `list`, not `resume`. |
 | `opencode` | `acp` subcommand | Handshake only. `sessionCapabilities` has `close`, `fork`, `list`, and `resume`. |
 | `claude` | none | The CLI exposes no protocol entry point. |
 | `codex` | none | `app-server` speaks a different JSON-RPC dialect, the one the `codex` adapter drives. |
@@ -45,13 +45,21 @@ A runtime streams one reply as many `agent_message_chunk` updates. Chunks of one
 
 ## Usage reporting
 
-The kind declares `turn_end` arrival and `per_model` attribution; a remote launch resolves to `none`/`none`. The figure does not come from the wire. A `usage_update` session update stays out of every token figure and is otherwise logged at debug level. Under a runtime declaration selected from the handshake name, its `_meta` reports usage windows, without ending the agent message. Claude Agent ACP forwards the SDK's `rate_limit_info` unchanged in `_claude/rateLimit`; a report without `rateLimitType` updates the kind's one `Usage limit` window, and the bridge drops a `rate_limit_event` until the turn has seen token usage, so a refusal on a turn's first request reports no window. The `_meta.quota` block on a prompt result is a presence signal and a lower bound, never the accounting figure.
+The kind declares `turn_end` arrival and `per_model` attribution; a remote launch resolves to `none`/`none`. The stable wire carries no spend counter. A `usage_update` session update stays out of every token figure and is otherwise logged at debug level. Under a runtime declaration selected from the handshake name, its `_meta` reports usage windows, without ending the agent message. Claude Agent ACP forwards the SDK's `rate_limit_info` unchanged in `_claude/rateLimit`; a report without `rateLimitType` updates the kind's one `Usage limit` window, and the bridge drops a `rate_limit_event` until the turn has seen token usage, so a refusal on a turn's first request reports no window. The `_meta.quota` block on a prompt result is a presence signal and a lower bound, never the accounting figure.
 
-The figure comes from a measurement source outside the protocol. Each source registers itself into `usagesource` from an `init` function, so adding one is additive. Before the first start, every registered source sees the launch target, and a source that arms something is carried only when the command line names its runtime. The handshake confirms at most one carried source, the first whose `Recognize` accepts the runtime's reported name, and sets `tokenCounts` to `ours`.
+A runtime's figure comes from its spend declaration or from a measurement source outside the protocol, and a runtime with neither is unmeasured.
+
+A spend declaration is selected once from the handshake name, like the other declarations, and says how the runtime reports spend. The declaration for `Copilot` pairs a live source with a records source. The live source reads the `usage` member of each prompt result as a counter cumulative over the runtime's process. The counter starts again at zero in a new process, which a session load starts. It holds cache reads and writes inside input and reasoning inside output, and names no model. A member that is absent, null, or not an integer leaves that count unknown, and `totalTokens`, `thoughtTokens`, and the `usage_update` occupancy never enter a figure. The records source reads the `session.usage_record` lines of the session-state journal on the runtime's host, one per model request, each naming the model that served it and an opaque request identity. The journal's location, session-id rule, and read caps live in `internal/agent/copilot/sessionstate`, shared with the `copilot-cli` kind.
+
+The transport reads the records at session start, so the requests a loaded session already holds count as history and never as this run's spend, and again at every turn end. It counts each model request once in the run total, whichever source reports it and whichever earlier reads failed, and a model request joins the per-model split at most once. A turn the live figure settles keeps its amount whether the records read splits it by served model, fails, or finds nothing; a failed read leaves that amount unsplit. A turn with no live figure, such as a cancelled turn or a result without `usage`, is settled from the records when they can be read, and ends as spend occurred with the amount unknown when they cannot. A live reading below the previous one is a counter restart: it counts in full, the turn is not complete, and no record counts until a later complete turn fixes a new boundary. A served model no price table carries stays unpriced.
+
+A session with a spend declaration raises `tokenCounts` to `ours` at the handshake. The first turn that reached the model and ends with no figure, while no earlier turn produced one, lowers it to `gap` for the rest of the session. A remote launch gets no spend declaration, so it stays on the `none`/`none` resolution.
+
+A runtime with a reader instead gets its figure from a measurement source outside the protocol. Each source registers itself into `usagesource` from an `init` function, so adding one is additive. Before the first start, every registered source sees the launch target, and a source that arms something is carried only when the command line names its runtime. The handshake confirms at most one carried source, the first whose `Recognize` accepts the runtime's reported name, and sets `tokenCounts` to `ours`.
 
 If the start carried a source the handshake does not confirm, or lacked the one that recognizes the runtime, the runtime is torn down and started again with the right source before the session is created. This happens at most twice, and each relaunch is logged at Info.
 
-A source accepts or refuses a record by whether it has every field the source's mapping needs, never by the runtime's version. The first drain that yields no record lowers `tokenCounts` to `gap` for the rest of the session. A session with no applicable source, which includes every remote launch, is unmeasured, and the token ceiling is inactive.
+A source accepts or refuses a record by whether it has every field the source's mapping needs, never by the runtime's version. The first drain that yields no record lowers `tokenCounts` to `gap` for the rest of the session. A session with neither an applicable source nor a spend declaration, which includes every remote launch, is unmeasured, and the token ceiling is inactive.
 
 The source for `gemini-cli`, under `usagesource`, reads the runtime's OpenTelemetry output first and its session journal as a backstop. It maps `input_token_count` to input (the cache read is already inside it), `output_token_count` plus `thoughts_token_count` to output, and `cached_content_token_count` to the cache-read subset. It discards the runtime's own total and `tool_token_count`. The figure carries a per-model split by each record's or kept journal message's model.
 
