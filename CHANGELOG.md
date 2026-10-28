@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Codex token counts and cost estimates now include prompt-cache writes. ([#1525](https://github.com/sortie-ai/sortie/issues/1525))
 - The dashboard Session page now says once, in plain words, how a run ended and what happens next.
 - Run failures, including failed CI checks, ceiling stops, stalls, and cancellations, now read as plain sentences everywhere they appear.
+- A cancelled turn that already reached the model now takes its spend from the agent's own records instead of the partial live reading, so it is counted once and exactly; when the records hold nothing, the live reading stands as a lower bound. ([#1535](https://github.com/sortie-ai/sortie/issues/1535))
 
 ## [1.30.0] - 2026-10-23
 

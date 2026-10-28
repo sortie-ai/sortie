@@ -22,7 +22,7 @@ What each runtime showed in its `initialize` handshake:
 |---|---|---|
 | `gemini` | `--acp` (`--experimental-acp` is deprecated) | Driven end to end by the gated suite. Advertises no `sessionCapabilities` object. |
 | `kiro-cli` | `acp` subcommand, listed only under `--help-all` | Driven end to end. Empty `sessionCapabilities`; `mcpCapabilities.sse` is false. |
-| `copilot` | `--acp` | `agentInfo.name` is `Copilot`. The gated suite's scripted-model run asserts exact usage per token class and per model on a local launch, and its SSH variant asserts the remote launch stays unmeasured. `sessionCapabilities` has `close` and `list`, not `resume`. |
+| `copilot` | `--acp` | `agentInfo.name` is `Copilot`. The gated suite runs with `SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION=Copilot`. On a local launch its scripted-model run asserts exact usage per token class and per model, with the settling source and strategy, for completed, tool-calling, resumed, and cancelled turns. Its journal holds a turn's records until the turn ends, so a killed turn's amount is unknown, never zero. The same turns run unmeasured over SSH. It advertises `mcpCapabilities.http`, so the tool-server SSH scenarios run with `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and the SSH kill, cancellation after output, and continuation pass. `sessionCapabilities` has `close` and `list`, not `resume`. |
 | `opencode` | `acp` subcommand | Handshake only. `sessionCapabilities` has `close`, `fork`, `list`, and `resume`. |
 | `claude` | none | The CLI exposes no protocol entry point. |
 | `codex` | none | `app-server` speaks a different JSON-RPC dialect, the one the `codex` adapter drives. |
