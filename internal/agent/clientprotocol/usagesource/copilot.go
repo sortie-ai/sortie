@@ -26,6 +26,7 @@ func init() {
 	VerificationAdditions.Register(copilotAgentName, func() VerificationAddition { return copilotVerification{} })
 	Declarations.Register(copilotHandshakeName, Declaration{
 		Live: usage.Source{
+			Category: usage.SourceProtocol,
 			Strategy: usage.StrategyLive,
 			Spend: usage.SpendDeclaration{
 				Shape:             usage.SpendProcessCumulative,
@@ -35,6 +36,7 @@ func init() {
 		},
 		PromptSpend: copilotPromptSpend,
 		Records: usage.Source{
+			Category: usage.SourceJournal,
 			Strategy: usage.StrategyRecords,
 			Spend: usage.SpendDeclaration{
 				Shape:             usage.SpendPerRequest,
@@ -42,6 +44,7 @@ func init() {
 				ReasoningInOutput: true,
 				ServedModel:       true,
 			},
+			WrittenAtTurnEnd: true,
 		},
 		ReadRecords: copilotReadRecords,
 	})

@@ -27,6 +27,9 @@ var (
 	ra   = rec("a", "m1", 20, 3)
 	rb   = rec("b", "m2", 10, 1)
 	rc   = rec("c", "m1", 5, 1)
+
+	liveProv = domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive}
+	recProv  = domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
 )
 
 func u(in, out int64) domain.TokenUsage { return uc(in, out, 0) }
@@ -55,12 +58,14 @@ func newLedger(t *testing.T, withRecords bool, start usage.RecordsRead) *usage.L
 	t.Helper()
 
 	liveSource := usage.Source{
+		Category: usage.SourceProtocol,
 		Strategy: usage.StrategyLive,
 		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true},
 	}
 	var recordsSource usage.Source
 	if withRecords {
 		recordsSource = usage.Source{
+			Category: usage.SourceJournal,
 			Strategy: usage.StrategyRecords,
 			Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, CacheInInput: true, ReasoningInOutput: true, ServedModel: true},
 		}
@@ -88,7 +93,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, live: live(30, 4), read: recs(hist, ra, rb), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, live: live(30, 4), read: recs(hist, ra, rb), needs: true,
@@ -101,7 +106,7 @@ func TestLedger(t *testing.T) {
 			start: recs(hist),
 			steps: []step{{
 				end: replied, live: liveWith("", 30, 4, 5), read: recs(hist, ra, rb), needs: true,
-				want: usage.Settlement{Run: uc(30, 4, 5), Figure: true, Spent: true, Complete: true, CoversSession: true},
+				want: usage.Settlement{Run: uc(30, 4, 5), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 			}},
 		},
 		{
@@ -109,7 +114,7 @@ func TestLedger(t *testing.T) {
 			start: recs(hist),
 			steps: []step{{
 				end: replied, live: live(30, 4), read: recs(hist), needs: true,
-				want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true},
+				want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 			}},
 		},
 		{
@@ -118,11 +123,11 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, live: live(30, 4), read: unread, needs: true,
-					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: cancelled, read: recs(hist, ra, rb, rc), needs: true,
-					want: usage.Settlement{Run: u(35, 5), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true},
+					want: usage.Settlement{Run: u(35, 5), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
 				},
 			},
 		},
@@ -132,11 +137,11 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, read: recs(hist, ra, ra, rb), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
 				},
 				{
 					end: replied, live: live(45, 6), read: recs(hist, ra, rb, rec("d", "m1", 15, 2)), needs: true,
-					want: usage.Settlement{Run: u(45, 6), ByModel: byModel{"m1": u(35, 5), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(45, 6), ByModel: byModel{"m1": u(35, 5), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 			},
 		},
@@ -146,11 +151,11 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, live: live(30, 4), read: recs(hist, ra, rb), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, live: live(10, 2), read: recs(hist, ra, rb, rec("e", "m2", 10, 2)), needs: true,
-					want: usage.Settlement{Run: u(40, 6), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Figure: true, Spent: true},
+					want: usage.Settlement{Run: u(40, 6), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Figure: true, Spent: true, Provenance: liveProv},
 				},
 				{
 					end: replied, read: recs(hist, ra, rb, rec("e", "m2", 10, 2), rec("f", "m2", 5, 1)), needs: true,
@@ -158,11 +163,11 @@ func TestLedger(t *testing.T) {
 				},
 				{
 					end: replied, live: live(30, 5), read: recs(hist, ra, rb, rec("e", "m2", 10, 2), rec("f", "m2", 5, 1)), needs: true,
-					want: usage.Settlement{Run: u(60, 9), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(60, 9), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, read: recs(hist, ra, rb, rec("e", "m2", 10, 2), rec("f", "m2", 5, 1), rec("g", "m2", 7, 1)), needs: true,
-					want: usage.Settlement{Run: u(67, 10), ByModel: byModel{"m1": u(20, 3), "m2": u(17, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true},
+					want: usage.Settlement{Run: u(67, 10), ByModel: byModel{"m1": u(20, 3), "m2": u(17, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: recProv},
 				},
 			},
 		},
@@ -171,7 +176,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: cancelled, live: live(30, 4), read: recs(ra, rb), needs: true,
-					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true},
+					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Provenance: liveProv},
 				},
 				{
 					end: replied, read: recs(ra, rb, rc), needs: true,
@@ -185,7 +190,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{{
 				end:  replied,
 				live: &usage.SpendReading{Input: new(int64(30)), Output: new(int64(4)), CacheRead: new(int64(0))}, read: recs(hist, ra, rb), needs: true,
-				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true},
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
 			}},
 		},
 		{
@@ -202,11 +207,11 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, live: liveWith("m1", 30, 4, 0),
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, live: liveWith("m2", 50, 6, 0),
-					want: usage.Settlement{Run: u(50, 6), ByModel: byModel{"m1": u(30, 4), "m2": u(20, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(50, 6), ByModel: byModel{"m1": u(30, 4), "m2": u(20, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, live: live(50, 6),
@@ -214,7 +219,7 @@ func TestLedger(t *testing.T) {
 				},
 				{
 					end: usage.TurnEnd{Replied: true}, live: live(50, 6),
-					want: usage.Settlement{Run: u(50, 6), ByModel: byModel{"m1": u(30, 4), "m2": u(20, 2)}, Figure: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(50, 6), ByModel: byModel{"m1": u(30, 4), "m2": u(20, 2)}, Figure: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 			},
 		},
@@ -224,11 +229,11 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, read: recs(hist, rec("big", "m1", 30, 4)), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
 				},
 				{
 					end: replied, live: live(40, 3), read: unread, needs: true,
-					want: usage.Settlement{Run: u(40, 4), ByModel: byModel{"m1": u(30, 4)}, Figure: true, Spent: true},
+					want: usage.Settlement{Run: u(40, 4), ByModel: byModel{"m1": u(30, 4)}, Figure: true, Spent: true, Provenance: liveProv},
 				},
 			},
 		},
@@ -238,7 +243,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, live: live(30, 4), read: unread, needs: true,
-					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true},
+					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
 				},
 				{
 					end: replied, read: recs(hist, recCache("a", "m1", 30, 4, 10)), needs: true,
@@ -246,7 +251,7 @@ func TestLedger(t *testing.T) {
 				},
 				{
 					end: replied, read: recs(hist, recCache("a", "m1", 30, 4, 10), rec("b", "m1", 5, 1)), needs: true,
-					want: usage.Settlement{Run: uc(35, 5, 10), ByModel: byModel{"m1": uc(35, 5, 10)}, Model: "m1", Figure: true, Spent: true},
+					want: usage.Settlement{Run: uc(35, 5, 10), ByModel: byModel{"m1": uc(35, 5, 10)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
 				},
 			},
 		},
@@ -255,8 +260,22 @@ func TestLedger(t *testing.T) {
 			start: recs(hist),
 			steps: []step{{
 				end: replied, read: recs(hist, ra, rec("z", "m1", 0, 0), rc), needs: true,
-				want: usage.Settlement{Run: u(20, 3), ByModel: byModel{"m1": u(20, 3)}, Model: "m1", Figure: true, Spent: true},
+				want: usage.Settlement{Run: u(20, 3), ByModel: byModel{"m1": u(20, 3)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
 			}},
+		},
+		{
+			name:  "cancelled reply settles from the records once, and the next live reading adds only what is new",
+			start: recs(hist),
+			steps: []step{
+				{
+					end: cancelled, live: live(30, 4), read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
+				},
+				{
+					end: replied, live: live(35, 5), read: recs(hist, ra, rb, rc), needs: true,
+					want: usage.Settlement{Run: u(35, 5), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+				},
+			},
 		},
 	}
 
