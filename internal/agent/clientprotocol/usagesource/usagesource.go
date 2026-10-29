@@ -135,18 +135,21 @@ type PullRuntime interface {
 	// LaunchEnv returns a variable as the runtime receives it from Sortie.
 	LaunchEnv(name string) (string, bool)
 
-	// ReadHomeFile reads rel under the runtime's home on its host, which is
-	// the value of homeVar in the launch environment, else the user's home
-	// directory. A missing file wraps fs.ErrNotExist; a file above limit
-	// bytes is an error.
-	ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error)
+	// ReadHomeFile reads the file path names under the runtime's home, which
+	// is the home as the runtime's own host resolves it. A missing file wraps
+	// fs.ErrNotExist; a path that is not valid wraps
+	// agentcore.ErrInvalidRuntimePath; a file above limit bytes, a dropped
+	// connection, and an ended context are errors.
+	ReadHomeFile(ctx context.Context, path agentcore.RuntimePath, limit int64) ([]byte, error)
 
-	// ScanHomeFile scans rel as ReadHomeFile locates it, calling fn with each
-	// line in file order, without its terminator. The line is valid only
-	// during the call. A missing file wraps fs.ErrNotExist; a file above
-	// limit bytes, a line above lineLimit bytes, an ended context, and an
-	// error from fn stop the scan and return an error.
-	ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error
+	// ScanHomeFile scans the file as ReadHomeFile locates it, calling fn with
+	// each line in file order, without its terminator. The line is valid only
+	// during the call. A missing file wraps fs.ErrNotExist; a path that is
+	// not valid wraps agentcore.ErrInvalidRuntimePath; a file above limit
+	// bytes, a line above lineLimit bytes, a remote stream that ends without
+	// success, an ended context, and an error from fn stop the scan and
+	// return an error.
+	ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error
 
 	// RemoteHost reports whether the runtime runs on another host, reached
 	// over SSH, rather than on Sortie's own.

@@ -864,7 +864,7 @@ func TestChooseDeclaration(t *testing.T) {
 	}
 }
 
-func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
+func TestNewSessionLedgerReadsRecordsOnEveryLaunch(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -876,8 +876,8 @@ func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
 	}{
 		{"local continued session", agentcore.LaunchTarget{Command: "agent"}, false, 1, true},
 		{"local created session", agentcore.LaunchTarget{Command: "agent"}, true, 0, true},
-		{"remote continued session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, false, 0, false},
-		{"remote created session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, true, 0, false},
+		{"remote continued session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, false, 1, true},
+		{"remote created session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, true, 0, true},
 	}
 
 	for _, tt := range tests {
@@ -936,7 +936,7 @@ func TestChildSessionSpendSettlesTheTurn(t *testing.T) {
 	}{
 		{"completed child counted", []usagesource.ChildSignal{start, done}, agentcore.LaunchTarget{Command: "agent"}, false, both},
 		{"started child never completed", []usagesource.ChildSignal{start, {Session: "child-1"}}, agentcore.LaunchTarget{Command: "agent"}, true, both},
-		{"remote turn that ran a child", []usagesource.ChildSignal{start, done}, sshLaunch("agent"), true, domain.TokenUsage{InputTokens: 100, OutputTokens: 10, TotalTokens: 110}},
+		{"remote turn that ran a child", []usagesource.ChildSignal{start, done}, sshLaunch("agent"), false, both},
 	}
 
 	for _, tt := range tests {

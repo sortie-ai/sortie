@@ -136,9 +136,7 @@ func (s Sources) Disposition() (Arrival, Attribution) {
 // CarriesTokenFigure reports whether a session with these sources can carry
 // a token figure on a local launch (remote false) or a remote launch.
 //
-// On a remote launch only the live source counts: a records source is read
-// from the runtime's host with local file access, which a remote session does
-// not have.
+// On a remote launch only the live source counts.
 func (s Sources) CarriesTokenFigure(remote bool) bool {
 	if remote {
 		s.Records = Source{}

@@ -570,6 +570,7 @@ var contractBoundedSinkTypes = map[string]string{
 	"bytes.Buffer":        "grows in memory and never blocks on Write",
 	"procutil.TailBuffer": "drops the earliest bytes once its cap is exceeded",
 	"cappedWriter":        "discards bytes past its cap and always reports success",
+	"pipeSink":            "blocks only until its reader consumes or closes the pipe, and scanRemote closes the reader on every return",
 }
 
 // contractSinkTypeOwner is the map rule SINK directs a caller to extend

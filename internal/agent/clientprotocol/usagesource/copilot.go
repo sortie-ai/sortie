@@ -52,19 +52,11 @@ func init() {
 }
 
 // copilotReadRecords returns the usage records of the session's journal in
-// file order. The journal lives under COPILOT_HOME when the launch sets it
-// and under the user's home directory otherwise.
+// file order. The runtime's host resolves the journal's home, so a local and
+// a remote launch read it the same way.
 func copilotReadRecords(ctx context.Context, rt PullRuntime) ([]usage.SpendReading, error) {
-	id := rt.SessionID()
-	if !sessionstate.ValidSessionID(id) {
-		return nil, errors.New("session id is not a safe journal path segment")
-	}
-	homeVar, rel := "HOME", sessionstate.DefaultHome+"/"+sessionstate.EventsRel(id)
-	if home, ok := rt.LaunchEnv(sessionstate.HomeVar); ok && home != "" {
-		homeVar, rel = sessionstate.HomeVar, sessionstate.EventsRel(id)
-	}
 	var readings []usage.SpendReading
-	err := rt.ScanHomeFile(ctx, homeVar, rel, sessionstate.MaxFileBytes, sessionstate.MaxLineBytes, func(line []byte) error {
+	err := rt.ScanHomeFile(ctx, sessionstate.JournalPath(rt.SessionID()), sessionstate.MaxFileBytes, sessionstate.MaxLineBytes, func(line []byte) error {
 		if reading, ok := sessionstate.UsageRecord(line); ok {
 			readings = append(readings, reading)
 		}

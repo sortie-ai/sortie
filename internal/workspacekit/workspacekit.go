@@ -82,10 +82,11 @@ func verifyDir(path string) (string, os.FileInfo, error) {
 	return clean, info, nil
 }
 
-// openDir opens a verified handle on path: the directory Lstat reported
+// OpenDir opens a verified handle on path: the directory Lstat reported
 // there immediately before the open must match what the open handle itself
-// reports, or the open fails with [ErrChanged].
-func openDir(path string) (*os.Root, error) {
+// reports, or the open fails with [ErrChanged]. The caller closes the
+// returned root.
+func OpenDir(path string) (*os.Root, error) {
 	clean, pre, err := verifyDir(path)
 	if err != nil {
 		return nil, err
@@ -154,7 +155,7 @@ func OpenSubdir(parent *os.Root, name string, create bool) (*os.Root, error) {
 // When create is true, OpenSortieDir creates the directory if it is absent.
 // The caller closes the returned root.
 func OpenSortieDir(workspacePath string, create bool) (*os.Root, error) {
-	root, err := openDir(workspacePath)
+	root, err := OpenDir(workspacePath)
 	if err != nil {
 		return nil, err
 	}

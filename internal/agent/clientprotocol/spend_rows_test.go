@@ -29,10 +29,14 @@ func declarationsNamedByRows(doc nightlyWorkflowDocument) map[string]bool {
 	return named
 }
 
-func unnamedSpendDeclarations(t *testing.T, doc nightlyWorkflowDocument) []string {
+func declaresSpend(declaration usagesource.Declaration) bool {
+	return declaration.Live.Spend.Shape != usage.SpendUndeclared ||
+		declaration.Records.Spend.Shape != usage.SpendUndeclared
+}
+
+func allDeclarations(t *testing.T) map[string]usagesource.Declaration {
 	t.Helper()
 
-	named := declarationsNamedByRows(doc)
 	declarations := map[string]usagesource.Declaration{usagesource.DefaultName: usagesource.Default}
 	for _, name := range usagesource.Declarations.Kinds() {
 		declaration, err := usagesource.Declarations.Get(name)
@@ -41,13 +45,17 @@ func unnamedSpendDeclarations(t *testing.T, doc nightlyWorkflowDocument) []strin
 		}
 		declarations[name] = declaration
 	}
+	return declarations
+}
 
+func unnamedSpendDeclarations(t *testing.T, doc nightlyWorkflowDocument) []string {
+	t.Helper()
+
+	named := declarationsNamedByRows(doc)
+	declarations := allDeclarations(t)
 	var unnamed []string
 	for _, name := range slices.Sorted(maps.Keys(declarations)) {
-		declaration := declarations[name]
-		declaresSpend := declaration.Live.Spend.Shape != usage.SpendUndeclared ||
-			declaration.Records.Spend.Shape != usage.SpendUndeclared
-		if declaresSpend && !named[name] {
+		if declaresSpend(declarations[name]) && !named[name] {
 			unnamed = append(unnamed, name)
 		}
 	}
@@ -80,8 +88,10 @@ func TestUnnamedSpendDeclarationsNamesDeclarationWithoutRow(t *testing.T) {
 	})
 
 	named := declarationsNamedByRows(shipped)
-	delete(named, "")
-	want := slices.Sorted(maps.Keys(named))
+	declarations := allDeclarations(t)
+	want := slices.DeleteFunc(slices.Sorted(maps.Keys(named)), func(name string) bool {
+		return !declaresSpend(declarations[name])
+	})
 	if len(want) == 0 {
 		t.Fatalf("no nightly row names a spend declaration in %s", spendDeclarationEnv)
 	}

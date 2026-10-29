@@ -199,9 +199,9 @@ func TestOpenSubdir(t *testing.T) {
 
 	openParent := func(t *testing.T, ws string) *os.Root {
 		t.Helper()
-		root, err := openDir(ws)
+		root, err := OpenDir(ws)
 		if err != nil {
-			t.Fatalf("openDir(%q): %v", ws, err)
+			t.Fatalf("OpenDir(%q): %v", ws, err)
 		}
 		t.Cleanup(func() { root.Close() }) //nolint:errcheck // test cleanup
 		return root
@@ -635,7 +635,7 @@ func TestOpenDir_SeamDrivenRealDirectorySwapChanged(t *testing.T) {
 	}
 	t.Cleanup(func() { seam = original })
 
-	root, err := openDir(ws)
+	root, err := OpenDir(ws)
 	if root != nil {
 		// Windows refuses to remove a directory that still has an open handle.
 		root.Close() //nolint:errcheck // test cleanup
@@ -643,12 +643,12 @@ func TestOpenDir_SeamDrivenRealDirectorySwapChanged(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		if err != nil {
-			t.Errorf("openDir(swapped directory) on windows = %v, want nil", err)
+			t.Errorf("OpenDir(swapped directory) on windows = %v, want nil", err)
 		}
 		return
 	}
 	if !errors.Is(err, ErrChanged) {
-		t.Errorf("openDir(swapped directory) = %v, want wrapping ErrChanged", err)
+		t.Errorf("OpenDir(swapped directory) = %v, want wrapping ErrChanged", err)
 	}
 }
 

@@ -16,8 +16,6 @@ import (
 
 const (
 	geminiCredentialsHomeVar = "GEMINI_CLI_HOME"
-	geminiCredentialsFile    = ".gemini/oauth_creds.json"        //nolint:gosec // G101: a file path, not a credential
-	geminiEncryptedFile      = ".gemini/gemini-credentials.json" //nolint:gosec // G101: a file path, not a credential
 	geminiCredentialsLimit   = 64 * 1024
 
 	geminiForceEncryptedVar = "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"
@@ -27,6 +25,17 @@ const (
 
 	geminiKeychainService = "gemini-cli-oauth"
 	geminiKeychainAccount = "main-account"
+)
+
+var (
+	geminiCredentialsFile = agentcore.RuntimePath{
+		HomeVar:  geminiCredentialsHomeVar,
+		Segments: []string{".gemini", "oauth_creds.json"},
+	}
+	geminiEncryptedFile = agentcore.RuntimePath{
+		HomeVar:  geminiCredentialsHomeVar,
+		Segments: []string{".gemini", "gemini-credentials.json"},
+	}
 )
 
 // geminiSignInVars are the variables that decide where the runtime takes its
@@ -160,7 +169,7 @@ func geminiHostEnv(ctx context.Context, rt PullRuntime, names []string) (map[str
 }
 
 func geminiPlainFileToken(ctx context.Context, rt PullRuntime) (geminiToken, bool, error) {
-	data, err := rt.ReadHomeFile(ctx, geminiCredentialsHomeVar, geminiCredentialsFile, geminiCredentialsLimit)
+	data, err := rt.ReadHomeFile(ctx, geminiCredentialsFile, geminiCredentialsLimit)
 	if errors.Is(err, fs.ErrNotExist) {
 		return geminiToken{}, false, nil
 	}
@@ -177,7 +186,7 @@ func geminiPlainFileToken(ctx context.Context, rt PullRuntime) (geminiToken, boo
 }
 
 func geminiEncryptedFileToken(ctx context.Context, rt PullRuntime) (geminiToken, bool, error) {
-	data, err := rt.ReadHomeFile(ctx, geminiCredentialsHomeVar, geminiEncryptedFile, geminiCredentialsLimit)
+	data, err := rt.ReadHomeFile(ctx, geminiEncryptedFile, geminiCredentialsLimit)
 	if errors.Is(err, fs.ErrNotExist) {
 		return geminiToken{}, false, nil
 	}

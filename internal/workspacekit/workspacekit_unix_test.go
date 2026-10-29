@@ -78,8 +78,8 @@ func TestSeamDrivenSymlinkSwapChanged(t *testing.T) {
 		}
 		t.Cleanup(func() { seam = original })
 
-		if _, err := openDir(ws); !errors.Is(err, ErrChanged) {
-			t.Errorf("openDir(seam-swapped for symlink) = %v, want wrapping ErrChanged", err)
+		if _, err := OpenDir(ws); !errors.Is(err, ErrChanged) {
+			t.Errorf("OpenDir(seam-swapped for symlink) = %v, want wrapping ErrChanged", err)
 		}
 	})
 
@@ -96,9 +96,9 @@ func TestSeamDrivenSymlinkSwapChanged(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(ws, "child"), 0o750); err != nil {
 			t.Fatalf("Mkdir(child): %v", err)
 		}
-		parent, err := openDir(ws)
+		parent, err := OpenDir(ws)
 		if err != nil {
-			t.Fatalf("openDir: %v", err)
+			t.Fatalf("OpenDir: %v", err)
 		}
 		t.Cleanup(func() { parent.Close() }) //nolint:errcheck // test cleanup
 
@@ -127,9 +127,9 @@ func TestSeamDrivenSymlinkSwapChanged(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("original"), 0o600); err != nil {
 			t.Fatalf("WriteFile(f.txt): %v", err)
 		}
-		dir, err := openDir(ws)
+		dir, err := OpenDir(ws)
 		if err != nil {
-			t.Fatalf("openDir: %v", err)
+			t.Fatalf("OpenDir: %v", err)
 		}
 		t.Cleanup(func() { dir.Close() }) //nolint:errcheck // test cleanup
 

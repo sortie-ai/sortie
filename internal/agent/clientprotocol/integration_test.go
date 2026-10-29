@@ -561,8 +561,7 @@ func writeModelDocument(t *testing.T, path, template, url string) string {
 
 func sshVariant() *fakemodel.SSHVariant {
 	variant := &fakemodel.SSHVariant{
-		Install:  os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_INSTALL"),
-		LiveOnly: true,
+		Install: os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_INSTALL"),
 		RemoteCommand: func(fakemodel.Environment) string {
 			return os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_COMMAND")
 		},
@@ -620,18 +619,24 @@ func spendSources(t *testing.T) *fakemodel.SpendSources {
 	if name == "" {
 		return nil
 	}
+	defaultSources := &fakemodel.SpendSources{
+		Live:       domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive},
+		LowerBound: true,
+	}
 	if name == usagesource.DefaultName {
-		return &fakemodel.SpendSources{
-			Live:       domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive},
-			LowerBound: true,
-		}
+		return defaultSources
 	}
 	declaration, err := usagesource.Declarations.Get(name)
 	if err != nil {
 		t.Fatalf("%s = %q, want the handshake name of a registered usage declaration: %v", variable, name, err)
 	}
-	if declaration.Live.Spend.Shape == usage.SpendUndeclared || declaration.Records.Spend.Shape == usage.SpendUndeclared {
-		t.Fatalf("%s = %q, want a declaration whose live and records sources both declare spend", variable, name)
+	liveSpend := declaration.Live.Spend.Shape != usage.SpendUndeclared
+	recordsSpend := declaration.Records.Spend.Shape != usage.SpendUndeclared
+	if !liveSpend && !recordsSpend {
+		return defaultSources
+	}
+	if !liveSpend || !recordsSpend {
+		t.Fatalf("%s = %q, want a declaration whose live and records sources both declare spend, or neither", variable, name)
 	}
 	return &fakemodel.SpendSources{
 		Live:             domain.UsageProvenance{Source: declaration.Live.Category, Strategy: declaration.Live.Strategy},

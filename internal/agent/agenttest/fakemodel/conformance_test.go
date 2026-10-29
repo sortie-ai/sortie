@@ -1468,11 +1468,6 @@ func TestAssertExactUsageReadsTheKindsSources(t *testing.T) {
 			wantFailed: true,
 		},
 		{
-			name:    "remote LiveOnly binding accepts an interrupted turn with no figure",
-			binding: Binding{Kind: conformanceCommandKind, Spend: &SpendSources{Live: live, Records: records}, SSH: &SSHVariant{LiveOnly: true}},
-			mutate:  chain(remote, unmeasured(domain.EventTurnCancelled)),
-		},
-		{
 			name:          "remote binding reading records rejects an interrupted turn with no figure",
 			binding:       Binding{Kind: conformanceCommandKind, Spend: &SpendSources{Live: live, Records: records}, SSH: &SSHVariant{}},
 			mutate:        chain(remote, unmeasured(domain.EventTurnCancelled)),

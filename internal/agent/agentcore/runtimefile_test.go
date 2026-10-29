@@ -19,6 +19,8 @@ func TestScanRuntimeFileRejects(t *testing.T) {
 		name      string
 		content   string
 		skipFile  bool
+		symlink   bool
+		homeLink  bool
 		limit     int64
 		lineLimit int64
 		stopAt    string
@@ -56,6 +58,22 @@ func TestScanRuntimeFileRejects(t *testing.T) {
 			wantIs:    fs.ErrNotExist,
 		},
 		{
+			name:      "segment symlinked to a file outside the home",
+			content:   "outside\n",
+			symlink:   true,
+			limit:     1 << 20,
+			lineLimit: 10,
+			wantErr:   true,
+		},
+		{
+			name:      "home kept as a symlink is read",
+			content:   "a\n",
+			homeLink:  true,
+			limit:     1 << 20,
+			lineLimit: 10,
+			wantLines: []string{"a"},
+		},
+		{
 			name:      "error from the line callback",
 			content:   "a\nb\nc\n",
 			limit:     1 << 20,
@@ -79,14 +97,28 @@ func TestScanRuntimeFileRejects(t *testing.T) {
 			t.Parallel()
 
 			home := t.TempDir()
+			file := filepath.Join(home, "events.jsonl")
+			if tt.symlink {
+				file = filepath.Join(t.TempDir(), "outside.jsonl")
+				if err := os.Symlink(file, filepath.Join(home, "events.jsonl")); err != nil {
+					t.Skipf("os.Symlink: %v", err)
+				}
+			}
 			if !tt.skipFile {
-				if err := os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(tt.content), 0o600); err != nil {
+				if err := os.WriteFile(file, []byte(tt.content), 0o600); err != nil {
 					t.Fatalf("os.WriteFile: %v", err)
 				}
 			}
+			if tt.homeLink {
+				link := filepath.Join(t.TempDir(), "home")
+				if err := os.Symlink(home, link); err != nil {
+					t.Skipf("os.Symlink: %v", err)
+				}
+				home = link
+			}
 			var seen []string
 
-			err := LaunchTarget{}.ScanRuntimeFile(t.Context(), []string{homeVar + "=" + home}, homeVar, "events.jsonl", tt.limit, tt.lineLimit, func(line []byte) error {
+			err := LaunchTarget{}.ScanRuntimeFile(t.Context(), []string{homeVar + "=" + home}, RuntimePath{HomeVar: homeVar, Segments: []string{"events.jsonl"}}, tt.limit, tt.lineLimit, func(line []byte) error {
 				seen = append(seen, strings.TrimSuffix(string(line), "\r"))
 				if tt.stopAt != "" && string(line) == tt.stopAt {
 					return errStop
@@ -107,6 +139,57 @@ func TestScanRuntimeFileRejects(t *testing.T) {
 			}
 			if tt.wantLines != nil && strings.Join(seen, "|") != strings.Join(tt.wantLines, "|") {
 				t.Errorf("ScanRuntimeFile() lines = %q, want %q", seen, tt.wantLines)
+			}
+		})
+	}
+}
+
+func TestRuntimePathRefusal(t *testing.T) {
+	t.Parallel()
+
+	const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	targets := map[string]LaunchTarget{
+		"local":  {},
+		"remote": {Command: filepath.Join(t.TempDir(), "absent-ssh"), SSHHost: "lab", WorkspacePath: t.TempDir(), RemoteCommand: "true"},
+	}
+	segments := func(elements ...string) RuntimePath {
+		return RuntimePath{HomeVar: "AGENT_HOME", Segments: elements}
+	}
+
+	tests := []struct {
+		name    string
+		path    RuntimePath
+		invalid bool
+	}{
+		{name: "home variable with a dash", path: RuntimePath{HomeVar: "AGENT-HOME", Segments: []string{"f"}}, invalid: true},
+		{name: "empty home variable", path: RuntimePath{Segments: []string{"f"}}, invalid: true},
+		{name: "no segments", path: segments(), invalid: true},
+		{name: "current directory segment", path: segments("session-state", "."), invalid: true},
+		{name: "parent directory segment", path: segments("session-state", ".."), invalid: true},
+		{name: "segment with a slash", path: segments("a/b"), invalid: true},
+		{name: "segment with a backslash", path: segments(`a\b`), invalid: true},
+		{name: "absolute path as a segment", path: segments("/etc/passwd"), invalid: true},
+		{name: "empty segment", path: segments("session-state", ""), invalid: true},
+		{name: "parent segment in the home default", path: RuntimePath{HomeVar: "AGENT_HOME", HomeDefault: []string{".."}, Segments: []string{"f"}}, invalid: true},
+		{name: "journal path with a session identifier", path: RuntimePath{HomeVar: "COPILOT_HOME", HomeDefault: []string{".copilot"}, Segments: []string{"session-state", uuid, "events.jsonl"}}},
+		{name: "credential path without a home default", path: RuntimePath{HomeVar: "GEMINI_CLI_HOME", Segments: []string{".gemini", "oauth_creds.json"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := []string{tt.path.HomeVar + "=" + t.TempDir()}
+
+			for host, target := range targets {
+				_, readErr := target.ReadRuntimeFile(t.Context(), env, tt.path, 1<<10)
+				scanErr := target.ScanRuntimeFile(t.Context(), env, tt.path, 1<<10, 1<<10, func([]byte) error { return nil })
+
+				for op, err := range map[string]error{"ReadRuntimeFile": readErr, "ScanRuntimeFile": scanErr} {
+					if got := errors.Is(err, ErrInvalidRuntimePath); got != tt.invalid {
+						t.Errorf("%s %s(%+v) error = %v, errors.Is(ErrInvalidRuntimePath) = %t, want %t", host, op, tt.path, err, got, tt.invalid)
+					}
+				}
 			}
 		})
 	}

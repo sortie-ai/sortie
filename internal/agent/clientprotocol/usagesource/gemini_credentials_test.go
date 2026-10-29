@@ -38,16 +38,16 @@ func (r geminiStoreRuntime) LaunchEnv(name string) (string, bool) { return r.env
 
 func (geminiStoreRuntime) RemoteHost() bool { return true }
 
-func (r geminiStoreRuntime) ReadHomeFile(_ context.Context, _, rel string, _ int64) ([]byte, error) {
-	content, ok := r.files[rel]
+func (r geminiStoreRuntime) ReadHomeFile(_ context.Context, path agentcore.RuntimePath, _ int64) ([]byte, error) {
+	content, ok := r.files[joinSegments(path)]
 	if !ok {
 		return nil, fs.ErrNotExist
 	}
 	return []byte(content), nil
 }
 
-func (r geminiStoreRuntime) ScanHomeFile(_ context.Context, _, rel string, _, _ int64, fn func(line []byte) error) error {
-	content, ok := r.files[rel]
+func (r geminiStoreRuntime) ScanHomeFile(_ context.Context, path agentcore.RuntimePath, _, _ int64, fn func(line []byte) error) error {
+	content, ok := r.files[joinSegments(path)]
 	if !ok {
 		return fs.ErrNotExist
 	}
@@ -58,6 +58,8 @@ func (r geminiStoreRuntime) ScanHomeFile(_ context.Context, _, rel string, _, _ 
 	}
 	return nil
 }
+
+func joinSegments(path agentcore.RuntimePath) string { return strings.Join(path.Segments, "/") }
 
 func (geminiStoreRuntime) CommandWords() []string { return nil }
 
@@ -123,7 +125,7 @@ func TestGeminiAccessTokenFollowsTheRuntimesStoreOrder(t *testing.T) {
 
 			rt := geminiStoreRuntime{
 				env:      tt.env,
-				files:    map[string]string{geminiCredentialsFile: testSignInFile(valid)},
+				files:    map[string]string{joinSegments(geminiCredentialsFile): testSignInFile(valid)},
 				keychain: geminiStoredEntry("keychain-token", valid),
 				host:     geminiFixtureHost,
 				user:     geminiFixtureUser,
@@ -132,7 +134,7 @@ func TestGeminiAccessTokenFollowsTheRuntimesStoreOrder(t *testing.T) {
 				rt.keychain = ""
 			}
 			if !tt.noEncrypted {
-				rt.files[geminiEncryptedFile] = encrypted
+				rt.files[joinSegments(geminiEncryptedFile)] = encrypted
 			}
 
 			got, err := geminiAccessToken(t.Context(), rt)
@@ -172,7 +174,7 @@ func TestGeminiEncryptedFileYieldsTheTokenOnlyForItsOwnHost(t *testing.T) {
 
 			rt := geminiStoreRuntime{
 				env:   map[string]string{geminiForceEncryptedVar: "true", geminiForceFileVar: "true"},
-				files: map[string]string{geminiEncryptedFile: tt.file},
+				files: map[string]string{joinSegments(geminiEncryptedFile): tt.file},
 				host:  tt.host,
 				user:  tt.user,
 			}
@@ -225,7 +227,7 @@ func TestGeminiPullSendsNothingWithAnExpiredStoredToken(t *testing.T) {
 			}
 			maps.Copy(rt.env, tt.env)
 			if tt.file != "" {
-				rt.files[geminiEncryptedFile] = readFixture(t, tt.file)
+				rt.files[joinSegments(geminiEncryptedFile)] = readFixture(t, tt.file)
 			}
 
 			readings, err := geminiPullWindows(t.Context(), rt)

@@ -9,6 +9,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -208,12 +209,12 @@ func (r pullRuntime) LaunchEnv(name string) (string, bool) {
 	return r.state.target.RuntimeEnv(r.state.launchEnv, name)
 }
 
-func (r pullRuntime) ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error) {
-	return r.state.target.ReadRuntimeFile(ctx, r.state.launchEnv, homeVar, rel, limit)
+func (r pullRuntime) ReadHomeFile(ctx context.Context, path agentcore.RuntimePath, limit int64) ([]byte, error) {
+	return r.state.target.ReadRuntimeFile(ctx, r.state.launchEnv, path, limit)
 }
 
-func (r pullRuntime) ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
-	return r.state.target.ScanRuntimeFile(ctx, r.state.launchEnv, homeVar, rel, limit, lineLimit, fn)
+func (r pullRuntime) ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error {
+	return r.state.target.ScanRuntimeFile(ctx, r.state.launchEnv, path, limit, lineLimit, fn)
 }
 
 func (r pullRuntime) RemoteHost() bool {
@@ -225,6 +226,9 @@ func (r pullRuntime) CommandWords() []string {
 }
 
 func (r pullRuntime) RunHostCommand(ctx context.Context, cmd agentcore.HostCommand) ([]byte, error) {
+	if addition := r.state.launchAddition; addition.set {
+		cmd.Settings = []sshutil.EnvVar{{Name: addition.name, Value: addition.value}}
+	}
 	return r.state.target.RunHostCommand(ctx, r.state.launchEnv, cmd)
 }
 
@@ -240,27 +244,17 @@ func newSessionPuller(decl usagesource.Declaration, state *sessionState, credent
 	})
 }
 
-// readsRecords reports whether the session's launch can read records. A remote
-// launch cannot.
-func readsRecords(state *sessionState) bool {
-	return state.target.RemoteCommand == ""
-}
-
 // readSessionRecords reads every spend record of the session from the runtime's
-// host under the read timeout. A launch that reads none returns the empty read,
-// which the ledger takes as a failed one.
+// host under the read timeout.
 func readSessionRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration) usage.RecordsRead {
 	return readTurnRecords(ctx, state, decl, nil)
 }
 
 // readTurnRecords reads the session's records and then those of each child
 // session, in the order given, under one read timeout. A failed child read
-// leaves the later children read. A launch that reads none returns the empty
-// read, whose ChildrenOK is false, as is that of a read naming no child.
+// leaves the later children read. ChildrenOK is false for a read naming no
+// child.
 func readTurnRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration, children []string) usage.RecordsRead {
-	if !readsRecords(state) {
-		return usage.RecordsRead{}
-	}
 	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
