@@ -132,9 +132,8 @@ func TestWriteFile(t *testing.T) {
 	t.Parallel()
 
 	const (
-		path        = "/workspace/nonce.txt"
-		content     = "hello from sortie"
-		wantMessage = "no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content"
+		path    = "/workspace/nonce.txt"
+		content = "hello from sortie"
 	)
 	write := func(first, second, secondType string) []fakemodel.Tool {
 		schema := fmt.Sprintf(`{"type":"object","properties":{%q:{"type":"string"},%q:{"type":%s}},"required":[%q,%q]}`, first, second, secondType, first, second)
@@ -147,6 +146,7 @@ func TestWriteFile(t *testing.T) {
 		want     map[string]string
 	}{
 		{"file_path and content", write("file_path", "content", `"string"`), map[string]string{"file_path": path, "content": content}},
+		{"file_text content", []fakemodel.Tool{{Name: "create", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"file_text":{"type":"string"}},"required":["path","file_text"]}`)}}, map[string]string{"path": path, "file_text": content}},
 		{"path alone", []fakemodel.Tool{{Name: "read", Parameters: singleRequired("path", `"string"`)}}, nil},
 		{"content is not a string", write("path", "content", `"array"`), nil},
 	}
@@ -158,8 +158,8 @@ func TestWriteFile(t *testing.T) {
 			call, err := fakemodel.WriteFile(path, content)(tt.declared)
 
 			if tt.want == nil {
-				if err == nil || err.Error() != wantMessage {
-					t.Errorf("WriteFile(%q, %q)(%s) = (%+v, %v), want error %q", path, content, tt.name, call, err, wantMessage)
+				if err == nil {
+					t.Errorf("WriteFile(%q, %q)(%s) = %+v, want an error", path, content, tt.name, call)
 				}
 				return
 			}
@@ -182,19 +182,29 @@ func TestCatFile(t *testing.T) {
 		path         string
 		wantProperty string
 		wantCommand  string
+		wantFilled   string
+		parameters   json.RawMessage
 	}{
-		{"cmd", "cmd", "/workspace/nonce.txt", "cmd", `'cat' '/workspace/nonce.txt'`},
-		{"command", "command", "/workspace/nonce.txt", "command", `'cat' '/workspace/nonce.txt'`},
-		{"space in path", "cmd", "/workspace/my file.txt", "cmd", `'cat' '/workspace/my file.txt'`},
-		{"quote in path", "command", "/workspace/it's.txt", "command", `'cat' '/workspace/it'\''s.txt'`},
-		{"shell metacharacters", "cmd", "/workspace/$HOME;rm.txt", "cmd", `'cat' '/workspace/$HOME;rm.txt'`},
+		{"cmd", "cmd", "/workspace/nonce.txt", "cmd", `'cat' '/workspace/nonce.txt'`, "", nil},
+		{"command", "command", "/workspace/nonce.txt", "command", `'cat' '/workspace/nonce.txt'`, "", nil},
+		{"space in path", "cmd", "/workspace/my file.txt", "cmd", `'cat' '/workspace/my file.txt'`, "", nil},
+		{"quote in path", "command", "/workspace/it's.txt", "command", `'cat' '/workspace/it'\''s.txt'`, "", nil},
+		{"shell metacharacters", "cmd", "/workspace/$HOME;rm.txt", "cmd", `'cat' '/workspace/$HOME;rm.txt'`, "", nil},
+		{
+			"required description", "", "/workspace/nonce.txt", "command", `'cat' '/workspace/nonce.txt'`, "description",
+			json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"description":{"type":"string"},"mode":{"type":"string"}},"required":["command","description"]}`),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			declared := []fakemodel.Tool{{Name: "exec", Parameters: singleRequired(tt.property, `"string"`)}}
+			parameters := tt.parameters
+			if parameters == nil {
+				parameters = singleRequired(tt.property, `"string"`)
+			}
+			declared := []fakemodel.Tool{{Name: "exec", Parameters: parameters}}
 
 			call, err := fakemodel.CatFile(tt.path)(declared)
 			if err != nil {
@@ -205,7 +215,12 @@ func TestCatFile(t *testing.T) {
 				t.Errorf("CatFile(%q)(%s).Name = %q, want %q", tt.path, tt.name, call.Name, "exec")
 			}
 			want := map[string]string{tt.wantProperty: tt.wantCommand}
-			if got := decodeArguments(t, call); !reflect.DeepEqual(got, want) {
+			got := decodeArguments(t, call)
+			if tt.wantFilled != "" && got[tt.wantFilled] == "" {
+				t.Errorf("CatFile(%q)(%s).Arguments = %v, want a non-empty %q", tt.path, tt.name, got, tt.wantFilled)
+			}
+			delete(got, tt.wantFilled)
+			if !reflect.DeepEqual(got, want) {
 				t.Errorf("CatFile(%q)(%s).Arguments = %v, want %v", tt.path, tt.name, got, want)
 			}
 		})

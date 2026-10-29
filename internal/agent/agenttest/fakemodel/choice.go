@@ -14,6 +14,13 @@ import (
 // carry.
 var pathPropertyNames = []string{"filepath", "path", "absolutepath"}
 
+var contentPropertyNames = []string{"content", "filetext"}
+
+var commandPropertyNames = []string{"cmd", "command"}
+
+// catDescription satisfies a shell tool's required description property.
+const catDescription = "Print the file"
+
 // ReadFile returns a [ToolChoice] that reads path through the first declared
 // tool requiring exactly one string property named file_path, filePath, path
 // or absolute_path, in declaration order. The arguments carry path under that
@@ -30,9 +37,9 @@ func ReadFile(path string) ToolChoice {
 
 // WriteFile returns a [ToolChoice] that writes content to path through the
 // first declared tool requiring exactly two string properties, one named
-// file_path, filePath, path or absolute_path and one named content, in
-// declaration order. The arguments carry path and content under those
-// properties' own names.
+// file_path, filePath, path or absolute_path and one named content or
+// file_text, in declaration order. The arguments carry path and content under
+// those properties' own names.
 func WriteFile(path, content string) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
 		for _, tool := range declared {
@@ -41,20 +48,28 @@ func WriteFile(path, content string) ToolChoice {
 				return FunctionCall{Name: tool.Name, Arguments: encodeJSON(map[string]string{pathProperty: path, contentProperty: content})}, nil
 			}
 		}
-		return FunctionCall{}, errors.New("no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content")
+		return FunctionCall{}, errors.New("no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content or file_text")
 	}
 }
 
 // CatFile returns a [ToolChoice] that prints path through the first declared
-// tool requiring exactly one string property named cmd or command, in
-// declaration order. The property value is a quoted cat command line.
+// tool requiring exactly one string property named cmd or command, or that and
+// one named description, in declaration order. The command value is a quoted
+// cat command line.
 func CatFile(path string) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
-		tool, property, ok := findSingleStringTool(declared, "cmd", "command")
-		if !ok {
-			return FunctionCall{}, errors.New("no declared tool requires exactly one string property named cmd or command")
+		for _, tool := range declared {
+			commandProperty, descriptionProperty, ok := commandProperties(tool.Parameters)
+			if !ok {
+				continue
+			}
+			arguments := map[string]string{commandProperty: sshutil.QuoteArgv([]string{"cat", path})}
+			if descriptionProperty != "" {
+				arguments[descriptionProperty] = catDescription
+			}
+			return FunctionCall{Name: tool.Name, Arguments: encodeJSON(arguments)}, nil
 		}
-		return newCall(tool, property, sshutil.QuoteArgv([]string{"cat", path})), nil
+		return FunctionCall{}, errors.New("no declared tool requires exactly one string property named cmd or command, or exactly two string properties, one named cmd or command and one named description")
 	}
 }
 
@@ -125,13 +140,39 @@ func pathAndContentProperties(parameters json.RawMessage) (pathProperty, content
 			return "", "", false
 		}
 		switch name := normalizePropertyName(property); {
-		case name == "content":
+		case slices.Contains(contentPropertyNames, name):
 			contentProperty = property
 		case slices.Contains(pathPropertyNames, name):
 			pathProperty = property
 		}
 	}
 	return pathProperty, contentProperty, pathProperty != "" && contentProperty != ""
+}
+
+// commandProperties returns the command property and, when the schema requires
+// one, the description property; it requires nothing else.
+func commandProperties(parameters json.RawMessage) (commandProperty, descriptionProperty string, ok bool) {
+	var schema requiredProperties
+	if json.Unmarshal(parameters, &schema) != nil || len(schema.Required) < 1 || len(schema.Required) > 2 {
+		return "", "", false
+	}
+	for _, property := range schema.Required {
+		if !schema.isString(property) {
+			return "", "", false
+		}
+		switch name := normalizePropertyName(property); {
+		case slices.Contains(commandPropertyNames, name):
+			commandProperty = property
+		case name == "description":
+			descriptionProperty = property
+		default:
+			return "", "", false
+		}
+	}
+	if len(schema.Required) == 2 && descriptionProperty == "" {
+		return "", "", false
+	}
+	return commandProperty, descriptionProperty, commandProperty != ""
 }
 
 func normalizePropertyName(name string) string {

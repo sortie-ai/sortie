@@ -92,6 +92,7 @@ type conformanceExhaustionState struct {
 	timedOut bool
 	failures []string
 	nonce    string
+	folded   bool
 }
 
 type conformanceSpyTB struct {
@@ -769,6 +770,25 @@ func TestConformancePropertyTurnOutcome(t *testing.T) {
 	)
 }
 
+func TestConformanceRefusalOutcome(t *testing.T) {
+	t.Parallel()
+
+	cases := []conformanceCase[Run]{
+		{name: "turn ended on the refusal"},
+		{name: "returned an error", mutate: func(run *Run) { run.Err = errors.New("boom") }, want: []string{""}},
+		{name: "reported failed", mutate: func(run *Run) { run.Result.ExitReason = domain.EventTurnFailed }, want: []string{""}},
+	}
+
+	conformanceRunCases(t, "turn outcome", cases,
+		func() Run {
+			run := conformanceTurnRun()
+			run.Exchanges = slices.Delete(run.Exchanges, conformanceSecondTurnAt, conformanceSecondTurnAt+1)
+			return run
+		},
+		func(run Run) []string { return refusalOutcomeViolations(run, 2) },
+	)
+}
+
 func TestConformancePropertyToolPath(t *testing.T) {
 	t.Parallel()
 
@@ -1330,6 +1350,14 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			},
 		},
 		{
+			name: "per-model kind's last usage event names no model",
+			mutate: func(s *conformanceUsageState) {
+				s.settling.splitExpected = true
+				s.run.Exchanges[conformanceSecondTurnAt].Model = "model-b"
+			},
+			want: []string{"per model, want"},
+		},
+		{
 			name: "measured usage is not reported",
 			mutate: func(s *conformanceUsageState) {
 				s.run.Result.UsageMeasured = false
@@ -1632,6 +1660,11 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 	cases := []conformanceCase[conformanceExhaustionState]{
 		{name: "clean run"},
 		{
+			name:   "folded failure reported as failed",
+			mutate: func(s *conformanceExhaustionState) { s.folded = true },
+			want:   []string{""},
+		},
+		{
 			name:   "RunTurn did not return inside the bound",
 			mutate: func(s *conformanceExhaustionState) { s.timedOut = true },
 			want:   []string{"did not return inside"},
@@ -1758,7 +1791,7 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 	conformanceRunCases(t, "script exhaustion", cases,
 		conformanceNewExhaustion,
 		func(s conformanceExhaustionState) []string {
-			return exhaustionViolations(s.run, Binding{}, s.nonce, s.timedOut, s.failures)
+			return exhaustionViolations(s.run, Binding{RuntimeFailureFolded: s.folded}, s.nonce, s.timedOut, s.failures)
 		},
 	)
 }
