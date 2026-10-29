@@ -833,7 +833,7 @@ func refusalMessage(r usagesource.Refusal) string {
 	if r.Message == "" {
 		return "usage-limit refusal"
 	}
-	return fmt.Sprintf("usage-limit refusal: %q", r.Message)
+	return fmt.Sprintf("usage-limit refusal: %q", redact.Truncate(r.Message, messageTruncateLimit))
 }
 
 // armDrain runs one turn's measurement wait on its own goroutine: the source is
