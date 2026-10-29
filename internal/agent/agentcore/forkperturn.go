@@ -192,7 +192,7 @@ const (
 
 // turnEnding reports how a finished turn ended, in the terms the usage
 // component's pull policy reads.
-func turnEnding(cancelled, endedByHook bool, trigger turnTrigger) usage.TurnEnding {
+func turnEnding(cancelled, endedByHook bool, trigger turnTrigger, scanErr error) usage.TurnEnding {
 	switch {
 	case cancelled:
 		return usage.EndingCancelled
@@ -200,7 +200,7 @@ func turnEnding(cancelled, endedByHook bool, trigger turnTrigger) usage.TurnEndi
 		return usage.EndingProtocolBroken
 	case trigger == triggerFirstEventTimeout:
 		return usage.EndingTimedOut
-	case trigger == triggerReadFailure:
+	case trigger == triggerReadFailure, scanErr != nil && !errors.Is(scanErr, procutil.ErrStdoutAbandoned):
 		return usage.EndingReadFailed
 	default:
 		return usage.EndingAnswered
@@ -661,7 +661,7 @@ loop:
 	}
 
 	if s.hooks.PullWindows != nil {
-		windows, err := s.hooks.PullWindows(ctx, turnEnding(cancelled, endedByHook, trigger))
+		windows, err := s.hooks.PullWindows(ctx, turnEnding(cancelled, endedByHook, trigger, scanErr))
 		if err != nil {
 			logger.Debug("usage pull failed", slog.Any("error", err))
 		}

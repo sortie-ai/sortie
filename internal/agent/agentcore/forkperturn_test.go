@@ -738,7 +738,7 @@ func TestForkPerTurnSession(t *testing.T) {
 			_, err := sess.RunTurn(ctx, "p", func(domain.AgentEvent) {})
 
 			if err == nil || gotEnding != tc.wantEnding {
-				t.Errorf("RunTurn() = %v, PullWindows ending = %q, want an error and %q", err, gotEnding, tc.wantEnding)
+				t.Errorf("RunTurn() = %v, PullWindows ending = %d, want an error and %d", err, gotEnding, tc.wantEnding)
 			}
 		})
 	}
