@@ -56,6 +56,10 @@ func (geminiRuntime) RunHostCommand(context.Context, agentcore.HostCommand) ([]b
 	return nil, errors.New("unexpected host command")
 }
 
+func (geminiRuntime) RunHostExchange(context.Context, agentcore.HostCommand, func(io.Writer, io.Reader) error) error {
+	return errors.New("unexpected host exchange")
+}
+
 type geminiPull struct {
 	windows   []domain.UsageWindow
 	err       error

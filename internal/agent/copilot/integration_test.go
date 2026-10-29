@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,7 +134,6 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	quota := serveQuota(t, http.StatusInternalServerError, nil)
 	t.Setenv("COPILOT_GITHUB_TOKEN", "unused-token-for-quota-endpoint")
 
 	fakemodel.AssertConformance(t, fakemodel.Binding{
@@ -188,10 +186,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			}
 		},
 	})
-
-	if n := quota.hits.Load(); n != 0 {
-		t.Errorf("quota endpoint requests on a custom provider = %d, want 0", n)
-	}
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

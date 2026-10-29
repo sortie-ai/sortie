@@ -20,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -707,33 +708,40 @@ func TestForkPerTurnSession(t *testing.T) {
 		}
 	})
 
-	t.Run("PullWindows_BetweenSettleAndFinalize_SkippedOnceCtxDone", func(t *testing.T) {
-		t.Parallel()
-		var order []string
-		cancel := func() {}
-		hooks := noopHooks()
-		hooks.SettleUsage = func(context.Context, func(domain.AgentEvent), *TurnSpend) {
-			order = append(order, "settle")
-			cancel()
-		}
-		hooks.PullWindows = func(context.Context) ([]domain.UsageWindow, error) {
-			order = append(order, "pull")
-			return []domain.UsageWindow{{Key: "five_hour"}}, nil
-		}
-		emit := func(e domain.AgentEvent) { order = append(order, string(e.Type)) }
-		sess := NewForkPerTurnSession(fakeTarget(t, false, agenttest.OutputScenario, agenttest.Output{}), hooks, slog.Default(), 0)
-		doneCtx, done := context.WithCancel(context.Background())
-		defer done()
+	for _, tc := range []struct {
+		name       string
+		endByHook  bool
+		wantEnding usage.TurnEnding
+	}{
+		{"cancelled turn", false, usage.EndingCancelled},
+		{"turn ended through EndTurn", true, usage.EndingProtocolBroken},
+	} {
+		t.Run("PullWindows_Ending_"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(waittest.Context(t))
+			defer cancel()
+			var gotEnding usage.TurnEnding
+			hooks := noopHooks()
+			hooks.ParseLine = func([]byte, func(domain.AgentEvent), string, *TurnSpend) (any, error) {
+				if tc.endByHook {
+					return nil, EndTurn(domain.ErrResponseError, "ended by hook")
+				}
+				cancel()
+				return nil, nil
+			}
+			hooks.PullWindows = func(_ context.Context, ending usage.TurnEnding) ([]domain.UsageWindow, error) {
+				gotEnding = ending
+				return nil, nil
+			}
+			sess := NewForkPerTurnSession(fakeTarget(t, false, agenttest.OutputScenario, agenttest.Output{Stdout: "line\n", Hang: true}), hooks, slog.Default(), 100)
 
-		_, err1 := sess.RunTurn(context.Background(), "p", emit)
-		cancel = done
-		_, err2 := sess.RunTurn(doneCtx, "p", emit)
+			_, err := sess.RunTurn(ctx, "p", func(domain.AgentEvent) {})
 
-		want := []string{"settle", "pull", string(domain.EventNotification), string(domain.EventTurnCompleted), "settle", string(domain.EventTurnCompleted)}
-		if err1 != nil || err2 != nil || !slices.Equal(order, want) {
-			t.Errorf("RunTurn() errors = %v, %v, order = %q, want nil, nil and %q", err1, err2, order, want)
-		}
-	})
+			if err == nil || gotEnding != tc.wantEnding {
+				t.Errorf("RunTurn() = %v, PullWindows ending = %d, want an error and %d", err, gotEnding, tc.wantEnding)
+			}
+		})
+	}
 
 	t.Run("Arm7_OnFinalizeError", func(t *testing.T) {
 		t.Parallel()

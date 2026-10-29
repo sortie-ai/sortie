@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -923,6 +924,61 @@ func TestPumpPulledUsage(t *testing.T) {
 		if got := len(windowEvents(events)); got != 0 {
 			t.Errorf("events carrying windows = %d, want 0", got)
 		}
+	})
+
+	t.Run("a turn ended for human input starts no pull", func(t *testing.T) {
+		t.Parallel()
+
+		var pulls atomic.Int32
+		turn := newActiveTurnForDirectDispatch()
+		turn.pendingEnd = turnEndHumanInput
+		p := &pumpState{
+			state: &sessionState{
+				logger: discardLogger(),
+				stopCh: make(chan struct{}),
+				inbox:  jsonrpc.NewInbox[pumpItem](),
+			},
+			activeTurn: turn,
+			puller: usage.NewPuller(usage.Source{}, time.Second, false, func(context.Context) ([]usage.WindowReading, error) {
+				pulls.Add(1)
+				return nil, nil
+			}),
+		}
+
+		p.startPull(turn)
+
+		if p.pullInFlight || turn.pullPending {
+			t.Errorf("startPull() with a human-input end left pullInFlight = %v, pullPending = %v, want both false", p.pullInFlight, turn.pullPending)
+		}
+		if got := pulls.Load(); got != 0 {
+			t.Errorf("startPull() with a human-input end ran %d pulls, want 0", got)
+		}
+	})
+
+	t.Run("a stop while the pull is in flight still ends the turn", func(t *testing.T) {
+		t.Parallel()
+
+		pulling := make(chan struct{}, 1)
+		pullCtx := waittest.Context(t)
+		declaration := usagesource.Declaration{
+			PullWindows: func(context.Context, usagesource.PullRuntime) ([]usage.WindowReading, error) {
+				pulling <- struct{}{}
+				<-pullCtx.Done()
+				return nil, nil
+			},
+		}
+		state, out, inPw := newDeclaredSession(t, declaration, nil)
+		outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+		promptID := out.awaitMethod(t, methodSessionPrompt)
+		respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
+		waittest.Receive(t, pulling, "usage pull start")
+		_ = inPw.Close()
+
+		if err := stopSession(t.Context(), fakeSession(state)); err != nil {
+			t.Fatalf("stopSession() = %v, want nil", err)
+		}
+
+		waittest.Receive(t, outcomeCh, "turn outcome after the stop")
 	})
 }
 

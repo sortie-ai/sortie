@@ -3,9 +3,11 @@ package usagesource
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -32,6 +34,8 @@ func init() {
 				ReasoningInOutput: true,
 			},
 		},
+		Pull:        quota.Source,
+		PullWindows: copilotPullWindows,
 		PromptSpend: standardPromptSpend,
 		Records: usage.Source{
 			Category: usage.SourceJournal,
@@ -49,6 +53,29 @@ func init() {
 			return commandNamesRuntime(target, copilotExecutableName, copilotPackageName)
 		},
 	})
+}
+
+// copilotPullWindows asks for the quota through the shared pull. The live
+// channel carries no quota, so this is the declaration's only window source.
+func copilotPullWindows(ctx context.Context, rt PullRuntime) ([]usage.WindowReading, error) {
+	return quota.Pull(ctx, copilotQuotaRuntime{rt})
+}
+
+// copilotQuotaRuntime lets the quota pull reach the session's runtime.
+type copilotQuotaRuntime struct {
+	rt PullRuntime
+}
+
+func (r copilotQuotaRuntime) Env(name string) (string, bool) {
+	return r.rt.LaunchEnv(name)
+}
+
+// Exchange cuts the configured command after the runtime word, which drops the
+// ACP switch the headless server cannot take.
+func (r copilotQuotaRuntime) Exchange(ctx context.Context, args []string, limit int64, exchange func(stdin io.Writer, stdout io.Reader) error) error {
+	cmd := runtimeCommand(r.rt.CommandWords(), args, copilotExecutableName, copilotPackageName)
+	cmd.Limit = limit
+	return r.rt.RunHostExchange(ctx, cmd, exchange)
 }
 
 // copilotReadRecords returns the usage records of the session's journal in

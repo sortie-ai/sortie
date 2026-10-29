@@ -5,7 +5,9 @@
 // when no call is in flight, into a caller-supplied [Sink]. Every
 // outgoing line is queued and written by the connection's own writer
 // goroutine, so no send waits on the peer reading it. Start from
-// [NewConn].
+// [NewConn]. [WriteContentLengthFrame] and [ReadContentLengthFrame]
+// frame a message with a Content-Length header instead, for a peer that
+// speaks that framing, and need no [Conn].
 package jsonrpc
 
 import (

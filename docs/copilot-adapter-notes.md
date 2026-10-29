@@ -67,7 +67,7 @@ The endpoint route is `GET https://api.github.com/copilot_internal/user` with `A
 
 `percent_remaining` is the share left, so the used share is its complement. `timestamp_utc` is when the snapshot was taken, and `quota_reset_date_utc` is the instant the quotas reset. The answer is fresh on every call. The sibling `quota_reset_date` is a bare date and is not read. A 401, 403, or 404 falls through to the headless route. Any other HTTP error is reported as its status code alone. The token goes in that one header and nowhere else, and the response body is never logged.
 
-The headless route runs when no token variable is set, or when the endpoint refuses the token. It starts `copilot --headless --no-auto-update --stdio` as an auxiliary command, locally or over the session's SSH launch, and speaks JSON-RPC with `Content-Length` framing on the standard streams. The exchange is `connect` first, with the parameters `@github/copilot-sdk` sends, then `account.getQuota` with `{}`, then stdin closes. The answer, trimmed:
+The headless route runs when no token variable is set, or when the endpoint refuses the token. It starts `copilot --headless --no-auto-update --stdio` on the runtime's host, locally or over the session's SSH launch, and speaks JSON-RPC with `Content-Length` framing on the standard streams. The exchange is `connect` first, with the parameters `@github/copilot-sdk` sends, then `account.getQuota` with `{}`, then stdin closes. The answer, trimmed:
 
 ```json
 {
@@ -84,6 +84,8 @@ The headless route runs when no token variable is set, or when the endpoint refu
 ```
 
 Two traps live in this answer. First, the runtime serves it from a cached copy of the endpoint's answer, kept in its user cache file outside `COPILOT_HOME`, with no network round trip. Authenticated headless runs did not refresh that cache, so the figure can trail the endpoint. Second, `resetDate` is the time the cached snapshot was taken, not a reset: it equals the cache's `timestamp_utc` and differs from the endpoint's `quota_reset_date_utc`. The adapter reads it as the observation time and reports no reset on this route. An error answer, such as `Not authenticated`, means the runtime holds no GitHub sign-in of its own, and it ends the session's pulls.
+
+The `agent-client-protocol` declaration for Copilot CLI runs the same pull, with the same token variables read from the session's launch environment. Its headless command is the configured command cut after the `copilot` word: `--acp` and every later word are dropped, a launcher, environment assignments, or a path before the word stay, and the headless arguments follow. The protocol's live channel carries no quota: `initialize` acknowledges no quota opt-in, a `usage_update` carries only `used` and `size`, and the ACP connection answers `account.getQuota` with method-not-found.
 
 A custom provider reports no quota. With `COPILOT_PROVIDER_BASE_URL` set in the runtime's environment the turn spends no Copilot quota, so the pull returns unsupported before any request on either route.
 

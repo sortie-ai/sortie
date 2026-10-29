@@ -1,4 +1,10 @@
-package copilot
+// Package quota reads a Copilot CLI account's quota windows: from the
+// endpoint the runtime itself calls when a token is at hand, and from a
+// one-shot headless runtime server otherwise. Both the hand-written Copilot
+// adapter and the agent-client-protocol declaration share it; the caller
+// supplies the [Runtime] that reaches the runtime's host. Start from [Pull]
+// and [Source].
+package quota
 
 import (
 	"context"
@@ -10,13 +16,12 @@ import (
 	"slices"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
-// quotaSource declares the quota windows both pull routes report: the share
+// Source declares the quota windows both pull routes report: the share
 // is what is left of the window.
-var quotaSource = usage.Source{
+var Source = usage.Source{
 	Strategy: usage.StrategyPull,
 	Windows: usage.WindowDeclaration{
 		Share:          usage.SharePercent,
@@ -33,12 +38,11 @@ var quotaSource = usage.Source{
 // account's quota. It is a variable so a test can point it at a server.
 var quotaEndpoint = "https://api.github.com/copilot_internal/user"
 
-const (
-	providerBaseURLEnv = "COPILOT_PROVIDER_BASE_URL"
+const providerBaseURLEnv = "COPILOT_PROVIDER_BASE_URL"
 
-	// maxQuotaBody bounds the answer read from the endpoint.
-	maxQuotaBody = 1 << 20
-)
+// MaxAnswerBytes bounds an answer read from the endpoint or from the headless
+// server.
+const MaxAnswerBytes = 1 << 20
 
 // quotaTokenEnv lists the token variables in the runtime's precedence order.
 var quotaTokenEnv = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
@@ -54,17 +58,27 @@ type rawQuotaSnapshot struct {
 	TimestampUTC     string   `json:"timestamp_utc"`
 }
 
-// pullQuota reads the account's Copilot quota windows. A custom provider
-// spends no Copilot quota, so it ends the pulls before any request. The
-// token goes only into the request header; an answer the endpoint refuses,
-// or no token at all, falls back to asking the runtime itself.
-func pullQuota(ctx context.Context, target agentcore.LaunchTarget, env []string) ([]usage.WindowReading, error) {
-	if base, _ := target.RuntimeEnv(env, providerBaseURLEnv); base != "" {
+// Runtime is how a quota pull reaches the runtime it asks.
+type Runtime interface {
+	// Env returns a variable as the runtime receives it from Sortie.
+	Env(name string) (string, bool)
+
+	// Exchange runs the configured runtime with args on its host and hands the
+	// command's standard streams to exchange; output above limit fails.
+	Exchange(ctx context.Context, args []string, limit int64, exchange func(stdin io.Writer, stdout io.Reader) error) error
+}
+
+// Pull reads the account's Copilot quota windows. A custom provider spends no
+// Copilot quota, so it ends the pulls before any request. The token goes only
+// into the request header; an answer the endpoint refuses, or no token at all,
+// falls back to asking the runtime itself.
+func Pull(ctx context.Context, rt Runtime) ([]usage.WindowReading, error) {
+	if base, _ := rt.Env(providerBaseURLEnv); base != "" {
 		return nil, usage.ErrPullUnsupported
 	}
-	token := quotaToken(target, env)
+	token := quotaToken(rt)
 	if token == "" {
-		return headlessQuota(ctx, target, env)
+		return askHeadless(ctx, rt)
 	}
 	answer, status, err := fetchQuota(ctx, token)
 	if err != nil {
@@ -74,15 +88,15 @@ func pullQuota(ctx context.Context, target agentcore.LaunchTarget, env []string)
 	case http.StatusOK:
 		return quotaReadings(answer), nil
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return headlessQuota(ctx, target, env)
+		return askHeadless(ctx, rt)
 	default:
 		return nil, fmt.Errorf("copilot quota request: status %d", status)
 	}
 }
 
-func quotaToken(target agentcore.LaunchTarget, env []string) string {
+func quotaToken(rt Runtime) string {
 	for _, name := range quotaTokenEnv {
-		if token, _ := target.RuntimeEnv(env, name); token != "" {
+		if token, _ := rt.Env(name); token != "" {
 			return token
 		}
 	}
@@ -107,7 +121,7 @@ func fetchQuota(ctx context.Context, token string) (*rawQuotaAnswer, int, error)
 		return nil, resp.StatusCode, nil
 	}
 	var answer rawQuotaAnswer
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxQuotaBody)).Decode(&answer); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxAnswerBytes)).Decode(&answer); err != nil {
 		return nil, 0, fmt.Errorf("decode copilot quota answer: %w", err)
 	}
 	return &answer, resp.StatusCode, nil

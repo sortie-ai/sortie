@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -232,14 +233,21 @@ func (r pullRuntime) RunHostCommand(ctx context.Context, cmd agentcore.HostComma
 	return r.state.target.RunHostCommand(ctx, r.state.launchEnv, cmd)
 }
 
+func (r pullRuntime) RunHostExchange(ctx context.Context, cmd agentcore.HostCommand, exchange func(stdin io.Writer, stdout io.Reader) error) error {
+	if addition := r.state.launchAddition; addition.set {
+		cmd.Settings = []sshutil.EnvVar{{Name: addition.name, Value: addition.value}}
+	}
+	return r.state.target.RunHostExchange(ctx, r.state.launchEnv, cmd, exchange)
+}
+
 // newSessionPuller builds the session's puller from decl, or returns nil when
-// the declaration has no pull or the session verifies a credential.
+// the declaration has no pull or the usage component declines the session.
 func newSessionPuller(decl usagesource.Declaration, state *sessionState, credentialVerification bool) *usage.Puller {
-	if decl.PullWindows == nil || credentialVerification {
+	if decl.PullWindows == nil {
 		return nil
 	}
 	runtime := pullRuntime{state: state}
-	return usage.NewPuller(decl.Pull, agentcore.AuxiliaryTimeout(state.agentConfig), func(ctx context.Context) ([]usage.WindowReading, error) {
+	return usage.NewPuller(decl.Pull, agentcore.AuxiliaryTimeout(state.agentConfig), credentialVerification, func(ctx context.Context) ([]usage.WindowReading, error) {
 		return decl.PullWindows(ctx, runtime)
 	})
 }

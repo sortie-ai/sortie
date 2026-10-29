@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 )
 
 const verificationSessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
@@ -33,12 +33,8 @@ func init() {
 
 func runDeleteServerScenario(_ []string, params deleteServerParams) int {
 	br := bufio.NewReader(os.Stdin)
-	length, err := readContentLengthHeader(br)
+	body, err := jsonrpc.ReadContentLengthFrame(br, maxSessionDeleteResponseLength)
 	if err != nil {
-		return 1
-	}
-	body := make([]byte, length)
-	if _, err := io.ReadFull(br, body); err != nil {
 		return 1
 	}
 	var req struct {
@@ -56,7 +52,7 @@ func runDeleteServerScenario(_ []string, params deleteServerParams) int {
 	_ = os.WriteFile(params.CapturePath, captured, 0o600)
 
 	resp, _ := json.Marshal(map[string]any{"id": req.ID, "result": map[string]any{"success": true}})
-	_ = writeContentLengthFramed(os.Stdout, resp)
+	_ = jsonrpc.WriteContentLengthFrame(os.Stdout, resp)
 	return 0
 }
 

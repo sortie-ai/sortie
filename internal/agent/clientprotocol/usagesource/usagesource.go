@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -164,6 +165,11 @@ type PullRuntime interface {
 	// command that does not start or does not exit zero wraps
 	// agentcore.ErrHostCommandFailed.
 	RunHostCommand(ctx context.Context, cmd agentcore.HostCommand) ([]byte, error)
+
+	// RunHostExchange runs one command on the runtime's host, locally or
+	// through the session's SSH launch, as RunHostCommand does, and hands its
+	// standard input and output to exchange.
+	RunHostExchange(ctx context.Context, cmd agentcore.HostCommand, exchange func(stdin io.Writer, stdout io.Reader) error) error
 }
 
 // ErrMethodNotFound marks a request the runtime does not implement.
@@ -337,6 +343,21 @@ func namesRuntime(target agentcore.LaunchTarget, executable string, packages ...
 // launch costs one refused request pair before a puller stops.
 func commandNamesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
 	return runtimeWordIndex(target.CommandWords(), executable, packages...) >= 0
+}
+
+// runtimeCommand cuts the configured agent command after its runtime word,
+// keeping a launcher, env assignments, or a path before it and dropping what
+// follows, then appends args, so the command runs the binary and environment
+// the session runs. A command that names no runtime falls back to the
+// executable on PATH.
+func runtimeCommand(words, args []string, executable string, packages ...string) agentcore.HostCommand {
+	cmd := agentcore.HostCommand{Args: args, InSession: true}
+	if i := runtimeWordIndex(words, executable, packages...); i >= 0 {
+		cmd.LaunchWords = i + 1
+	} else {
+		cmd.Name = executable
+	}
+	return cmd
 }
 
 // runtimeWordIndex returns the index of the first word that names the

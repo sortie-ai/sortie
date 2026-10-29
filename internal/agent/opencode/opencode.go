@@ -10,6 +10,7 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
+	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -251,13 +253,37 @@ func newForkSession(state *sessionState) *agentcore.ForkPerTurnSession {
 		Tools:             state.tools,
 		ToolPlacement:     state.placeTools,
 	}
-	if !state.credentialVerification {
-		puller := usage.NewPuller(limitsSource, agentcore.AuxiliaryTimeout(state.agentConfig), func(ctx context.Context) ([]usage.WindowReading, error) {
-			return pullLimits(ctx, state)
-		})
-		hooks.PullWindows = puller.Pull
-	}
+	hooks.PullWindows = usage.NewPuller(usagelimits.Source, agentcore.AuxiliaryTimeout(state.agentConfig), state.credentialVerification, opencodePull(state)).Pull
 	return agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
+}
+
+// opencodePull returns the session's usage-limits pull, which launches the
+// usage command the way the session launches its other auxiliary commands.
+func opencodePull(state *sessionState) func(context.Context) ([]usage.WindowReading, error) {
+	return func(ctx context.Context) ([]usage.WindowReading, error) {
+		return usagelimits.Pull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
+			cmd, err := auxiliaryCommand(ctx, state, args)
+			if err != nil {
+				return nil, fmt.Errorf("build opencode usage limits command: %w", err)
+			}
+
+			var stdout bytes.Buffer
+			result, startErr := procutil.RunCapture(ctx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
+				Stdout: &stdout,
+				Logger: state.logger(),
+			})
+			if startErr != nil {
+				return nil, fmt.Errorf("start opencode usage limits: %w", startErr)
+			}
+			if result.WaitErr != nil {
+				if state.target.RemoteCommand != "" && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
+					return nil, fmt.Errorf("run opencode usage limits: %w: %w", sshutil.ErrConnectionFailed, result.WaitErr)
+				}
+				return nil, fmt.Errorf("run opencode usage limits: %w", result.WaitErr)
+			}
+			return stdout.Bytes(), nil
+		})
+	}
 }
 
 // turnEnv returns the environment every turn runs with and the settings an

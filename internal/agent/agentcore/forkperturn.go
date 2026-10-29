@@ -15,6 +15,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 )
@@ -144,12 +145,12 @@ type ForkPerTurnHooks struct {
 	SettleUsage func(ctx context.Context, emit func(domain.AgentEvent), spend *TurnSpend)
 
 	// PullWindows runs once per started turn, on RunTurn's goroutine, after
-	// SettleUsage and before the terminal event, on the endings that run
-	// SettleUsage. It is skipped for a cancelled turn and once ctx is done.
-	// ctx is the turn's own, so the adapter bounds its own work. A non-empty
-	// result reaches the consumer as usage windows; an error is logged and
-	// does not change how the turn ends. Nil disables it.
-	PullWindows func(ctx context.Context) ([]domain.UsageWindow, error)
+	// SettleUsage and before the terminal event, with the ending RunTurn
+	// observed. The usage component decides from the ending whether a pull
+	// runs. ctx is the turn's own, so the adapter bounds its own work. A
+	// non-empty result reaches the consumer as usage windows; an error is
+	// logged and does not change how the turn ends. Nil disables it.
+	PullWindows func(ctx context.Context, ending usage.TurnEnding) ([]domain.UsageWindow, error)
 
 	// TurnEnv returns the started process's environment and the settings
 	// an SSH launch carries. Nil keeps the host environment and no
@@ -188,6 +189,23 @@ const (
 	triggerEndTurn
 	triggerReadFailure
 )
+
+// turnEnding reports how a finished turn ended, in the terms the usage
+// component's pull policy reads.
+func turnEnding(cancelled, endedByHook bool, trigger turnTrigger, scanErr error) usage.TurnEnding {
+	switch {
+	case cancelled:
+		return usage.EndingCancelled
+	case endedByHook:
+		return usage.EndingProtocolBroken
+	case trigger == triggerFirstEventTimeout:
+		return usage.EndingTimedOut
+	case trigger == triggerReadFailure, scanErr != nil && !errors.Is(scanErr, procutil.ErrStdoutAbandoned):
+		return usage.EndingReadFailed
+	default:
+		return usage.EndingAnswered
+	}
+}
 
 // ForkPerTurnSession owns the entire fork-per-turn subprocess lifecycle
 // for a single agent session. For each call to RunTurn, the skeleton
@@ -642,8 +660,8 @@ loop:
 		s.hooks.SettleUsage(context.WithoutCancel(ctx), emit, &spend)
 	}
 
-	if s.hooks.PullWindows != nil && !endedByHook && !cancelled && ctx.Err() == nil {
-		windows, err := s.hooks.PullWindows(ctx)
+	if s.hooks.PullWindows != nil {
+		windows, err := s.hooks.PullWindows(ctx, turnEnding(cancelled, endedByHook, trigger, scanErr))
 		if err != nil {
 			logger.Debug("usage pull failed", slog.Any("error", err))
 		}
