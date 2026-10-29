@@ -2319,8 +2319,8 @@ func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failu
 	if len(exhausted) == 0 {
 		v.add("0 exhausted exchanges, want at least one")
 	}
-	if !b.RuntimeFailureFolded && len(turns) == 1 && len(exhausted) > 0 {
-		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures)
+	if len(turns) == 1 && len(exhausted) > 0 {
+		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures, b.RuntimeFailureFolded)
 	}
 
 	if !run.Result.UsageMeasured {
@@ -2347,8 +2347,23 @@ func checkFoldedOutcome(v *findings, run Run) {
 // checkExhaustedExchanges accepts more than one request beyond the script: a
 // runtime may resend a rejected request, such as once more without an
 // optional feature.
-func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string) {
-	message := exhausted[len(exhausted)-1].Answer.Text
+// A folding runtime reports no endpoint failure, so folded skips only the
+// checks that the failure reached the caller.
+func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string, folded bool) {
+	if !folded {
+		checkEndpointFailureReported(v, run, exhausted[len(exhausted)-1].Answer.Text)
+	}
+
+	for _, ex := range exhausted {
+		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
+	}
+
+	if !oneFailurePerRequest(failures, exhausted) {
+		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
+	}
+}
+
+func checkEndpointFailureReported(v *findings, run Run, message string) {
 	if run.Err == nil || !strings.Contains(run.Err.Error(), message) {
 		v.add("RunTurn error %v does not contain the endpoint message %q", run.Err, message)
 	}
@@ -2358,14 +2373,6 @@ func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Ex
 		v.add("no %q event was delivered", domain.EventTurnFailed)
 	case !strings.Contains(failed.Message, message):
 		v.add("the last %q event message %q does not contain the endpoint message %q", domain.EventTurnFailed, failed.Message, message)
-	}
-
-	for _, ex := range exhausted {
-		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
-	}
-
-	if !oneFailurePerRequest(failures, exhausted) {
-		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
 	}
 }
 

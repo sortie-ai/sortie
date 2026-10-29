@@ -77,6 +77,7 @@ type profileDeclaration struct {
 	Capability string `json:"capability"`
 	Case       string `json:"case"`
 	Reason     string `json:"reason"`
+	Surface    string `json:"surface"`
 }
 
 type capabilityGapLabelsDocument struct {
@@ -110,7 +111,8 @@ func namedProfileFoldsRuntimeFailure(t *testing.T) bool {
 		t.Fatalf("decode the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
 	}
 	return slices.ContainsFunc(doc.Declarations, func(d profileDeclaration) bool {
-		return d.Capability == "turn_disposition" && d.Case == "runtime_failure" && d.Reason == "outcome_folded_into_another"
+		return d.Capability == "turn_disposition" && d.Case == "runtime_failure" && d.Reason == "outcome_folded_into_another" &&
+			(d.Surface == "" || d.Surface == "protocol")
 	})
 }
 
