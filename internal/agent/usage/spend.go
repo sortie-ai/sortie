@@ -32,6 +32,9 @@ const (
 // MaxRecordsBytes is the largest records document a reader accepts.
 const MaxRecordsBytes = 64 << 20
 
+// MaxRecordLineBytes is the longest records line a reader accepts.
+const MaxRecordLineBytes = 10 << 20
+
 // SpendDeclaration is a source's declaration of what its spend counts
 // mean.
 type SpendDeclaration struct {
@@ -81,6 +84,12 @@ type SpendReading struct {
 
 	// Identity is the request's identity; required for SpendPerRequest.
 	Identity string
+
+	// ByModel splits a live reading by the model that served it. Each entry
+	// carries one model's counts and names the model in Model; a reading with
+	// entries carries its counts in them only. It is read only under
+	// SpendPerTurn.
+	ByModel []SpendReading
 }
 
 // TurnEnd is how a turn ended, as the transport knows it.
@@ -175,6 +184,9 @@ type Ledger struct {
 	base          domain.TokenUsage
 
 	childSeen map[string]struct{}
+
+	requests    map[string]domain.TokenUsage // the turn's largest during-turn reading per request identity
+	provisional domain.TokenUsage            // the sum of requests
 }
 
 // NewLedger returns a ledger for a live source of SpendProcessCumulative or
@@ -251,6 +263,30 @@ func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 	return !l.boundaryKnown || (!l.live.ServedModel && l.records.ServedModel)
 }
 
+// ObserveRequest holds the largest reading per request identity that the
+// live source reports while a turn runs and returns the sum of the held
+// readings and whether the identity is new to the turn. It changes nothing
+// when the live declaration lacks DuringTurn, the identity is empty, or the
+// reading does not normalize. It never moves the run total, the per-model
+// split, or the covered position; Settle ends the turn's held readings.
+func (l *Ledger) ObserveRequest(reading SpendReading) (provisional domain.TokenUsage, newRequest bool) {
+	if !l.live.DuringTurn || reading.Identity == "" {
+		return l.provisional, false
+	}
+	u, ok := Normalize(reading, l.live)
+	if !ok {
+		return l.provisional, false
+	}
+	prior, seen := l.requests[reading.Identity]
+	next := Max(prior, u)
+	if l.requests == nil {
+		l.requests = make(map[string]domain.TokenUsage)
+	}
+	l.requests[reading.Identity] = next
+	l.provisional = Add(Subtract(l.provisional, prior), next)
+	return l.provisional, !seen
+}
+
 // Settle accounts one turn from its live reading and records read. It
 // never lowers the run total or a per-model entry. When the turn showed
 // child sessions, the records of each child read count once per identity
@@ -260,6 +296,7 @@ func (l *Ledger) Settle(end TurnEnd, live *SpendReading, read RecordsRead) Settl
 	if end.Children {
 		s, added = l.countChildren(s, added, end, read)
 	}
+	l.requests, l.provisional = nil, domain.TokenUsage{}
 	return l.settlement(s, added)
 }
 
@@ -299,7 +336,10 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 	var added map[string]domain.TokenUsage
 	from, fromOK := recs.at(l.split)
 	to, toOK := recs.at(l.covered)
-	if model := strings.TrimSpace(live.Model); recs.usable && fromOK && toOK && from <= to {
+	if arm.split != nil {
+		added = arm.split
+		l.split = l.covered
+	} else if model := strings.TrimSpace(live.Model); recs.usable && fromOK && toOK && from <= to {
 		added = recs.byModel(from, to)
 		l.split = l.covered
 	} else if model != "" {
@@ -419,6 +459,7 @@ type liveEval struct {
 	normalized bool // the reading is usable; the ledger state follows it
 	settles    bool // the reading also settles the turn
 	reading    domain.TokenUsage
+	split      map[string]domain.TokenUsage // the turn's share per model, when the reading carries one
 	covered    domain.TokenUsage
 	delta      domain.TokenUsage
 	reset      bool
@@ -430,11 +471,11 @@ func (l *Ledger) evalLive(end TurnEnd, live *SpendReading) liveEval {
 	if live == nil {
 		return liveEval{}
 	}
-	reading, ok := Normalize(*live, l.live)
+	reading, split, ok := l.normalizeLive(*live)
 	if !ok {
 		return liveEval{}
 	}
-	arm := liveEval{normalized: true, reading: reading}
+	arm := liveEval{normalized: true, reading: reading, split: split}
 	switch {
 	case l.live.Shape == SpendPerTurn:
 		arm.delta, arm.covered = reading, Add(l.covered, reading)
@@ -449,6 +490,30 @@ func (l *Ledger) evalLive(end TurnEnd, live *SpendReading) liveEval {
 	addedNothing := arm.delta.InputTokens == 0 && arm.delta.OutputTokens == 0
 	arm.settles = !end.ModelReached || !addedNothing
 	return arm
+}
+
+// normalizeLive converts a live reading to counts and, when the reading
+// splits by model under SpendPerTurn, to the share of each named model.
+// Any entry that does not normalize makes the whole reading no figure.
+func (l *Ledger) normalizeLive(r SpendReading) (counts domain.TokenUsage, split map[string]domain.TokenUsage, ok bool) {
+	if l.live.Shape != SpendPerTurn || len(r.ByModel) == 0 {
+		counts, ok = Normalize(r, l.live)
+		return counts, nil, ok
+	}
+	for _, entry := range r.ByModel {
+		u, entryOK := Normalize(entry, l.live)
+		if !entryOK {
+			return domain.TokenUsage{}, nil, false
+		}
+		counts = Add(counts, u)
+		if name := strings.TrimSpace(entry.Model); name != "" {
+			if split == nil {
+				split = make(map[string]domain.TokenUsage)
+			}
+			split[name] = Add(split[name], u)
+		}
+	}
+	return counts, split, true
 }
 
 type knownRecord struct {

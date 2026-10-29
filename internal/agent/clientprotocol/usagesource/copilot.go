@@ -129,7 +129,7 @@ func (r copilotQuotaRuntime) Exchange(ctx context.Context, args []string, limit 
 // a remote launch read it the same way.
 func copilotReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
 	var readings []usage.SpendReading
-	err := rt.ScanHomeFile(ctx, sessionstate.JournalPath(rt.SessionID()), sessionstate.MaxFileBytes, sessionstate.MaxLineBytes, func(line []byte) error {
+	err := rt.ScanHomeFile(ctx, sessionstate.JournalPath(rt.SessionID()), sessionstate.MaxFileBytes, usage.MaxRecordLineBytes, func(line []byte) error {
 		if reading, ok := sessionstate.UsageRecord(line); ok {
 			readings = append(readings, reading)
 		}

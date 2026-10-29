@@ -3,11 +3,12 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
-	"golang.org/x/mod/semver"
-
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/claude/ratelimit"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
@@ -21,9 +22,11 @@ type rawEvent struct {
 	Subtype string `json:"subtype,omitempty"`
 
 	// System/init fields.
-	SessionID         string `json:"session_id,omitempty"`
-	Cwd               string `json:"cwd,omitempty"`
-	ClaudeCodeVersion string `json:"claude_code_version,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+
+	// System/task_started fields.
+	TaskID string `json:"task_id,omitempty"`
 
 	// System/permission_denied fields.
 	ToolName string `json:"tool_name,omitempty"`
@@ -41,14 +44,11 @@ type rawEvent struct {
 	APIErrorStatus int `json:"api_error_status,omitempty"`
 
 	// RateLimitInfo is present on rate_limit_event lines.
-	RateLimitInfo *rawRateLimitInfo `json:"rate_limit_info,omitempty"`
+	RateLimitInfo *ratelimit.Info `json:"rate_limit_info,omitempty"`
 
-	// Usage (present in result events).
-	Usage *rawUsage `json:"usage,omitempty"`
-
-	// ModelUsage is the per-model usage breakdown on a result event,
-	// present when the terminal turn touched at least one model.
-	ModelUsage map[string]rawModelUsage `json:"modelUsage,omitempty"`
+	// ModelUsageSinceLastResult is the per-model spend of the requests the
+	// process made since its previous result event.
+	ModelUsageSinceLastResult json.RawMessage `json:"model_usage_since_last_result,omitempty"`
 
 	// Assistant message wrapper.
 	Message json.RawMessage `json:"message,omitempty"`
@@ -59,48 +59,6 @@ type rawEvent struct {
 	RetryDelayMS int    `json:"retry_delay_ms,omitempty"`
 	ErrorStatus  int    `json:"error_status,omitempty"`
 	ErrorField   string `json:"error,omitempty"`
-}
-
-// rawRateLimitInfo is the subscription allowance state a rate_limit_event
-// line reports. ResetsAt is Unix seconds.
-type rawRateLimitInfo struct {
-	Status        string `json:"status"`
-	ResetsAt      int64  `json:"resetsAt"`
-	RateLimitType string `json:"rateLimitType"`
-	OverageStatus string `json:"overageStatus"`
-
-	// Utilization is a fraction of the window; absent when the report
-	// only says the window is open.
-	Utilization *float64 `json:"utilization"`
-}
-
-func (i *rawRateLimitInfo) windowReadings() []usage.WindowReading {
-	if i == nil {
-		return nil
-	}
-	return []usage.WindowReading{{
-		Window:   i.RateLimitType,
-		Share:    i.Utilization,
-		Status:   i.Status,
-		ResetsAt: i.ResetsAt,
-	}}
-}
-
-// rawUsage holds token counts from a Claude Code result event.
-type rawUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
-}
-
-// rawModelUsage holds one model's token counts from a result event's
-// modelUsage map.
-type rawModelUsage struct {
-	InputTokens              int64 `json:"inputTokens"`
-	OutputTokens             int64 `json:"outputTokens"`
-	CacheReadInputTokens     int64 `json:"cacheReadInputTokens"`
-	CacheCreationInputTokens int64 `json:"cacheCreationInputTokens"`
 }
 
 // rawContentBlock represents a single block inside an assistant
@@ -148,12 +106,93 @@ type rawAssistantMessage struct {
 
 // rawAssistantMessageMeta holds the message id, model, and per-request
 // usage from an assistant event's message object. Claude Code repeats
-// one message id across every streamed event of the same model
-// request, so ID is the deduplication key.
+// one message id across every streamed event of the same model request.
 type rawAssistantMessageMeta struct {
-	ID    string    `json:"id,omitempty"`
-	Model string    `json:"model,omitempty"`
-	Usage *rawUsage `json:"usage,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Model string          `json:"model,omitempty"`
+	Usage json.RawMessage `json:"usage,omitempty"`
+}
+
+// usageMembers names the members of a usage object that carry each count;
+// the stream, the journal, and a result's per-model figure spell them
+// differently.
+type usageMembers struct {
+	input, output, cacheRead, cacheWrite string
+}
+
+var (
+	requestMembers = usageMembers{"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"}
+	resultMembers  = usageMembers{"inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"}
+)
+
+// spendReadingOf maps a usage object to a reading. A count that is absent,
+// null, or not an integer stays nil, and an object that does not decode
+// yields a reading with no counts, so a malformed usage never fails the line
+// that carries it.
+func spendReadingOf(raw json.RawMessage, members usageMembers) usage.SpendReading {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return usage.SpendReading{}
+	}
+	return usage.SpendReading{
+		Input:      countOf(fields[members.input]),
+		Output:     countOf(fields[members.output]),
+		CacheRead:  countOf(fields[members.cacheRead]),
+		CacheWrite: countOf(fields[members.cacheWrite]),
+	}
+}
+
+func countOf(raw json.RawMessage) *int64 {
+	var count int64
+	if absent(raw) || json.Unmarshal(raw, &count) != nil {
+		return nil
+	}
+	return &count
+}
+
+// absent reports whether a raw member is missing or null.
+func absent(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
+}
+
+// requestReading maps the usage of one assistant message. It reports false
+// for a message that names no request or no real model, or carries no usage
+// object.
+func requestReading(meta rawAssistantMessageMeta) (usage.SpendReading, bool) {
+	if meta.ID == "" || absent(meta.Usage) || meta.Model == "" || meta.Model == syntheticModel {
+		return usage.SpendReading{}, false
+	}
+	reading := spendReadingOf(meta.Usage, requestMembers)
+	reading.Model = meta.Model
+	reading.Identity = meta.ID
+	return reading, true
+}
+
+// liveReading maps the per-model members of every result event of a turn
+// to one reading. It is nil when the turn has no member or any member is
+// not a JSON object, so the records settle the turn. A member with no keys
+// adds nothing; when no member has a key the reading is a measured zero.
+func liveReading(members []json.RawMessage) *usage.SpendReading {
+	if len(members) == 0 {
+		return nil
+	}
+	var entries []usage.SpendReading
+	for _, member := range members {
+		var perModel map[string]json.RawMessage
+		if absent(member) || json.Unmarshal(member, &perModel) != nil {
+			return nil
+		}
+		for _, model := range slices.Sorted(maps.Keys(perModel)) {
+			entry := spendReadingOf(perModel[model], resultMembers)
+			entry.Model = model
+			entries = append(entries, entry)
+		}
+	}
+	if len(entries) == 0 {
+		zero := int64(0)
+		return &usage.SpendReading{Input: &zero, Output: &zero, CacheRead: &zero, CacheWrite: &zero}
+	}
+	return &usage.SpendReading{ByModel: entries}
 }
 
 // parseEvent parses a single JSONL line from Claude Code stdout into
@@ -164,70 +203,6 @@ func parseEvent(line []byte) (rawEvent, error) {
 		return rawEvent{}, fmt.Errorf("parse event: %w", err)
 	}
 	return ev, nil
-}
-
-// usageFromAssistant converts a raw usage payload from a Claude Code
-// assistant event into a [domain.TokenUsage]. InputTokens includes
-// prompt-cache reads and prompt-cache writes; TotalTokens is computed
-// as InputTokens plus OutputTokens.
-func usageFromAssistant(raw *rawUsage) domain.TokenUsage {
-	if raw == nil {
-		return domain.TokenUsage{}
-	}
-	input := raw.InputTokens + raw.CacheReadInputTokens + raw.CacheCreationInputTokens
-	return domain.TokenUsage{
-		InputTokens:      input,
-		OutputTokens:     raw.OutputTokens,
-		TotalTokens:      input + raw.OutputTokens,
-		CacheReadTokens:  raw.CacheReadInputTokens,
-		CacheWriteTokens: raw.CacheCreationInputTokens,
-	}
-}
-
-// usageFromResult returns the usage the result event reports and its split
-// by model. It prefers the modelUsage map, which is present whenever the turn
-// touched at least one model and includes sub-agent activity that the
-// top-level usage object excludes; it falls back to the top-level usage
-// object when modelUsage is absent or empty, in which case byModel is nil.
-// InputTokens includes prompt-cache reads and prompt-cache writes in both
-// cases; TotalTokens is computed as InputTokens plus OutputTokens.
-//
-// On a process that restored its session's saved totals the figure is
-// cumulative over the whole session, so callers subtract a baseline
-// instead of adding it to a run total.
-func usageFromResult(event rawEvent) (usage domain.TokenUsage, byModel map[string]domain.TokenUsage) {
-	if len(event.ModelUsage) == 0 {
-		return usageFromAssistant(event.Usage), nil
-	}
-	byModel = make(map[string]domain.TokenUsage, len(event.ModelUsage))
-	for name, mu := range event.ModelUsage {
-		figure := usageFromAssistant(&rawUsage{
-			InputTokens:              mu.InputTokens,
-			OutputTokens:             mu.OutputTokens,
-			CacheReadInputTokens:     mu.CacheReadInputTokens,
-			CacheCreationInputTokens: mu.CacheCreationInputTokens,
-		})
-		byModel[name] = figure
-		usage = agentcore.AddUsage(usage, figure)
-	}
-	return usage, byModel
-}
-
-// firstRestoringRelease is the first release whose resumed process
-// restores the totals its session saved.
-const firstRestoringRelease = "2.1.277"
-
-// restoresSavedTotals reports whether a process that names version on its
-// init event restores saved session totals. An absent version is an
-// older release; a version that is not valid semver is a newer one.
-func restoresSavedTotals(version string) bool {
-	if version == "" {
-		return false
-	}
-	if !semver.IsValid("v" + version) {
-		return true
-	}
-	return semver.Compare("v"+version, "v"+firstRestoringRelease) >= 0
 }
 
 // contentBlocks extracts the content array from an assistant message
