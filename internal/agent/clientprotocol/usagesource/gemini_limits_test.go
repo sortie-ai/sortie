@@ -54,7 +54,9 @@ func (r geminiRuntime) ScanHomeFile(ctx context.Context, homeVar, rel string, li
 
 func (geminiRuntime) RemoteHost() bool { return false }
 
-func (geminiRuntime) RunHostCommand(context.Context, string, ...string) ([]byte, error) {
+func (geminiRuntime) CommandWords() []string { return nil }
+
+func (geminiRuntime) RunHostCommand(context.Context, agentcore.HostCommand) ([]byte, error) {
 	return nil, errors.New("unexpected host command")
 }
 

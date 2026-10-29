@@ -146,7 +146,7 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: GOOGLE_GENERATIVE_AI_API_KEY
-            run_filter: ^TestIntegration_ScriptedModel$/^credential_verification_context$
+            run_filter: ^TestIntegration_ScriptedModel$/
             test_path: ./internal/agent/clientprotocol/...
             timeout: 300s
             node: true
@@ -156,6 +156,9 @@ jobs:
             clientprotocol_command: "opencode acp"
             clientprotocol_model_base_url_env: OPENCODE_CONFIG
             clientprotocol_model_document: '{"$schema":"https://opencode.ai/config.json","model":"scripted/scripted-model","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"{url}/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}'
+            clientprotocol_spend_declaration: OpenCode
+            clientprotocol_reported_model_prefix: scripted/
+            clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
 
           - name: Kiro CLI - ACP (scripted)
             adapter: acp-kiro
@@ -340,6 +343,8 @@ jobs:
           SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT: ${{ matrix.clientprotocol_model_document }}
           SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT_PATH: ${{ matrix.clientprotocol_model_document_path }}
           SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: ${{ matrix.clientprotocol_spend_declaration }}
+          SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: ${{ matrix.clientprotocol_reported_model_prefix }}
+          SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is

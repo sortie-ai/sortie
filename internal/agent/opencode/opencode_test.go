@@ -489,15 +489,15 @@ func TestRunTurn_MultiTurnAccumulation(t *testing.T) {
 	}
 
 	export1Path := filepath.Join(tmpDir, "export1.json")
-	export1 := `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}]}`
+	export1 := `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(export1Path, []byte(export1), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	export2Path := filepath.Join(tmpDir, "export2.json")
 	export2 := `{"info":{"id":"ses_abc123"},"messages":[` +
-		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}},` +
-		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":60,"total":60,"cache":{"read":0,"write":0}}}` +
+		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":100,"total":100,"reasoning":0,"cache":{"read":0,"write":0}}},` +
+		`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":0,"output":60,"total":60,"reasoning":0,"cache":{"read":0,"write":0}}}` +
 		`]}`
 	if err := os.WriteFile(export2Path, []byte(export2), 0o644); err != nil {
 		t.Fatal(err)
@@ -556,7 +556,7 @@ func TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn(t *testing.T) {
 	}
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +875,7 @@ func TestRunTurn_ReadErrorRecoversUsageFromExport(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -989,7 +989,7 @@ func TestRunTurn_SSH_CompletedTurnWithExit255IsNotAConnectionFailure(t *testing.
 const emptyExport = `{"info":{"id":"ses_abc123"},"messages":[]}`
 
 func exportOf(input, output int) string {
-	return fmt.Sprintf(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":%d,"output":%d,"cache":{"read":0,"write":0}}}]}`, input, output)
+	return fmt.Sprintf(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":%d,"output":%d,"reasoning":0,"cache":{"read":0,"write":0}}}]}`, input, output)
 }
 
 func stepRun(input, output int) string {
@@ -1109,7 +1109,7 @@ func TestRunTurn_CleanExitWithoutStepFinishSettlesSpend(t *testing.T) {
 	}
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1732,7 +1732,7 @@ func TestRunTurn_CancelledTurnRecoversUsageFromExport(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}]}`
+	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":10,"output":20,"total":30,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
 	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
 		t.Fatal(err)
 	}

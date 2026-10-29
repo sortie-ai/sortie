@@ -24,7 +24,13 @@ const (
 	// SpendAdapterMapped is token counts the kind's adapter reads and maps
 	// itself; the ledger refuses it.
 	SpendAdapterMapped
+	// SpendPerTurn is one turn's own counts: a delta over the model requests
+	// of that turn and of no other.
+	SpendPerTurn
 )
+
+// MaxRecordsBytes is the largest records document a reader accepts.
+const MaxRecordsBytes = 64 << 20
 
 // SpendDeclaration is a source's declaration of what its spend counts
 // mean.
@@ -65,6 +71,11 @@ type SpendReading struct {
 	CacheRead  *int64
 	CacheWrite *int64
 
+	// Reasoning is the reasoning count a reading reports apart from Output.
+	// It is read only under a declaration whose reasoning sits outside
+	// output; nil there is unknown, never zero.
+	Reasoning *int64
+
 	// Model is the model that served the reading; empty when it names none.
 	Model string
 
@@ -82,6 +93,15 @@ type TurnEnd struct {
 
 	// ModelReached is true when the turn reached the model.
 	ModelReached bool
+
+	// Children is true when the turn showed a child session: a session the
+	// runtime ran part of the turn's work in, whose requests the live source
+	// does not count.
+	Children bool
+
+	// ChildrenSettled is true when every child session the turn showed
+	// completed and named its identifier.
+	ChildrenSettled bool
 }
 
 // RecordsRead is the outcome of reading a records source.
@@ -91,6 +111,12 @@ type RecordsRead struct {
 	// OK is true when the read completed; false when not made, failed, or
 	// timed out.
 	OK bool
+
+	// ChildReadings are the records of the child sessions the turn named,
+	// each read from that session's own records, in session order.
+	// ChildrenOK is true when every one of those reads completed.
+	ChildReadings []SpendReading
+	ChildrenOK    bool
 }
 
 // Settlement is the ledger's account of one turn.
@@ -147,22 +173,25 @@ type Ledger struct {
 	boundaryKnown bool
 	boundary      map[string]struct{}
 	base          domain.TokenUsage
+
+	childSeen map[string]struct{}
 }
 
-// NewLedger returns a ledger for a live source of SpendProcessCumulative
-// shape and, when records is not the zero Source, a records source of
-// SpendPerRequest shape. Both declarations must place cache inside input
-// and reasoning inside output; any other declaration, SpendAdapterMapped
-// included, returns an error wrapping ErrSpendUnsupported.
+// NewLedger returns a ledger for a live source of SpendProcessCumulative or
+// SpendPerTurn shape and, when records is not the zero Source, a records
+// source of SpendPerRequest shape. Either source may place cache inside or
+// outside input and reasoning inside or outside output; any other
+// declaration, SpendAdapterMapped included, returns an error wrapping
+// ErrSpendUnsupported.
 func NewLedger(live, records Source) (*Ledger, error) {
-	if !declares(live, StrategyLive, SpendProcessCumulative) {
+	if !declaresLive(live) {
 		return nil, fmt.Errorf("live source: %w", ErrSpendUnsupported)
 	}
 	l := &Ledger{live: live.Spend, liveProvenance: provenanceOf(live)}
 	if reflect.ValueOf(records).IsZero() {
 		return l, nil
 	}
-	if !declares(records, StrategyRecords, SpendPerRequest) {
+	if !declaresRecords(records) {
 		return nil, fmt.Errorf("records source: %w", ErrSpendUnsupported)
 	}
 	l.records, l.hasRecs, l.recordsProvenance = records.Spend, true, provenanceOf(records)
@@ -173,9 +202,13 @@ func provenanceOf(src Source) domain.UsageProvenance {
 	return domain.UsageProvenance{Source: src.Category, Strategy: src.Strategy}
 }
 
-func declares(src Source, strategy Strategy, shape SpendShape) bool {
-	return src.Strategy == strategy && src.Spend.Shape == shape &&
-		src.Spend.CacheInInput && src.Spend.ReasoningInOutput
+func declaresLive(src Source) bool {
+	return src.Strategy == StrategyLive &&
+		(src.Spend.Shape == SpendProcessCumulative || src.Spend.Shape == SpendPerTurn)
+}
+
+func declaresRecords(src Source) bool {
+	return src.Strategy == StrategyRecords && src.Spend.Shape == SpendPerRequest
 }
 
 // Boundary fixes the identities already present in a records read as
@@ -196,13 +229,20 @@ func (l *Ledger) Boundary(read RecordsRead) {
 	l.split = l.covered
 }
 
+// SessionCreated records that the runtime created the session the ledger
+// counts, so no history exists: an unknown boundary becomes known and empty
+// without a read. It is called once, before the first Settle.
+func (l *Ledger) SessionCreated() {
+	l.Boundary(RecordsRead{OK: true})
+}
+
 // NeedsRecords reports whether Settle needs a records read for a turn that
 // ended as end with the live reading live. It changes no state.
 func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 	if !l.hasRecs {
 		return false
 	}
-	if end.Cancelled && end.ModelReached {
+	if end.Children || (end.Cancelled && end.ModelReached) {
 		return true
 	}
 	if !l.evalLive(end, live).settles {
@@ -212,8 +252,20 @@ func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 }
 
 // Settle accounts one turn from its live reading and records read. It
-// never lowers the run total or a per-model entry.
+// never lowers the run total or a per-model entry. When the turn showed
+// child sessions, the records of each child read count once per identity
+// and the turn is complete only if every child was settled and read.
 func (l *Ledger) Settle(end TurnEnd, live *SpendReading, read RecordsRead) Settlement {
+	s, added := l.settleSession(end, live, read)
+	if end.Children {
+		s, added = l.countChildren(s, added, end, read)
+	}
+	return l.settlement(s, added)
+}
+
+// settleSession settles the session's own spend and returns the shares it
+// added to the per-model split.
+func (l *Ledger) settleSession(end TurnEnd, live *SpendReading, read RecordsRead) (Settlement, map[string]domain.TokenUsage) {
 	arm := l.evalLive(end, live)
 	// A cancelled reply's live reading and the records cover the same
 	// requests, so the records replace the reading instead of adding to it.
@@ -237,10 +289,10 @@ func (l *Ledger) Settle(end TurnEnd, live *SpendReading, read RecordsRead) Settl
 	case recs.usable:
 		return l.settleRecords(end, recs)
 	}
-	return l.settlement(Settlement{}, nil)
+	return Settlement{}, nil
 }
 
-func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, arm liveEval, recs recordsView) Settlement {
+func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, arm liveEval, recs recordsView) (Settlement, map[string]domain.TokenUsage) {
 	l.run = Add(l.run, arm.delta)
 	complete := end.Replied && !end.Cancelled && !arm.reset && !arm.floored
 
@@ -259,13 +311,13 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 	if complete {
 		l.Boundary(read)
 	}
-	return l.settlement(Settlement{
+	return Settlement{
 		Figure:        true,
 		Spent:         arm.delta.InputTokens+arm.delta.OutputTokens > 0,
 		Complete:      complete && !l.live.LowerBound,
-		CoversSession: complete && !l.live.LowerBound,
+		CoversSession: complete && !l.live.LowerBound && l.live.Shape != SpendPerTurn,
 		Provenance:    l.liveProvenance,
-	}, added)
+	}, added
 }
 
 // hasUncounted reports whether the known records hold input or output beyond
@@ -275,11 +327,11 @@ func (l *Ledger) hasUncounted(recs recordsView) bool {
 	return amount.InputTokens != 0 || amount.OutputTokens != 0
 }
 
-func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) Settlement {
+func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) (Settlement, map[string]domain.TokenUsage) {
 	top := recs.positions[len(recs.known)]
 	amount := Subtract(top, l.covered)
 	if !l.hasUncounted(recs) {
-		return l.settlement(Settlement{}, nil)
+		return Settlement{}, nil
 	}
 	_, exact := recs.at(l.covered)
 	exact = exact && len(recs.known) == recs.all
@@ -292,12 +344,54 @@ func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) Settlement {
 		l.split = top
 	}
 	l.addByModel(added)
-	return l.settlement(Settlement{
+	return Settlement{
 		Figure:     true,
 		Spent:      true,
-		Complete:   end.Replied && !end.Cancelled && exact,
+		Complete:   end.Replied && !end.Cancelled && exact && !l.live.LowerBound,
 		Provenance: l.recordsProvenance,
-	}, added)
+	}, added
+}
+
+// countChildren adds the records of the turn's child sessions to s and
+// added. Child records move neither the live position nor the records
+// alignment, so the session's own readings and records stay one for one.
+func (l *Ledger) countChildren(s Settlement, added map[string]domain.TokenUsage, end TurnEnd, read RecordsRead) (Settlement, map[string]domain.TokenUsage) {
+	short := !end.ChildrenSettled || !read.ChildrenOK
+	var total domain.TokenUsage
+	var shares map[string]domain.TokenUsage
+	counted := false
+	for _, r := range read.ChildReadings {
+		u, ok := Normalize(r, l.records)
+		if !ok {
+			short = true
+			continue
+		}
+		if _, repeat := l.childSeen[r.Identity]; repeat {
+			continue
+		}
+		if l.childSeen == nil {
+			l.childSeen = make(map[string]struct{})
+		}
+		l.childSeen[r.Identity] = struct{}{}
+		counted = true
+		total = Add(total, u)
+		if model := strings.TrimSpace(r.Model); model != "" {
+			shares = AddByModel(shares, map[string]domain.TokenUsage{model: u})
+		}
+	}
+	if counted {
+		l.run = Add(l.run, total)
+		l.addByModel(shares)
+		added = AddByModel(added, shares)
+		if !s.Figure {
+			s.Provenance = l.recordsProvenance
+		}
+		s.Figure, s.Spent = true, true
+	}
+	if short {
+		s.Complete, s.CoversSession = false, false
+	}
+	return s, added
 }
 
 func (l *Ledger) addByModel(added map[string]domain.TokenUsage) {
@@ -333,15 +427,21 @@ type liveEval struct {
 
 // evalLive evaluates live without changing the ledger.
 func (l *Ledger) evalLive(end TurnEnd, live *SpendReading) liveEval {
-	reading, ok := normalize(live, l.live)
+	if live == nil {
+		return liveEval{}
+	}
+	reading, ok := Normalize(*live, l.live)
 	if !ok {
 		return liveEval{}
 	}
 	arm := liveEval{normalized: true, reading: reading}
-	if FellBelow(reading, l.lastLive) {
+	switch {
+	case l.live.Shape == SpendPerTurn:
+		arm.delta, arm.covered = reading, Add(l.covered, reading)
+	case FellBelow(reading, l.lastLive):
 		arm.reset = true
 		arm.delta, arm.covered = reading, reading
-	} else {
+	default:
 		arm.delta = Subtract(reading, l.covered)
 		arm.floored = FellBelow(reading, l.covered)
 		arm.covered = Add(l.covered, arm.delta)
@@ -384,7 +484,7 @@ func (l *Ledger) recordsView(read RecordsRead) recordsView {
 		if !stillKnown {
 			continue
 		}
-		u, ok := normalize(r, l.records)
+		u, ok := Normalize(*r, l.records)
 		if !ok {
 			stillKnown = false
 			continue
@@ -424,16 +524,31 @@ func (v recordsView) byModel(from, to int) map[string]domain.TokenUsage {
 	return sum
 }
 
-// normalize converts a reading to counts, reporting false when any count
-// is missing or the reading contradicts the declaration.
-func normalize(reading *SpendReading, spend SpendDeclaration) (domain.TokenUsage, bool) {
-	if reading == nil || reading.Input == nil || reading.Output == nil ||
+// Normalize converts a reading to counts under spend, reporting false when
+// any count the declaration maps is missing or negative, or the reading
+// contradicts the declaration. Input counts every input token and output
+// every output token whatever the source's placement; Total is their sum.
+func Normalize(reading SpendReading, spend SpendDeclaration) (domain.TokenUsage, bool) {
+	if reading.Input == nil || reading.Output == nil ||
 		reading.CacheRead == nil || reading.CacheWrite == nil {
 		return domain.TokenUsage{}, false
 	}
 	in, out, cr, cw := *reading.Input, *reading.Output, *reading.CacheRead, *reading.CacheWrite
-	if in < 0 || out < 0 || cr < 0 || cw < 0 || cr+cw > in {
+	if in < 0 || out < 0 || cr < 0 || cw < 0 {
 		return domain.TokenUsage{}, false
+	}
+	if !spend.ReasoningInOutput {
+		if reading.Reasoning == nil || *reading.Reasoning < 0 {
+			return domain.TokenUsage{}, false
+		}
+		out += *reading.Reasoning
+	}
+	if spend.CacheInInput {
+		if cr+cw > in {
+			return domain.TokenUsage{}, false
+		}
+	} else {
+		in += cr + cw
 	}
 	if spend.Shape == SpendPerRequest && (reading.Identity == "" || (in == 0 && out == 0)) {
 		return domain.TokenUsage{}, false

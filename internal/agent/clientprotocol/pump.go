@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,76 @@ type activeTurn struct {
 	spendLive      *usage.SpendReading
 	recordsPending bool
 	spendSettled   bool
+
+	// children is what the turn's updates showed of child sessions.
+	children childSessions
+}
+
+// childSessions is the child-session state of one running turn, kept in
+// first-seen order and read and written only by the pump goroutine.
+type childSessions struct {
+	started        []string // calls that started a child session
+	startedUnnamed bool     // a start named no call, so no completion can match it
+	completedCalls []string // started calls that completed and named their session
+	sessions       []string // child sessions the turn named
+	settled        []string // sessions a completed call named
+}
+
+// note folds one session update's child signal into the state.
+func (c *childSessions) note(signal usagesource.ChildSignal) {
+	if signal.Started {
+		if signal.Call == "" {
+			c.startedUnnamed = true
+		} else {
+			c.started = appendNew(c.started, signal.Call)
+		}
+	}
+	if signal.Session == "" {
+		return
+	}
+	c.sessions = appendNew(c.sessions, signal.Session)
+	if signal.Completed && signal.Call != "" {
+		c.completedCalls = appendNew(c.completedCalls, signal.Call)
+		c.settled = appendNew(c.settled, signal.Session)
+	}
+}
+
+// end reports whether the turn showed a child session and whether every one it
+// showed completed and named its identifier.
+func (c *childSessions) end() (children, settled bool) {
+	children = c.startedUnnamed || len(c.started) > 0 || len(c.sessions) > 0
+	if !children {
+		return false, false
+	}
+	settled = !c.startedUnnamed &&
+		isSubset(c.started, c.completedCalls) &&
+		isSubset(c.sessions, c.settled)
+	return children, settled
+}
+
+func appendNew(list []string, value string) []string {
+	if slices.Contains(list, value) {
+		return list
+	}
+	return append(list, value)
+}
+
+func isSubset(members, of []string) bool {
+	return !slices.ContainsFunc(members, func(member string) bool {
+		return !slices.Contains(of, member)
+	})
+}
+
+// spendTurnEnd builds the ledger's view of how the turn ended.
+func (t *activeTurn) spendTurnEnd(replied, cancelled bool) usage.TurnEnd {
+	children, settled := t.children.end()
+	return usage.TurnEnd{
+		Replied:         replied,
+		Cancelled:       cancelled,
+		ModelReached:    t.spend.ModelReached(),
+		Children:        children,
+		ChildrenSettled: settled,
+	}
 }
 
 // heldEnd is the disposition and drained figure a turn ends on once its pull
@@ -698,7 +769,7 @@ func contextUntilStop(stop <-chan struct{}) (context.Context, context.CancelFunc
 // carries no usage member, and the ledger alone decides whether the records are
 // needed.
 func (p *pumpState) settleReply(turn *activeTurn, evidence agentcore.TurnEvidence, cancelled bool, live *usage.SpendReading) {
-	end := usage.TurnEnd{Replied: true, Cancelled: cancelled, ModelReached: turn.spend.ModelReached()}
+	end := turn.spendTurnEnd(true, cancelled)
 	if p.needsRecordsRead(end, live) {
 		p.startRecordsRead(turn, evidence, end, live)
 		return
@@ -730,6 +801,7 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 
 	state := p.state
 	declaration := p.declaration
+	children := slices.Clone(turn.children.sessions)
 	inbox := state.inbox
 	stop := state.stopCh
 
@@ -737,7 +809,7 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		ctx, cancel := contextUntilStop(stop)
 		defer cancel()
 
-		read := readSessionRecords(ctx, state, declaration)
+		read := readTurnRecords(ctx, state, declaration, children)
 		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read}}})
 	}()
 }
@@ -788,7 +860,7 @@ func (p *pumpState) endUnreplied(ev agentcore.TurnEvidence) {
 	case turn.recordsPending:
 		p.settleTurn(ev, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
 	default:
-		end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
+		end := turn.spendTurnEnd(false, false)
 		if p.needsRecordsRead(end, nil) {
 			turn.endSettled = true
 			p.startRecordsRead(turn, ev, end, nil)
@@ -923,6 +995,7 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	if sue.kind == updateUserMessageChunk || sue.kind == updateAgentMessageChunk {
 		p.observeReplay()
 	}
+	p.observeChildSession(notif.Update.Remainder)
 	p.observeModelReached(sue.kind)
 	if sue.kind == updateUsage {
 		p.publishUsageUpdateWindows(sue.usage.Meta)
@@ -943,6 +1016,17 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	if result.hasEvent {
 		p.emitOrQueue(result.event)
 	}
+}
+
+// observeChildSession folds what the declared runtime shows of a child session
+// in update into the running turn. Updates outside a turn show nothing the
+// ledger counts.
+func (p *pumpState) observeChildSession(update json.RawMessage) {
+	turn := p.activeTurn
+	if turn == nil || !p.sessionIDKnown || p.declaration.ChildSession == nil {
+		return
+	}
+	turn.children.note(p.declaration.ChildSession(p.sessionID, update))
 }
 
 // publishUsageUpdateWindows publishes the windows the declared runtime reports in
@@ -1254,7 +1338,7 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 		p.finalizeTurn(ev)
 		return
 	}
-	end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
+	end := turn.spendTurnEnd(false, false)
 	if p.needsRecordsRead(end, nil) {
 		// The elapsed wait is spent; the read gets a wait of its own.
 		turn.deadlineC = nil

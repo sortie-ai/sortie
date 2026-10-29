@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -116,17 +118,18 @@ type rawStepFinishPart struct {
 	Tokens    *rawStepTokens `json:"tokens,omitempty"`
 }
 
+// rawStepTokens keeps each count raw so that an absent, null, or non-integer
+// member stays distinguishable from a zero.
 type rawStepTokens struct {
-	Total     int64         `json:"total,omitempty"`
-	Input     int64         `json:"input,omitempty"`
-	Output    int64         `json:"output,omitempty"`
-	Reasoning int64         `json:"reasoning,omitempty"`
-	Cache     rawCacheUsage `json:"cache,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
+	Cache     rawCacheUsage   `json:"cache,omitempty"`
 }
 
 type rawCacheUsage struct {
-	Read  int64 `json:"read,omitempty"`
-	Write int64 `json:"write,omitempty"`
+	Read  json.RawMessage `json:"read,omitempty"`
+	Write json.RawMessage `json:"write,omitempty"`
 }
 
 type exportUsage struct {
@@ -194,6 +197,19 @@ func parseStepFinishPart(raw json.RawMessage) (rawStepFinishPart, error) {
 	return part, nil
 }
 
+// stepSpendReading builds the reading of one step report. The runtime sends
+// reasoning and cache counts only above zero, so those read zero when absent;
+// input and output are always sent, so a missing one is unknown.
+func stepSpendReading(t *rawStepTokens) usage.SpendReading {
+	return usage.SpendReading{
+		Input:      sessionexport.Count(t.Input),
+		Output:     sessionexport.Count(t.Output),
+		Reasoning:  sessionexport.CountOmittedAtZero(t.Reasoning),
+		CacheRead:  sessionexport.CountOmittedAtZero(t.Cache.Read),
+		CacheWrite: sessionexport.CountOmittedAtZero(t.Cache.Write),
+	}
+}
+
 // freeTierRefusalClause returns a clause naming the free-tier-required
 // tools state's policy denies, or "" when runErr does not match the
 // free-tier refusal envelope, or the policy denies neither tool.
@@ -243,68 +259,30 @@ func isFreeTierRefusal(runErr *rawRunError) bool {
 // `session export --standalone --sanitize` document, summing over every
 // finished assistant message. When sinceUnixMS is non-zero, only messages
 // created at or after it are counted. A message without a tokens object
-// is skipped. The reported model comes from the last kept message.
-// Returns the zero exportUsage unless the document decodes and its
-// info.id equals sessionID.
+// is skipped. The reported model comes from the last kept message that names
+// one. Returns the zero exportUsage unless the document decodes, its info.id
+// equals sessionID, and every kept message carries all its counts.
 func parseSessionExport(data []byte, sessionID string, sinceUnixMS int64) exportUsage {
-	var payload struct {
-		Info struct {
-			ID string `json:"id"`
-		} `json:"info"`
-		Messages []map[string]any `json:"messages"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return exportUsage{}
-	}
-	if payload.Info.ID != sessionID {
+	records, err := sessionexport.Parse(data, sessionID)
+	if err != nil {
 		return exportUsage{}
 	}
 
 	var sum exportUsage
 	kept := false
-	for _, message := range payload.Messages {
-		if stringFromAny(message["type"]) != "assistant" {
+	for _, record := range records {
+		if sinceUnixMS != 0 && record.CreatedMS < sinceUnixMS {
 			continue
 		}
-		if stringFromAny(message["finish"]) == "" {
-			continue
+		messageUsage, ok := usage.Normalize(record.Spend, usageSources.Records.Spend)
+		if !ok {
+			return exportUsage{}
 		}
-		if sinceUnixMS != 0 {
-			created, ok := messageCreatedMS(message)
-			if !ok || created < sinceUnixMS {
-				continue
-			}
-		}
-		tokens := mapFromAny(message["tokens"])
-		if tokens == nil {
-			continue
-		}
-
-		inputTokens, _ := int64FromAny(tokens["input"])
-		outputTokens, _ := int64FromAny(tokens["output"])
-		var reasoningTokens int64
-		if reasoning, ok := int64FromAny(tokens["reasoning"]); ok {
-			reasoningTokens = reasoning
-		}
-		var cacheReadTokens, cacheWriteTokens int64
-		if cache := mapFromAny(tokens["cache"]); cache != nil {
-			if read, ok := int64FromAny(cache["read"]); ok {
-				cacheReadTokens = read
-			}
-			if write, ok := int64FromAny(cache["write"]); ok {
-				cacheWriteTokens = write
-			}
-		}
-
-		messageUsage := stepTokens(inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens)
 		sum.Usage = agentcore.AddUsage(sum.Usage, messageUsage)
 		kept = true
 
-		model := mapFromAny(message["model"])
-		providerID := stringFromAny(model["providerID"])
-		modelID := stringFromAny(model["id"])
-		if providerID != "" && modelID != "" {
-			sum.Model = providerID + "/" + modelID
+		if record.Spend.Model != "" {
+			sum.Model = record.Spend.Model
 			if sum.ByModel == nil {
 				sum.ByModel = map[string]domain.TokenUsage{}
 			}
@@ -328,7 +306,7 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
-	cmd, err := auxiliaryCommand(queryCtx, state, exportArgs(sessionID))
+	cmd, err := auxiliaryCommand(queryCtx, state, sessionexport.Args(sessionID))
 	if err != nil {
 		state.logger().Warn("failed to build opencode export environment", slog.Any("error", err))
 		return exportUsage{}
@@ -348,75 +326,9 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 		return exportUsage{}
 	}
 
-	usage := parseSessionExport(stdout.Bytes(), sessionID, sinceUnixMS)
-	if !usage.Recovered {
+	exported := parseSessionExport(stdout.Bytes(), sessionID, sinceUnixMS)
+	if !exported.Recovered {
 		state.logger().Warn("no assistant token usage found in opencode export")
 	}
-	return usage
-}
-
-// stepTokens maps the counts of one step or one assistant message to token
-// usage. The runtime reports cache and reasoning counts beside input and
-// output, so they are added into those totals here.
-func stepTokens(input, output, reasoning, cacheRead, cacheWrite int64) domain.TokenUsage {
-	return domain.TokenUsage{
-		InputTokens:      input + cacheRead + cacheWrite,
-		OutputTokens:     output + reasoning,
-		CacheReadTokens:  cacheRead,
-		CacheWriteTokens: cacheWrite,
-	}
-}
-
-// messageCreatedMS extracts time.created (Unix milliseconds) from an
-// assistant message. ok is false when the field is absent
-// or not parseable as a number.
-func messageCreatedMS(info map[string]any) (createdMS int64, ok bool) {
-	t := mapFromAny(info["time"])
-	if t == nil {
-		return 0, false
-	}
-	return int64FromAny(t["created"])
-}
-
-func mapFromAny(value any) map[string]any {
-	if value == nil {
-		return nil
-	}
-	typed, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-	return typed
-}
-
-func stringFromAny(value any) string {
-	str, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return str
-}
-
-func int64FromAny(value any) (int64, bool) {
-	switch typed := value.(type) {
-	case int:
-		return int64(typed), true
-	case int32:
-		return int64(typed), true
-	case int64:
-		return typed, true
-	case float64:
-		if typed != float64(int64(typed)) {
-			return 0, false
-		}
-		return int64(typed), true
-	case json.Number:
-		value, err := typed.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return value, true
-	default:
-		return 0, false
-	}
+	return exported
 }

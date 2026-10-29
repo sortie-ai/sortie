@@ -177,9 +177,16 @@ func chooseDeclaration(declarations *registry.Registry[usagesource.Declaration, 
 // environment, and runtime home.
 type pullRuntime struct {
 	state *sessionState
+
+	// session names a child session whose records are read; empty means the
+	// session's own.
+	session string
 }
 
 func (r pullRuntime) SessionID() string {
+	if r.session != "" {
+		return r.session
+	}
 	return r.state.sessionID
 }
 
@@ -213,8 +220,12 @@ func (r pullRuntime) RemoteHost() bool {
 	return r.state.target.RemoteCommand != ""
 }
 
-func (r pullRuntime) RunHostCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return r.state.target.RunHostCommand(ctx, name, args...)
+func (r pullRuntime) CommandWords() []string {
+	return r.state.target.CommandWords()
+}
+
+func (r pullRuntime) RunHostCommand(ctx context.Context, cmd agentcore.HostCommand) ([]byte, error) {
+	return r.state.target.RunHostCommand(ctx, r.state.launchEnv, cmd)
 }
 
 // newSessionPuller builds the session's puller from decl, or returns nil when
@@ -239,16 +250,40 @@ func readsRecords(state *sessionState) bool {
 // host under the read timeout. A launch that reads none returns the empty read,
 // which the ledger takes as a failed one.
 func readSessionRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration) usage.RecordsRead {
+	return readTurnRecords(ctx, state, decl, nil)
+}
+
+// readTurnRecords reads the session's records and then those of each child
+// session, in the order given, under one read timeout. A failed child read
+// leaves the later children read. A launch that reads none returns the empty
+// read, whose ChildrenOK is false, as is that of a read naming no child.
+func readTurnRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration, children []string) usage.RecordsRead {
 	if !readsRecords(state) {
 		return usage.RecordsRead{}
 	}
 	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
-	readings, err := decl.ReadRecords(readCtx, pullRuntime{state: state})
+
+	var read usage.RecordsRead
+	read.Readings, read.OK = readRecordsOf(readCtx, state, decl, "")
+	childrenOK := len(children) > 0
+	for _, child := range children {
+		readings, ok := readRecordsOf(readCtx, state, decl, child)
+		read.ChildReadings = append(read.ChildReadings, readings...)
+		childrenOK = childrenOK && ok
+	}
+	read.ChildrenOK = childrenOK
+	return read
+}
+
+// readRecordsOf reads the records of the child session named, or of the
+// session's own when child is empty, and logs a failed read.
+func readRecordsOf(ctx context.Context, state *sessionState, decl usagesource.Declaration, child string) ([]usage.SpendReading, bool) {
+	readings, err := decl.ReadRecords(ctx, pullRuntime{state: state, session: child})
 	if err != nil {
 		state.logger.Debug("usage records read failed", slog.Any("error", err))
 	}
-	return usage.RecordsRead{Readings: readings, OK: err == nil}
+	return readings, err == nil
 }
 
 // releaseUsageSources closes every claimed source and the verification addition.

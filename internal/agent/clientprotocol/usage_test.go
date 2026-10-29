@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strconv"
@@ -869,11 +870,14 @@ func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
 	tests := []struct {
 		name      string
 		target    agentcore.LaunchTarget
+		created   bool
 		wantReads int
 		wantOK    bool
 	}{
-		{"local launch", agentcore.LaunchTarget{Command: "agent"}, 1, true},
-		{"remote launch", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, 0, false},
+		{"local continued session", agentcore.LaunchTarget{Command: "agent"}, false, 1, true},
+		{"local created session", agentcore.LaunchTarget{Command: "agent"}, true, 0, true},
+		{"remote continued session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, false, 0, false},
+		{"remote created session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, true, 0, false},
 	}
 
 	for _, tt := range tests {
@@ -889,7 +893,7 @@ func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
 			state := &sessionState{logger: discardLogger(), target: tt.target}
 			live := spendReading(100, 20, 0, "", "")
 
-			ledger := newSessionLedger(t.Context(), state, decl)
+			ledger := newSessionLedger(t.Context(), state, decl, tt.created)
 
 			if ledger == nil {
 				t.Fatalf("newSessionLedger(%+v) = nil, want a ledger built from the declaration's live and records sources", tt.target)
@@ -902,10 +906,75 @@ func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
 				t.Errorf("Settle() = {Figure %v, Run %+v}, want the live figure 100/20", settlement.Figure, settlement.Run)
 			}
 
+			history := usage.RecordsRead{OK: true, Readings: []usage.SpendReading{spendReading(10, 2, 0, "model-a", "u1")}}
+			boundary := newSessionLedger(t.Context(), state, decl, tt.created).Settle(usage.TurnEnd{Replied: true, ModelReached: true}, nil, history)
+			if boundary.Figure != tt.created {
+				t.Errorf("newSessionLedger(%+v, created %v) counts a record that is on the host at session start = %v, want %v", tt.target, tt.created, boundary.Figure, tt.created)
+			}
+
 			read := readSessionRecords(t.Context(), state, decl)
 
 			if read.OK != tt.wantOK || (len(read.Readings) != 0) != tt.wantOK {
 				t.Errorf("readSessionRecords(%+v) = {OK %v, %d readings}, want OK %v", tt.target, read.OK, len(read.Readings), tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestChildSessionSpendSettlesTheTurn(t *testing.T) {
+	t.Parallel()
+
+	start := usagesource.ChildSignal{Call: "c1", Started: true}
+	done := usagesource.ChildSignal{Call: "c1", Session: "child-1", Completed: true}
+	both := domain.TokenUsage{InputTokens: 150, OutputTokens: 15, TotalTokens: 165}
+	tests := []struct {
+		name            string
+		signals         []usagesource.ChildSignal
+		target          agentcore.LaunchTarget
+		wantUnaccounted bool
+		want            domain.TokenUsage
+	}{
+		{"completed child counted", []usagesource.ChildSignal{start, done}, agentcore.LaunchTarget{Command: "agent"}, false, both},
+		{"started child never completed", []usagesource.ChildSignal{start, {Session: "child-1"}}, agentcore.LaunchTarget{Command: "agent"}, true, both},
+		{"remote turn that ran a child", []usagesource.ChildSignal{start, done}, sshLaunch("agent"), true, domain.TokenUsage{InputTokens: 100, OutputTokens: 10, TotalTokens: 110}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			live := spendReading(100, 10, 0, "", "")
+			declaration := scriptedSpendDeclaration(&live, nil, nil)
+			declaration.ChildSession = func(_ string, update json.RawMessage) usagesource.ChildSignal {
+				var decoded struct{ Signal usagesource.ChildSignal }
+				_ = json.Unmarshal(update, &decoded)
+				return decoded.Signal
+			}
+			declaration.ReadRecords = func(_ context.Context, rt usagesource.PullRuntime) ([]usage.SpendReading, error) {
+				if rt.SessionID() == "child-1" {
+					return []usage.SpendReading{spendReading(50, 5, 0, "model-b", "c1")}, nil
+				}
+				return []usage.SpendReading{spendReading(100, 10, 0, "model-a", "p1")}, nil
+			}
+			ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+			if err != nil {
+				t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+			}
+			ledger.SessionCreated()
+			state, out, inPw := newDeclaredSession(t, declaration, ledger)
+			state.target = tt.target
+
+			outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+			promptID := out.awaitMethod(t, methodSessionPrompt)
+			for _, signal := range tt.signals {
+				body, _ := json.Marshal(signal)
+				sendLine(t, inPw, fmt.Sprintf(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"},"signal":%s}}}`, body))
+			}
+			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+			result := waittest.Receive(t, outcomeCh, "turn outcome").result
+
+			if result.Usage != tt.want || result.SpendUnaccounted != tt.wantUnaccounted {
+				t.Errorf("RunTurn() = {Usage %+v, SpendUnaccounted %v}, want {%+v, %v}", result.Usage, result.SpendUnaccounted, tt.want, tt.wantUnaccounted)
 			}
 		})
 	}

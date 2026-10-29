@@ -111,3 +111,21 @@ func TestScanRuntimeFileRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestRunHostCommandRefusesBadCommand(t *testing.T) {
+	t.Parallel()
+
+	target := LaunchTarget{Command: "agent", Args: []string{"acp"}}
+	for name, cmd := range map[string]HostCommand{
+		"launch words above the word count": {LaunchWords: 3},
+		"program that does not start":       {Name: filepath.Join(t.TempDir(), "absent")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got, err := target.RunHostCommand(t.Context(), nil, cmd); !errors.Is(err, ErrHostCommandFailed) {
+				t.Errorf("RunHostCommand(%+v) = %q, %v, want error wrapping ErrHostCommandFailed", cmd, got, err)
+			}
+		})
+	}
+}

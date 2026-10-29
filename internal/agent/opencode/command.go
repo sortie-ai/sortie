@@ -173,11 +173,6 @@ func buildRunArgs(state *sessionState, pt passthroughConfig) []string {
 	return args
 }
 
-// exportArgs returns the usage-recovery invocation's argument vector.
-func exportArgs(sessionID string) []string {
-	return []string{"session", "export", "--standalone", "--sanitize", sessionID}
-}
-
 // deleteArgs returns the session-deletion invocation's argument vector.
 func deleteArgs(sessionID string) []string {
 	return []string{"session", "delete", "--standalone", sessionID}

@@ -79,6 +79,46 @@ type Declaration struct {
 	// identifies the configured runtime a handshake name is compared against.
 	// Nil when the handshake name alone selects the runtime.
 	Launches func(target agentcore.LaunchTarget) bool
+
+	// LaunchAddition turns off a model request the runtime makes on its own
+	// that no source records. The zero value adds nothing.
+	LaunchAddition LaunchAddition
+
+	// ChildSession reads the update object of one session/update notification
+	// of session sessionID and reports what it shows of a child session: a
+	// session the runtime ran part of the turn's work in. Nil when the runtime
+	// runs none.
+	ChildSession func(sessionID string, update json.RawMessage) ChildSignal
+}
+
+// LaunchAddition turns off a model request the runtime makes on its own that
+// no source records, through one environment variable of every session launch.
+type LaunchAddition struct {
+	// Name is the variable. It is empty exactly when Merge is nil.
+	Name string
+
+	// Merge returns the value Name carries with the addition merged into
+	// current, the value the launch holds for Name (set is false when none).
+	// inEffect is false when current keeps the request on or cannot take the
+	// addition; value is then current, unchanged.
+	Merge func(current string, set bool) (value string, inEffect bool)
+}
+
+// ChildSignal is what one session update shows of a child session.
+type ChildSignal struct {
+	// Call is the tool call that starts or ends a child session. It is empty
+	// when the update names none.
+	Call string
+
+	// Started is true when the update shows Call starting a child session.
+	Started bool
+
+	// Completed is true when the update shows Call's child session completed.
+	Completed bool
+
+	// Session is a child session identifier the update names. It is empty when
+	// the update names none.
+	Session string
 }
 
 // PullRuntime is what a declaration may use to reach one session's runtime. The
@@ -112,11 +152,15 @@ type PullRuntime interface {
 	// over SSH, rather than on Sortie's own.
 	RemoteHost() bool
 
+	// CommandWords returns the words of the configured agent command, never the
+	// SSH executable.
+	CommandWords() []string
+
 	// RunHostCommand runs one command on the runtime's host, locally or
 	// through the session's SSH launch, and returns its standard output. A
 	// command that does not start or does not exit zero wraps
 	// agentcore.ErrHostCommandFailed.
-	RunHostCommand(ctx context.Context, name string, args ...string) ([]byte, error)
+	RunHostCommand(ctx context.Context, cmd agentcore.HostCommand) ([]byte, error)
 }
 
 // ErrMethodNotFound marks a request the runtime does not implement.
@@ -151,6 +195,8 @@ func checkDeclaration(d Declaration, _ struct{}) error {
 		return err
 	}
 	switch {
+	case (d.LaunchAddition.Name == "") != (d.LaunchAddition.Merge == nil):
+		return errors.New("LaunchAddition must set Name and Merge together")
 	case d.Live.Category != usage.SourceProtocol:
 		return fmt.Errorf("live source category %q is not %q", d.Live.Category, usage.SourceProtocol)
 	case (d.PromptSpend == nil) != (d.Live.Spend.Shape == usage.SpendUndeclared):
@@ -287,23 +333,23 @@ func namesRuntime(target agentcore.LaunchTarget, executable string, packages ...
 // and never Command, which is the SSH executable. A wrong match on a remote
 // launch costs one refused request pair before a puller stops.
 func commandNamesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
-	var tokens []string
-	if target.RemoteCommand != "" {
-		tokens = strings.Fields(target.RemoteCommand)
-	} else {
-		tokens = append([]string{target.Command}, target.Args...)
-	}
-	for i, token := range tokens {
+	return runtimeWordIndex(target.CommandWords(), executable, packages...) >= 0
+}
+
+// runtimeWordIndex returns the index of the first word that names the
+// executable or one of the npm packages, or -1 when none does.
+func runtimeWordIndex(words []string, executable string, packages ...string) int {
+	for i, word := range words {
 		var optionValue bool
 		if i > 0 {
-			prev := tokens[i-1]
+			prev := words[i-1]
 			optionValue = strings.HasPrefix(prev, "-") && prev != "--"
 		}
-		if runtimeToken(token, optionValue, executable, packages) {
-			return true
+		if runtimeToken(word, optionValue, executable, packages) {
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 func runtimeToken(token string, optionValue bool, executable string, packages []string) bool {

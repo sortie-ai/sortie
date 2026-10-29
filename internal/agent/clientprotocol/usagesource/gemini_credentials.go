@@ -145,7 +145,7 @@ func geminiHostEnv(ctx context.Context, rt PullRuntime, names []string) (map[str
 	for _, name := range missing {
 		fmt.Fprintf(&script, ` "$%s"`, name)
 	}
-	out, err := rt.RunHostCommand(ctx, "sh", "-c", script.String())
+	out, err := rt.RunHostCommand(ctx, agentcore.HostCommand{Name: "sh", Args: []string{"-c", script.String()}})
 	if err != nil {
 		return nil, fmt.Errorf("read gemini storage settings: %w", err)
 	}
@@ -211,7 +211,7 @@ func geminiKeychainSecret(ctx context.Context, rt PullRuntime) (string, error) {
 	if !rt.RemoteHost() && runtime.GOOS == "windows" {
 		return geminiCredentialManagerSecret(geminiKeychainService + "/" + geminiKeychainAccount), nil
 	}
-	out, err := rt.RunHostCommand(ctx, "sh", "-c", geminiKeychainScript)
+	out, err := rt.RunHostCommand(ctx, agentcore.HostCommand{Name: "sh", Args: []string{"-c", geminiKeychainScript}})
 	if errors.Is(err, agentcore.ErrHostCommandFailed) {
 		return "", nil
 	}

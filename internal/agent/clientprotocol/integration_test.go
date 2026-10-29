@@ -71,6 +71,17 @@
 //	                                  declaration a runtime with none of its own
 //	                                  is measured under, whose figure is a lower
 //	                                  bound
+//	SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX
+//	                                  text the runtime puts before a served
+//	                                  model's name in the model name it
+//	                                  reports; unset when it reports the
+//	                                  served name
+//	SORTIE_CLIENTPROTOCOL_STATUS_CALL
+//	                                  JSON {"name": ..., "arguments": {...}}
+//	                                  of the call that reaches sortie_status,
+//	                                  for a runtime that offers server tools
+//	                                  only through another tool; unset calls
+//	                                  the declared sortie_status tool
 //
 // Run:
 //
@@ -135,7 +146,7 @@ func captureAgentConfig(t *testing.T, command string, expect captureExpectation,
 		events:     events,
 	}
 	wrapperPath := filepath.Join(dir, "capture.sh")
-	wrapper := fmt.Sprintf("#!/bin/sh\nset -eu\ntee %q | \"$@\" | tee %q\n", capture.clientPath, capture.agentPath)
+	wrapper := fmt.Sprintf("#!/bin/sh\nset -eu\n[ \"$*\" = %q ] || exec \"$@\"\ntee %q | \"$@\" | tee %q\n", command, capture.clientPath, capture.agentPath)
 	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o700); err != nil {
 		t.Fatalf("integrationAgentConfig() write capture wrapper: %v", err)
 	}
@@ -588,6 +599,19 @@ func bindingKind() string {
 	return emptyDeclarationsKind
 }
 
+func statusCall(t *testing.T) fakemodel.ToolChoice {
+	t.Helper()
+	raw := os.Getenv("SORTIE_CLIENTPROTOCOL_STATUS_CALL")
+	if raw == "" {
+		return nil
+	}
+	var call fakemodel.FunctionCall
+	if err := json.Unmarshal([]byte(raw), &call); err != nil {
+		t.Fatalf("SORTIE_CLIENTPROTOCOL_STATUS_CALL = %q, want a JSON object with name and arguments: %v", raw, err)
+	}
+	return fakemodel.Named(call.Name, call.Arguments)
+}
+
 func spendSources(t *testing.T) *fakemodel.SpendSources {
 	t.Helper()
 
@@ -645,10 +669,12 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	turnExpect := expectScriptedToolTurn
 	binding := fakemodel.Binding{
+		SortieStatus:        statusCall(t),
 		Kind:                bindingKind(),
 		LocalToolsOverHTTP:  os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") == "1",
 		SSH:                 sshVariant(),
 		Spend:               spendSources(t),
+		ReportedModelPrefix: os.Getenv("SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX"),
 		Passthrough:         map[string]any{},
 		CredentialEnv:       credentialNames,
 		UserInstructions:    os.Getenv("SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS"),

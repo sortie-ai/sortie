@@ -59,8 +59,10 @@ func (r geminiStoreRuntime) ScanHomeFile(_ context.Context, _, rel string, _, _ 
 	return nil
 }
 
-func (r geminiStoreRuntime) RunHostCommand(_ context.Context, _ string, args ...string) ([]byte, error) {
-	switch script := args[len(args)-1]; {
+func (geminiStoreRuntime) CommandWords() []string { return nil }
+
+func (r geminiStoreRuntime) RunHostCommand(_ context.Context, cmd agentcore.HostCommand) ([]byte, error) {
+	switch script := cmd.Args[len(cmd.Args)-1]; {
 	case script == geminiKeychainScript && r.keychain == "":
 		return nil, agentcore.ErrHostCommandFailed
 	case script == geminiKeychainScript:
@@ -71,7 +73,7 @@ func (r geminiStoreRuntime) RunHostCommand(_ context.Context, _ string, args ...
 	return nil, errors.New("unexpected host command")
 }
 
-func readGeminiFixture(t *testing.T, name string) string {
+func readFixture(t *testing.T, name string) string {
 	t.Helper()
 
 	data, err := os.ReadFile("testdata/" + name)
@@ -97,7 +99,7 @@ func TestGeminiAccessTokenFollowsTheRuntimesStoreOrder(t *testing.T) {
 	t.Parallel()
 
 	valid := time.Now().Add(time.Hour)
-	encrypted := readGeminiFixture(t, "gemini_credentials_encrypted.txt")
+	encrypted := readFixture(t, "gemini_credentials_encrypted.txt")
 	tests := []struct {
 		name        string
 		env         map[string]string
@@ -148,7 +150,7 @@ func TestGeminiAccessTokenFollowsTheRuntimesStoreOrder(t *testing.T) {
 func TestGeminiEncryptedFileYieldsTheTokenOnlyForItsOwnHost(t *testing.T) {
 	t.Parallel()
 
-	encrypted := readGeminiFixture(t, "gemini_credentials_encrypted.txt")
+	encrypted := readFixture(t, "gemini_credentials_encrypted.txt")
 	tests := []struct {
 		name    string
 		host    string
@@ -223,7 +225,7 @@ func TestGeminiPullSendsNothingWithAnExpiredStoredToken(t *testing.T) {
 			}
 			maps.Copy(rt.env, tt.env)
 			if tt.file != "" {
-				rt.files[geminiEncryptedFile] = readGeminiFixture(t, tt.file)
+				rt.files[geminiEncryptedFile] = readFixture(t, tt.file)
 			}
 
 			readings, err := geminiPullWindows(t.Context(), rt)

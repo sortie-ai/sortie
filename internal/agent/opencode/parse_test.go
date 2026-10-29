@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -255,31 +256,9 @@ func TestQueryExportUsage(t *testing.T) {
 		}
 	})
 
-	t.Run("parse_missing_tokens_returns_zero", func(t *testing.T) {
-		t.Parallel()
-
-		data := loadFixture(t, "export_usage_missing_tokens.json")
-		usage := parseSessionExport(data, "ses_abc123", 0)
-
-		if usage.Usage.InputTokens != 0 {
-			t.Errorf("InputTokens = %d, want 0", usage.Usage.InputTokens)
-		}
-		if usage.Usage.OutputTokens != 0 {
-			t.Errorf("OutputTokens = %d, want 0", usage.Usage.OutputTokens)
-		}
-		if usage.Usage.CacheReadTokens != 0 {
-			t.Errorf("CacheReadTokens = %d, want 0", usage.Usage.CacheReadTokens)
-		}
-	})
-
 	t.Run("a_genuinely_zero_export_is_recovered_not_discarded", func(t *testing.T) {
 		t.Parallel()
 
-		// The runtime's assistant message carries `tokens` as a required
-		// object, so a turn that cost nothing exports the same shape as
-		// any other. Reading the VALUES to decide whether anything was
-		// recovered turned that known zero into an unknown spend, and
-		// threw away the model the export named along with it.
 		data := []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop",` +
 			`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
 			`"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}`)
@@ -303,16 +282,12 @@ func TestQueryExportUsage(t *testing.T) {
 	t.Run("nothing_kept_is_not_recovered", func(t *testing.T) {
 		t.Parallel()
 
-		// The accept control for the cell above: "no figure" must stay
-		// distinguishable from "a figure that happens to be zero", or the
-		// presence test is just a way of always saying yes.
 		for name, data := range map[string][]byte{
-			"empty_messages":  []byte(`{"info":{"id":"ses_abc123"},"messages":[]}`),
-			"invalid_json":    []byte("not valid json"),
-			"user_message":    []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"user","tokens":{"input":100,"output":50}}]}`),
-			"missing_tokens":  []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop"}]}`),
-			"other_session":   []byte(`{"info":{"id":"ses_other"},"messages":[{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1}}]}`),
-			"unfinished_step": []byte(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}`),
+			"empty_messages": []byte(`{"info":{"id":"ses_abc123"},"messages":[]}`),
+			"other_session":  []byte(`{"info":{"id":"ses_other"},"messages":[{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}]}`),
+			"kept_message_missing_a_count": []byte(`{"info":{"id":"ses_abc123"},"messages":[` +
+				`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}},` +
+				`{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"cache":{"read":0,"write":0}}}]}`),
 		} {
 			usage := parseSessionExport(data, "ses_abc123", 0)
 			if usage.Recovered {
@@ -331,9 +306,9 @@ func TestQueryExportUsage(t *testing.T) {
 			`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
 			`"tokens":{"input":100,"output":10,"reasoning":5,"cache":{"read":20,"write":30}}},` +
 			`{"type":"assistant","finish":"stop","model":{"providerID":"openai","id":"gpt-5"},` +
-			`"tokens":{"input":200,"output":40}},` +
+			`"tokens":{"input":200,"output":40,"reasoning":0,"cache":{"read":0,"write":0}}},` +
 			`{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
-			`"tokens":{"input":10,"output":2}}]}`)
+			`"tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":0,"write":0}}}]}`)
 
 		usage := parseSessionExport(data, "ses_abc123", 0)
 
@@ -343,17 +318,6 @@ func TestQueryExportUsage(t *testing.T) {
 		}
 		if !reflect.DeepEqual(usage.ByModel, want) {
 			t.Errorf("ByModel = %+v, want %+v", usage.ByModel, want)
-		}
-	})
-
-	t.Run("parse_session_id_mismatch_returns_zero", func(t *testing.T) {
-		t.Parallel()
-
-		data := loadFixture(t, "export_usage.json")
-		usage := parseSessionExport(data, "ses_different_session", 0)
-
-		if usage.Usage.InputTokens != 0 {
-			t.Errorf("InputTokens = %d, want 0 for mismatched session", usage.Usage.InputTokens)
 		}
 	})
 }
@@ -428,6 +392,20 @@ func TestParseSessionExport(t *testing.T) {
 		}
 	})
 
+	t.Run("a message without time.created is dropped under a window and kept without one", func(t *testing.T) {
+		t.Parallel()
+
+		undated := []byte(`{"info":{"id":"ses_x"},"messages":[{"type":"assistant","finish":"stop",` +
+			`"tokens":{"input":9,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}]}`)
+
+		windowed := parseSessionExport(undated, "ses_x", 1)
+		unwindowed := parseSessionExport(undated, "ses_x", 0)
+
+		if windowed.Recovered || !unwindowed.Recovered || unwindowed.Usage.InputTokens != 9 {
+			t.Errorf("parseSessionExport(undated) windowed = %+v, unwindowed = %+v, want dropped under a window and kept without one", windowed, unwindowed)
+		}
+	})
+
 	t.Run("a step report and an export message with the same tokens give the same counts", func(t *testing.T) {
 		t.Parallel()
 
@@ -438,22 +416,47 @@ func TestParseSessionExport(t *testing.T) {
 		}
 		exported := parseSessionExport([]byte(`{"info":{"id":"ses_x"},"messages":[{"type":"assistant","finish":"stop","tokens":`+tokens+`}]}`), "ses_x", 0)
 
-		got := agentcore.AddUsage(domain.TokenUsage{}, stepTokens(step.Tokens.Input, step.Tokens.Output, step.Tokens.Reasoning, step.Tokens.Cache.Read, step.Tokens.Cache.Write))
+		got, _ := usage.Normalize(stepSpendReading(step.Tokens), usageSources.Live.Spend)
 
 		want := domain.TokenUsage{InputTokens: 135, OutputTokens: 27, CacheReadTokens: 30, CacheWriteTokens: 5, TotalTokens: 162}
 		if got != want || exported.Usage != want {
-			t.Errorf("stepTokens(%+v) = %+v, export parser = %+v, want both %+v (cache added to input, reasoning to output)", *step.Tokens, got, exported.Usage, want)
+			t.Errorf("step report = %+v, export parser = %+v, want both %+v (cache added to input, reasoning to output)", got, exported.Usage, want)
 		}
 	})
+}
 
-	t.Run("a session id mismatch returns zero", func(t *testing.T) {
-		t.Parallel()
+func TestStepReportMapping(t *testing.T) {
+	t.Parallel()
 
-		usage := parseSessionExport(data, "ses_different_session", 0)
-		if !reflect.DeepEqual(usage, exportUsage{}) {
-			t.Errorf("usage = %+v, want zero value for a mismatched session", usage)
-		}
-	})
+	tests := []struct {
+		name   string
+		tokens string
+		want   domain.TokenUsage
+		wantOK bool
+	}{
+		{"omitted reasoning and cache count as zero", `{"input":10,"output":2}`, domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}, true},
+		{"missing input adds nothing", `{"output":2}`, domain.TokenUsage{}, false},
+		{"missing output adds nothing", `{"input":10}`, domain.TokenUsage{}, false},
+		{"null reasoning adds nothing", `{"input":10,"output":2,"reasoning":null}`, domain.TokenUsage{}, false},
+		{"non-integer cache read adds nothing", `{"input":10,"output":2,"cache":{"read":1.5}}`, domain.TokenUsage{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			part, err := parseStepFinishPart([]byte(`{"tokens":` + tt.tokens + `}`))
+			if err != nil {
+				t.Fatalf("parseStepFinishPart(%s) error = %v", tt.tokens, err)
+			}
+
+			got, ok := usage.Normalize(stepSpendReading(part.Tokens), usageSources.Live.Spend)
+
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("step report %s = %+v, %v, want %+v, %v", tt.tokens, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
 }
 
 func loadFreeTierRunError(t *testing.T, fixture string) *rawRunError {

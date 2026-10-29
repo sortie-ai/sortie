@@ -390,7 +390,9 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 		}
 		spend.MarkModelReached()
 		if t := part.Tokens; t != nil {
-			s.liveSinceSettled = agentcore.AddUsage(s.liveSinceSettled, stepTokens(t.Input, t.Output, t.Reasoning, t.Cache.Read, t.Cache.Write))
+			if stepUsage, ok := usage.Normalize(stepSpendReading(t), usageSources.Live.Spend); ok {
+				s.liveSinceSettled = agentcore.AddUsage(s.liveSinceSettled, stepUsage)
+			}
 		}
 		agentcore.EmitNotification(emit, "")
 		if stepFinishEndsTurn(part.Reason) {

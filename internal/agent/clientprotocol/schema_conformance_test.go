@@ -961,7 +961,7 @@ func TestSchemaConformance(t *testing.T) {
 		t.Cleanup(cancelLoad)
 		loadOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
+			sessionID, _, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
 			loadOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		loadProbeID := loadOut.awaitMethod(t, negativeControlMethod)
@@ -977,7 +977,7 @@ func TestSchemaConformance(t *testing.T) {
 		t.Cleanup(cancelResume)
 		resumeOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
+			sessionID, _, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
 			resumeOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		resumeProbeID := resumeOut.awaitMethod(t, negativeControlMethod)

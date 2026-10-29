@@ -195,6 +195,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/usage":                     {reason: "shared usage normalization and merge for provider usage windows, and spend accounting; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate":      {reason: "shared Copilot CLI journal location, read caps, and record parser; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport":    {reason: "shared OpenCode session export arguments and document parser; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/sshutil":                   {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/toolrelay":                 {reason: "shared HTTP tool-server relay lifecycle and delivery decision; registers no kind and holds no adapter", coreImportable: false},

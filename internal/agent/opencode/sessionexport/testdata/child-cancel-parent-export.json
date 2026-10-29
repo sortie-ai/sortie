@@ -1,0 +1,129 @@
+{
+  "info": {
+    "id": "ses_e79773d5cffeGZOgs16v5Zm70A",
+    "projectID": "<PROJECT_ID>",
+    "model": {
+      "id": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 226,
+      "output": 113,
+      "reasoning": 126,
+      "cache": {
+        "read": 17536,
+        "write": 0
+      }
+    },
+    "outcome": "interrupted",
+    "time": {
+      "created": 1793258472130,
+      "updated": 1793258476481,
+      "idle": 1793258476484
+    },
+    "title": "Subagent counts to 300",
+    "location": {
+      "directory": "<WORKSPACE>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18688c2e0001Jq6j8wiSFKDJEz",
+      "time": {
+        "created": 1793258472160
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode"
+      }
+    },
+    {
+      "id": "msg_18688c2e7001BCwYbD5vbs0Yvn",
+      "time": {
+        "created": 1793258472201
+      },
+      "text": "Use the subagent tool to start a general subagent whose job is to count from 1 to 300, one number per line, without using any tools. Then reply with exactly what the subagent returned.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18688c316001Iy9gXc8B1v4nPE",
+      "time": {
+        "created": 1793258472223,
+        "streamed": 1793258474678,
+        "completed": 1793258476481
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The user wants me to start a general subagent that counts from 1 to 300, one number per line, without using any tools. Then reply with exactly what it returned.\n\nLet me use the subagent tool with the general agent.\n\nPotential concern: the subagent might not output all 300 numbers. But I should do as asked and then relay exactly.\n\nLet me call it.",
+          "time": {
+            "created": 1793258473778,
+            "completed": 1793258474673
+          }
+        },
+        {
+          "type": "tool",
+          "id": "call_00_k6e245re32391p6jwn5jo9ho",
+          "name": "subagent",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "agent": "general",
+              "description": "Count 1 to 300",
+              "prompt": "Count from 1 to 300, one number per line, in your final response. Do not use any tools. Output only the numbers, nothing else."
+            },
+            "error": {
+              "type": "aborted",
+              "message": "Tool execution interrupted (sessionID: ses_e79773346ffeKVGj032T0Q7h9p)"
+            },
+            "metadata": {
+              "sessionID": "ses_e79773346ffeKVGj032T0Q7h9p",
+              "status": "running"
+            }
+          },
+          "time": {
+            "created": 1793258474658,
+            "ran": 1793258474677,
+            "completed": 1793258476479
+          }
+        }
+      ],
+      "finish": "error",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 102,
+        "output": 106,
+        "reasoning": 79,
+        "cache": {
+          "read": 17152,
+          "write": 0
+        }
+      },
+      "error": {
+        "type": "aborted",
+        "message": "Step interrupted"
+      }
+    },
+    {
+      "id": "msg_18688d3c40015Msx00CGg1GYQg",
+      "time": {
+        "created": 1793258476484
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    }
+  ]
+}
