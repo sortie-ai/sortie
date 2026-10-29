@@ -11,6 +11,9 @@ import (
 )
 
 func TestUsageLimitRefusal(t *testing.T) {
+	// The live suite keeps the host tokens, and COPILOT_GITHUB_TOKEN outranks
+	// GH_TOKEN, so a real account could supply a reset these cases must not see.
+	t.Setenv("COPILOT_GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
