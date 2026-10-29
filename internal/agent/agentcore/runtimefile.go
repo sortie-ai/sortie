@@ -472,7 +472,8 @@ func remoteReadCommand(path RuntimePath, limit int64) string {
 func quotedSuffix(segments []string) string {
 	var suffix strings.Builder
 	for _, segment := range segments {
-		suffix.WriteString("/" + sshutil.QuoteArgv([]string{segment}))
+		suffix.WriteByte('/')
+		suffix.WriteString(sshutil.QuoteArgv([]string{segment}))
 	}
 	return suffix.String()
 }
