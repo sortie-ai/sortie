@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -176,7 +175,7 @@ func (s *sessionState) logger() *slog.Logger {
 func (s *sessionState) recoverUsage(logger *slog.Logger) (recovered *agentcore.RecoveredUsage, estimated bool, resume *domain.TokenUsage, resumeByModel map[string]domain.TokenUsage) {
 	remote := s.target.RemoteCommand != ""
 	sessionID := s.copilotSessionID
-	validID := sessionID != "" && sessionstate.ValidSessionID(sessionID)
+	validID := sessionID != "" && agentcore.ValidPathSegment(sessionID)
 
 	// The journal is opened with local file access, so a remote launch has
 	// none to read.
@@ -240,7 +239,7 @@ func seedResumeBaseline(params domain.StartSessionParams, target agentcore.Launc
 		return *agentcore.NewResumeBaseline(&domain.TokenUsage{}, nil)
 	case params.ResumeUsage != nil:
 		return *agentcore.NewResumeBaseline(params.ResumeUsage, params.ResumeUsageByModel)
-	case target.RemoteCommand != "" || !sessionstate.ValidSessionID(sessionID):
+	case target.RemoteCommand != "" || !agentcore.ValidPathSegment(sessionID):
 		return agentcore.ResumeBaseline{}
 	}
 	return *agentcore.NewResumeBaseline(journalResumeUsage(sessionID, logger))

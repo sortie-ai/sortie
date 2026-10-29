@@ -126,25 +126,3 @@ func TestCopilotDeclarationAutoRecords(t *testing.T) {
 		t.Errorf("Settle().ByModel = %+v, want only gpt-6.1-terra at %+v", got.ByModel, want)
 	}
 }
-
-func TestCopilotReadRecordsRefusesUnsafeSessionID(t *testing.T) {
-	t.Parallel()
-
-	readRecords := mustDeclaration(t, copilotHandshakeName).ReadRecords
-	for _, id := range []string{"../escape", "a/b", `a\b`, "", ".", ".."} {
-		t.Run(id, func(t *testing.T) {
-			t.Parallel()
-
-			var scans int
-
-			readings, err := readRecords(t.Context(), geminiRuntime{sessionID: id, scans: &scans})
-
-			if err == nil {
-				t.Errorf("ReadRecords(session %q) error = nil, want an error", id)
-			}
-			if len(readings) != 0 || scans != 0 {
-				t.Errorf("ReadRecords(session %q) = %d readings after %d scans, want none", id, len(readings), scans)
-			}
-		})
-	}
-}

@@ -1038,7 +1038,7 @@ func TestPumpSpendLedgerSettlesTurn(t *testing.T) {
 	}
 }
 
-func TestEndUnrepliedSettlesARemoteTurnWithoutARecordsRead(t *testing.T) {
+func TestEndUnrepliedSettlesARemoteTurnThroughItsRecordsRead(t *testing.T) {
 	t.Parallel()
 
 	state, _, _ := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
@@ -1056,9 +1056,10 @@ func TestEndUnrepliedSettlesARemoteTurnWithoutARecordsRead(t *testing.T) {
 
 	pump.endUnreplied(streamEndedEvidence(state, "stream ended", nil))
 
-	if pump.activeTurn != nil || turn.recordsPending {
-		t.Fatalf("endUnreplied() left the turn active (recordsPending %v), want it settled in place: a read returning through the inbox can lose to the session stopping", turn.recordsPending)
+	if pump.activeTurn != turn || !turn.recordsPending {
+		t.Fatalf("endUnreplied() left activeTurn set = %v, recordsPending %v, want the turn held for its records read", pump.activeTurn == turn, turn.recordsPending)
 	}
+	pump.handleRecordsRead(&recordsResult{turn: turn, read: usage.RecordsRead{OK: true}})
 	end := waittest.Receive(t, turn.resultCh, "turn result")
 	if !end.result.SpendUnaccounted {
 		t.Errorf("turn result SpendUnaccounted = false, want true: a turn that reached the model with no figure")

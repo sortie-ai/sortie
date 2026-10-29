@@ -181,10 +181,6 @@ type SSHVariant struct {
 	// ToolServerSkip, when not empty, skips the scenarios that deliver Sortie's
 	// tool server over SSH with this reason; the other SSH scenarios still run.
 	ToolServerSkip string
-
-	// LiveOnly marks a runtime whose records are not read over SSH yet: an
-	// interrupted remote turn carries what its live source alone reports.
-	LiveOnly bool
 }
 
 // PermissionRefusal is a binding's fixture for the permission refusal
@@ -958,7 +954,7 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	})
 	if b.Spend != nil && (scenario == ScenarioCancellationAfterOutput || scenario == ScenarioKill) {
 		t.Run("exact usage", func(t *testing.T) {
-			if scenario == ScenarioKill && b.Spend.RecordsAtTurnEnd {
+			if scenario == ScenarioKill && b.Spend.RecordsAtTurnEnd && !run.Result.UsageMeasured {
 				reportViolations(t, killedBeforeRecordsViolations(run.Result))
 				return
 			}
@@ -2000,7 +1996,7 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 
 	arrival, _ := meta.UsageDisposition()
 	settling := usageSettling{
-		recordsUnread:  b.Spend != nil && (b.Spend.Records == (domain.UsageProvenance{}) || remote && b.SSH != nil && b.SSH.LiveOnly),
+		recordsUnread:  b.Spend != nil && b.Spend.Records == (domain.UsageProvenance{}),
 		liveLowerBound: b.Spend == nil && meta.UsageSources.Live.Spend.LowerBound,
 	}
 	reportViolations(t, exactUsage(run, arrival,
@@ -2164,6 +2160,12 @@ func spendProvenanceViolations(v *findings, result domain.TurnResult, spend Spen
 // a turn killed while its runtime still held every record of the turn's spend:
 // spend occurred, its amount is unknown. A measured zero claims an amount, so
 // it fails like any measured figure.
+//
+// Over SSH the kill can land after the runtime wrote the turn's records, and
+// the read then settles the exact figure. Nothing the harness observes tells
+// the two apart before the Result does, so a measured Result is held to the
+// exact usage of an interrupted turn instead, and only an unmeasured one
+// reaches this check.
 func killedBeforeRecordsViolations(result domain.TurnResult) []string {
 	v := &findings{property: "exact usage"}
 	if result.UsageMeasured {

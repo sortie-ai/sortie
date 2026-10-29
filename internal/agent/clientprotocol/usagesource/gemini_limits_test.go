@@ -27,7 +27,6 @@ const geminiTestToken = "ya29.a0-test-access-token"
 type geminiRuntime struct {
 	env       map[string]string
 	sessionID string
-	scans     *int
 }
 
 func (r geminiRuntime) SessionID() string { return r.sessionID }
@@ -41,15 +40,12 @@ func (r geminiRuntime) LaunchEnv(name string) (string, bool) {
 	return value, ok
 }
 
-func (r geminiRuntime) ReadHomeFile(ctx context.Context, homeVar, rel string, limit int64) ([]byte, error) {
-	return agentcore.LaunchTarget{}.ReadRuntimeFile(ctx, []string{homeVar + "=" + r.env[homeVar]}, homeVar, rel, limit)
+func (r geminiRuntime) ReadHomeFile(ctx context.Context, path agentcore.RuntimePath, limit int64) ([]byte, error) {
+	return agentcore.LaunchTarget{}.ReadRuntimeFile(ctx, []string{path.HomeVar + "=" + r.env[path.HomeVar]}, path, limit)
 }
 
-func (r geminiRuntime) ScanHomeFile(ctx context.Context, homeVar, rel string, limit, lineLimit int64, fn func(line []byte) error) error {
-	if r.scans != nil {
-		*r.scans++
-	}
-	return agentcore.LaunchTarget{}.ScanRuntimeFile(ctx, []string{homeVar + "=" + r.env[homeVar]}, homeVar, rel, limit, lineLimit, fn)
+func (r geminiRuntime) ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error {
+	return agentcore.LaunchTarget{}.ScanRuntimeFile(ctx, []string{path.HomeVar + "=" + r.env[path.HomeVar]}, path, limit, lineLimit, fn)
 }
 
 func (geminiRuntime) RemoteHost() bool { return false }

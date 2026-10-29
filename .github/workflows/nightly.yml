@@ -112,14 +112,17 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: COPILOT_PROVIDER_API_KEY
-            run_filter: ^TestIntegration_ScriptedModel$/^credential_verification_context$
+            run_filter: '^TestIntegration_ScriptedModel$/^(credential_verification_context|scripted_turn|session_continuation|session_continuation_over_ssh|turn_cancellation_after_output|turn_cancellation_after_output_over_ssh|turn_kill|turn_kill_over_ssh)$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 300s
+            timeout: 600s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
             source: "npm: @github/copilot (unpinned, installs latest)"
             clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_ssh_install: npm install -g @github/copilot
+            clientprotocol_http_tools: "1"
             clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
             clientprotocol_spend_declaration: Copilot
@@ -129,14 +132,17 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: COPILOT_PROVIDER_API_KEY
-            run_filter: ^TestIntegration_ScriptedModel$/^credential_verification_context$
+            run_filter: '^TestIntegration_ScriptedModel$/^(credential_verification_context|scripted_turn|session_continuation|session_continuation_over_ssh|turn_cancellation_after_output|turn_cancellation_after_output_over_ssh|turn_kill|turn_kill_over_ssh)$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 300s
+            timeout: 600s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
             source: "npm: @github/copilot (unpinned, installs latest)"
             clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_ssh_install: npm install -g @github/copilot
+            clientprotocol_http_tools: "1"
             clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
             clientprotocol_spend_declaration: default
@@ -154,6 +160,8 @@ jobs:
             version_cmd: opencode --version
             source: "npm: @opencode/cli@2 (latest 2.x)"
             clientprotocol_command: "opencode acp"
+            clientprotocol_ssh_command: "opencode acp"
+            clientprotocol_ssh_install: npm install -g --ignore-scripts=false @opencode/cli@2
             clientprotocol_model_base_url_env: OPENCODE_CONFIG
             clientprotocol_model_document: '{"$schema":"https://opencode.ai/config.json","model":"scripted/scripted-model","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"{url}/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}'
             clientprotocol_spend_declaration: OpenCode
@@ -345,6 +353,9 @@ jobs:
           SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: ${{ matrix.clientprotocol_spend_declaration }}
           SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: ${{ matrix.clientprotocol_reported_model_prefix }}
           SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
+          SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
+          SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
+          SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is

@@ -1,7 +1,7 @@
 // Package sessionstate holds what the Copilot CLI session-state journal
-// shares between its readers: where the journal lives, which session ids may
-// name a path inside it, how much of it a reader may take, and how one of its
-// per-request usage lines maps to a spend reading. The copilot-cli kind and
+// shares between its readers: where the journal lives, how much of it a
+// reader may take, and how one of its per-request usage lines maps to a spend
+// reading. The copilot-cli kind and
 // the Copilot usage declaration on the agent-client-protocol kind import it.
 //
 // The package registers no kind and holds no adapter.
@@ -9,9 +9,9 @@ package sessionstate
 
 import (
 	"encoding/json"
-	"regexp"
 	"strconv"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
@@ -34,19 +34,15 @@ const (
 
 const usageRecordType = "session.usage_record"
 
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// ValidSessionID reports whether id is safe to join into a journal path as one
-// segment. The dot-only names pass the pattern but name the current or parent
-// directory.
-func ValidSessionID(id string) bool {
-	return id != "." && id != ".." && sessionIDPattern.MatchString(id)
-}
-
-// EventsRel returns the journal's path relative to the runtime home, with
-// forward slashes. The caller checks [ValidSessionID] first.
-func EventsRel(sessionID string) string {
-	return "session-state/" + sessionID + "/events.jsonl"
+// JournalPath returns the path of the session's journal under the runtime
+// home. It does not validate the id: the read refuses one that is not a safe
+// path segment.
+func JournalPath(sessionID string) agentcore.RuntimePath {
+	return agentcore.RuntimePath{
+		HomeVar:     HomeVar,
+		HomeDefault: []string{DefaultHome},
+		Segments:    []string{"session-state", sessionID, "events.jsonl"},
+	}
 }
 
 type journalLine struct {

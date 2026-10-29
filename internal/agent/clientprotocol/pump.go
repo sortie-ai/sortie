@@ -770,19 +770,11 @@ func contextUntilStop(stop <-chan struct{}) (context.Context, context.CancelFunc
 // needed.
 func (p *pumpState) settleReply(turn *activeTurn, evidence agentcore.TurnEvidence, cancelled bool, live *usage.SpendReading) {
 	end := turn.spendTurnEnd(true, cancelled)
-	if p.needsRecordsRead(end, live) {
+	if p.ledger.NeedsRecords(end, live) {
 		p.startRecordsRead(turn, evidence, end, live)
 		return
 	}
 	p.settleTurn(evidence, p.settleSpend(turn, end, live, usage.RecordsRead{}))
-}
-
-// needsRecordsRead reports whether the ledger needs a records read for the turn
-// and the launch can make one. A launch that reads none settles on the empty
-// read in place: a read that returns through the inbox could lose to the session
-// stopping, which ends the pump with the turn unfinished.
-func (p *pumpState) needsRecordsRead(end usage.TurnEnd, live *usage.SpendReading) bool {
-	return readsRecords(p.state) && p.ledger.NeedsRecords(end, live)
 }
 
 // startRecordsRead reads the runtime's records for turn on its own goroutine: the
@@ -861,7 +853,7 @@ func (p *pumpState) endUnreplied(ev agentcore.TurnEvidence) {
 		p.settleTurn(ev, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
 	default:
 		end := turn.spendTurnEnd(false, false)
-		if p.needsRecordsRead(end, nil) {
+		if p.ledger.NeedsRecords(end, nil) {
 			turn.endSettled = true
 			p.startRecordsRead(turn, ev, end, nil)
 			return
@@ -1339,7 +1331,7 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 		return
 	}
 	end := turn.spendTurnEnd(false, false)
-	if p.needsRecordsRead(end, nil) {
+	if p.ledger.NeedsRecords(end, nil) {
 		// The elapsed wait is spent; the read gets a wait of its own.
 		turn.deadlineC = nil
 		p.startRecordsRead(turn, ev, end, nil)
