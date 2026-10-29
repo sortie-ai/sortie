@@ -1606,3 +1606,78 @@ func TestNotInducibleReasonStillPinsItsCase(t *testing.T) {
 		t.Errorf("Decode() error = %v, want it to name the mismatched pairing", err)
 	}
 }
+
+func TestDecodeRuntimeProfileModelEnv(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		envName    string
+		envValue   string
+		modelArgs  []string
+		protoArgs  []string
+		wantSub    string
+		wantAccept bool
+	}{
+		{name: "a JSON object value with one model placeholder loads", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, wantAccept: true},
+		{name: "a value with another placeholder is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{prompt}"}`, wantSub: "model_env"},
+		{name: "a value without a placeholder is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"x"}`, wantSub: "model_env"},
+		{name: "a value with the model placeholder twice is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}","small_model":"{model}"}`, wantSub: "model_env"},
+		{name: "a name that is not a bare variable name is rejected", envName: "BAD NAME", envValue: `{"model":"{model}"}`, wantSub: "model_env"},
+		{name: "model_args alongside model_env is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, modelArgs: []string{"--model", "{model}"}, wantSub: "model_args"},
+		{name: "an entry point carrying the model alongside model_env is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, protoArgs: []string{"--acp", "--model", "{model}"}, wantSub: "entry_points[protocol]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := cloneProfileDoc(t, validProfileDoc())
+			doc["model_args"] = []string{}
+			if tt.modelArgs != nil {
+				doc["model_args"] = tt.modelArgs
+			}
+			doc["model_env"] = map[string]any{"name": tt.envName, "value": tt.envValue}
+			if tt.protoArgs != nil {
+				doc["entry_points"].(map[string]any)["protocol"] = map[string]any{"args": tt.protoArgs, "asking_args": tt.protoArgs}
+			}
+			data := marshalProfileDoc(t, doc)
+
+			_, err := Decode(data)
+
+			if tt.wantAccept {
+				if err != nil {
+					t.Fatalf("Decode(%s) = _, %v, want nil", data, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("Decode(%s) = _, %v, want an error naming %q", data, err, tt.wantSub)
+			}
+		})
+	}
+}
+
+func docWithScopedDeclaration(declared, notInducible string) map[string]any {
+	doc := validProfileDoc()
+	doc["declarations"] = []any{map[string]any{"capability": "retry_classification", "case": "human_input", "reason": evidence.DeclaredGapNeverProduced, "surface": declared}}
+	doc["not_inducible_cases"] = []any{map[string]any{"surface": notInducible, "case": "human_input", "reason": evidence.NotInducibleTerminalVocabularyClosed}}
+	return doc
+}
+func TestScopedDeclaration(t *testing.T) {
+	t.Parallel()
+	for _, surfaces := range [][2]string{{"aggregate", "native_stream_json"}, {"protocol", "protocol"}} {
+		if _, err := Decode(marshalProfileDoc(t, docWithScopedDeclaration(surfaces[0], surfaces[1]))); err == nil {
+			t.Errorf("Decode(declared on %q, not_inducible_cases on %q) = nil error, want a rejection", surfaces[0], surfaces[1])
+		}
+	}
+	p, err := Decode(marshalProfileDoc(t, docWithScopedDeclaration("protocol", "native_stream_json")))
+	if err != nil {
+		t.Fatalf("Decode(declared on protocol, not_inducible_cases on native_stream_json) = _, %v, want nil", err)
+	}
+	protocol := p.CaseExclusion(evidence.SurfaceProtocol, evidence.CapabilityRetryClassification, evidence.CaseHumanInput)
+	native := p.CaseExclusion(evidence.SurfaceNativeStreamJSON, evidence.CapabilityRetryClassification, evidence.CaseHumanInput)
+	if protocol != evidence.ExclusionNotApplicable || native == evidence.ExclusionNotApplicable {
+		t.Errorf("CaseExclusion(human_input) = %v on protocol, %v on native_stream_json, want %v on protocol only", protocol, native, evidence.ExclusionNotApplicable)
+	}
+}

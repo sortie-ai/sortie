@@ -246,7 +246,8 @@ func corroborateAbsentSurface(t *testing.T, coords Coordinates, fixture *sharedF
 	if err != nil {
 		t.Fatalf("build corroboration argv for %s: %v", surface, err)
 	}
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.workspaceRoot, fixture.env, fixture.ownership())
+	env := withModelEnviron(fixture.env, coords.Profile, coords.Model)
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.workspaceRoot, env, fixture.ownership())
 	launch := evidence.LaunchRecord{Argv: argv, AuthEnvNames: coords.AuthEnvNames, Model: coords.Model, Outcome: launchOutcomeFor(launchErr)}
 	streams := boundStreamCapture(output)
 	if eval.RecognizedTerminal(coords.Profile, surface, launch, streams) {
@@ -281,7 +282,7 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates, envWrapper strin
 		WorkspacePath: t.TempDir(),
 		AgentConfig: domain.AgentConfig{
 			Kind:           "agent-client-protocol",
-			Command:        strings.Join(append([]string{envWrapper}, argv...), " "),
+			Command:        strings.Join(slices.Concat([]string{envWrapper}, modelEnvironPrefix(coords.Profile, coords.Model), argv), " "),
 			ReadTimeoutMS:  30000,
 			TurnTimeoutMS:  300000,
 			StallTimeoutMS: 60000,

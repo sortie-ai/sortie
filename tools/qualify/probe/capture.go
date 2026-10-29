@@ -73,6 +73,12 @@ func declarableSurfaceUnproduced(collected collectedObservations, measured []evi
 	return true
 }
 
+func surfacesCoveredBy(d profile.DeclaredGap, surfaces []evidence.Surface) []evidence.Surface {
+	return slices.DeleteFunc(slices.Clone(surfaces), func(surface evidence.Surface) bool {
+		return !d.CoversSurface(surface)
+	})
+}
+
 // baseRecord returns the fixed identity fields every composed record
 // shares: schema version and the collection's own observation moment.
 // Sequence is assigned once the full set is known.
@@ -173,11 +179,15 @@ func composeLive(p profile.RuntimeProfile, collected collectedObservations, star
 		notInducibleReason[[2]string{string(entry.Surface), string(entry.Case)}] = entry.Reason
 	}
 
-	deferredDeclared := map[[2]string]bool{}
+	deferredDeclared := map[[2]string]profile.DeclaredGap{}
 	for _, d := range p.Declarations {
-		if declarableSurfaceUnproduced(collected, measured, d.Case) {
-			deferredDeclared[[2]string{string(d.Capability), string(d.Case)}] = true
+		if declarableSurfaceUnproduced(collected, surfacesCoveredBy(d, measured), d.Case) {
+			deferredDeclared[[2]string{string(d.Capability), string(d.Case)}] = d
 		}
+	}
+	deferredOn := func(surface evidence.Surface, capability evidence.Capability, caseID evidence.Case) bool {
+		d, deferred := deferredDeclared[[2]string{string(capability), string(caseID)}]
+		return deferred && d.CoversSurface(surface)
 	}
 
 	var records []evidence.Record
@@ -192,7 +202,7 @@ func composeLive(p profile.RuntimeProfile, collected collectedObservations, star
 					rec = composeNotInducibleRecord(observedAt, surface, capability, caseID, evidence.NotInducibleDetail)
 				case notInducibleReason[[2]string{string(surface), string(caseID)}] != "":
 					rec = composeNotInducibleRecord(observedAt, surface, capability, caseID, notInducibleReason[[2]string{string(surface), string(caseID)}])
-				case deferredDeclared[[2]string{string(capability), string(caseID)}]:
+				case deferredOn(surface, capability, caseID):
 					continue
 				default:
 					obs, ok := collected.semantic[surface][caseID]
@@ -211,13 +221,10 @@ func composeLive(p profile.RuntimeProfile, collected collectedObservations, star
 	}
 
 	for _, d := range p.Declarations {
-		if !deferredDeclared[[2]string{string(d.Capability), string(d.Case)}] {
+		if _, deferred := deferredDeclared[[2]string{string(d.Capability), string(d.Case)}]; !deferred {
 			continue
 		}
-		for _, surface := range evidence.DeclarableSurfaces {
-			if !slices.Contains(measured, surface) {
-				continue
-			}
+		for _, surface := range surfacesCoveredBy(d, measured) {
 			observedSessionID := collected.semantic[surface][d.Case].SessionID
 			rec := composeDeclaredGapRecord(observedAt, surface, d.Capability, d.Case, d.Reason, observedSessionID)
 			records = append(records, rec)

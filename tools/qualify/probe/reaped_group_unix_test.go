@@ -3,6 +3,7 @@
 package probe
 
 import (
+	"fmt"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
 )
 
@@ -74,4 +76,34 @@ func TestReapedGroupNumberLeavesStrangerUntouched(t *testing.T) {
 	if slices.Contains(held, launch.group.PID()) {
 		t.Errorf("readHeld() numbers = %v, want none equal to the reaped launch's %d", held, launch.group.PID())
 	}
+}
+
+func TestSignalLaunchKillEndsDetachedChild(t *testing.T) {
+	t.Parallel()
+
+	owned := newOwnedDescendants(&groupTracker{})
+	t.Cleanup(func() { drainOwnedProcesses(owned) })
+	launch, err := startBoundedLaunch("/bin/sh", []string{"-c", "setsid sleep 300 & wait"}, t.TempDir(), nil, owned)
+	if err != nil {
+		t.Fatalf("startBoundedLaunch(sh) = %v, want nil", err)
+	}
+	var detached int
+	waittest.Until(t, func() error {
+		members, held, err := owned.readHeld()
+		if err != nil {
+			return err
+		}
+		owned.observe(members, held)
+		for _, m := range descendantsOf(members, launch.group.PID()) {
+			if m.pgid != launch.group.PID() {
+				detached = m.pid
+				return nil
+			}
+		}
+		return fmt.Errorf("no descendant of launch %d outside its group", launch.group.PID())
+	})
+
+	signalLaunch(owned, launch.group, syscall.SIGKILL)
+
+	waittest.ProcessGone(t, detached)
 }

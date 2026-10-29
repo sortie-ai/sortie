@@ -248,6 +248,67 @@ func (o *ownedDescendants) observe(members []processMember, pgids []int) []proce
 	return survivors
 }
 
+// descendantsOf returns the members that descend from root through
+// parent links, root itself excluded.
+func descendantsOf(members []processMember, root int) []processMember {
+	admitted := map[int]bool{root: true}
+	var found []processMember
+	for changed := true; changed; {
+		changed = false
+		for _, m := range members {
+			if !admitted[m.pid] && admitted[m.ppid] {
+				admitted[m.pid] = true
+				found = append(found, m)
+				changed = true
+			}
+		}
+	}
+	return found
+}
+
+// signalLaunch sends sig to g's process group. SIGKILL leaves the runtime
+// no shutdown path of its own, so whatever it had started in a session of
+// its own, as a shell tool does, would outlive the launch and be graded
+// against a teardown that never ran: the probe ends those itself.
+func signalLaunch(owned *ownedDescendants, g *procutil.Group, sig syscall.Signal) {
+	if sig != syscall.SIGKILL {
+		_ = g.Signal(sig)
+		return
+	}
+	var detached []processMember
+	members, held, err := owned.readHeld()
+	if err == nil && slices.Contains(held, g.PID()) {
+		owned.observe(members, held)
+		for _, m := range descendantsOf(members, g.PID()) {
+			if m.pgid != g.PID() {
+				detached = append(detached, m)
+			}
+		}
+	}
+	_ = g.Signal(sig)
+	killMatching(detached)
+}
+
+// killMatching kills each of want that still runs with the same pid, group
+// and program name, so a reused pid is never signalled. The parent is not
+// compared: a child of the killed leader has been reparented by now.
+func killMatching(want []processMember) {
+	if len(want) == 0 {
+		return
+	}
+	running, err := psSnapshot()
+	if err != nil {
+		return
+	}
+	for _, m := range running {
+		if slices.ContainsFunc(want, func(w processMember) bool {
+			return w.pid == m.pid && w.pgid == m.pgid && w.basename == m.basename
+		}) {
+			_ = syscall.Kill(m.pid, syscall.SIGKILL)
+		}
+	}
+}
+
 // induceWorkspaceSecurity is not an OS sandbox: nothing here observes
 // what a launch could reach outside its directory.
 func induceWorkspaceSecurity(t *testing.T, coords Coordinates, fixture *sharedFixture) evidence.Observation {

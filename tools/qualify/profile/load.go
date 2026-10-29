@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -32,11 +33,18 @@ var capabilityGapLabels = []string{
 }
 
 // DeclaredGap is one operator claim that the runtime cannot produce a
-// semantic case.
+// semantic case. A set Surface scopes the claim to that one surface; empty
+// claims it on every declarable surface.
 type DeclaredGap struct {
 	Capability evidence.Capability `json:"capability"`
 	Case       evidence.Case       `json:"case"`
 	Reason     string              `json:"reason"`
+	Surface    evidence.Surface    `json:"surface,omitempty"`
+}
+
+// CoversSurface reports whether the claim applies to surface.
+func (d DeclaredGap) CoversSurface(surface evidence.Surface) bool {
+	return d.Surface == "" || d.Surface == surface
 }
 
 // AbsentSurface is one operator claim that the runtime exposes no
@@ -47,7 +55,7 @@ type AbsentSurface struct {
 }
 
 var declaredGapFields = map[string]bool{
-	"capability": true, "case": true, "reason": true,
+	"capability": true, "case": true, "reason": true, "surface": true,
 }
 
 var absentSurfaceFields = map[string]bool{
@@ -61,7 +69,7 @@ func decodeDeclaredGapEntry(raw map[string]json.RawMessage) (DeclaredGap, error)
 		}
 	}
 	for name := range declaredGapFields {
-		if _, ok := raw[name]; !ok {
+		if _, ok := raw[name]; !ok && name != "surface" {
 			return DeclaredGap{}, fmt.Errorf("missing field %q", name)
 		}
 	}
@@ -91,7 +99,17 @@ func decodeDeclaredGapEntry(raw map[string]json.RawMessage) (DeclaredGap, error)
 		return DeclaredGap{}, fmt.Errorf("reason %q is outside the closed value set", reason)
 	}
 
-	return DeclaredGap{Capability: capability, Case: caseID, Reason: reason}, nil
+	var surface evidence.Surface
+	if rawSurface, scoped := raw["surface"]; scoped {
+		if err := json.Unmarshal(rawSurface, &surface); err != nil {
+			return DeclaredGap{}, fmt.Errorf("surface: %w", err)
+		}
+		if !slices.Contains(evidence.DeclarableSurfaces, surface) {
+			return DeclaredGap{}, fmt.Errorf("surface %q is outside DeclarableSurfaces", surface)
+		}
+	}
+
+	return DeclaredGap{Capability: capability, Case: caseID, Reason: reason, Surface: surface}, nil
 }
 
 func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, error) {
@@ -123,6 +141,13 @@ func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, er
 	}
 
 	return AbsentSurface{Surface: surface, Reason: reason}, nil
+}
+
+// ModelEnv carries the model to a runtime whose launch takes no model switch,
+// through one environment variable of every launch that carries a model.
+type ModelEnv struct {
+	Name  string `json:"name"`
+	Value string `json:"value"` // carries "{model}" exactly once
 }
 
 // EntryPoint is one surface's argument vector for a graded launch, appended to
@@ -257,6 +282,10 @@ type RuntimeProfile struct {
 	ModelArgs           []string `json:"model_args"`
 	CapabilityGapLabels []string `json:"capability_gap_labels"`
 
+	// ModelEnv is nil when ModelArgs carries the model; omitted when nil, so it
+	// never moves the digest of a profile that does not set it.
+	ModelEnv *ModelEnv `json:"model_env,omitempty"`
+
 	// ConfigRootEnvNames are the environment variable names, in declared order,
 	// forwarded to a native launch when the parent environment carries them;
 	// values never travel through this member itself.
@@ -314,7 +343,7 @@ var runtimeProfileFieldOrder = []string{
 }
 
 // runtimeProfileOptionalFields carries the members a document may omit.
-var runtimeProfileOptionalFields = []string{"config_root_env_names", "tool_policy_format"}
+var runtimeProfileOptionalFields = []string{"config_root_env_names", "tool_policy_format", "model_env"}
 
 // runtimeProfileFields is the exact set of member names a runtime
 // profile document may carry at the top level.
@@ -445,11 +474,20 @@ func Decode(data []byte) (RuntimeProfile, error) {
 	if err := json.Unmarshal(top["model_args"], &profile.ModelArgs); err != nil {
 		return RuntimeProfile{}, fmt.Errorf("model_args: %w", err)
 	}
-	if len(profile.ModelArgs) == 0 {
-		return RuntimeProfile{}, errors.New("model_args must be non-empty")
-	}
-	if err := validatePlaceholderArgs(profile.ModelArgs, []string{"{model}"}, []string{"{model}"}); err != nil {
-		return RuntimeProfile{}, fmt.Errorf("model_args: %w", err)
+	if modelEnvRaw, has := top["model_env"]; has {
+		if profile.ModelEnv, err = decodeModelEnv(modelEnvRaw); err != nil {
+			return RuntimeProfile{}, fmt.Errorf("model_env: %w", err)
+		}
+		if len(profile.ModelArgs) != 0 {
+			return RuntimeProfile{}, errors.New("model_args must be [] when model_env carries the model")
+		}
+	} else {
+		if len(profile.ModelArgs) == 0 {
+			return RuntimeProfile{}, errors.New("model_args must be non-empty")
+		}
+		if err := validatePlaceholderArgs(profile.ModelArgs, []string{"{model}"}, []string{"{model}"}); err != nil {
+			return RuntimeProfile{}, fmt.Errorf("model_args: %w", err)
+		}
 	}
 
 	if err := json.Unmarshal(top["capability_gap_labels"], &profile.CapabilityGapLabels); err != nil {
@@ -477,6 +515,11 @@ func Decode(data []byte) (RuntimeProfile, error) {
 	}
 	if _, hasProtocol := profile.EntryPoints[evidence.SurfaceProtocol]; !hasProtocol {
 		return RuntimeProfile{}, fmt.Errorf("entry_points must carry %q", evidence.SurfaceProtocol)
+	}
+	if profile.ModelEnv != nil {
+		if err := rejectModelPlaceholderInEntryPoints(profile.EntryPoints); err != nil {
+			return RuntimeProfile{}, err
+		}
 	}
 
 	if profile.Recognizers, err = decodeRecognizers(top["recognizers"], profile.EntryPoints); err != nil {
@@ -656,7 +699,7 @@ func decodeNotInducibleCases(raw json.RawMessage, profile RuntimeProfile) ([]Sur
 			return nil, fmt.Errorf("[%d]: duplicate (surface, case) pair (%s, %s)", i, entry.Surface, entry.Case)
 		}
 		seen[key] = true
-		if _, declared := profile.Declared(evidence.CapabilityOwning(entry.Case), entry.Case); declared {
+		if _, declared := profile.DeclaredOn(entry.Surface, evidence.CapabilityOwning(entry.Case), entry.Case); declared {
 			return nil, fmt.Errorf("[%d]: (%s, %s) is also named by declarations", i, entry.Surface, entry.Case)
 		}
 	}
@@ -665,13 +708,14 @@ func decodeNotInducibleCases(raw json.RawMessage, profile RuntimeProfile) ([]Sur
 }
 
 // CaseExclusion reports what one surface's silence on caseID means. A
-// declaration excludes the case on every surface; a not_inducible_cases entry
-// is scoped to one surface and read through [evidence.NotInducibleExclusion].
+// declaration excludes the case on the surfaces it covers; a
+// not_inducible_cases entry is scoped to one surface and read through
+// [evidence.NotInducibleExclusion].
 func (p RuntimeProfile) CaseExclusion(surface evidence.Surface, capability evidence.Capability, caseID evidence.Case) evidence.ExclusionKind {
 	if slices.Contains(evidence.CatalogNotInducibleCases, caseID) {
 		return evidence.NotInducibleExclusion(evidence.NotInducibleDetail)
 	}
-	if _, declared := p.Declared(capability, caseID); declared {
+	if _, declared := p.DeclaredOn(surface, capability, caseID); declared {
 		return evidence.ExclusionNotApplicable
 	}
 	if reason, ok := p.NotInducibleDeclared(surface, caseID); ok {
@@ -709,6 +753,58 @@ func rejectUnknownPlaceholders(value string, allowed []string) error {
 		}
 		rest = rest[open+closeIdx+1:]
 	}
+}
+
+var (
+	modelEnvNamePattern     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	placeholderTokenPattern = regexp.MustCompile(`\{[a-z_]+\}`)
+)
+
+// decodeModelEnv strictly decodes model_env. Its value is free text that may
+// carry literal braces, so only a placeholder-shaped token counts.
+func decodeModelEnv(raw json.RawMessage) (*ModelEnv, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	for name := range fields {
+		if name != "name" && name != "value" {
+			return nil, fmt.Errorf("unknown field %q", name)
+		}
+	}
+	var env ModelEnv
+	for _, member := range []struct {
+		name string
+		dst  *string
+	}{{"name", &env.Name}, {"value", &env.Value}} {
+		rawMember, ok := fields[member.name]
+		if !ok {
+			return nil, fmt.Errorf("missing field %q", member.name)
+		}
+		value, err := evidence.DecodeString(rawMember)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", member.name, err)
+		}
+		*member.dst = value
+	}
+	if !modelEnvNamePattern.MatchString(env.Name) {
+		return nil, fmt.Errorf("name %q is not a bare environment variable name", env.Name)
+	}
+	if tokens := placeholderTokenPattern.FindAllString(env.Value, -1); len(tokens) != 1 || tokens[0] != "{model}" {
+		return nil, fmt.Errorf("value %q must carry {model} exactly once and no other placeholder", env.Value)
+	}
+	return &env, nil
+}
+
+func rejectModelPlaceholderInEntryPoints(entries map[evidence.Surface]EntryPoint) error {
+	for surface, entry := range entries {
+		for _, args := range [][]string{entry.Args, entry.AskingArgs} {
+			if strings.Contains(strings.Join(args, "\x00"), "{model}") {
+				return fmt.Errorf("entry_points[%s]: args carry {model} while model_env carries the model", surface)
+			}
+		}
+	}
+	return nil
 }
 
 func validatePlaceholderArgs(args, required, allowed []string) error {
@@ -1177,10 +1273,21 @@ func ReadPublishedSampleCommand(path string) ([]string, error) {
 	return strings.Fields(parsed.Agent.Command), nil
 }
 
-// Declared reports the declared reason for one capability and case.
+// Declared reports the declared reason for one capability and case, whichever
+// surface the declaration covers.
 func (p RuntimeProfile) Declared(capability evidence.Capability, caseID evidence.Case) (string, bool) {
 	for _, entry := range p.Declarations {
 		if entry.Capability == capability && entry.Case == caseID {
+			return entry.Reason, true
+		}
+	}
+	return "", false
+}
+
+// DeclaredOn reports the declared reason for one capability and case on surface.
+func (p RuntimeProfile) DeclaredOn(surface evidence.Surface, capability evidence.Capability, caseID evidence.Case) (string, bool) {
+	for _, entry := range p.Declarations {
+		if entry.Capability == capability && entry.Case == caseID && entry.CoversSurface(surface) {
 			return entry.Reason, true
 		}
 	}
@@ -1306,6 +1413,15 @@ func (p RuntimeProfile) AskingArgs(surface evidence.Surface, model, policy, prom
 		return nil, false
 	}
 	return substitutePlaceholders(entry.AskingArgs, model, policy, prompt), true
+}
+
+// ModelEnviron returns the NAME=value entry that carries model, with {model}
+// substituted, and false when the profile carries the model through ModelArgs.
+func (p RuntimeProfile) ModelEnviron(model string) (string, bool) {
+	if p.ModelEnv == nil {
+		return "", false
+	}
+	return p.ModelEnv.Name + "=" + strings.ReplaceAll(p.ModelEnv.Value, "{model}", model), true
 }
 
 // PublishedPostureArgs builds the published-posture probe's argv: the sample
