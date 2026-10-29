@@ -35,7 +35,7 @@ type AgentConstructor func() (domain.AgentAdapter, error)
 // functions; the orchestrator resolves adapters via [Registry.Get] at
 // runtime. A registration whose [AgentMeta.UsageSources] fails its check
 // panics, so [Registry.Register] without metadata always panics here.
-var Agents = NewCheckedRegistry[AgentConstructor, AgentMeta]("agent", func(_ AgentConstructor, meta AgentMeta) error {
+var Agents = NewCheckedRegistry("agent", func(_ AgentConstructor, meta AgentMeta) error {
 	return meta.UsageSources.Check()
 })
 

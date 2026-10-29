@@ -128,7 +128,7 @@ var ErrMethodNotFound = errors.New("method not found")
 //
 // Registration refuses a declaration [checkDeclaration] rejects, and the key
 // [DefaultName] is reserved.
-var Declarations = registry.NewCheckedRegistry[Declaration, struct{}]("usage declaration", checkDeclaration, DefaultName)
+var Declarations = registry.NewCheckedRegistry("usage declaration", checkDeclaration, DefaultName)
 
 // Effective returns d with Default's spend mapping when d maps no spend of its
 // own, that is, when its live source declares neither a token shape nor a
