@@ -25,6 +25,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/waittest"
@@ -1089,9 +1090,6 @@ func TestStartSessionLocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 	}
 }
 
-// readEnvCaptures decodes the JSON-object-per-line file a
-// protocolAgentParams.EnvCaptureNames fixture appends to, one element per
-// process start, in start order.
 func readEnvCaptures(t *testing.T, path string) []map[string]string {
 	t.Helper()
 
@@ -1114,8 +1112,6 @@ func readEnvCaptures(t *testing.T, path string) []map[string]string {
 	return captures
 }
 
-// readSequenceCount reports how many times a protocolAgentParams.SequencePath
-// fixture has started, 0 when the file was never created.
 func readSequenceCount(t *testing.T, path string) int {
 	t.Helper()
 
@@ -1798,6 +1794,112 @@ printf '%s\n' "$PROBE_FILE" > '` + envPath + `'
 			}
 			if wantFile {
 				assertDirGone(t, filepath.Dir(file))
+			}
+		})
+	}
+}
+
+const additionVariable = "PROBE_FILE"
+
+func additionAdapter() *ClientProtocolAdapter {
+	decl := scriptedSpendDeclaration(nil, nil, nil)
+	decl.Launches = func(agentcore.LaunchTarget) bool { return true }
+	decl.LaunchAddition = usagesource.LaunchAddition{Name: additionVariable, Merge: func(current string, _ bool) (string, bool) {
+		if current == "kept-on" {
+			return current, false
+		}
+		return strings.TrimSuffix(current, "+off") + "+off", true
+	}}
+	declarations := registry.NewRegistry[usagesource.Declaration, struct{}]("usage declaration")
+	declarations.Register("addition", decl)
+	return &ClientProtocolAdapter{declarations: declarations}
+}
+
+func TestStartSessionLaunchAddition(t *testing.T) {
+	tests := []struct {
+		name         string
+		remote       bool
+		verification bool
+		wantBase     string
+	}{
+		{name: "a local working launch merges into the operator's value", wantBase: "operator"},
+		{name: "a local verification launch merges into the claimed switch's value", verification: true, wantBase: "marker"},
+		{name: "a remote launch carries the merged value in its SSH options", remote: true, wantBase: "operator"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.verification {
+				t.Setenv(additionVariable, "operator")
+			}
+			dir := t.TempDir()
+			capturePath := filepath.Join(dir, "captured.jsonl")
+			agent := agenttest.FakeRuntime(t, dir, probeExecutable, scenarioProtocolAgent, protocolAgentParams{
+				Handshake: true, EnvCaptureNames: []string{additionVariable}, EnvCapturePath: capturePath,
+			})
+			params := domain.StartSessionParams{WorkspacePath: t.TempDir(), AgentConfig: domain.AgentConfig{Command: agent}, CredentialVerification: tt.verification}
+			if tt.remote {
+				sshDir := t.TempDir()
+				agenttest.FakeRuntime(t, sshDir, "ssh", scenarioSSHStandIn, sshStandInParams{PATH: sshStandInEnvPath(t, true)})
+				t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				params.SSHHost, params.SSHEnvNames = "user@stand-in-host", []string{additionVariable}
+			}
+
+			session, err := startTestSession(context.Background(), additionAdapter(), params)
+			if err != nil {
+				t.Fatalf("startSession() error = %v, want nil", err)
+			}
+			if err := stopSession(context.Background(), session); err != nil {
+				t.Errorf("stopSession() error = %v", err)
+			}
+
+			captures := readEnvCaptures(t, capturePath)
+			if len(captures) != 1 {
+				t.Fatalf("runtime starts = %d, want 1", len(captures))
+			}
+			got := captures[0][additionVariable]
+			if base, merged := strings.CutSuffix(got, "+off"); !merged || filepath.Base(base) != tt.wantBase {
+				t.Errorf("runtime observed %s = %q, want %q merged with the addition", additionVariable, got, tt.wantBase)
+			}
+			if tt.remote {
+				return
+			}
+			entries := slices.DeleteFunc(slices.Clone(session.Internal.(*sessionState).launchEnv), func(entry string) bool {
+				return !strings.HasPrefix(entry, additionVariable+"=")
+			})
+			if want := []string{additionVariable + "=" + got}; !slices.Equal(entries, want) {
+				t.Errorf("launch environment entries for %s = %q, want %q", additionVariable, entries, want)
+			}
+		})
+	}
+}
+
+func TestNewSessionLedgerIsALowerBoundWhenTheAdditionIsNotInEffect(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		carried      string
+		wantComplete bool
+	}{
+		{name: "the launch carries the merged value", carried: additionVariable + "=operator+off", wantComplete: true},
+		{name: "the merge reports the request still on", carried: additionVariable + "=kept-on"},
+		{name: "the launch carried nothing", carried: "UNRELATED=1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := &sessionState{logger: discardLogger(), target: agentcore.LaunchTarget{Command: "agent"}, launchEnv: []string{tt.carried}}
+			live := spendReading(10, 2, 0, "", "")
+			decl, _ := additionAdapter().declarations.Get("addition")
+
+			ledger := newSessionLedger(t.Context(), state, decl, true)
+
+			settlement := ledger.Settle(usage.TurnEnd{Replied: true, ModelReached: true}, &live, usage.RecordsRead{})
+			if settlement.Complete != tt.wantComplete {
+				t.Errorf("Settle().Complete with launch carrying %q = %v, want %v", tt.carried, settlement.Complete, tt.wantComplete)
 			}
 		})
 	}

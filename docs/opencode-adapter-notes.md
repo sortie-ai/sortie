@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/opencode`.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-29
 
 ## Where to get the volatile facts
 
@@ -82,6 +82,8 @@ The hosted free-tier model refuses any request whose tool set lacks its shell to
 Step-scoped token counts on the stream are not a running total. Between the tool step and the final text step of one turn the numbers move in both directions, so taking the last one is wrong.
 
 The kind attaches each `step_finish` part's `tokens` as its live source and the session export as its records source, and derives `turn_end` arrival and `per_model` attribution from them. After the subprocess exits, `queryExportUsage` runs a sanitized session export and reports the figure through the shared turn-end report, with the model of the last kept message. The export also runs over SSH, so remote launches are measured too, unlike `copilot-cli`. The export is sanitized so tool output never reaches a log. The figure also carries a per-model split, each kept message counting under its provider and model.
+
+The export's invocation and parsing live in `internal/agent/opencode/sessionexport`, shared with the OpenCode declaration on the `agent-client-protocol` kind, so both routes read an export the same way and refuse the same ones: another session's document, and one above 64 MiB. The usage component normalizes the counts, adding cache to input and reasoning to output. The runtime omits a counter that is zero, so a missing `reasoning`, `cache.read`, or `cache.write` reads as zero, while any other missing count is unknown, never zero: a kept message missing a count makes the export recover nothing, and a step report missing its `input` or `output` count adds nothing.
 
 The adapter sums the step reports of a turn as they arrive, and the export settles every turn. A figure the export recovers replaces the step counts, and the two are never added. A turn whose export recovers nothing keeps the counts its step reports carried, as a lower bound, and carries unaccounted spend. The final text step of a turn emits no `step_finish` tokens, so that sum falls short of the turn's spend; step reports that add no input and no output tokens leave it with no figure.
 

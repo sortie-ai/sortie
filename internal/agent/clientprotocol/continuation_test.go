@@ -20,6 +20,7 @@ import (
 // test can hand them across a goroutine boundary on one channel.
 type resolveSessionOutcome struct {
 	sessionID string
+	created   bool
 	err       *domain.AgentError
 }
 
@@ -31,10 +32,17 @@ type resolveSessionOutcome struct {
 func runResolveSessionAsync(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities) <-chan resolveSessionOutcome {
 	ch := make(chan resolveSessionOutcome, 1)
 	go func() {
-		sessionID, err := resolveSession(ctx, state, resumeID, caps, "", nil)
-		ch <- resolveSessionOutcome{sessionID: sessionID, err: err}
+		sessionID, created, err := resolveSession(ctx, state, resumeID, caps, "", nil)
+		ch <- resolveSessionOutcome{sessionID: sessionID, created: created, err: err}
 	}()
 	return ch
+}
+
+func assertCreated(t *testing.T, outcome resolveSessionOutcome, want bool) {
+	t.Helper()
+	if outcome.created != want {
+		t.Errorf("resolveSession() created = %v, want %v", outcome.created, want)
+	}
 }
 
 // capsAdvertisingLoad returns handshake-advertised capabilities that
@@ -150,6 +158,7 @@ func TestResolveSessionEmptyResumeIDSkipsContinuation(t *testing.T) {
 	if outcome.sessionID != "brand-new" {
 		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "brand-new")
 	}
+	assertCreated(t, outcome, true)
 }
 
 // TestResolveSessionLoadUnimplementedLowersAndFallsBack confirms that
@@ -181,6 +190,7 @@ func TestResolveSessionLoadUnimplementedLowersAndFallsBack(t *testing.T) {
 	if outcome.sessionID != "fallback-session" {
 		t.Errorf("resolveSession() session id = %q, want %q: the fallback session/new's own identifier", outcome.sessionID, "fallback-session")
 	}
+	assertCreated(t, outcome, true)
 
 	assertSessionContinuationEntry(t, state, out, inPw, true)
 }
@@ -215,6 +225,7 @@ func TestResolveSessionLoadRealFailureLowersAndFallsBack(t *testing.T) {
 	if outcome.sessionID != "fallback-session" {
 		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
 	}
+	assertCreated(t, outcome, true)
 
 	assertSessionContinuationEntry(t, state, out, inPw, true)
 }
@@ -330,6 +341,7 @@ func TestResolveSessionLoadSuccessWithReplayConfirms(t *testing.T) {
 	if outcome.sessionID != "prior-session" {
 		t.Errorf("resolveSession() session id = %q, want %q: observed replay must confirm the loaded session", outcome.sessionID, "prior-session")
 	}
+	assertCreated(t, outcome, false)
 
 	assertSessionContinuationEntry(t, state, out, inPw, false)
 }
@@ -359,6 +371,7 @@ func TestResolveSessionResumeSuccessConfirmsWithoutReplay(t *testing.T) {
 	if outcome.sessionID != "prior-session" {
 		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
 	}
+	assertCreated(t, outcome, false)
 
 	assertSessionContinuationEntry(t, state, out, inPw, false)
 }
@@ -418,6 +431,7 @@ func TestResolveSessionNegativeControlStreamEndFails(t *testing.T) {
 	if outcome.err.Kind != domain.ErrPortExit {
 		t.Errorf("resolveSession() error kind = %q, want %q", outcome.err.Kind, domain.ErrPortExit)
 	}
+	assertCreated(t, outcome, false)
 }
 
 // TestResolveSessionCallTimeoutFallsBack confirms that a call that never
@@ -804,8 +818,8 @@ func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	outcomeCh := make(chan resolveSessionOutcome, 1)
 	go func() {
-		sessionID, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
-		outcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
+		sessionID, created, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
+		outcomeCh <- resolveSessionOutcome{sessionID: sessionID, created: created, err: err}
 	}()
 
 	probeID := out.awaitMethod(t, negativeControlMethod)

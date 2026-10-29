@@ -3,6 +3,7 @@ package agentcore
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"unicode"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -90,20 +93,56 @@ func (t LaunchTarget) ScanRuntimeFile(ctx context.Context, env []string, homeVar
 	return scanLines(ctx, f, rel, limit, lineLimit, fn)
 }
 
-// RunHostCommand runs one command on the session's host and returns its
-// standard output, at most 64 KiB. A local session starts name directly;
-// a remote session runs the same words, quoted, through its own SSH
-// launch, so name and args reach the remote shell unexpanded. The
-// command never sees standard input.
+// HostCommand describes one command [LaunchTarget.RunHostCommand] runs. The
+// zero options run Name and Args as given, in Sortie's own environment and
+// working directory, with at most 64 KiB of output.
+type HostCommand struct {
+	// Name is the program. It is empty exactly when LaunchWords is positive.
+	Name string
+
+	// Args are the arguments, one each.
+	Args []string
+
+	// LaunchWords, when positive, makes the command the configured agent
+	// command cut to its first LaunchWords words, followed by Args. A launcher,
+	// an env assignment, or a path before the runtime word is kept, so the
+	// command runs the binary and environment the session runs.
+	LaunchWords int
+
+	// InSession runs a local command in the verified workspace with the launch
+	// environment. A remote command always runs in the workspace.
+	InSession bool
+
+	// Limit is the largest standard output accepted, in bytes. Zero means 64 KiB.
+	Limit int64
+}
+
+// label names the command in errors without echoing its arguments.
+func (c HostCommand) label() string {
+	return cmp.Or(c.Name, "agent command")
+}
+
+// RunHostCommand runs cmd on the session's host and returns its standard
+// output. A local session starts the command directly; a remote session runs
+// the same words, quoted, through its own SSH launch, so Name and Args reach
+// the remote shell unexpanded. With LaunchWords the remote shell instead
+// expands the configured command's own text, as it did for the launch. The
+// command never sees standard input and its standard error is discarded.
 //
-// A command that does not start or does not exit zero wraps
-// [ErrHostCommandFailed], whatever its status; a remote SSH connection
-// failure wraps [sshutil.ErrConnectionFailed] instead.
+// env is the environment of an InSession local command, [os.Environ] when
+// nil; a remote session does not consult it. A command that does not start or
+// does not exit zero wraps [ErrHostCommandFailed], whatever its status; a
+// remote SSH connection failure wraps [sshutil.ErrConnectionFailed] instead.
+// Output above cmd.Limit is an error, and at most Limit+1 bytes are held.
 //
-// The output may be a credential: RunHostCommand neither logs it nor
-// puts it in an error, and the caller must do the same.
-func (t LaunchTarget) RunHostCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	stdout, result, err := t.captureHost(ctx, name, args)
+// The output may be a credential: RunHostCommand neither logs it nor puts it
+// in an error, and the caller must do the same.
+func (t LaunchTarget) RunHostCommand(ctx context.Context, env []string, cmd HostCommand) ([]byte, error) {
+	limit := cmd.Limit
+	if limit <= 0 {
+		limit = hostCommandLimit
+	}
+	stdout, result, err := t.captureHost(ctx, env, cmd, limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -111,32 +150,101 @@ func (t LaunchTarget) RunHostCommand(ctx context.Context, name string, args ...s
 		if t.RemoteCommand != "" && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
 			return nil, fmt.Errorf("remote command: %w", sshutil.ErrConnectionFailed)
 		}
-		return nil, fmt.Errorf("host command %q: %w", name, ErrHostCommandFailed)
+		return nil, fmt.Errorf("host command %q: %w", cmd.label(), ErrHostCommandFailed)
 	}
-	if stdout.Len() > hostCommandLimit {
-		return nil, fmt.Errorf("host command %q printed more than %d bytes", name, hostCommandLimit)
+	if int64(stdout.Len()) > limit {
+		return nil, fmt.Errorf("host command %q printed more than %d bytes", cmd.label(), limit)
 	}
 	return stdout.Bytes(), nil
 }
 
-func (t LaunchTarget) captureHost(ctx context.Context, name string, args []string) (*bytes.Buffer, procutil.CaptureResult, error) {
-	if t.RemoteCommand != "" {
-		return t.captureRemote(ctx, sshutil.QuoteArgv(append([]string{name}, args...)))
-	}
-	return t.captureLocal(ctx, name, args)
+// cappedWriter keeps the first max bytes written to it and discards the rest
+// while accepting every write, so a chatty command is neither stopped by a
+// broken pipe nor held whole in memory.
+type cappedWriter struct {
+	buf bytes.Buffer
+	max int64
 }
 
-func (t LaunchTarget) captureLocal(ctx context.Context, name string, args []string) (*bytes.Buffer, procutil.CaptureResult, error) {
-	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: name and args are the adapter's fixed read-only lookup
-	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(ctx, cmd, t.StopGrace, procutil.CaptureParams{Stdout: &stdout})
+func (b *cappedWriter) Write(p []byte) (int, error) {
+	if room := b.max - int64(b.buf.Len()); room > 0 {
+		b.buf.Write(p[:min(int64(len(p)), room)])
+	}
+	return len(p), nil
+}
+
+func (b *cappedWriter) Len() int { return b.buf.Len() }
+
+func (b *cappedWriter) Bytes() []byte { return b.buf.Bytes() }
+
+func (t LaunchTarget) captureHost(ctx context.Context, env []string, cmd HostCommand, maxBytes int64) (*cappedWriter, procutil.CaptureResult, error) {
+	if err := t.checkLaunchWords(cmd); err != nil {
+		return nil, procutil.CaptureResult{}, err
+	}
+	switch {
+	case t.RemoteCommand == "":
+		return t.captureLocal(ctx, env, cmd, maxBytes)
+	case cmd.LaunchWords > 0:
+		return t.captureRemote(ctx, remotePrefix(t.RemoteCommand, cmd.LaunchWords), cmd.Args, maxBytes)
+	}
+	return t.captureRemote(ctx, sshutil.QuoteArgv(append([]string{cmd.Name}, cmd.Args...)), nil, maxBytes)
+}
+
+// checkLaunchWords refuses a command that names its program twice or not at
+// all, or that cuts more words than the configured command holds.
+func (t LaunchTarget) checkLaunchWords(cmd HostCommand) error {
+	switch {
+	case cmd.LaunchWords < 0, cmd.LaunchWords > 0 && cmd.Name != "", cmd.LaunchWords == 0 && cmd.Name == "":
+		return fmt.Errorf("host command %q: %w: Name and LaunchWords must name the program exactly once", cmd.label(), ErrHostCommandFailed)
+	case cmd.LaunchWords > len(t.CommandWords()):
+		return fmt.Errorf("host command %q: %w: LaunchWords %d is above the configured command's word count", cmd.label(), ErrHostCommandFailed, cmd.LaunchWords)
+	}
+	return nil
+}
+
+func (t LaunchTarget) captureLocal(ctx context.Context, env []string, hc HostCommand, maxBytes int64) (*cappedWriter, procutil.CaptureResult, error) {
+	program, args := hc.Name, hc.Args
+	if hc.LaunchWords > 0 {
+		program = t.Command
+		args = append(slices.Clone(t.Args[:hc.LaunchWords-1]), hc.Args...)
+	}
+	cmd := exec.CommandContext(ctx, program, args...) //nolint:gosec // G204: the program and arguments are the adapter's fixed read-only lookup
+	if hc.InSession {
+		cmd.Env = env
+		if agentErr := t.BindWorkspace(cmd); agentErr != nil {
+			return nil, procutil.CaptureResult{}, fmt.Errorf("host command %q: %w", hc.label(), agentErr)
+		}
+	}
+	stdout := &cappedWriter{max: maxBytes}
+	result, startErr := procutil.RunCapture(ctx, cmd, t.StopGrace, procutil.CaptureParams{Stdout: stdout})
 	switch {
 	case ctx.Err() != nil:
-		return nil, result, fmt.Errorf("host command %q: %w", name, ctx.Err())
+		return nil, result, fmt.Errorf("host command %q: %w", hc.label(), ctx.Err())
 	case startErr != nil:
-		return nil, result, fmt.Errorf("start host command %q: %w: %w", name, ErrHostCommandFailed, startErr)
+		return nil, result, fmt.Errorf("start host command %q: %w: %w", hc.label(), ErrHostCommandFailed, startErr)
 	}
-	return &stdout, result, nil
+	return stdout, result, nil
+}
+
+// remotePrefix returns the text of command through the end of its n-th
+// whitespace-separated word, as written. The caller guarantees command holds
+// at least n words.
+func remotePrefix(command string, n int) string {
+	inWord := false
+	for i, r := range command {
+		if !unicode.IsSpace(r) {
+			inWord = true
+			continue
+		}
+		if !inWord {
+			continue
+		}
+		if n--; n == 0 {
+			return command[:i]
+		}
+		inWord = false
+	}
+	return command
 }
 
 func (t LaunchTarget) readLocalFile(ctx context.Context, env []string, homeVar, rel string, limit int64) ([]byte, error) {
@@ -172,7 +280,7 @@ func (t LaunchTarget) readRemoteFile(ctx context.Context, homeVar, rel string, l
 	if !sshutil.IsEnvName(homeVar) {
 		return nil, fmt.Errorf("home variable %q is not an environment variable name", homeVar)
 	}
-	stdout, result, err := t.captureRemote(ctx, remoteReadCommand(homeVar, rel, limit))
+	stdout, result, err := t.captureRemote(ctx, remoteReadCommand(homeVar, rel, limit), nil, limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -185,27 +293,27 @@ func (t LaunchTarget) readRemoteFile(ctx context.Context, homeVar, rel string, l
 	return stdout.Bytes(), nil
 }
 
-// captureRemote runs command, a remote shell fragment, through t's own SSH
-// launch and returns what it printed. The error covers a launch that did
-// not start or did not finish; the command's own exit status is in the
-// result.
-func (t LaunchTarget) captureRemote(ctx context.Context, command string) (*bytes.Buffer, procutil.CaptureResult, error) {
+// captureRemote runs command, a remote shell fragment, followed by args, each
+// quoted, through t's own SSH launch and returns what it printed, at most
+// maxBytes of it. The error covers a launch that did not start or did not
+// finish; the command's own exit status is in the result.
+func (t LaunchTarget) captureRemote(ctx context.Context, command string, args []string, maxBytes int64) (*cappedWriter, procutil.CaptureResult, error) {
 	runner := t
 	runner.RemoteCommand = command
-	cmd, agentErr := runner.AuxiliaryCommand(ctx, nil, nil, nil)
+	cmd, agentErr := runner.AuxiliaryCommand(ctx, args, nil, nil)
 	if agentErr != nil {
 		return nil, procutil.CaptureResult{}, agentErr
 	}
 
-	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(ctx, cmd, t.StopGrace, procutil.CaptureParams{Stdout: &stdout})
+	stdout := &cappedWriter{max: maxBytes}
+	result, startErr := procutil.RunCapture(ctx, cmd, t.StopGrace, procutil.CaptureParams{Stdout: stdout})
 	switch {
 	case startErr != nil:
 		return nil, result, fmt.Errorf("start remote command: %w", startErr)
 	case ctx.Err() != nil:
 		return nil, result, fmt.Errorf("remote command: %w", ctx.Err())
 	}
-	return &stdout, result, nil
+	return stdout, result, nil
 }
 
 // remoteReadCommand renders the one read-only command a remote read

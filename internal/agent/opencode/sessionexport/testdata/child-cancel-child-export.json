@@ -1,0 +1,88 @@
+{
+  "info": {
+    "id": "ses_e79773346ffeKVGj032T0Q7h9p",
+    "parentID": "ses_e79773d5cffeGZOgs16v5Zm70A",
+    "projectID": "<PROJECT_ID>",
+    "agent": "general",
+    "model": {
+      "id": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "interrupted",
+    "time": {
+      "created": 1793258474686,
+      "updated": 1793258476491,
+      "idle": 1793258476492
+    },
+    "title": "[redacted:session-title:ses_e79773346ffeKVGj032T0Q7h9p]",
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e79773346ffeKVGj032T0Q7h9p]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18688ccc0002HwT7g2Bb39fjER",
+      "time": {
+        "created": 1793258474699
+      },
+      "text": "[redacted:text:msg_18688ccc0002HwT7g2Bb39fjER]",
+      "type": "user"
+    },
+    {
+      "id": "msg_18688cccf001jRqtylSUPmhRWi",
+      "time": {
+        "created": 1793258474710,
+        "streamed": 1793258476489,
+        "completed": 1793258476491
+      },
+      "type": "assistant",
+      "agent": "general",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "[redacted:reasoning:msg_18688cccf001jRqtylSUPmhRWi]",
+          "native": {
+            "redacted": "reasoning-native:msg_18688cccf001jRqtylSUPmhRWi"
+          },
+          "time": {
+            "created": 1793258476217,
+            "completed": 1793258476488
+          }
+        },
+        {
+          "type": "text",
+          "text": "[redacted:text:msg_18688cccf001jRqtylSUPmhRWi]"
+        }
+      ],
+      "finish": "error",
+      "error": {
+        "type": "aborted",
+        "message": "Step interrupted"
+      }
+    },
+    {
+      "id": "msg_18688d3cc0011ZgRyEL4iFksC8",
+      "time": {
+        "created": 1793258476492
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    }
+  ]
+}

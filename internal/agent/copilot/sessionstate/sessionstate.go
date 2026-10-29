@@ -23,9 +23,9 @@ const (
 	// HomeVar is unset or empty.
 	DefaultHome = ".copilot"
 
-	// MaxFileBytes is the largest journal a reader takes. Larger files are
-	// rejected without being read.
-	MaxFileBytes = 64 * 1024 * 1024
+	// MaxFileBytes is the largest journal a reader takes, the limit every
+	// records reader applies. Larger files are rejected without being read.
+	MaxFileBytes = usage.MaxRecordsBytes
 
 	// MaxLineBytes is the largest single journal line a reader scans,
 	// matching the stdout scanner cap the fork-per-turn skeleton uses.

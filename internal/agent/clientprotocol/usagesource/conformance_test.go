@@ -85,6 +85,9 @@ func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
 
 	noPromptSpend := Default
 	noPromptSpend.PromptSpend = nil
+	nameOnly, mergeOnly := Default, Default
+	nameOnly.LaunchAddition = LaunchAddition{Name: "ADDITION_VARIABLE"}
+	mergeOnly.LaunchAddition = LaunchAddition{Merge: func(current string, _ bool) (string, bool) { return current, true }}
 	tests := []struct {
 		name        string
 		key         string
@@ -93,6 +96,8 @@ func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
 		{"zero live source", "refused-zero-live", Declaration{}},
 		{"declared spend without a prompt reader", "refused-no-prompt-spend", noPromptSpend},
 		{"the reserved default key", DefaultName, Default},
+		{"a launch addition with a name and no merge", "refused-addition-name-only", nameOnly},
+		{"a launch addition with a merge and no name", "refused-addition-merge-only", mergeOnly},
 	}
 
 	for _, tt := range tests {
@@ -163,6 +168,7 @@ func TestDeclarationLaunchesFollowTheConfiguredCommand(t *testing.T) {
 		{"executable with its flag", copilotHandshakeName, agentcore.LaunchTarget{Command: "copilot", Args: []string{"--acp"}}, true},
 		{"npm package through a launcher", geminiAgentName, agentcore.LaunchTarget{Command: "npx", Args: []string{"@google/gemini-cli@latest", "--acp"}}, true},
 		{"wrapper command", copilotHandshakeName, agentcore.LaunchTarget{Command: "env", Args: []string{"MODEL=x", "copilot", "--acp"}}, true},
+		{"npm package of the 2.x line through a launcher", opencodeHandshakeName, agentcore.LaunchTarget{Command: "npx", Args: []string{"-y", "@opencode/cli@2", "acp"}}, true},
 		{"another runtime's command", copilotHandshakeName, agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, false},
 		{"remote command named, ssh as the executable", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "kiro-cli acp --model x"}, true},
 		{"remote command naming nothing", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent --acp"}, false},

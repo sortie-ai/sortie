@@ -21,12 +21,12 @@ func spendJSON(t *testing.T, reading *usage.SpendReading) string {
 	return string(data)
 }
 
-func mustCopilotDeclaration(t *testing.T) Declaration {
+func mustDeclaration(t *testing.T, name string) Declaration {
 	t.Helper()
 
-	declaration, err := Declarations.Get(copilotHandshakeName)
+	declaration, err := Declarations.Get(name)
 	if err != nil {
-		t.Fatalf("Declarations.Get(%q): %v", copilotHandshakeName, err)
+		t.Fatalf("Declarations.Get(%q): %v", name, err)
 	}
 	return declaration
 }
@@ -90,9 +90,9 @@ func TestStandardPromptSpend(t *testing.T) {
 func TestCopilotDeclarationAutoRecords(t *testing.T) {
 	t.Parallel()
 
-	declaration := mustCopilotDeclaration(t)
+	declaration := mustDeclaration(t, copilotHandshakeName)
 	var records []usage.SpendReading
-	for line := range strings.Lines(readGeminiFixture(t, "auto-records.jsonl")) {
+	for line := range strings.Lines(readFixture(t, "auto-records.jsonl")) {
 		reading, ok := sessionstate.UsageRecord([]byte(line))
 		if !ok {
 			t.Fatalf("UsageRecord(%.60q) = not a record, want a record", line)
@@ -130,7 +130,7 @@ func TestCopilotDeclarationAutoRecords(t *testing.T) {
 func TestCopilotReadRecordsRefusesUnsafeSessionID(t *testing.T) {
 	t.Parallel()
 
-	readRecords := mustCopilotDeclaration(t).ReadRecords
+	readRecords := mustDeclaration(t, copilotHandshakeName).ReadRecords
 	for _, id := range []string{"../escape", "a/b", `a\b`, "", ".", ".."} {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()

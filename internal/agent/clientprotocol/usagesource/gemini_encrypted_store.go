@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/scrypt"
+
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 )
 
 // The runtime derives its file key with Node's crypto.scryptSync, whose
@@ -42,7 +44,7 @@ func geminiHostSalt(ctx context.Context, rt PullRuntime) (string, error) {
 
 func geminiHostNames(ctx context.Context, rt PullRuntime) (host, name string, err error) {
 	if rt.RemoteHost() {
-		out, err := rt.RunHostCommand(ctx, "sh", "-c", `printf '%s\0%s' "$(uname -n)" "$(id -un)"`)
+		out, err := rt.RunHostCommand(ctx, agentcore.HostCommand{Name: "sh", Args: []string{"-c", `printf '%s\0%s' "$(uname -n)" "$(id -un)"`}})
 		if err != nil {
 			return "", "", fmt.Errorf("read gemini host names: %w", err)
 		}

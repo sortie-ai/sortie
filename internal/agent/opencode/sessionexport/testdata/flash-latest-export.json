@@ -1,0 +1,215 @@
+{
+  "info": {
+    "id": "ses_e7ac4b348ffeP2wfjLJwh4m3tB",
+    "projectID": "<PROJECT_ID>",
+    "model": {
+      "id": "gemini-flash-latest",
+      "providerID": "google",
+      "variant": "default"
+    },
+    "cost": 0.01986525,
+    "tokens": {
+      "input": 22516,
+      "output": 37,
+      "reasoning": 225,
+      "cache": {
+        "read": 31724,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793236618450,
+      "updated": 1793236629755,
+      "idle": 1793236629757
+    },
+    "title": "Reply with just ok",
+    "location": {
+      "directory": "<WORKSPACE>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1853b4cde001GKx7WPQe7n8Aue",
+      "time": {
+        "created": 1793236618462
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "gemini-flash-latest",
+        "providerID": "google"
+      }
+    },
+    {
+      "id": "msg_1853b4ce5001fVFfVYU42iMQrK",
+      "time": {
+        "created": 1793236618503
+      },
+      "text": "Reply with the single word ok",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1853b4d15001U9XOeu96aJRuCD",
+      "time": {
+        "created": 1793236618538,
+        "streamed": 1793236621146,
+        "completed": 1793236621147
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-flash-latest",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.01311225,
+      "tokens": {
+        "input": 17283,
+        "output": 1,
+        "reasoning": 39,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1853b575d001V9epBxputGDThk",
+      "time": {
+        "created": 1793236621149
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_1853b6348001xjyJMn2GVRiHwp",
+      "metadata": {
+        "notice": "instructions",
+        "instructionSources": [
+          "core/codemode",
+          "core/mcp-guidance"
+        ]
+      },
+      "time": {
+        "created": 1793236624200
+      },
+      "type": "system",
+      "text": "The Code Mode tool catalog has changed.\n\nNew tools are available in addition to those previously listed:\n  - tools.context7[\"query-docs\"]({\n  /**\n   * Exact Context7-compatible library ID (e.g., '/mongodb/docs', '/vercel/next.js', '/supabase/supabase', '/vercel/next.js/v16.2.9') retrieved from 'resolve-library-id' or directly from user query in the format '/org/project' or '/org/project/version'.\n   */\n  libraryId: string,\n  /**\n   * What to look up in the library's documentation, scoped to a single concept. Be specific and include relevant details, but keep each query to one topic — if the user's question spans multiple distinct concepts, make a separate call per concept instead of combining them, unless the question is about how the concepts interact. Good: 'How to set up authentication with JWT in Express.js' or 'React useEffect cleanup function examples'. Bad (too vague): 'auth' or 'hooks'. Bad (too broad): 'routing and auth and caching in Next.js'. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Programming language the user is writing code in, such as 'Python', 'TypeScript', 'Go', or 'C#'. Ranks code examples in that language first. Leave it out when the language is unknown or does not apply.\n   */\n  language?: string,\n}): Promise<unknown> // Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.\n  - tools.context7[\"resolve-library-id\"]({\n  /**\n   * What to look up in the library's documentation. This is used to rank library results by relevance to what the user is trying to accomplish. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Library name to search for and retrieve a Context7-compatible library ID. Use the official library name with proper punctuation — e.g., 'Next.js' instead of 'nextjs', 'Customer.io' instead of 'customerio', 'Three.js' instead of 'threejs'.\n   */\n  libraryName: string,\n}): Promise<unknown> // Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.\n\n<mcp_instructions>\n  <server name=\"context7\">\n    Use tools from this server through `execute` under `tools[\"context7\"]`.\n    Use this server to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service — even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer — your training data may not reflect recent changes. Prefer this over web search for library docs.\n    \n    Do not use for: refactoring, writing scripts from scratch, debugging business logic, code review, or general programming concepts.\n  </server>\n</mcp_instructions>",
+      "description": "Instructions updated: core/codemode, core/mcp-guidance"
+    },
+    {
+      "id": "msg_1853b632a0016obZNqwL6cZYfT",
+      "time": {
+        "created": 1793236624202
+      },
+      "text": "Use your file read tool to read opencode.json in the current directory, then reply with only the value of its model field.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1853b634e001nxFDqhbbDAUccc",
+      "time": {
+        "created": 1793236624212,
+        "streamed": 1793236626729,
+        "completed": 1793236626735
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-flash-latest",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_5228144",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "opencode.json"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file opencode.json, lines 1-5\n1: {\n2:   \"$schema\": \"https://opencode.ai/config.json\",\n3:   \"model\": \"opencode/deepseek-v4.1-flash-free\",\n4:   \"small_model\": \"opencode/deepseek-v4.1-flash-free\"\n5: }"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793236626719,
+            "ran": 1793236626722,
+            "completed": 1793236626733
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "STOP",
+      "cost": 0.0035941499999999995,
+      "tokens": {
+        "input": 2924,
+        "output": 17,
+        "reasoning": 52,
+        "cache": {
+          "read": 15232,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1853b6d3a001yCmoYHBvHo00Bh",
+      "time": {
+        "created": 1793236626754,
+        "streamed": 1793236629754,
+        "completed": 1793236629755
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-flash-latest",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "opencode/deepseek-v4.1-flash-free"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.00315885,
+      "tokens": {
+        "input": 2221,
+        "output": 14,
+        "reasoning": 62,
+        "cache": {
+          "read": 16108,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1853b78fd001UVs0wNFXpfAyLm",
+      "time": {
+        "created": 1793236629757
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

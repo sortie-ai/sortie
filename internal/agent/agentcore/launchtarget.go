@@ -170,6 +170,17 @@ func resolveArgvLaunch(params domain.StartSessionParams, absPath, sshHost string
 	}, nil
 }
 
+// CommandWords returns the words of the configured agent command: Command
+// then Args for a local launch, the whitespace-separated words of
+// RemoteCommand for a remote one. The SSH executable is never among them.
+// The slice is the caller's to modify.
+func (t LaunchTarget) CommandWords() []string {
+	if t.RemoteCommand != "" {
+		return strings.Fields(t.RemoteCommand)
+	}
+	return append([]string{t.Command}, t.Args...)
+}
+
 // AppendCommandArgs returns command, which names an executable,
 // followed by args, in the form that launches exactly that argv. A list
 // stays a list in both launch modes. A string launched locally stays a

@@ -1,0 +1,177 @@
+{
+  "info": {
+    "id": "ses_e7a97b044ffeLBcm210kbDgVGn",
+    "projectID": "<PROJECT_ID>",
+    "model": {
+      "id": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 1303,
+      "output": 114,
+      "reasoning": 178,
+      "cache": {
+        "read": 34688,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793239568344,
+      "updated": 1793239575446,
+      "idle": 1793239575448
+    },
+    "title": "Subagent returning ok",
+    "location": {
+      "directory": "<WORKSPACE>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_185684fe7001FTv0ksR1UwVg5k",
+      "time": {
+        "created": 1793239568359
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode"
+      }
+    },
+    {
+      "id": "msg_185684fed001ze4akW8kG1E91d",
+      "time": {
+        "created": 1793239568402
+      },
+      "text": "Use the task tool to start a general subagent whose only job is to reply with the single word ok. Then reply with exactly what the subagent returned.",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_185685030001tjC6AVo5Q9XVr3",
+      "time": {
+        "created": 1793239568443,
+        "streamed": 1793239571352,
+        "completed": 1793239572702
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The user wants me to use the task tool to start a general subagent that replies with \"ok\", then reply with exactly what it returned.\n\nThe available tool for this is `subagent`. I'll call it with agent \"general\", prompt \"Reply with exactly the single word: ok\".\n\nThere's no \"task\" tool named task, but subagent is the equivalent. I should just do it.\n\nNote: subagents may add a tool preamble; I need to reply with exactly what was returned. Let me call it.",
+          "time": {
+            "created": 1793239570194,
+            "completed": 1793239571345
+          }
+        },
+        {
+          "type": "tool",
+          "id": "call_00_cxt443ul4ms1i2w2360sslz0",
+          "name": "subagent",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "Reply with ok",
+              "prompt": "Reply with exactly the single word: ok\n\nDo not use any tools. Do not add punctuation, explanation, or anything else. Your entire response must be that one word."
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_e7a97a463ffeLUn2P96bFtM6MV\" state=\"completed\">\nok\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "ses_e7a97a463ffeLUn2P96bFtM6MV",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793239571303,
+            "ran": 1793239571350,
+            "completed": 1793239572700
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 91,
+        "output": 106,
+        "reasoning": 107,
+        "cache": {
+          "read": 17152,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1856860e3001Bhi0XQZ6sDolL5",
+      "metadata": {
+        "notice": "instructions",
+        "instructionSources": [
+          "core/codemode",
+          "core/mcp-guidance"
+        ]
+      },
+      "time": {
+        "created": 1793239572707
+      },
+      "type": "system",
+      "text": "The Code Mode tool catalog has changed.\n\nNew tools are available in addition to those previously listed:\n  - tools.context7[\"query-docs\"]({\n  /**\n   * Exact Context7-compatible library ID (e.g., '/mongodb/docs', '/vercel/next.js', '/supabase/supabase', '/vercel/next.js/v16.2.9') retrieved from 'resolve-library-id' or directly from user query in the format '/org/project' or '/org/project/version'.\n   */\n  libraryId: string,\n  /**\n   * What to look up in the library's documentation, scoped to a single concept. Be specific and include relevant details, but keep each query to one topic — if the user's question spans multiple distinct concepts, make a separate call per concept instead of combining them, unless the question is about how the concepts interact. Good: 'How to set up authentication with JWT in Express.js' or 'React useEffect cleanup function examples'. Bad (too vague): 'auth' or 'hooks'. Bad (too broad): 'routing and auth and caching in Next.js'. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Programming language the user is writing code in, such as 'Python', 'TypeScript', 'Go', or 'C#'. Ranks code examples in that language first. Leave it out when the language is unknown or does not apply.\n   */\n  language?: string,\n}): Promise<unknown> // Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.\n  - tools.context7[\"resolve-library-id\"]({\n  /**\n   * What to look up in the library's documentation. This is used to rank library results by relevance to what the user is trying to accomplish. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Library name to search for and retrieve a Context7-compatible library ID. Use the official library name with proper punctuation — e.g., 'Next.js' instead of 'nextjs', 'Customer.io' instead of 'customerio', 'Three.js' instead of 'threejs'.\n   */\n  libraryName: string,\n}): Promise<unknown> // Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.\n\n<mcp_instructions>\n  <server name=\"context7\">\n    Use tools from this server through `execute` under `tools[\"context7\"]`.\n    Use this server to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service — even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer — your training data may not reflect recent changes. Prefer this over web search for library docs.\n    \n    Do not use for: refactoring, writing scripts from scratch, debugging business logic, code review, or general programming concepts.\n  </server>\n</mcp_instructions>",
+      "description": "Instructions updated: core/codemode, core/mcp-guidance"
+    },
+    {
+      "id": "msg_1856860e8001xsju8oTvo1awb8",
+      "time": {
+        "created": 1793239572719,
+        "streamed": 1793239575445,
+        "completed": 1793239575446
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 1099,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "read": 17152,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_185686b98001FLFMBeliFdK86e",
+      "time": {
+        "created": 1793239575448
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

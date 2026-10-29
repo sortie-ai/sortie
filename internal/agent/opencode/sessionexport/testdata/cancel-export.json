@@ -1,0 +1,95 @@
+{
+  "info": {
+    "id": "ses_e7ac4d139ffeivndL710DYWtze",
+    "projectID": "<PROJECT_ID>",
+    "model": {
+      "id": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 94,
+      "output": 5,
+      "reasoning": 35,
+      "cache": {
+        "read": 384,
+        "write": 0
+      }
+    },
+    "outcome": "interrupted",
+    "time": {
+      "created": 1793236610787,
+      "updated": 1793236613327,
+      "idle": 1793236613329
+    },
+    "title": "Counting to 400",
+    "location": {
+      "directory": "<WORKSPACE>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1853b2ef6001rTGElIXk1sLpTu",
+      "time": {
+        "created": 1793236610806
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode"
+      }
+    },
+    {
+      "id": "msg_1853b2eff001IupTuT5Hz594IH",
+      "time": {
+        "created": 1793236610843
+      },
+      "text": "Count from 1 to 400, one number per line",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1853b2f30001iqbM7WxQN5JbjT",
+      "time": {
+        "created": 1793236610887,
+        "streamed": 1793236613326,
+        "completed": 1793236613327
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The user wants me to count from 1 to 400, one number per line. This is a simple task — just output numbers. Let me do it directly.\n\nI should just output them. That's 400 lines. Fine.\n\nShould I worry about token cost? Just do it.",
+          "time": {
+            "created": 1793236612155,
+            "completed": 1793236613324
+          }
+        },
+        {
+          "type": "text",
+          "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109"
+        }
+      ],
+      "finish": "error",
+      "error": {
+        "type": "aborted",
+        "message": "Step interrupted"
+      }
+    },
+    {
+      "id": "msg_1853b38d1001ejaQN01pj065hq",
+      "time": {
+        "created": 1793236613329
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    }
+  ]
+}

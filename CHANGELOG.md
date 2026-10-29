@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Agents on SSH worker hosts can now use Sortie's tools and the HTTP tool servers configured under `mcp_config`. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - When an agent's provider usage limit runs out, Sortie now waits for the reported reset instead of retrying, and keeps dispatching work to other agents and models in the meantime. ([#1523](https://github.com/sortie-ai/sortie/issues/1523))
 - The dashboard Overview page now shows each agent's plan usage limits, such as 5-hour, weekly, or monthly limits, with how much is used and when each resets, for Claude Code, Codex, Copilot CLI, OpenCode, Gemini CLI, and Kiro CLI, in one 'Usage' section with the spend budget. The JSON API serves them as `rate_limits`. ([#1388](https://github.com/sortie-ai/sortie/issues/1388))
-- Agents on the Agent Client Protocol (ACP) agent kind now report their token usage on local and SSH worker runs, so `agent.max_tokens` and the cost limits apply to them. Copilot CLI also reports the models that served it on local runs, and an agent without dedicated support is counted as a lower bound. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1534](https://github.com/sortie-ai/sortie/issues/1534))
+- Agents on the Agent Client Protocol (ACP) agent kind now report their token usage on local and SSH worker runs, so `agent.max_tokens` and the cost limits apply to them. Copilot CLI and OpenCode also report the models that served them on local runs, and an agent without dedicated support is counted as a lower bound. OpenCode on this kind also counts a subagent's tokens toward the run and `agent.max_tokens`, and runs its sessions without a title. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1484](https://github.com/sortie-ai/sortie/issues/1484))
 - An OpenCode run whose session export fails now reports the token usage its output carried, as a lower bound. ([#1534](https://github.com/sortie-ai/sortie/issues/1534))
 
 ### Changed
@@ -44,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The dashboard Session page now says once, in plain words, how a run ended and what happens next.
 - Run failures, including failed CI checks, ceiling stops, stalls, and cancellations, now read as plain sentences everywhere they appear.
 - A cancelled turn that already reached the model now takes its spend from the agent's own records instead of the partial live reading, so it is counted once and exactly; when the records hold nothing, the live reading stands as a lower bound. ([#1535](https://github.com/sortie-ai/sortie/issues/1535))
+- The `opencode` agent kind no longer counts a token count missing from a session export or a step report as zero, and no longer reads a session export above 64 MiB; a turn whose export is refused keeps its step counts as a lower bound. ([#1484](https://github.com/sortie-ai/sortie/issues/1484))
 
 ## [1.30.0] - 2026-10-23
 

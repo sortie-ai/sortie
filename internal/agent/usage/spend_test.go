@@ -1,6 +1,7 @@
 package usage_test
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -22,6 +23,7 @@ var (
 	replied   = usage.TurnEnd{Replied: true, ModelReached: true}
 	cancelled = usage.TurnEnd{Replied: true, Cancelled: true, ModelReached: true}
 	unread    = usage.RecordsRead{}
+	withChild = usage.TurnEnd{Replied: true, ModelReached: true, Children: true, ChildrenSettled: true}
 
 	hist = rec("h", "m0", 50, 5)
 	ra   = rec("a", "m1", 20, 3)
@@ -54,13 +56,27 @@ func recs(readings ...usage.SpendReading) usage.RecordsRead {
 	return usage.RecordsRead{Readings: readings, OK: true}
 }
 
-func newLedger(t *testing.T, withRecords, lowerBound bool, start usage.RecordsRead) *usage.Ledger {
+func turnWith(in, out, reasoning, cr int64) *usage.SpendReading {
+	r := liveWith("", in, out, cr)
+	r.Reasoning = new(reasoning)
+	return r
+}
+
+func withKids(read usage.RecordsRead, kids ...usage.SpendReading) usage.RecordsRead {
+	read.ChildReadings, read.ChildrenOK = kids, true
+	return read
+}
+
+func newLedger(t *testing.T, withRecords, lowerBound, perTurn bool, start usage.RecordsRead) *usage.Ledger {
 	t.Helper()
 
 	liveSource := usage.Source{
 		Category: usage.SourceProtocol,
 		Strategy: usage.StrategyLive,
 		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true, LowerBound: lowerBound},
+	}
+	if perTurn {
+		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendPerTurn}
 	}
 	var recordsSource usage.Source
 	if withRecords {
@@ -85,6 +101,8 @@ func TestLedger(t *testing.T) {
 		name       string
 		liveOnly   bool
 		lowerBound bool
+		perTurn    bool
+		created    bool
 		start      usage.RecordsRead
 		steps      []step
 	}{
@@ -293,13 +311,89 @@ func TestLedger(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:     "per-turn readings count a falling series in full, cache outside input and reasoning outside output, refuse a missing or negative count, and never cover the session",
+			liveOnly: true,
+			perTurn:  true,
+			steps: []step{
+				{
+					end: replied, live: turnWith(15681, 4, 66, 384),
+					want: usage.Settlement{Run: uc(16065, 70, 384), Figure: true, Spent: true, Complete: true, Provenance: liveProv},
+				},
+				{end: replied, live: live(5, 1), want: usage.Settlement{Run: uc(16065, 70, 384)}},
+				{end: replied, live: turnWith(5, 1, -1, 0), want: usage.Settlement{Run: uc(16065, 70, 384)}},
+				{end: replied, live: turnWith(-1, 1, 0, 0), want: usage.Settlement{Run: uc(16065, 70, 384)}},
+				{
+					end: replied, live: turnWith(827, 3, 0, 0),
+					want: usage.Settlement{Run: uc(16892, 73, 384), Figure: true, Spent: true, Complete: true, Provenance: liveProv},
+				},
+			},
+		},
+		{
+			name:     "reasoning count of a source that puts reasoning inside output is never read",
+			liveOnly: true,
+			steps:    []step{{end: replied, live: turnWith(30, 4, -1, 0), want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv}}},
+		},
+		{
+			name:       "lower-bound live source leaves a records-settled turn incomplete",
+			lowerBound: true,
+			start:      recs(hist),
+			steps: []step{{
+				end: replied, read: recs(hist, ra, rb), needs: true,
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
+			}},
+		},
+		{
+			name:    "created session settles its first records-settled turn complete without a boundary read",
+			created: true,
+			steps: []step{{
+				end: replied, read: recs(ra, rb), needs: true,
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+			}},
+		},
+		{
+			name:  "child records count once per identity, the first alone under the records provenance, without moving the live position or the alignment",
+			start: recs(hist),
+			steps: []step{
+				{
+					end: withChild, read: withKids(recs(hist), rec("c1", "m3", 7, 2)), needs: true,
+					want: usage.Settlement{Run: u(7, 2), ByModel: byModel{"m3": u(7, 2)}, Model: "m3", Figure: true, Spent: true, Provenance: recProv},
+				},
+				{
+					end: withChild, live: live(35, 5), read: withKids(recs(hist, ra, rb, rc), rec("c1", "m3", 7, 2), rec("c2", "m3", 3, 1)), needs: true,
+					want: usage.Settlement{Run: u(45, 8), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1), "m3": u(10, 3)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+				},
+			},
+		},
+		{
+			name:  "unsettled child, failed child read, and refused child record each keep the turn a lower bound and count what they read",
+			start: recs(hist),
+			steps: []step{
+				{
+					end: usage.TurnEnd{Replied: true, ModelReached: true, Children: true}, live: live(10, 1), read: withKids(recs(hist), rec("c1", "m3", 7, 2)), needs: true,
+					want: usage.Settlement{Run: u(17, 3), ByModel: byModel{"m3": u(7, 2)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+				},
+				{
+					end: withChild, live: live(20, 2), needs: true,
+					read: usage.RecordsRead{Readings: recs(hist).Readings, OK: true, ChildReadings: []usage.SpendReading{rec("c2", "m3", 7, 2)}},
+					want: usage.Settlement{Run: u(34, 6), ByModel: byModel{"m3": u(14, 4)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+				},
+				{
+					end: withChild, live: live(30, 3), read: withKids(recs(hist), rec("c3", "m3", 7, 2), rec("z", "m3", 0, 0)), needs: true,
+					want: usage.Settlement{Run: u(51, 9), ByModel: byModel{"m3": u(21, 6)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.start)
+			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.start)
+			if tt.created {
+				l.SessionCreated()
+			}
 
 			for i, st := range tt.steps {
 				if got := l.NeedsRecords(st.end, st.live); got != st.needs {
@@ -319,7 +413,7 @@ func TestLedger(t *testing.T) {
 func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	t.Parallel()
 
-	l := newLedger(t, true, false, recs(hist))
+	l := newLedger(t, true, false, false, recs(hist))
 	first := l.Settle(replied, live(30, 4), recs(hist, ra, rb))
 	if first.ByModel == nil {
 		t.Fatalf("Settle() ByModel = nil, want a split")
@@ -332,5 +426,15 @@ func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	want := byModel{"m1": u(20, 3), "m2": u(10, 1)}
 	if !reflect.DeepEqual(got.ByModel, want) {
 		t.Errorf("Settle() ByModel after the caller edited an earlier one = %+v, want %+v", got.ByModel, want)
+	}
+}
+
+func TestNewLedger_RefusesAdapterMapped(t *testing.T) {
+	t.Parallel()
+
+	_, err := usage.NewLedger(usage.Source{Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Shape: usage.SpendAdapterMapped}}, usage.Source{})
+
+	if !errors.Is(err, usage.ErrSpendUnsupported) {
+		t.Errorf("NewLedger(adapter-mapped live) error = %v, want ErrSpendUnsupported", err)
 	}
 }

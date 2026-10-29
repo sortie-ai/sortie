@@ -1,0 +1,210 @@
+{
+  "info": {
+    "id": "ses_e7ac6691effe73waoQYzNihPM6",
+    "projectID": "<PROJECT_ID>",
+    "model": {
+      "id": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 16667,
+      "output": 10,
+      "reasoning": 66,
+      "cache": {
+        "read": 36992,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793236506365,
+      "updated": 1793236599011,
+      "idle": 1793236599013
+    },
+    "title": "Reply with ok",
+    "location": {
+      "directory": "<WORKSPACE>"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18539970d0019iB37R7uHEjgPm",
+      "time": {
+        "created": 1793236506381
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode"
+      }
+    },
+    {
+      "id": "msg_185399713001jGO7fPEZAImMcx",
+      "time": {
+        "created": 1793236506433
+      },
+      "text": "Reply with the single word ok",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18539974d0012WqTo2o1se1kiB",
+      "time": {
+        "created": 1793236506454,
+        "streamed": 1793236508146,
+        "completed": 1793236508148
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 15681,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "read": 1536,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_185399df7001IBpVWunq3giRJF",
+      "time": {
+        "created": 1793236508151
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_18539a9cb001cWkMY6B2Padx60",
+      "metadata": {
+        "notice": "instructions",
+        "instructionSources": [
+          "core/codemode",
+          "core/mcp-guidance"
+        ]
+      },
+      "time": {
+        "created": 1793236511179
+      },
+      "type": "system",
+      "text": "The Code Mode tool catalog has changed.\n\nNew tools are available in addition to those previously listed:\n  - tools.context7[\"query-docs\"]({\n  /**\n   * Exact Context7-compatible library ID (e.g., '/mongodb/docs', '/vercel/next.js', '/supabase/supabase', '/vercel/next.js/v16.2.9') retrieved from 'resolve-library-id' or directly from user query in the format '/org/project' or '/org/project/version'.\n   */\n  libraryId: string,\n  /**\n   * What to look up in the library's documentation, scoped to a single concept. Be specific and include relevant details, but keep each query to one topic — if the user's question spans multiple distinct concepts, make a separate call per concept instead of combining them, unless the question is about how the concepts interact. Good: 'How to set up authentication with JWT in Express.js' or 'React useEffect cleanup function examples'. Bad (too vague): 'auth' or 'hooks'. Bad (too broad): 'routing and auth and caching in Next.js'. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Programming language the user is writing code in, such as 'Python', 'TypeScript', 'Go', or 'C#'. Ranks code examples in that language first. Leave it out when the language is unknown or does not apply.\n   */\n  language?: string,\n}): Promise<unknown> // Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.\n  - tools.context7[\"resolve-library-id\"]({\n  /**\n   * What to look up in the library's documentation. This is used to rank library results by relevance to what the user is trying to accomplish. The query is sent to the Context7 API for processing. Do not include any sensitive or confidential information such as API keys, passwords, credentials, personal data, or proprietary code in your query.\n   */\n  query: string,\n  /**\n   * Library name to search for and retrieve a Context7-compatible library ID. Use the official library name with proper punctuation — e.g., 'Next.js' instead of 'nextjs', 'Customer.io' instead of 'customerio', 'Three.js' instead of 'threejs'.\n   */\n  libraryName: string,\n}): Promise<unknown> // Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.\n\n<mcp_instructions>\n  <server name=\"context7\">\n    Use tools from this server through `execute` under `tools[\"context7\"]`.\n    Use this server to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service — even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer — your training data may not reflect recent changes. Prefer this over web search for library docs.\n    \n    Do not use for: refactoring, writing scripts from scratch, debugging business logic, code review, or general programming concepts.\n  </server>\n</mcp_instructions>",
+      "description": "Instructions updated: core/codemode, core/mcp-guidance"
+    },
+    {
+      "id": "msg_18539a9b0001zQpqD6y8qb3Qgl",
+      "time": {
+        "created": 1793236511183
+      },
+      "text": "Reply with the single word yes",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18539a9de001HuZ32dlXLVn7e1",
+      "time": {
+        "created": 1793236511211,
+        "streamed": 1793236521907,
+        "completed": 1793236521908
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "yes"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 827,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "read": 17152,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18539d3b7001Ie5Ws27gkai1fb",
+      "time": {
+        "created": 1793236521911
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_1853af7ea001AWAAbKDFRLjb2w",
+      "time": {
+        "created": 1793236596736
+      },
+      "text": "Reply with the single word ok",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1853af808001HntSV0NpRCoE2G",
+      "time": {
+        "created": 1793236596752,
+        "streamed": 1793236599010,
+        "completed": 1793236599011
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 71,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "read": 17920,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1853b00e5002VjmYAScesKbaBf",
+      "time": {
+        "created": 1793236599013
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

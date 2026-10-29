@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +92,12 @@ type sessionState struct {
 	credentialVerification bool
 
 	launchEnv []string
+
+	// launchAddition is what the launch carried for the selected declaration's
+	// launch addition variable; its name is empty when no addition applied. It
+	// is kept apart from launchEnv because a remote launch carries the value in
+	// its SSH options.
+	launchAddition carriedValue
 
 	// sessionID is written once by finishSession, before the pump learns the
 	// handshake.
@@ -293,6 +301,8 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		verification, verificationSwitches, _ = usagesource.ClaimVerification(target, os.Environ())
 	}
 
+	addition := chooseDeclaration(declarations, nil, target).declaration.LaunchAddition
+
 	// Every failure below returns without a session, so this is the only release
 	// of what a claim armed across the starts.
 	var state *sessionState
@@ -337,7 +347,16 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		var cmd *exec.Cmd
 		var launch sshutil.SSHLaunch
 		if remote {
-			opts := target.SSHOptions()
+			var settings []sshutil.EnvVar
+			if addition.Merge != nil {
+				current, set := target.RuntimeEnv(os.Environ(), addition.Name)
+				value, _ := addition.Merge(current, set)
+				settings = append(settings, sshutil.EnvVar{Name: addition.Name, Value: value})
+			}
+			opts := target.SSHOptions(settings...)
+			if addition.Merge != nil {
+				state.launchAddition = carriedIn(opts.Env, addition.Name)
+			}
 			opts.Forward = tools.Forward(nil)
 			launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, opts)
 			cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
@@ -345,6 +364,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 			cmd = exec.CommandContext(ctx, target.Command, slices.Concat(target.Args, verificationSwitches.Args)...) //nolint:gosec // args are constructed programmatically
 		}
 		cmd.Env = slices.Concat(os.Environ(), readerEnv, verificationSwitches.Env)
+		if !remote && addition.Merge != nil {
+			cmd.Env = mergeAdditionInto(target, cmd.Env, addition)
+			value, set := target.RuntimeEnv(cmd.Env, addition.Name)
+			state.launchAddition = carriedValue{name: addition.Name, value: value, set: set}
+		}
 		state.launchEnv = cmd.Env
 		if !remote {
 			if bindErr := target.BindWorkspace(cmd); bindErr != nil {
@@ -515,7 +539,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		caps = *initResp.AgentCapabilities
 	}
 
-	sessionID, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wired)
+	sessionID, created, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wired)
 	if agentErr != nil {
 		teardownOnFailure()
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
@@ -555,7 +579,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 	if verdict.confirmed != nil {
 		facts.reader = verdict.confirmed.source
 	} else {
-		facts.ledger = newSessionLedger(ctx, state, choice.declaration)
+		facts.ledger = newSessionLedger(ctx, state, choice.declaration, created)
 	}
 
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
@@ -575,22 +599,92 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 }
 
 // newSessionLedger returns the session's spend ledger, or nil when the
-// declaration declares no spend or the ledger refuses it. The records already
-// on the host are read here, before the first prompt, so none of them is
-// counted as this run's spend.
-func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration) *usage.Ledger {
+// declaration declares no spend or the ledger refuses it. A session the runtime
+// created has no history, so its records boundary is known without a read. The
+// records already on the host of a continued session are read here, before the
+// first prompt, so none of them is counted as this run's spend. A launch whose
+// addition is not in effect makes every turn of the session a lower bound.
+func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, created bool) *usage.Ledger {
 	if decl.Live.Spend.Shape == usage.SpendUndeclared {
 		return nil
+	}
+	if !additionInEffect(state, decl.LaunchAddition) {
+		decl.Live.Spend.LowerBound = true
 	}
 	ledger, err := usage.NewLedger(decl.Live, decl.Records)
 	if err != nil {
 		state.logger.Warn("spend declaration unsupported", slog.Any("error", err))
 		return nil
 	}
-	if decl.ReadRecords != nil {
+	switch {
+	case created:
+		ledger.SessionCreated()
+	case decl.ReadRecords != nil:
 		ledger.Boundary(readSessionRecords(ctx, state, decl))
 	}
 	return ledger
+}
+
+// carriedValue is the value a launch carries for one environment variable.
+type carriedValue struct {
+	name  string
+	value string
+	set   bool
+}
+
+// carriedIn returns what the SSH options carry for name.
+func carriedIn(carried []sshutil.EnvVar, name string) carriedValue {
+	for _, entry := range carried {
+		if entry.Name == name {
+			return carriedValue{name: name, value: entry.Value, set: true}
+		}
+	}
+	return carriedValue{name: name}
+}
+
+// mergeAdditionInto returns env with one entry for the addition's variable,
+// holding the addition merged into the last value env gave it. Merging into
+// the last value keeps a verification launch's own document for the variable.
+func mergeAdditionInto(target agentcore.LaunchTarget, env []string, addition usagesource.LaunchAddition) []string {
+	current, set := target.RuntimeEnv(env, addition.Name)
+	value, inEffect := addition.Merge(current, set)
+	if !set && !inEffect {
+		return env
+	}
+	kept := slices.DeleteFunc(slices.Clone(env), func(entry string) bool {
+		return isEnvEntryNamed(entry, addition.Name)
+	})
+	return append(kept, addition.Name+"="+value)
+}
+
+// isEnvEntryNamed reports whether entry assigns name, which Windows compares
+// without regard to case.
+func isEnvEntryNamed(entry, name string) bool {
+	key, _, found := strings.Cut(entry, "=")
+	if runtime.GOOS == "windows" {
+		return found && strings.EqualFold(key, name)
+	}
+	return found && key == name
+}
+
+// carried returns the value the launch carries for name.
+func (s *sessionState) carried(name string) (string, bool) {
+	if s.launchAddition.name == name {
+		return s.launchAddition.value, s.launchAddition.set
+	}
+	return s.target.RuntimeEnv(s.launchEnv, name)
+}
+
+// additionInEffect reports whether the launch carries addition's request-off
+// setting: merging it into the value the launch carries changes nothing. A
+// declaration without an addition has nothing to be out of effect.
+func additionInEffect(state *sessionState, addition usagesource.LaunchAddition) bool {
+	if addition.Merge == nil {
+		return true
+	}
+	current, set := state.carried(addition.Name)
+	merged, inEffect := addition.Merge(current, set)
+	return inEffect && merged == current
 }
 
 // settleToolDelivery returns the tool servers for the session-creation
