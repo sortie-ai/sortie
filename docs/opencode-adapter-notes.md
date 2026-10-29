@@ -91,7 +91,7 @@ A message counts only once its `finish` field is set. The runtime saves an assis
 
 The configuration document disables the runtime's title agent. Its request is billed but recorded in no message, so the sum would miss it.
 
-A failed or empty export must never lower a figure the run has already reported. The settle step skips the update entirely rather than replacing a settled value with zero.
+A failed or empty export must never lower a figure the run has already reported. When the export recovers nothing, the settle step reports the turn's step counts instead of a zero, and a turn without step counts reports nothing.
 
 ## Usage limits
 
