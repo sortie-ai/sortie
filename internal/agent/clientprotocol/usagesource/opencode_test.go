@@ -64,11 +64,11 @@ func (r openCodeRuntime) RunHostCommand(ctx context.Context, cmd agentcore.HostC
 func readOpenCodeRecords(t *testing.T, rt openCodeRuntime) []usage.SpendReading {
 	t.Helper()
 
-	readings, err := mustDeclaration(t, opencodeHandshakeName).ReadRecords(t.Context(), rt)
+	records, err := mustDeclaration(t, opencodeHandshakeName).ReadRecords(t.Context(), rt)
 	if err != nil {
 		t.Fatalf("ReadRecords(%q) = %v, want records", rt.session, err)
 	}
-	return readings
+	return records.Spend
 }
 
 func counts(input, output, reasoning, cacheRead, cacheWrite int64) *usage.SpendReading {

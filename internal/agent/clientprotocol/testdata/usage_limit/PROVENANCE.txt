@@ -1,0 +1,44 @@
+Provenance of the usage-limit refusal fixtures
+
+No real provider refusal was captured on any runtime. Every refusal below
+came from a local stand-in upstream that answered each model request with one
+scripted error. Each capture ran on 2026-10-29 in an isolated HOME and XDG
+tree.
+
+Runtimes and routes
+- OpenCode 2.1.4 and 2.2.1 over the protocol (opencode acp).
+- Copilot CLI 1.0.105 over the protocol (copilot --acp --stdio).
+- Gemini CLI 0.66.0 over the protocol (gemini --acp, API-key session).
+- Kiro CLI 2.21.2, the default engine through kiro-cli acp and the v3 engine
+  run directly as its acp-server with the fake endpoints.
+
+Real and stand-in
+- Real, the runtime's own output: every agent frame in the *.jsonl files, and
+  the sanitized session exports in the opencode_*_export.json files. That
+  covers the error codes, the data.errorName, data.errorType and
+  data.retryErrorType members, the notification methods, and the stop reasons
+  the declarations read.
+- Stand-in, authored by the local endpoint or harness: the HTTP status, the
+  Retry-After header, the response body, and the message text that passes a
+  body through. The client frames, the scratch cwd in session/new, the
+  fake API key, and the request id req-sleuth-0001 are the harness's.
+- The OpenCode retryAfterMs and the idle message time in the free-limit export
+  come from the stand-in Retry-After header and OpenCode's clock. Whether a
+  real refusal carries a retry header is not established.
+
+Answer documents (*-answer.json)
+Each document is what the stand-in upstream served, in the shape the gated
+suite reads: status, header, body, and the expected model_only, plus requests
+when the runtime retries the refusal (default 1).
+- opencode-free-limit-answer.json: HTTP 429 with Retry-After 3600 and the
+  FreeUsageLimitError body. It is the answer the committed OpenCode
+  integration test scripts for the opencode kind.
+- copilot-rate-limit-answer.json: HTTP 429 with no Retry-After and the
+  bring-your-own-key rate-limit body, as served by the Copilot sleuth
+  harness (fakeapi.py) in the run behind copilot_rate_limit.jsonl. The
+  requests member is the number of model requests Copilot CLI 1.0.105 makes
+  before it ends the turn with the refusal; the capture holds that many
+  model.call_failure events and a live run served exactly that many.
+- gemini-daily-quota-answer.json: HTTP 429 with the free-tier daily quota
+  body and no Retry-After header, as served by the Gemini sleuth repro
+  (fake_google.py) in its daily mode.

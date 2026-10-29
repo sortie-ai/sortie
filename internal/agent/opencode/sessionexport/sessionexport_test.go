@@ -211,6 +211,48 @@ func TestParseRefusesUnreadableData(t *testing.T) {
 	}
 }
 
+func withMessages(data []byte, messages ...string) []byte {
+	end := bytes.LastIndexByte(data, ']')
+	return slices.Concat(data[:end], []byte(","+strings.Join(messages, ",")), data[end:])
+}
+
+func TestLastError(t *testing.T) {
+	t.Parallel()
+
+	const (
+		captures     = "../../../clientprotocol/testdata/usage_limit/"
+		freeSession  = "ses_e77a9b75fffeBqgRXMBQsUYvPv"
+		quotaSession = "ses_e77a0ddb7ffe1dlxp5Oso7Eq8N"
+	)
+	free := loadFixture(t, captures+"opencode_free_limit_export.json")
+	newTurn := []string{`{"type":"user"}`}
+	tests := []struct {
+		name      string
+		data      []byte
+		sessionID string
+		want      SessionError
+		wantFound bool
+		wantErr   error
+	}{
+		{"the idle message after the assistant message wins", free, freeSession, SessionError{Type: "provider.free-limit", RetryAfterMS: new(int64(3600000)), FailedAtMS: 1793288718816}, true, nil},
+		{"a refusal without a delay", loadFixture(t, captures+"opencode_quota_export.json"), quotaSession, SessionError{Type: "provider.quota", FailedAtMS: 1793289298588}, true, nil},
+		{"a refusal before the last user message is ignored", withMessages(free, newTurn...), freeSession, SessionError{}, false, nil},
+		{"a refusal after the last user message replaces the earlier one", withMessages(free, append(newTurn, `{"type":"assistant","error":{"type":"provider.quota"},"time":{"created":9}}`)...), freeSession, SessionError{Type: "provider.quota", FailedAtMS: 9}, true, nil},
+		{"another session", free, "ses_other", SessionError{}, false, ErrOtherSession},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, found, err := LastError(tt.data, tt.sessionID)
+
+			if !errors.Is(err, tt.wantErr) || found != tt.wantFound || !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("LastError(%s) = %+v, %v, %v, want %+v, %v, %v", tt.name, got, found, err, tt.want, tt.wantFound, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestArgs(t *testing.T) {
 	t.Parallel()
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
 	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -71,7 +72,24 @@ func init() {
 		Launches: func(target agentcore.LaunchTarget) bool {
 			return commandNamesRuntime(target, opencodeExecutableName, opencodePackageNames...)
 		},
+		PromptError: opencodePromptError,
 	})
+}
+
+// opencodePromptError reads the error name the runtime copies from its session
+// error into data. The error code is a generic internal-error code and is not
+// read. Only a console-metered name takes a console window's reset: a quota
+// refusal can come from a provider the console does not meter.
+func opencodePromptError(e jsonrpc.Error) PromptVerdict {
+	name, ok := jsonString(jsonMember(e.Data, "errorName"))
+	if !ok {
+		return PromptVerdict{}
+	}
+	limit, ok := usagelimits.Refusal(name)
+	if !ok {
+		return PromptVerdict{}
+	}
+	return PromptVerdict{Refusal: &Refusal{Name: name, Limit: limit, WindowReset: usagelimits.ConsoleMetered(name)}}
 }
 
 type opencodePromptUsage struct {
@@ -105,25 +123,38 @@ func opencodePromptSpend(result json.RawMessage) *usage.SpendReading {
 }
 
 // opencodeReadRecords returns the records of the session's export, in message
-// order. The export runs on the runtime's host with the runtime's own command.
-func opencodeReadRecords(ctx context.Context, rt PullRuntime) ([]usage.SpendReading, error) {
+// order, and the refusal the export records for the current turn. The export
+// runs on the runtime's host with the runtime's own command. A refusal that
+// cannot be read leaves the spend records intact.
+func opencodeReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
 	id := rt.SessionID()
 	if id == "" {
-		return nil, errors.New("session id is empty")
+		return Records{}, errors.New("session id is empty")
 	}
 	out, err := rt.RunHostCommand(ctx, exportCommand(rt.CommandWords(), id))
 	if err != nil {
-		return nil, fmt.Errorf("run session export: %w", err)
+		return Records{}, fmt.Errorf("run session export: %w", err)
 	}
-	records, err := sessionexport.Parse(out, id)
+	exported, err := sessionexport.Parse(out, id)
 	if err != nil {
-		return nil, err
+		return Records{}, err
 	}
-	readings := make([]usage.SpendReading, len(records))
-	for i, record := range records {
+	readings := make([]usage.SpendReading, len(exported))
+	for i, record := range exported {
 		readings[i] = record.Spend
 	}
-	return readings, nil
+	return Records{Spend: readings, Refusal: opencodeRecordedRefusal(out, id)}, nil
+}
+
+func opencodeRecordedRefusal(export []byte, id string) RecordedRefusal {
+	failure, ok, err := sessionexport.LastError(export, id)
+	if err != nil || !ok {
+		return RecordedRefusal{}
+	}
+	if _, refusal := usagelimits.Refusal(failure.Type); !refusal {
+		return RecordedRefusal{}
+	}
+	return RecordedRefusal{Name: failure.Type, ResetsAt: usagelimits.RetryAt(failure.FailedAtMS, failure.RetryAfterMS)}
 }
 
 // exportCommand is the session export, run as the session's own runtime.

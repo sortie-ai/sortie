@@ -1,7 +1,8 @@
 // Package usagelimits reads the console usage limits of an OpenCode
-// subscription from the runtime's usage command. It registers no kind and
-// holds no adapter, so every route to the runtime shares one declaration and
-// one parser.
+// subscription from the runtime's usage command and names the session errors
+// that are a provider usage-limit refusal. It registers no kind and holds no
+// adapter, so every route to the runtime shares one declaration, one parser,
+// and one refusal vocabulary. Start from [Pull], [Refusal], and [RetryAt].
 package usagelimits
 
 import (
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -20,6 +22,48 @@ const (
 	limitedStatus  = "limited"
 	minutesPerWeek = 7 * 24 * 60
 )
+
+// The runtime's own names for a session error that is a usage-limit refusal.
+const (
+	FreeLimitError        = "provider.free-limit"
+	QuotaError            = "provider.quota"
+	BudgetLimitError      = "provider.budget-limit"
+	ModelBudgetLimitError = "provider.model-budget-limit"
+)
+
+// Refusal reports whether name, matched exactly, is a usage-limit refusal and
+// returns the limit it ends a turn with. Every refusal is model-only: one
+// configuration reaches models of several providers, and the refusal comes
+// from the provider serving the run's model. A throttle such as
+// provider.rate-limit is not a refusal.
+func Refusal(name string) (domain.UsageLimit, bool) {
+	switch name {
+	case FreeLimitError, QuotaError, BudgetLimitError, ModelBudgetLimitError:
+		return domain.UsageLimit{ModelOnly: true}, true
+	}
+	return domain.UsageLimit{}, false
+}
+
+// ConsoleMetered reports whether the OpenCode console meters the refusal name,
+// so an exhausted console window is evidence for it. QuotaError is not
+// metered: any provider can send it.
+func ConsoleMetered(name string) bool {
+	switch name {
+	case FreeLimitError, BudgetLimitError, ModelBudgetLimitError:
+		return true
+	}
+	return false
+}
+
+// RetryAt returns the instant retryAfterMS after failedAtMS (Unix
+// milliseconds), in UTC. It returns the zero time unless the failure time is
+// positive and the delay is present and positive.
+func RetryAt(failedAtMS int64, retryAfterMS *int64) time.Time {
+	if failedAtMS <= 0 || retryAfterMS == nil || *retryAfterMS <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(failedAtMS + *retryAfterMS).UTC()
+}
 
 // Source declares the console limits the usage command reports.
 var Source = usage.Source{

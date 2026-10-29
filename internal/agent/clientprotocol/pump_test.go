@@ -999,8 +999,8 @@ func scriptedSpendDeclaration(live *usage.SpendReading, records []usage.SpendRea
 			Strategy: usage.StrategyRecords,
 			Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, CacheInInput: true, ReasoningInOutput: true, ServedModel: true},
 		},
-		ReadRecords: func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
-			return records, readErr
+		ReadRecords: func(context.Context, usagesource.PullRuntime) (usagesource.Records, error) {
+			return usagesource.Records{Spend: records}, readErr
 		},
 	}
 }
@@ -1184,10 +1184,10 @@ func TestPumpStopLeavesARecordsReadToSettleTheTurn(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				started, release := make(chan struct{}, 1), make(chan struct{}, 1)
 				declaration := scriptedSpendDeclaration(nil, nil, nil)
-				declaration.ReadRecords = func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
+				declaration.ReadRecords = func(context.Context, usagesource.PullRuntime) (usagesource.Records, error) {
 					started <- struct{}{}
 					<-release
-					return []usage.SpendReading{spendReading(100, 20, 0, "model-a", "u1")}, nil
+					return usagesource.Records{Spend: []usage.SpendReading{spendReading(100, 20, 0, "model-a", "u1")}}, nil
 				}
 				state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
 				outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
@@ -1622,6 +1622,66 @@ func TestPumpPromptErrorKind(t *testing.T) {
 			}
 			if !strings.Contains(agentErr.Message, runtimeText) {
 				t.Errorf("RunTurn(prompt error %d) message = %q, want it to carry the runtime text %q", tt.code, agentErr.Message, runtimeText)
+			}
+		})
+	}
+}
+
+func TestPumpRefusalResetSourcing(t *testing.T) {
+	t.Parallel()
+
+	base := time.Now().UTC().Truncate(time.Second).Add(time.Hour)
+	later := base.Add(time.Hour)
+	window := func(key string, at time.Time) usage.WindowReading {
+		return usage.WindowReading{Window: key, Status: "exhausted", ResetsAt: at.Unix()}
+	}
+	record := func(name string, at time.Time) usagesource.Records {
+		return usagesource.Records{Refusal: usagesource.RecordedRefusal{Name: name, ResetsAt: at}}
+	}
+	fromWindow, fromRecord := usagesource.Refusal{WindowReset: true}, usagesource.Refusal{Name: "quota", WindowReset: true}
+	tests := []struct {
+		name      string
+		refusal   usagesource.Refusal
+		model     string
+		windows   []usage.WindowReading
+		pullErr   error
+		records   usagesource.Records
+		readErr   error
+		wantReset time.Time
+	}{
+		{name: "exhausted window", refusal: fromWindow, windows: []usage.WindowReading{window("m1", base)}, wantReset: base},
+		{name: "no window reset", windows: []usage.WindowReading{window("m1", base)}},
+		{name: "records beat an earlier window", refusal: fromRecord, windows: []usage.WindowReading{window("m1", base)}, records: record("quota", later), wantReset: later},
+		{name: "another model's window", refusal: fromWindow, model: "m1", windows: []usage.WindowReading{window("m2/daily", base)}},
+		{name: "the model's own window", refusal: fromWindow, model: "m1", windows: []usage.WindowReading{window("m2/daily", base), window("m1/daily", later)}, wantReset: later},
+		{name: "failed pull", refusal: fromWindow, windows: []usage.WindowReading{window("m1", base)}, pullErr: errors.New("pull failed")},
+		{name: "failed records read", refusal: usagesource.Refusal{Name: "quota"}, records: record("quota", base), readErr: errors.New("unreadable")},
+		{name: "record of another refusal", refusal: usagesource.Refusal{Name: "quota"}, records: record("budget", base)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			declaration := scriptedSpendDeclaration(nil, nil, nil)
+			declaration.ReadRecords = func(context.Context, usagesource.PullRuntime) (usagesource.Records, error) {
+				return tt.records, tt.readErr
+			}
+			declaration.Pull = usage.Source{Strategy: usage.StrategyPull, Windows: usage.WindowDeclaration{Statuses: map[string]domain.UsageWindowStatus{"exhausted": domain.UsageWindowExhausted}}}
+			declaration.PullWindows = func(context.Context, usagesource.PullRuntime) ([]usage.WindowReading, error) {
+				return tt.windows, tt.pullErr
+			}
+			declaration.WindowModel = func(key string) string { model, _, _ := strings.Cut(key, "/"); return model }
+			declaration.PromptError = func(jsonrpc.Error) usagesource.PromptVerdict { return usagesource.PromptVerdict{Refusal: &tt.refusal} }
+			state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
+			state.configuredModel = tt.model
+
+			outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+			respondErrorLine(t, inPw, out.awaitMethod(t, methodSessionPrompt), 429, "quota exhausted")
+			agentErr, ok := errors.AsType[*domain.AgentError](waittest.Receive(t, outcomeCh, "turn outcome").err)
+
+			if !ok || agentErr.Kind != domain.ErrUsageLimit || !agentErr.UsageLimit.ResetsAt.Equal(tt.wantReset) {
+				t.Errorf("RunTurn() error = %+v, want kind %q with ResetsAt %v", agentErr, domain.ErrUsageLimit, tt.wantReset)
 			}
 		})
 	}

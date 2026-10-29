@@ -1,0 +1,77 @@
+{
+  "info": {
+    "id": "ses_e77a9b75fffeBqgRXMBQsUYvPv",
+    "projectID": "16d41ce9c1e2ca87e4face6cc2317d5dc9af46b0",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "failed",
+    "time": {
+      "created": 1793288718739,
+      "updated": 1793288718814,
+      "idle": 1793288718816
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e77a9b75fffeBqgRXMBQsUYvPv]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1885649a2001TJ1aeB9gBLy1Rx",
+      "time": {
+        "created": 1793288718784
+      },
+      "text": "[redacted:text:msg_1885649a2001TJ1aeB9gBLy1Rx]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1885649ca001B9EiJQ0Yyi4dy4",
+      "time": {
+        "created": 1793288718804,
+        "completed": 1793288718814
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "scripted-model",
+        "providerID": "scripted"
+      },
+      "content": [],
+      "finish": "error",
+      "error": {
+        "type": "provider.free-limit",
+        "message": "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+        "status": 429,
+        "response": {
+          "body": "{\"type\": \"error\", \"error\": {\"type\": \"FreeUsageLimitError\", \"message\": \"Rate limit exceeded. Please try again later.\"}}"
+        },
+        "retryAfterMs": 3600000
+      }
+    },
+    {
+      "id": "msg_1885649e0001R9UieFKgIlNlyy",
+      "time": {
+        "created": 1793288718816
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "provider.free-limit",
+        "message": "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+        "status": 429,
+        "response": {
+          "body": "{\"type\": \"error\", \"error\": {\"type\": \"FreeUsageLimitError\", \"message\": \"Rate limit exceeded. Please try again later.\"}}"
+        },
+        "retryAfterMs": 3600000
+      }
+    }
+  ]
+}

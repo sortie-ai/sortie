@@ -1,0 +1,75 @@
+{
+  "info": {
+    "id": "ses_e773f1134ffeeRFG9iHPkuYlNk",
+    "projectID": "f46f4c577f19363403028ab9e724ee44c7a051dd",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "failed",
+    "time": {
+      "created": 1793295707868,
+      "updated": 1793295707926,
+      "idle": 1793295707928
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e773f1134ffeeRFG9iHPkuYlNk]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_188c0eee5001N1XCLkzJUzd0Jh",
+      "time": {
+        "created": 1793295707902
+      },
+      "text": "[redacted:text:msg_188c0eee5001N1XCLkzJUzd0Jh]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_188c0ef0b001FNhdYQZgXBW6p4",
+      "time": {
+        "created": 1793295707919,
+        "completed": 1793295707926
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "scripted-model",
+        "providerID": "scripted"
+      },
+      "content": [],
+      "finish": "error",
+      "error": {
+        "type": "provider.model-budget-limit",
+        "message": "You've reached the spend limit for this model. Switch models to keep going.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"BudgetLimitError: model monthly budget reached\", \"status\": \"PAYMENT_REQUIRED\", \"coverage\": \"models\"}}"
+        }
+      }
+    },
+    {
+      "id": "msg_188c0ef18001YIqvrP2wrgyd69",
+      "time": {
+        "created": 1793295707928
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "provider.model-budget-limit",
+        "message": "You've reached the spend limit for this model. Switch models to keep going.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"BudgetLimitError: model monthly budget reached\", \"status\": \"PAYMENT_REQUIRED\", \"coverage\": \"models\"}}"
+        }
+      }
+    }
+  ]
+}

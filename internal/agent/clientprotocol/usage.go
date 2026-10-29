@@ -255,37 +255,43 @@ func newSessionPuller(decl usagesource.Declaration, state *sessionState, credent
 // readSessionRecords reads every spend record of the session from the runtime's
 // host under the read timeout.
 func readSessionRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration) usage.RecordsRead {
-	return readTurnRecords(ctx, state, decl, nil)
+	read, _ := readTurnRecords(ctx, state, decl, nil)
+	return read
 }
 
 // readTurnRecords reads the session's records and then those of each child
 // session, in the order given, under one read timeout. A failed child read
 // leaves the later children read. ChildrenOK is false for a read naming no
-// child.
-func readTurnRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration, children []string) usage.RecordsRead {
+// child. The refusal returned is the session's own, zero when that read failed;
+// a child's refusal is not this turn's.
+func readTurnRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration, children []string) (usage.RecordsRead, usagesource.RecordedRefusal) {
 	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
 	var read usage.RecordsRead
-	read.Readings, read.OK = readRecordsOf(readCtx, state, decl, "")
+	own, ok := readRecordsOf(readCtx, state, decl, "")
+	read.Readings, read.OK = own.Spend, ok
+	if !ok {
+		own.Refusal = usagesource.RecordedRefusal{}
+	}
 	childrenOK := len(children) > 0
 	for _, child := range children {
-		readings, ok := readRecordsOf(readCtx, state, decl, child)
-		read.ChildReadings = append(read.ChildReadings, readings...)
+		records, ok := readRecordsOf(readCtx, state, decl, child)
+		read.ChildReadings = append(read.ChildReadings, records.Spend...)
 		childrenOK = childrenOK && ok
 	}
 	read.ChildrenOK = childrenOK
-	return read
+	return read, own.Refusal
 }
 
 // readRecordsOf reads the records of the child session named, or of the
 // session's own when child is empty, and logs a failed read.
-func readRecordsOf(ctx context.Context, state *sessionState, decl usagesource.Declaration, child string) ([]usage.SpendReading, bool) {
-	readings, err := decl.ReadRecords(ctx, pullRuntime{state: state, session: child})
+func readRecordsOf(ctx context.Context, state *sessionState, decl usagesource.Declaration, child string) (usagesource.Records, bool) {
+	records, err := decl.ReadRecords(ctx, pullRuntime{state: state, session: child})
 	if err != nil {
 		state.logger.Debug("usage records read failed", slog.Any("error", err))
 	}
-	return readings, err == nil
+	return records, err == nil
 }
 
 // releaseUsageSources closes every claimed source and the verification addition.

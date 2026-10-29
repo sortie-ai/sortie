@@ -1,0 +1,75 @@
+{
+  "info": {
+    "id": "ses_e774076abffeTavX58oQ2a39qB",
+    "projectID": "a6b0116772c2d21eb403074f22f70e9bebe4eb1d",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "failed",
+    "time": {
+      "created": 1793295616356,
+      "updated": 1793295616414,
+      "idle": 1793295616416
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e774076abffeTavX58oQ2a39qB]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_188bf896a001vaieB7jTgD5Ls7",
+      "time": {
+        "created": 1793295616390
+      },
+      "text": "[redacted:text:msg_188bf896a001vaieB7jTgD5Ls7]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_188bf8993001sCAgztNBbwmkgv",
+      "time": {
+        "created": 1793295616407,
+        "completed": 1793295616414
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "scripted-model",
+        "providerID": "scripted"
+      },
+      "content": [],
+      "finish": "error",
+      "error": {
+        "type": "provider.budget-limit",
+        "message": "Workspace usage limit reached. Model use is paused until the limit resets.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"BudgetLimitError: workspace monthly budget reached\", \"status\": \"PAYMENT_REQUIRED\"}}"
+        }
+      }
+    },
+    {
+      "id": "msg_188bf899f001QgbVhRkI8Kpd54",
+      "time": {
+        "created": 1793295616416
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "provider.budget-limit",
+        "message": "Workspace usage limit reached. Model use is paused until the limit resets.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"BudgetLimitError: workspace monthly budget reached\", \"status\": \"PAYMENT_REQUIRED\"}}"
+        }
+      }
+    }
+  ]
+}

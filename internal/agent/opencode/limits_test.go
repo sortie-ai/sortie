@@ -19,20 +19,26 @@ import (
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-func startLimitsSession(t *testing.T, limitsAnswer, runFixture string) (domain.AgentAdapter, domain.Session, string) {
+func limitsRuntime(t *testing.T, limitsAnswer, runFixture string) (dir, script, callLog string) {
 	t.Helper()
-	dir := t.TempDir()
-	callLog := filepath.Join(dir, "limits-calls")
+	dir = t.TempDir()
+	callLog = filepath.Join(dir, "limits-calls")
 	runPath, _ := filepath.Abs(filepath.Join("testdata", runFixture))
 	answer := "exit 1"
 	if limitsAnswer != "" {
 		answer = "echo '" + limitsAnswer + "'"
 	}
-	script := writeOpenCodeScript(t, dir, `case "$1 $2" in
+	script = writeOpenCodeScript(t, dir, `case "$1 $2" in
   "api --standalone") echo called >> '`+callLog+`'; `+answer+`;;
   "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 cat '`+runPath+`'`)
+	return dir, script, callLog
+}
+
+func startLimitsSession(t *testing.T, limitsAnswer, runFixture string) (domain.AgentAdapter, domain.Session, string) {
+	t.Helper()
+	dir, script, callLog := limitsRuntime(t, limitsAnswer, runFixture)
 	a, _ := NewOpenCodeAdapter()
 	return a, mustStartSession(t, a, dir, script), callLog
 }
@@ -119,12 +125,35 @@ func TestRunTurn_FreeUsageLimitWindow(t *testing.T) {
 				if w.Label != "Free usage limit" || w.Status != domain.UsageWindowExhausted {
 					t.Errorf("window = {Label %q, Status %q}, want {%q, %q}", w.Label, w.Status, "Free usage limit", domain.UsageWindowExhausted)
 				}
-				if got := w.ResetsAt.Sub(w.ReportedAt); got != time.Hour {
-					t.Errorf("window ResetsAt - ReportedAt = %v, want %v", got, time.Hour)
+				if want := time.Unix(1793151700, 0); !w.ResetsAt.Equal(want) {
+					t.Errorf("window ResetsAt = %v, want %v", w.ResetsAt, want)
 				}
 			}
 		})
 	}
+}
+
+func TestUsageLimitRefusal(t *testing.T) {
+	t.Parallel()
+
+	refusal := func(t *testing.T, name, fixture string, wantResetsAt time.Time) agenttest.UsageLimitRefusalCase {
+		t.Helper()
+		dir, script, _ := limitsRuntime(t, "", fixture)
+		a, _ := NewOpenCodeAdapter()
+		return agenttest.UsageLimitRefusalCase{
+			Name:          name,
+			Adapter:       a,
+			Start:         domain.StartSessionParams{WorkspacePath: dir, AgentConfig: domain.AgentConfig{Command: script}},
+			Turn:          domain.RunTurnParams{Prompt: "work"},
+			WantResetsAt:  wantResetsAt,
+			WantModelOnly: true,
+		}
+	}
+
+	agenttest.AssertUsageLimitRefusal(t, "opencode", []agenttest.UsageLimitRefusalCase{
+		refusal(t, "free limit resets at the event timestamp plus the delay", "run2-free.jsonl", time.UnixMilli(1793151700867).UTC()),
+		refusal(t, "quota without a delay", "usage_limit_quota.jsonl", time.Time{}),
+	})
 }
 
 func TestOpencodePull_ConnectionFailureClass(t *testing.T) {

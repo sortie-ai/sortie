@@ -3,6 +3,7 @@ package opencode_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -208,31 +209,55 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		}
 	})
 
-	t.Run("free usage limit", func(t *testing.T) {
-		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
-			Script: []fakemodel.Response{{
-				Status: http.StatusTooManyRequests,
-				Header: http.Header{"Retry-After": {"3600"}},
-				Body:   []byte(`{"type": "error", "error": {"type": "FreeUsageLimitError", "message": "Rate limit exceeded. Please try again later."}}`),
-			}},
-			Prompt: "Reply with the word ok.",
-		})
+	for _, remote := range []bool{false, true} {
+		name := "free usage limit"
+		if remote {
+			name += " remote"
+		}
+		t.Run(name, func(t *testing.T) {
+			const retryAfter = time.Hour
+			start := time.Now().Truncate(time.Millisecond)
 
-		var windows []domain.UsageWindow
-		for _, e := range run.Events {
-			windows = append(windows, e.UsageWindows...)
-		}
-		if len(windows) != 1 {
-			t.Fatalf("usage windows of the refused turn = %+v, want exactly one", windows)
-		}
-		w := windows[0]
-		if w.Label != "Free usage limit" || w.Status != domain.UsageWindowExhausted {
-			t.Errorf("window = {Label %q, Status %q}, want {%q, %q}", w.Label, w.Status, "Free usage limit", domain.UsageWindowExhausted)
-		}
-		if got := w.ResetsAt.Sub(w.ReportedAt); got != time.Hour {
-			t.Errorf("window ResetsAt - ReportedAt = %v, want %v", got, time.Hour)
-		}
-	})
+			run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+				Script: []fakemodel.Response{{
+					Status: http.StatusTooManyRequests,
+					Header: http.Header{"Retry-After": {"3600"}},
+					Body:   []byte(`{"type": "error", "error": {"type": "FreeUsageLimitError", "message": "Rate limit exceeded. Please try again later."}}`),
+				}},
+				Prompt: "Reply with the word ok.",
+				Remote: remote,
+			})
+
+			end := time.Now()
+			var agentErr *domain.AgentError
+			if !errors.As(run.Err, &agentErr) || agentErr.Kind != domain.ErrUsageLimit || agentErr.UsageLimit == nil {
+				t.Fatalf("RunTurn() error = %v, want a usage_limit AgentError carrying a UsageLimit", run.Err)
+			}
+			if !agentErr.UsageLimit.ModelOnly {
+				t.Error("UsageLimit.ModelOnly = false, want true")
+			}
+			assertResetWithin(t, "UsageLimit.ResetsAt", agentErr.UsageLimit.ResetsAt, start.Add(retryAfter), end.Add(retryAfter))
+			var windows []domain.UsageWindow
+			for _, e := range run.Events {
+				windows = append(windows, e.UsageWindows...)
+			}
+			if len(windows) != 1 {
+				t.Fatalf("usage windows of the refused turn = %+v, want exactly one", windows)
+			}
+			w := windows[0]
+			if w.Label != "Free usage limit" || w.Status != domain.UsageWindowExhausted {
+				t.Errorf("window = {Label %q, Status %q}, want {%q, %q}", w.Label, w.Status, "Free usage limit", domain.UsageWindowExhausted)
+			}
+			assertResetWithin(t, "window ResetsAt", w.ResetsAt, start.Add(retryAfter).Truncate(time.Second), end.Add(retryAfter))
+		})
+	}
+}
+
+func assertResetWithin(t *testing.T, what string, got, earliest, latest time.Time) {
+	t.Helper()
+	if got.Before(earliest) || got.After(latest) {
+		t.Errorf("%s = %v, want within [%v, %v]", what, got, earliest, latest)
+	}
 }
 
 func TestIntegration_InvalidModelFailure(t *testing.T) {

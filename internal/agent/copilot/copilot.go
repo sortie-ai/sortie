@@ -18,11 +18,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -77,16 +77,15 @@ var usageSources = usage.Sources{
 
 func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
-		RequiresCommand:               true,
-		DefaultCommand:                defaultCommand,
-		ValidateAgentConfig:           validateConfig,
-		MCPDialect:                    registry.MCPDialectMCPServersJSON,
-		UsageSources:                  usageSources,
-		CredentialEnv:                 registry.DeclareCredentialEnv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
-		VerificationContext:           registry.DeclareVerificationContext(registry.VerificationKeepsSomeTools, registry.VerificationKeepsSystemPrompt),
-		EffortForwarding:              registry.EffortForwarded,
-		UsageLimitRecognition:         registry.UsageLimitNotRecognized,
-		UsageLimitNotRecognizedReason: "the adapter reads a session error as message text only",
+		RequiresCommand:       true,
+		DefaultCommand:        defaultCommand,
+		ValidateAgentConfig:   validateConfig,
+		MCPDialect:            registry.MCPDialectMCPServersJSON,
+		UsageSources:          usageSources,
+		CredentialEnv:         registry.DeclareCredentialEnv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+		VerificationContext:   registry.DeclareVerificationContext(registry.VerificationKeepsSomeTools, registry.VerificationKeepsSystemPrompt),
+		EffortForwarding:      registry.EffortForwarded,
+		UsageLimitRecognition: registry.UsageLimitRecognized,
 	})
 }
 
@@ -144,6 +143,10 @@ type sessionState struct {
 	// turnErrorMessage is the failure reason when the result event reports a
 	// failed exit.
 	turnErrorMessage string
+
+	// turnRefusal is the first session error of the turn that is a usage-limit
+	// refusal; nil when the turn saw none.
+	turnRefusal *usagelimits.Refusal
 
 	// turnContinuations is diagnostic only; the turn disposition never reads
 	// it.
@@ -471,11 +474,14 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				"session.tools_updated":
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
-			case "session.error":
+			case usagelimits.SessionErrorEvent:
 				if len(event.Data) > 0 {
-					errData, dataErr := parseSessionErrorData(event.Data)
+					sessionErr, dataErr := usagelimits.ParseSessionError(event.Data)
 					if dataErr == nil {
-						state.turnErrorMessage = strings.TrimSpace(errData.Message)
+						state.turnErrorMessage = sessionErr.Message
+						if refusal, ok := usagelimits.RefusalOf(sessionErr); ok && state.turnRefusal == nil {
+							state.turnRefusal = &refusal
+						}
 					}
 				}
 				agentcore.EmitNotification(emit, "")
@@ -531,33 +537,38 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			ev.Work, ev.WorkDetail = state.work.Report()
 
 			var apiDurationMS int64
-			if lastResult != nil {
-				if lastResult.Usage != nil {
-					apiDurationMS = lastResult.Usage.TotalAPIDurMS
-					state.logger().Info("copilot turn completed",
-						slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
-				}
+			if lastResult != nil && lastResult.Usage != nil {
+				apiDurationMS = lastResult.Usage.TotalAPIDurMS
+				state.logger().Info("copilot turn completed",
+					slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
+			}
 
-				switch {
-				case lastResult.ExitCode == nil || *lastResult.ExitCode != 0:
-					ev.Terminal = agentcore.TerminalFailure
-					ev.TerminalMessage = "non-zero exit in result event"
-					if state.turnErrorMessage != "" {
-						ev.TerminalMessage = state.turnErrorMessage
-					}
-				case !state.turnCompletionSeen:
-					ev.Terminal = agentcore.TerminalIncomplete
-					ev.TerminalMessage = "raise copilot-cli.max_autopilot_continues if the turn needs more steps"
-					state.logger().Warn("copilot turn ended without a task-completion report",
-						slog.Int("autopilot_continuations_observed", state.turnContinuations),
-						slog.Int("max_autopilot_continues", effectiveMaxAutopilotContinues(state.passthrough)))
-				case !state.turnCompletionSuccess:
-					ev.Terminal = agentcore.TerminalFailure
-					ev.TerminalErrorKind = domain.ErrTurnFailed
-					ev.TerminalMessage = completionFailureMessage(state.turnCompletionSummary)
-				default:
-					ev.Terminal = agentcore.TerminalSuccess
+			switch {
+			case state.turnRefusal != nil:
+				limit := state.turnRefusal.Limit
+				ev.Terminal = agentcore.TerminalFailure
+				ev.TerminalErrorKind = domain.ErrUsageLimit
+				ev.UsageLimit = &limit
+				ev.TerminalMessage = state.turnErrorMessage
+			case lastResult == nil:
+			case lastResult.ExitCode == nil || *lastResult.ExitCode != 0:
+				ev.Terminal = agentcore.TerminalFailure
+				ev.TerminalMessage = "non-zero exit in result event"
+				if state.turnErrorMessage != "" {
+					ev.TerminalMessage = state.turnErrorMessage
 				}
+			case !state.turnCompletionSeen:
+				ev.Terminal = agentcore.TerminalIncomplete
+				ev.TerminalMessage = "raise copilot-cli.max_autopilot_continues if the turn needs more steps"
+				state.logger().Warn("copilot turn ended without a task-completion report",
+					slog.Int("autopilot_continuations_observed", state.turnContinuations),
+					slog.Int("max_autopilot_continues", effectiveMaxAutopilotContinues(state.passthrough)))
+			case !state.turnCompletionSuccess:
+				ev.Terminal = agentcore.TerminalFailure
+				ev.TerminalErrorKind = domain.ErrTurnFailed
+				ev.TerminalMessage = completionFailureMessage(state.turnCompletionSummary)
+			default:
+				ev.Terminal = agentcore.TerminalSuccess
 			}
 
 			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.copilotSessionID, apiDurationMS, nil, *spend)
@@ -571,6 +582,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	// The adapter sets no TurnEnv hook, so a turn runs with the host
 	// environment and a nil env reads exactly that.
 	hooks.PullWindows = usage.NewPuller(quota.Source, agentcore.AuxiliaryTimeout(params.AgentConfig), params.CredentialVerification, copilotPull(target)).Pull
+	hooks.RefusalWindowReset = func() bool { return state.turnRefusal != nil && state.turnRefusal.QuotaWindow }
 
 	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 
@@ -600,6 +612,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	state.turnCompletionSuccess = false
 	state.turnCompletionSummary = ""
 	state.turnErrorMessage = ""
+	state.turnRefusal = nil
 	state.turnContinuations = 0
 	state.turnResultSeen = false
 	state.turnResume = nil

@@ -82,6 +82,14 @@
 //	                                  for a runtime that offers server tools
 //	                                  only through another tool; unset calls
 //	                                  the declared sortie_status tool
+//	SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER
+//	                                  path of a JSON document {"status", "header",
+//	                                  "body", "model_only", "requests"} holding
+//	                                  the refusal the scripted endpoint answers
+//	                                  with, the model scope the turn must
+//	                                  report, and how many requests the runtime
+//	                                  makes before it gives up (default 1); unset
+//	                                  skips the usage-limit case
 //
 // Run:
 //
@@ -92,11 +100,15 @@ package clientprotocol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -611,6 +623,33 @@ func statusCall(t *testing.T) fakemodel.ToolChoice {
 	return fakemodel.Named(call.Name, call.Arguments)
 }
 
+type usageLimitAnswer struct {
+	Status    int               `json:"status"`
+	Header    map[string]string `json:"header"`
+	Body      json.RawMessage   `json:"body"`
+	ModelOnly bool              `json:"model_only"`
+	Requests  int               `json:"requests"`
+}
+
+func usageLimitAnswerFromEnv(t *testing.T) usageLimitAnswer {
+	t.Helper()
+
+	const variable = "SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER"
+	path := os.Getenv(variable)
+	if path == "" {
+		t.Skipf("skipping usage-limit refusal: %s must name the JSON document of the refusal the endpoint answers with", variable)
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator names the document
+	if err != nil {
+		t.Fatalf("%s = %q: %v", variable, path, err)
+	}
+	var answer usageLimitAnswer
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		t.Fatalf("%s = %q, want a JSON object with status, header, body and model_only: %v", variable, path, err)
+	}
+	return answer
+}
+
 func spendSources(t *testing.T) *fakemodel.SpendSources {
 	t.Helper()
 
@@ -752,5 +791,42 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			t.Errorf("TurnResult.ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnCompleted)
 		}
 		assertContainsEventType(t, run.Events, domain.EventSessionStarted)
+	})
+	t.Run("usage_limit_refusal", func(t *testing.T) {
+		answer := usageLimitAnswerFromEnv(t)
+		turnExpect = expectHandshakeOnly
+		header := http.Header{}
+		for name, value := range answer.Header {
+			header.Set(name, value)
+		}
+
+		for _, remote := range []bool{false, true} {
+			t.Run(fmt.Sprintf("remote=%t", remote), func(t *testing.T) {
+				start := time.Now().Truncate(time.Millisecond)
+
+				run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+					Script: slices.Repeat([]fakemodel.Response{{Status: answer.Status, Header: header, Body: answer.Body}}, max(1, answer.Requests)),
+					Prompt: "Reply with the word ok.",
+					Remote: remote,
+				})
+
+				end := time.Now()
+				var agentErr *domain.AgentError
+				if !errors.As(run.Err, &agentErr) || agentErr.Kind != domain.ErrUsageLimit || agentErr.UsageLimit == nil {
+					t.Fatalf("RunTurn() error = %v, want a usage_limit AgentError carrying a UsageLimit", run.Err)
+				}
+				if agentErr.UsageLimit.ModelOnly != answer.ModelOnly {
+					t.Errorf("UsageLimit.ModelOnly = %v, want %v", agentErr.UsageLimit.ModelOnly, answer.ModelOnly)
+				}
+				seconds, err := strconv.Atoi(answer.Header["Retry-After"])
+				if err != nil {
+					return
+				}
+				retryAfter := time.Duration(seconds) * time.Second
+				if resetsAt := agentErr.UsageLimit.ResetsAt; resetsAt.Before(start.Add(retryAfter)) || resetsAt.After(end.Add(retryAfter)) {
+					t.Errorf("UsageLimit.ResetsAt = %v, want within [%v, %v]", resetsAt, start.Add(retryAfter), end.Add(retryAfter))
+				}
+			})
+		}
 	})
 }

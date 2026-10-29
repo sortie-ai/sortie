@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 const (
@@ -37,7 +40,33 @@ func init() {
 		Launches: func(target agentcore.LaunchTarget) bool {
 			return commandNamesRuntime(target, geminiExecutableName, geminiPackageName)
 		},
+		PromptError: geminiPromptError,
+		WindowModel: geminiWindowModel,
 	})
+}
+
+// geminiPromptError reads the code the runtime copies from the provider's HTTP
+// status after its own retries. A capacity refusal arrives as 503 and is not a
+// usage limit.
+func geminiPromptError(e jsonrpc.Error) PromptVerdict {
+	if e.Code != http.StatusTooManyRequests {
+		return PromptVerdict{}
+	}
+	return PromptVerdict{Refusal: &Refusal{Limit: domain.UsageLimit{ModelOnly: true}, WindowReset: true}}
+}
+
+// geminiWindowKey builds the key of a quota bucket's window, and
+// geminiWindowModel is its only inverse.
+func geminiWindowKey(modelID, tokenType string) string {
+	if tokenType == "" {
+		return modelID
+	}
+	return modelID + "/" + tokenType
+}
+
+func geminiWindowModel(key string) string {
+	modelID, _, _ := strings.Cut(key, "/")
+	return modelID
 }
 
 // geminiClientMetadata is what the runtime sends with loadCodeAssist when it
@@ -160,12 +189,8 @@ func geminiBucketReadings(buckets []geminiBucket) []usage.WindowReading {
 		if bucket.ModelID == "" || bucket.RemainingFraction == nil {
 			continue
 		}
-		window := bucket.ModelID
-		if bucket.TokenType != "" {
-			window += "/" + bucket.TokenType
-		}
 		readings = append(readings, usage.WindowReading{
-			Window:   window,
+			Window:   geminiWindowKey(bucket.ModelID, bucket.TokenType),
 			Span:     usage.Span{Scope: bucket.ModelID},
 			Share:    bucket.RemainingFraction,
 			ResetsAt: geminiResetUnix(bucket.ResetTime),

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -28,6 +29,19 @@ type Record struct {
 	// CreatedMS is time.created in Unix milliseconds; 0 when absent or not an
 	// integer.
 	CreatedMS int64
+}
+
+// SessionError is the error one export message records.
+type SessionError struct {
+	// Type is error.type, the runtime's own error name.
+	Type string
+
+	// RetryAfterMS is error.retryAfterMs; nil when absent or not an integer.
+	RetryAfterMS *int64
+
+	// FailedAtMS is time.completed, else time.created, in Unix milliseconds;
+	// 0 when neither is an integer.
+	FailedAtMS int64
 }
 
 // Args returns the argument vector of the sanitized export of one session.
@@ -66,27 +80,9 @@ func CountOmittedAtZero(raw json.RawMessage) *int64 {
 // records. Parse refuses data above [usage.MaxRecordsBytes], a document that
 // does not decode, and a document of another session ([ErrOtherSession]).
 func Parse(data []byte, sessionID string) ([]Record, error) {
-	if len(data) > usage.MaxRecordsBytes {
-		return nil, fmt.Errorf("session export exceeds %d bytes", usage.MaxRecordsBytes)
-	}
-	var doc struct {
-		Info struct {
-			ID string `json:"id"`
-		} `json:"info"`
-		Messages []struct {
-			ID     string          `json:"id"`
-			Type   string          `json:"type"`
-			Finish string          `json:"finish"`
-			Tokens json.RawMessage `json:"tokens"`
-			Model  json.RawMessage `json:"model"`
-			Time   json.RawMessage `json:"time"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("decode session export: %w", err)
-	}
-	if doc.Info.ID != sessionID {
-		return nil, ErrOtherSession
+	doc, err := decodeExport(data, sessionID)
+	if err != nil {
+		return nil, err
 	}
 
 	var records []Record
@@ -118,6 +114,80 @@ func Parse(data []byte, sessionID string) ([]Record, error) {
 	return records, nil
 }
 
+type exportMessage struct {
+	ID     string          `json:"id"`
+	Type   string          `json:"type"`
+	Finish string          `json:"finish"`
+	Tokens json.RawMessage `json:"tokens"`
+	Model  json.RawMessage `json:"model"`
+	Time   json.RawMessage `json:"time"`
+	Error  json.RawMessage `json:"error"`
+}
+
+type exportDocument struct {
+	Info struct {
+		ID string `json:"id"`
+	} `json:"info"`
+	Messages []exportMessage `json:"messages"`
+}
+
+// decodeExport applies the guards both readers share: the size limit, a
+// document that decodes, and the session the document belongs to.
+func decodeExport(data []byte, sessionID string) (exportDocument, error) {
+	if len(data) > usage.MaxRecordsBytes {
+		return exportDocument{}, fmt.Errorf("session export exceeds %d bytes", usage.MaxRecordsBytes)
+	}
+	var doc exportDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return exportDocument{}, fmt.Errorf("decode session export: %w", err)
+	}
+	if doc.Info.ID != sessionID {
+		return exportDocument{}, ErrOtherSession
+	}
+	return doc, nil
+}
+
+// LastError returns the error the export records for the session's current
+// turn: the last message after the last user message whose error is an object
+// with a string type. The bool is false when the turn records none, so an
+// earlier turn's refusal is never read as this turn's. LastError applies the
+// guards of [Parse] and returns their errors.
+func LastError(data []byte, sessionID string) (SessionError, bool, error) {
+	doc, err := decodeExport(data, sessionID)
+	if err != nil {
+		return SessionError{}, false, err
+	}
+	turn := doc.Messages
+	for i, message := range slices.Backward(turn) {
+		if message.Type == "user" {
+			turn = turn[i+1:]
+			break
+		}
+	}
+	for _, message := range slices.Backward(turn) {
+		failure, ok := decodeObject[exportError](message.Error)
+		if !ok || failure.Type == nil {
+			continue
+		}
+		times, _ := decodeObject[exportTime](message.Time)
+		return SessionError{
+			Type:         *failure.Type,
+			RetryAfterMS: Count(failure.RetryAfterMS),
+			FailedAtMS:   failedAtMS(times),
+		}, true, nil
+	}
+	return SessionError{}, false, nil
+}
+
+func failedAtMS(t exportTime) int64 {
+	for _, raw := range []json.RawMessage{t.Completed, t.Created} {
+		if ms := Count(raw); ms != nil {
+			return *ms
+		}
+	}
+	return 0
+}
+
 type exportTokens struct {
 	Input     json.RawMessage `json:"input"`
 	Output    json.RawMessage `json:"output"`
@@ -136,7 +206,13 @@ type exportModel struct {
 }
 
 type exportTime struct {
-	Created json.RawMessage `json:"created"`
+	Created   json.RawMessage `json:"created"`
+	Completed json.RawMessage `json:"completed"`
+}
+
+type exportError struct {
+	Type         *string         `json:"type"`
+	RetryAfterMS json.RawMessage `json:"retryAfterMs"`
 }
 
 // decodeObject decodes raw when it is a JSON object; an absent, null, or
