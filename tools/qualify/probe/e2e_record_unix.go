@@ -4,6 +4,7 @@ package probe
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func buildProtocolLaunch(coords Coordinates) (string, domain.AgentAdapter, error
 	if err != nil {
 		return "", nil, err
 	}
-	fullCommand := append([]string{coords.CommandPath}, argv...)
+	fullCommand := slices.Concat(modelEnvironPrefix(coords.Profile, coords.Model), []string{coords.CommandPath}, argv)
 
 	adapter, err := clientprotocol.NewClientProtocolAdapter()
 	if err != nil {

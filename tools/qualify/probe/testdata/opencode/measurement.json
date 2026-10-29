@@ -1,0 +1,89 @@
+{
+  "schema_version": 5,
+  "profile_digest": "27dc656261f9876f6ee5c757894d2a6070bca85d8c62dd8a938aa754e5b99244",
+  "measured_at": "2026-10-29",
+  "expectation": {
+    "Verdict": "not_qualified",
+    "Conformance": "not_qualified",
+    "Grades": [
+      {
+        "Surface": "protocol",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "retry_classification",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "token_ceiling",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "tool_server_delivery",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "session_continuation",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "permission_handling",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "retry_classification",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "token_ceiling",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      }
+    ],
+    "Excluded": [
+      "retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation",
+      "retry_classification non_retryable_refusal: declared outcome_never_produced",
+      "retry_classification unknown_outcome: no deterministic inducer on any runtime, so the case carries no obligation",
+      "turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation",
+      "turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface",
+      "turn_disposition runtime_refusal: declared outcome_never_produced"
+    ],
+    "Unobserved": [
+      "native_stream_json turn_disposition runtime_failure: fixture_induction_failed",
+      "native_stream_json turn_disposition success: fixture_induction_failed",
+      "protocol retry_classification human_input: fixture_induction_failed",
+      "protocol turn_disposition runtime_failure: fixture_induction_failed"
+    ]
+  },
+  "requested_model": "google/gemini-2.5-flash-lite",
+  "observed_model": null,
+  "provenance_digest": "b8f3789d725418edd690319f84575d07c40a89104078b920d2844be7fc7c0cd7",
+  "evaluator_version": 2
+}

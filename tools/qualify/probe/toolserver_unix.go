@@ -4,7 +4,12 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
@@ -42,19 +48,143 @@ type mcpToolServerParams struct {
 }
 
 // writeToolServerMCPConfig writes a generated MCP configuration
-// declaring one stdio server at scriptPath and returns its path.
-func writeToolServerMCPConfig(t *testing.T, dir, scriptPath string) string {
+// declaring the fixture server as the JSON object entry and returns its
+// path.
+func writeToolServerMCPConfig(t *testing.T, dir, entry string) string {
 	t.Helper()
 	sortieDir := filepath.Join(dir, workspacekit.SortieDir)
 	if err := os.Mkdir(sortieDir, 0o750); err != nil && !os.IsExist(err) {
 		t.Fatalf("create %s: %v", sortieDir, err)
 	}
 	path := filepath.Join(sortieDir, "mcp.json")
-	content := fmt.Sprintf(`{"mcpServers":{%q:{"type":"stdio","command":%q,"args":[]}}}`, toolServerName, scriptPath)
+	content := fmt.Sprintf(`{"mcpServers":{%q:%s}}`, toolServerName, entry)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write induction MCP configuration %s: %v", path, err)
 	}
 	return path
+}
+
+// declareToolServer returns the path of the configuration declaring
+// the fixture server: over HTTP when an earlier launch of this run saw
+// the runtime advertise HTTP MCP servers, because some runtimes load no
+// other kind, and over stdio otherwise.
+func (f *sharedFixture) declareToolServer(t *testing.T, dir, recordPath string) string {
+	t.Helper()
+	if advertisesHTTPToolServers(f.wireTraceDir) {
+		return writeToolServerMCPConfig(t, dir, fmt.Sprintf(`{"type":"http","url":%q}`, serveToolServerHTTP(t, recordPath)))
+	}
+	scriptPath := agenttest.FakeRuntime(t, dir, "mcp-server", mcpToolServerScenario, mcpToolServerParams{RecordPath: recordPath})
+	return writeToolServerMCPConfig(t, dir, fmt.Sprintf(`{"type":"stdio","command":%q,"args":[]}`, scriptPath))
+}
+
+// advertisesHTTPToolServers reports whether any launch captured under
+// traceDir answered initialize with mcpCapabilities.http set.
+func advertisesHTTPToolServers(traceDir string) bool {
+	if traceDir == "" {
+		return false
+	}
+	paths, err := filepath.Glob(filepath.Join(traceDir, wireTraceFilePrefix+"*.jsonl"))
+	if err != nil {
+		return false
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path) //nolint:gosec // a capture this collection's own launch wrote under its own trace directory
+		if err != nil {
+			continue
+		}
+		for line := range strings.SplitSeq(string(content), "\n") {
+			var message struct {
+				Result struct {
+					AgentCapabilities struct {
+						MCPCapabilities struct {
+							HTTP bool `json:"http"`
+						} `json:"mcpCapabilities"`
+					} `json:"agentCapabilities"`
+				} `json:"result"`
+			}
+			if json.Unmarshal([]byte(line), &message) == nil && message.Result.AgentCapabilities.MCPCapabilities.HTTP {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// serveToolServerHTTP serves the fixture tool server on a loopback port
+// until t's cleanups run and returns its URL. Calls are recorded to
+// recordPath as the stdio fake records them.
+func serveToolServerHTTP(t *testing.T, recordPath string) string {
+	t.Helper()
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the HTTP tool server: %v", err)
+	}
+	server := &http.Server{Handler: toolServerHandler(recordPath), ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	return "http://" + listener.Addr().String() + "/mcp"
+}
+
+// toolServerHandler replies in plain JSON and refuses GET, so a client
+// finds no event stream to open.
+func toolServerHandler(recordPath string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			} `json:"params"`
+		}
+		if json.Unmarshal(body, &req) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(req.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+
+		var reply string
+		switch req.Method {
+		case "initialize":
+			version := req.Params.ProtocolVersion
+			if version == "" {
+				version = "2024-11-05"
+			}
+			reply = fmt.Sprintf(`"result":{"protocolVersion":%q,"capabilities":{"tools":{}},"serverInfo":{"name":%q,"version":"0.0.0"}}`, version, toolServerName)
+		case "tools/list":
+			reply = fmt.Sprintf(`"result":{"tools":[{"name":%q,"description":"records that the qualification probe induced a call","inputSchema":{"type":"object","properties":{}}}]}`, probeToolName)
+		case "tools/call":
+			if err := appendToolCall(recordPath, body); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			reply = `"result":{"content":[{"type":"text","text":"ok"}]}`
+		default:
+			reply = `"error":{"code":-32601,"message":"method not found"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,%s}`, req.ID, reply)
+	})
+}
+
+func appendToolCall(path string, call []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // path is under the caller's own t.TempDir()
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(slices.Clone(call), '\n'))
+	return errors.Join(err, f.Close())
 }
 
 // qualifiedToolName substitutes server and tool into the runtime's
@@ -146,6 +276,40 @@ func fileHasContent(path string) (bool, error) {
 	return info.Size() > 0, nil
 }
 
+// withModelEnviron returns env with the profile's model_env entry for model
+// in place of any variable of the same name, and env itself when the profile
+// carries its model through model_args.
+func withModelEnviron(env []string, p profile.RuntimeProfile, model string) []string {
+	entry, ok := p.ModelEnviron(model)
+	if !ok {
+		return env
+	}
+	name, _, _ := strings.Cut(entry, "=")
+	carried := slices.DeleteFunc(slices.Clone(env), func(variable string) bool {
+		return strings.HasPrefix(variable, name+"=")
+	})
+	return append(carried, entry)
+}
+
+// modelEnvironPrefix returns the words that put the model_env entry in front
+// of a command string, which the adapter splits on whitespace without a
+// shell, and nil when the profile carries its model through model_args.
+func modelEnvironPrefix(p profile.RuntimeProfile, model string) []string {
+	entries := withModelEnviron(nil, p, model)
+	if len(entries) == 0 {
+		return nil
+	}
+	return append([]string{"env"}, entries...)
+}
+
+// modelCarryingCommand renders the launch of coords' runtime with argv through
+// the run's environment wrapper, carrying the model_env entry the profile
+// states.
+func (f *sharedFixture) modelCarryingCommand(coords Coordinates, argv []string) string {
+	launch := append(modelEnvironPrefix(coords.Profile, coords.Model), coords.CommandPath)
+	return f.controlledCommand(strings.Join(launch, " "), argv)
+}
+
 // startInductionSession runs under the run's environment wrapper, so
 // both surfaces answer under the same allowlist, and registers the
 // session with the run that owns workspace, so process-cleanup stops
@@ -167,7 +331,7 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 		WorkspacePath: workspace,
 		AgentConfig: domain.AgentConfig{
 			Kind:           "agent-client-protocol",
-			Command:        fixture.controlledCommand(coords.CommandPath, argv),
+			Command:        fixture.modelCarryingCommand(coords, argv),
 			ReadTimeoutMS:  30000,
 			TurnTimeoutMS:  int(toolInductionTurnBound / time.Millisecond),
 			StallTimeoutMS: 60000,

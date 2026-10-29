@@ -2,7 +2,15 @@
 
 Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/opencode`.
 
-Last updated: 2026-10-29
+Last updated: October 2026
+
+Eligibility: not_qualified
+
+Product conformance: not_qualified
+
+Both verdicts fail on one row: protocol session continuation is a gap below the native reference. In the recorded capture the recall turn kept the session identifier, but its answer did not contain the phrase the seed turn asked the runtime to remember (`same_session_without_recall`). The previous capture of the same profile recorded `confirmed_same_session` for that row. Several load-bearing rows are also unmeasured: permission handling, where the runtime raised no permission request under the asking posture; the policy precondition, where no refusal was answered; the human-input case of protocol retry classification, where no request of either class was raised; and native turn disposition, where the success turn ended with no recognized terminal. Protocol runtime failure is not observed either: the refused-model inducer yields a completed turn, because the runtime replaces an unresolvable model id with its default model. Product conformance is also blocked by session continuation, and waits on permission handling, the policy precondition, the human-input case, and protocol runtime failure. The protocol `limit_reached` case stays unmeasured because the prompt channel cannot carry a request big enough to reach the runtime's limit.
+
+This file is checked against the tracked measurement under `tools/qualify/probe/testdata/opencode/`. Changing a grade row below fails the staleness gate until a fresh run replaces that measurement.
 
 ## Where to get the volatile facts
 
@@ -47,7 +55,7 @@ Turns run on `agentcore.ForkPerTurnSession`, the skeleton Claude Code and Copilo
 
 `StopSession` calls the skeleton's stop, then deletes the verification session when the session is a credential verification.
 
-The verification request carries a deny-all permission policy, and on 2.2.0 it still declares the `skill` tool: the runtime's browser plugin appends a `skill` rule after every configuration source, so no configuration removes the definition. The deny-all rules leave the tool unusable, and the adapter declares that the verification request keeps some tools.
+The verification request carries a deny-all permission policy, and on release 2.2 it still declares the `skill` tool: the runtime's browser plugin appends a `skill` rule after every configuration source, so no configuration removes the definition. The deny-all rules leave the tool unusable, and the adapter declares that the verification request keeps some tools.
 
 The first-event deadline is the larger of the read timeout and `agentcore.CredentialExchangeBound`. OpenCode prints nothing until the provider starts answering, and the free hosted model can take much longer than the 5-second default read timeout. The deadline stops at the first envelope, so it catches a process that never talks, not a stall in the middle of a turn. Stalls belong to the orchestrator.
 
@@ -99,7 +107,7 @@ A failed or empty export must never lower a figure the run has already reported.
 
 The run stream carries no subscription window. Two other places do.
 
-The pull runs `opencode api experimental.usage.limits` once a turn that reached the runtime has ended, through the same auxiliary launch the export uses, locally or over the session's SSH launch. The `agent-client-protocol` declaration runs the same command, with the configured command cut after the `opencode` word like its export, locally or over the session's SSH launch, while the session's `opencode acp` process runs. It runs on empty stdin. A cancelled turn and a credential-verification session do not pull. The command exists only on releases that ship the usage-limits subsystem. On an older build it fails or hangs until the bound, and on either kind a command that fails to start, exits non-zero, outlives the bound, or prints no object ends the session's pulls. A failed SSH connection costs that turn's limits only, and the next turn pulls again. Do not gate the pull on a version check.
+The pull runs `opencode api --standalone experimental.usage.limits` once a turn that reached the runtime has ended, through the same auxiliary launch the export uses, locally or over the session's SSH launch. The `agent-client-protocol` declaration runs the same command, with the configured command cut after the `opencode` word like its export, locally or over the session's SSH launch, while the session's `opencode acp` process runs. It runs on empty stdin. The `--standalone` flag keeps the call off the host's shared background service: without it the call starts that service, which detaches into its own session on a fixed local port and outlives the call and the process-group stop, so every worker would leave one behind. A cancelled turn and a credential-verification session do not pull. The command exists only on releases that ship the usage-limits subsystem. On an older build it fails or hangs until the bound, and on either kind a command that fails to start, exits non-zero, outlives the bound, or prints no object ends the session's pulls. A failed SSH connection costs that turn's limits only, and the next turn pulls again. Do not gate the pull on a version check.
 
 The answer is a JSON object, with the payload under `data` next to a `location` member. Trimmed:
 
@@ -121,7 +129,7 @@ The answer is a JSON object, with the payload under `data` next to a `location` 
 
 The command answers only for a runtime signed in to the OpenCode console. Without that sign-in the payload is `{"data":null}`, which carries no `go` and ends the session's pulls. The runtime makes the console calls itself with the console credential it holds; Sortie neither reads nor sends that credential.
 
-The command goes through the runtime's background service, not through an in-process server. That is the service every launch avoids with `--standalone`, so this is the one invocation that uses it, and it starts the service when none is running. Two consequences follow. The service keeps the environment of whichever client started it first and outlives Sortie, so a service an operator already runs answers for its own state. And a service from another release already holding the default port makes the command collide with it until the port is changed with `opencode service set port`. A plain `opencode serve` route returns 401 without the service credential that `api` supplies, so do not call the HTTP route directly.
+With `--standalone` the command answers in its own process, so it neither starts the background service nor reads the state of one an operator already runs. A plain `opencode serve` route returns 401 without the service credential that `api` supplies, so do not call the HTTP route directly.
 
 The free hosted model reports its limit in the stream instead. When the limit is hit the run prints an error envelope with `type` set to `provider.free-limit`, status 429, and `retryAfterMs`:
 
@@ -161,3 +169,94 @@ The live tests in `integration_test.go` are gated on `SORTIE_OPENCODE_TEST=1` an
 - A test that resumes a session must run both turns in the same workspace.
 - The scripted-model case isolates `HOME` and the XDG directories, so a version-manager shim that reads `HOME` fails to start. Name the binary by an absolute path.
 - OpenCode 2.x offers MCP tools only inside code mode, and it offers a server's tools only from the request after the tool listing. A scripted endpoint has to script an `execute` call and wait for the listing before it answers.
+
+## Entry points
+
+Two routes drive this runtime. The `opencode` kind, described in the sections above, launches `opencode run` once per turn. The generic `agent-client-protocol` kind drives `opencode acp` and keeps one process open for the session. This page records how the protocol route meets the generic adapter and how it compares with the native stream. The sample workflow for the protocol route is `examples/WORKFLOW.agent-client-protocol.opencode.md`.
+
+The `acp` subcommand is the only protocol entry point, and it takes no model switch; the protocol observations below say where the model comes from. The route carries session continuation and Sortie's own tool server over HTTP, and its spend comes from the runtime's session export.
+
+The native entry point is `opencode run --standalone --format json`, with `--session` to resume. `--auto` approves permission requests, and the asking posture leaves it out.
+
+A stored provider login authenticates a run. Every grade on this page was measured under a stored provider credential.
+
+## Load-bearing capability observations
+
+Protocol session continuation blocks both verdicts: it is a gap where the native stream is usable. Permission handling, the human-input case on the protocol surface, the runtime failure case on the protocol surface, and the success turn on the native stream stay unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
+
+No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's session export, the same source the native kind settles from. The ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at 53750 token(s) ... token budget hold"). The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
+
+The native stream carries no token figure on its terminal either. `opencode run --format json` has no terminal envelope: the stream ends with a `text` event or with nothing. A `step_finish` event carries tokens only on a tool step, so the final text step of a turn reports none. Turn disposition on this surface is not observed for that reason: the success turn ended with no end-of-turn terminal the profile can recognize, so there is no disposition to grade.
+
+Retry classification on the native stream is a gap because the run stream has no human-input terminal. The case was induced and the surface reported no outcome, so it counts against the surface. On the protocol surface the same case is not observed, because no request of either class was raised under the posture the probe ran in.
+
+Cancellation passed on the protocol surface, where the turn ended in cancellation after its own context was cancelled. On the native stream SIGINT yields an `error` event, never a cancellation terminal, and the runtime writes its terminal only at exit, so cancellation cannot be induced there. The retryable failure case passed on both surfaces: after one SIGKILL to its group, the launch reported transport loss.
+
+Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. A request built to trigger one completed normally, so the case is recorded as `outcome_never_produced`. The runtime failure case is not declared. The runtime reports an endpoint failure as a failed turn on the protocol, but the qualification's refused-model inducer cannot induce one: an unresolvable model id is silently replaced by the default model, so the turn completes and the case is not observed on either surface. The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation. `limit_reached` was not induced on either surface.
+
+Permission handling is not observed. Under the asking posture the runtime raised no permission request, and the policy precondition found no refusal answered, so the probe has nothing to grade. That says nothing about how the runtime behaves when it does ask.
+
+- protocol turn_disposition: Not observed: not_observed
+- protocol retry_classification: Not observed: not_observed
+- protocol token_ceiling: Observed: gap
+- protocol tool_server_delivery: Observed: usable
+- protocol session_continuation: Observed: gap
+- protocol permission_handling: Not observed: not_observed
+- native_stream_json turn_disposition: Not observed: not_observed
+- native_stream_json retry_classification: Observed: gap
+- native_stream_json token_ceiling: Observed: gap
+- native_stream_json session_continuation: Observed: usable
+
+A case that was induced and that the surface reported no outcome for keeps its obligation. It counts against that surface; it is not forgiven.
+
+Gaps on the protocol route outside the capture:
+
+- The run record does not carry the provenance of a spend figure or whether it is complete.
+- The runtime reports a cost in its session export. Neither the capture nor the money run showed an amount in a unit other than US dollars, so there is no vendor-unit amount to record. Sortie prices the run from its own tables, and the amount the runtime reports is not recorded on the run.
+- The documentation site has no page for the protocol route of this runtime. The sample workflow points at the generic reference page.
+
+## Protocol-specific observations
+
+The handshake reports the agent's own name, `OpenCode`, and its version, which the gated suite's identity rule reads. It advertises `loadSession` true, `mcpCapabilities.http` true with `sse` false, and `sessionCapabilities` carrying `close`, `delete`, `fork`, `list`, and `resume`. `authMethods` names one login method, which points at `opencode auth login`.
+
+Tool servers declared in `session/new` reach OpenCode over HTTP.
+
+`opencode acp` takes no model switch. The model comes from OpenCode's configuration, and the qualification passes it through `OPENCODE_CONFIG_CONTENT` as a document with a `model` key holding the model id. An id OpenCode cannot resolve does not fail: the runtime silently selects its default model instead. The refused-model inducer, which names an id no provider serves, was served `openrouter/particle-ai/particle-1`, on this surface and on `run`. That is why the refused-model inducer cannot induce a runtime failure. It also means a mistyped model id runs the turn on a model nobody chose, with nothing in the output marking it.
+
+The title agent makes a billed request that no exported message records. With the model pinned in the environment of the Sortie process, the money run served exactly one model and no request attributed to a title agent. The credential-verification session was deleted through the protocol before it could be re-read, so that check covers the run's session only.
+
+On the release the qualification ran on, the usage-limits pull fails: the `experimental.usage.limits` call does not exist on that release, and the session logs the pull as unsupported. The turn is unaffected. The usage limits section above describes the command on releases that have it.
+
+Session continuation is proven only by the recall answer: a successful load alone does not show that the history came back. On the native stream, resuming through `--session` returned the phrase the seed asked the runtime to remember. On the protocol surface of the recorded capture, the recall turn ran under the seed's own session identifier but its answer did not contain the phrase, which grades as `same_session_without_recall`. The previous capture of the same profile recorded `confirmed_same_session` on the protocol surface.
+
+## Native headless observations
+
+`opencode run --standalone --format json` prints JSON Lines on stdout, one event per line: `step_start`, `tool_use`, `step_finish` on tool steps, and `text`. There is no run-started envelope and no final result envelope. The stream ends with the final `text` event or with nothing, so the profile's recognizer keys on the first `text` event. A turn that ends without one has no terminal.
+
+`--standalone` is required. Without it, `opencode run` attaches to the host's shared background service, which keeps the environment of the client that started it first. It then ignores the per-launch model variable and serves its own default model on every launch.
+
+A cancelled turn leaves an `error` event, never a cancellation terminal. The stream has no terminal for a request addressed to a person.
+
+The profile treats the plain-JSON surface as absent. The output-format flag accepts a default text format and JSON Lines, and no structured single-document format. A declared absence is checked by running the ordinary headless invocation and finding no structured terminal; a launch that fails to start would prove nothing.
+
+## Workspace trust and process boundary
+
+The containment boundary held under measurement: every launch ran inside the run-scoped root, no project settings applied, and every process-group member observed was the launched command or its descendant. The profile treats `opencode.json`, `.opencode`, and `AGENTS.md` in a workspace as project settings.
+
+## Excluded capability cases
+
+- retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation
+- retry_classification non_retryable_refusal: declared outcome_never_produced
+- retry_classification unknown_outcome: no deterministic inducer on any runtime, so the case carries no obligation
+- turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation
+- turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface
+- turn_disposition runtime_refusal: declared outcome_never_produced
+
+## Unobserved surfaces
+
+Windows live qualification is unobserved.
+
+- native_stream_json turn_disposition runtime_failure: fixture_induction_failed
+- native_stream_json turn_disposition success: fixture_induction_failed
+- protocol retry_classification human_input: fixture_induction_failed
+- protocol turn_disposition runtime_failure: fixture_induction_failed

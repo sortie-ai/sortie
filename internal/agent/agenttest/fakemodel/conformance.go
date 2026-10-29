@@ -126,6 +126,11 @@ type Binding struct {
 	// its input count still holds those tokens.
 	CacheWriteUnreported bool
 
+	// RuntimeFailureFolded marks a runtime whose profile declares the
+	// runtime_failure case outcome_folded_into_another: it reports a model
+	// request the endpoint failed as a completed turn.
+	RuntimeFailureFolded bool
+
 	// ReportedModelPrefix precedes a served model's name in the name the
 	// runtime reports. Empty when the runtime reports the served name.
 	ReportedModelPrefix string
@@ -785,14 +790,14 @@ func runPermissionRefusal(t *testing.T, b Binding) {
 	}
 	run, _ := driveTurn(t, b, drive{
 		scenario:  ScenarioPermissionRefusal,
-		server:    Start(t, script),
+		server:    Start(scriptReporter{t}, script),
 		workspace: workspace,
 		settings:  settings,
 		prompt:    "Read the file " + guarded + " and report its contents.",
 	})
 
 	t.Run("turn outcome", func(t *testing.T) {
-		reportViolations(t, turnOutcomeViolations(run, len(script)))
+		reportViolations(t, refusalOutcomeViolations(run, len(script)))
 	})
 	t.Run("refused call", func(t *testing.T) {
 		reportViolations(t, refusedCallViolations(run, nonce, r.Notice))
@@ -1199,7 +1204,8 @@ type instructionSeeds struct {
 
 // scriptReporter drops unused-entry failures: a request without tools is
 // answered outside the script, so how many entries the verification session
-// consumes depends on its declaration.
+// consumes depends on its declaration, and a runtime may end a refused turn
+// without requesting the closing entry.
 type scriptReporter struct {
 	testing.TB
 }
@@ -1728,6 +1734,16 @@ func sshDeliveryViolations(run Run, refused bool) []string {
 	return v.items
 }
 
+// refusalOutcomeViolations holds a refused turn to the script's entries, except
+// a one-exchange turn: a runtime may end on the refusal instead of reporting it
+// to the model.
+func refusalOutcomeViolations(run Run, entries int) []string {
+	if len(exchangesOfKind(run.Exchanges, ExchangeTurn)) == 1 {
+		entries = 1
+	}
+	return turnOutcomeViolations(run, entries)
+}
+
 func turnOutcomeViolations(run Run, entries int) []string {
 	v := &findings{property: "turn outcome"}
 
@@ -1994,10 +2010,11 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 		return
 	}
 
-	arrival, _ := meta.UsageDisposition()
+	arrival, attribution := meta.UsageDisposition()
 	settling := usageSettling{
 		recordsUnread:  b.Spend != nil && b.Spend.Records == (domain.UsageProvenance{}),
 		liveLowerBound: b.Spend == nil && meta.UsageSources.Live.Spend.LowerBound,
+		splitExpected:  attribution == registry.UsageAttributionPerModel,
 	}
 	reportViolations(t, exactUsage(run, arrival,
 		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b), b.Spend, settling))
@@ -2021,15 +2038,17 @@ func reachedModel(exchanges []Exchange) bool {
 type usageSettling struct {
 	recordsUnread  bool // no records source is read for the run, so an interrupted turn keeps its live figure alone
 	liveLowerBound bool // the kind's live source declares a lower bound and the binding states no provenance
+	splitExpected  bool // the kind's sources name the served model, so the split is expected even when the last usage event names none
 }
 
 // exactUsage returns the violations of the usage property: a measured figure
 // equal to want, carried by the last usage event, arriving as the disposition
-// declares, and split per model as wantByModel wherever the last usage event
-// names a model or carries a split. A disposition that reports no usage has
-// none to check here. A non-nil spend adds the provenance and completeness the
-// turn's exit reason expects. A figure that settling leaves a lower bound
-// exceeds want in no class and stands in for the exact figure.
+// declares, and split per model as wantByModel wherever the kind's sources name
+// the served model or the last usage event names a model or carries a split. A
+// disposition that reports no usage has none to check here. A non-nil spend adds
+// the provenance and completeness the turn's exit reason expects. A figure that
+// settling leaves a lower bound exceeds want in no class and stands in for the
+// exact figure.
 func exactUsage(run Run, arrival registry.UsageArrival, want domain.TokenUsage, wantByModel map[string]domain.TokenUsage, spend *SpendSources, settling usageSettling) []string {
 	v := &findings{property: "exact usage"}
 	if arrival == registry.UsageArrivalNone {
@@ -2076,7 +2095,7 @@ func exactUsage(run Run, arrival registry.UsageArrival, want domain.TokenUsage, 
 			v.add("declared turn_end, the turn reported no token_usage event")
 		}
 	}
-	if found && (last.Model != "" || len(last.UsageByModel) > 0) {
+	if found && (settling.splitExpected || last.Model != "" || len(last.UsageByModel) > 0) {
 		split, exceedsTotals := effectiveSplit(last, reportedModel(run.Events))
 		if exceedsTotals {
 			v.add("the last event carrying usage splits %+v per model, more than its total %+v", last.UsageByModel, last.Usage)
@@ -2281,11 +2300,15 @@ func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failu
 	if timedOut {
 		v.add("RunTurn did not return inside the %s bound", turnBound)
 	}
-	if run.Err == nil {
-		v.add("RunTurn returned nil, want an error")
-	}
-	if run.Result.ExitReason != domain.EventTurnFailed {
-		v.add("ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnFailed)
+	if b.RuntimeFailureFolded {
+		checkFoldedOutcome(v, run)
+	} else {
+		if run.Err == nil {
+			v.add("RunTurn returned nil, want an error")
+		}
+		if run.Result.ExitReason != domain.EventTurnFailed {
+			v.add("ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnFailed)
+		}
 	}
 
 	turns := exchangesOfKind(run.Exchanges, ExchangeTurn)
@@ -2297,7 +2320,7 @@ func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failu
 		v.add("0 exhausted exchanges, want at least one")
 	}
 	if len(turns) == 1 && len(exhausted) > 0 {
-		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures)
+		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures, b.RuntimeFailureFolded)
 	}
 
 	if !run.Result.UsageMeasured {
@@ -2309,11 +2332,38 @@ func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failu
 	return v.items
 }
 
+// checkFoldedOutcome expects the completed turn a folding runtime reports for a
+// failed model request; a failed turn means the declaration is stale.
+func checkFoldedOutcome(v *findings, run Run) {
+	if run.Err != nil || run.Result.ExitReason == domain.EventTurnFailed {
+		v.add("the turn was reported as failed (ExitReason = %q, error %v), so the runtime now reports the endpoint failure: drop the outcome_folded_into_another declaration and re-qualify the runtime", run.Result.ExitReason, run.Err)
+		return
+	}
+	if run.Result.ExitReason != domain.EventTurnCompleted {
+		v.add("ExitReason = %q, want %q", run.Result.ExitReason, domain.EventTurnCompleted)
+	}
+}
+
 // checkExhaustedExchanges accepts more than one request beyond the script: a
 // runtime may resend a rejected request, such as once more without an
 // optional feature.
-func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string) {
-	message := exhausted[len(exhausted)-1].Answer.Text
+// A folding runtime reports no endpoint failure, so folded skips only the
+// checks that the failure reached the caller.
+func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string, folded bool) {
+	if !folded {
+		checkEndpointFailureReported(v, run, exhausted[len(exhausted)-1].Answer.Text)
+	}
+
+	for _, ex := range exhausted {
+		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
+	}
+
+	if !oneFailurePerRequest(failures, exhausted) {
+		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
+	}
+}
+
+func checkEndpointFailureReported(v *findings, run Run, message string) {
 	if run.Err == nil || !strings.Contains(run.Err.Error(), message) {
 		v.add("RunTurn error %v does not contain the endpoint message %q", run.Err, message)
 	}
@@ -2323,14 +2373,6 @@ func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Ex
 		v.add("no %q event was delivered", domain.EventTurnFailed)
 	case !strings.Contains(failed.Message, message):
 		v.add("the last %q event message %q does not contain the endpoint message %q", domain.EventTurnFailed, failed.Message, message)
-	}
-
-	for _, ex := range exhausted {
-		checkToolResult(v, call, ex, nonce, run.Environment.Sentinel)
-	}
-
-	if !oneFailurePerRequest(failures, exhausted) {
-		v.add("the endpoint reported %d failures %q, want one naming each of %d exhausted requests", len(failures), failures, len(exhausted))
 	}
 }
 

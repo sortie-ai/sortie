@@ -4,7 +4,7 @@ Working notes for anyone changing Sortie's Agent Client Protocol adapter in `int
 
 Last updated: 2026-10-29
 
-This kind names no default runtime. The operator's `agent.command` picks the binary and the flag or subcommand that puts it into protocol mode, so these notes cover several runtimes. A runtime's version is never pinned here; the adapter records it per session from the `initialize` handshake. Runtime-specific traps live in `docs/gemini-adapter-notes.md` and `docs/kiro-adapter-notes.md`.
+This kind names no default runtime. The operator's `agent.command` picks the binary and the flag or subcommand that puts it into protocol mode, so these notes cover several runtimes. A runtime's version is never pinned here; the adapter records it per session from the `initialize` handshake. Runtime-specific traps live in `docs/gemini-adapter-notes.md`, `docs/kiro-adapter-notes.md`, `docs/copilot-adapter-notes.md`, and `docs/opencode-adapter-notes.md`.
 
 ## Pinned schema artifact
 
@@ -23,19 +23,19 @@ What each runtime showed in its `initialize` handshake:
 | `gemini` | `--acp` (`--experimental-acp` is deprecated) | Driven end to end by the gated suite. Advertises no `sessionCapabilities` object. |
 | `kiro-cli` | `acp` subcommand, listed only under `--help-all` | Driven end to end. Empty `sessionCapabilities`; `mcpCapabilities.sse` is false. |
 | `copilot` | `--acp` | `agentInfo.name` is `Copilot`. The gated suite runs with `SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION=Copilot`. On a local launch its scripted-model run asserts exact usage per token class and per model, with the settling source and strategy, for completed, tool-calling, resumed, and cancelled turns. Its journal holds a turn's records until the turn ends, so a killed turn's amount is unknown, never zero. Over SSH the same assertions pass as locally, because the records are read on the worker host. It advertises `mcpCapabilities.http`, so the tool-server SSH scenarios run with `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and the SSH kill, cancellation after output, and continuation pass. `sessionCapabilities` has `close` and `list`, not `resume`. |
-| `opencode` | `acp` subcommand | `agentInfo.name` is `OpenCode`. The gated suite runs the whole scripted-model contract with `SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION=OpenCode`, `SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX=scripted/`, and a `SORTIE_CLIENTPROTOCOL_STATUS_CALL` that scripts the model's `execute` tool, the only route through which OpenCode 2.x offers MCP tools to the model. On a local launch it asserts exact usage per token class and per model, with the settling source and strategy, for completed, tool-calling, resumed, cancelled, and killed turns. Over SSH the same assertions pass as locally, because the session export is read on the worker host. `sessionCapabilities` has `close`, `fork`, `list`, and `resume`. |
+| `opencode` | `acp` subcommand | `agentInfo.name` is `OpenCode`. The gated suite runs the whole scripted-model contract with `SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION=OpenCode`, `SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX=scripted/`, and a `SORTIE_CLIENTPROTOCOL_STATUS_CALL` that scripts the model's `execute` tool, the only route through which OpenCode 2.x offers MCP tools to the model. On a local launch it asserts exact usage per token class and per model, with the settling source and strategy, for completed, tool-calling, resumed, cancelled, and killed turns. Over SSH the same assertions pass as locally, because the session export is read on the worker host. It advertises `mcpCapabilities.http`, so the tool-server SSH scenarios run with `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`. `sessionCapabilities` has `close`, `fork`, `list`, and `resume`. |
 | `claude` | none | The CLI exposes no protocol entry point. |
 | `codex` | none | `app-server` speaks a different JSON-RPC dialect, the one the `codex` adapter drives. |
 
 A local launch needs up to three command-line switches: one that puts the runtime on the protocol, one that trusts the workspace so declared tool servers are not dropped, and one for a posture that does not ask before running a tool. Runtimes spell them differently, and no shared code branches on which runtime it is.
 
-| Switch | `gemini` | `kiro-cli` |
-|---|---|---|
-| Protocol | `--acp` | `acp` subcommand |
-| Trust | `--skip-trust` | `-a` |
-| Posture | `--approval-mode yolo` | `-a`, the same switch |
+| Switch | `gemini` | `kiro-cli` | `copilot` | `opencode` |
+|---|---|---|---|---|
+| Protocol | `--acp` | `acp` subcommand | `--acp` | `acp` subcommand |
+| Trust | `--skip-trust` | `-a` | none | none |
+| Posture | `--approval-mode yolo` | `-a`, the same switch | `--allow-all-tools` | none |
 
-`kiro-cli` uses one switch for trust and posture, so you cannot take back one without the other.
+`kiro-cli` uses one switch for trust and posture, so you cannot take back one without the other. Without `--allow-all-tools`, a `copilot` tool call raises `session/request_permission`, a refusal fails the call, and the turn ends without a follow-up model request. `opencode` takes no model switch either: its model comes from its own configuration, which the qualification passes through `OPENCODE_CONFIG_CONTENT`.
 
 Some runtimes send many notifications under their own vendor method prefix. They are notifications, not requests, so the client answers none of them and depends on none of them.
 
@@ -81,9 +81,9 @@ A declaration is selected by the name the handshake reports, and a name with no 
 
 ## Session close and delete
 
-Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. This path has fixture coverage only, because the runtimes that advertise it were probed at the handshake only.
+Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. The gated suite drives this path against Copilot CLI and OpenCode, whose handshakes advertise `sessionCapabilities.close`.
 
-When a handshake advertises `sessionCapabilities.delete`, a verification session's teardown sends `session/delete` instead, so the verification conversation does not stay in the runtime's store. No measured runtime advertises it.
+When a handshake advertises `sessionCapabilities.delete`, a verification session's teardown sends `session/delete` instead, so the verification conversation does not stay in the runtime's store. OpenCode advertises it, and its credential-verification session was deleted through the protocol. Copilot CLI does not advertise it.
 
 ## Credential verification
 
@@ -135,6 +135,7 @@ The live tests in `integration_test.go` are gated on `SORTIE_CLIENTPROTOCOL_TEST
 - `SORTIE_CLIENTPROTOCOL_ASKING_COMMAND`, used by the scripted refusal case, must leave out the posture switch. A runtime that never asks runs the guarded command and the case fails.
 - The scripted cases isolate `HOME` and the XDG directories, so a version-manager shim that reads `HOME` fails to start. Name the runtime by an absolute path.
 - The client fills in a default for a field it cannot read instead of refusing the message. A change in the shape of a message it already handles therefore does not fail at runtime. The gated suite's shape assertions are the only place that shows up.
+- The `(default declaration)` Copilot run names `claude-sonnet-4.5`, a model id Copilot's multiplier table knows. An unknown id, such as `scripted-model`, makes Copilot print a "No token count multiplier is known" notice as agent text before the first `usage_update`.
 - Whether the model calls a tool when asked is the model's choice, not a protocol obligation. The live suite logs a missing tool call as a `model-dependent observation` and does not fail on it. It still fails when a tool call arrives without a normalized tool result. The scripted cases drive the tool call deterministically and do fail without it.
 
 The qualification profile in `tools/qualify` drives a live model for minutes and spends real credits. It has its own gate; `docs/agent-adapter-howto.md` describes its coordinates and the `make qualify-*` targets. Things that are not obvious:

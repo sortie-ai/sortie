@@ -269,7 +269,7 @@ qualify-live: ## Drive a live capture (spends provider quota; opt-in gated)
 
 .PHONY: qualify-report
 qualify-report: ## Re-derive a report from a saved capture directory and render it (CAPTURE_DIR=path PROFILE=path)
-	cd tools/qualify && SORTIE_CLIENTPROTOCOL_QUALIFICATION_CAPTURE_DIR=$(CAPTURE_DIR) SORTIE_CLIENTPROTOCOL_QUALIFICATION_PROFILE=$(PROFILE) $(GO) test -count=1 -run TestQualifyReport ./eval/...
+	cd tools/qualify && SORTIE_CLIENTPROTOCOL_QUALIFICATION_CAPTURE_DIR=$(CAPTURE_DIR) SORTIE_CLIENTPROTOCOL_QUALIFICATION_PROFILE=$(PROFILE) $(GO) test -count=1 -v -run TestQualifyReport ./eval/...
 
 .PHONY: qualify-reemit
 qualify-reemit: ## Re-emit derived artifacts for a saved capture directory (CAPTURE_DIR=path PROFILE=path)

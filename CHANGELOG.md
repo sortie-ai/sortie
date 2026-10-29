@@ -47,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The `opencode` agent kind no longer counts a token count missing from a session export or a step report as zero, and no longer reads a session export above 64 MiB; a turn whose export is refused keeps its step counts as a lower bound. ([#1484](https://github.com/sortie-ai/sortie/issues/1484))
 - OpenCode limits on an SSH worker no longer stop for the rest of a session after one failed connection. ([#1547](https://github.com/sortie-ai/sortie/issues/1547))
 - An agent on the ACP agent kind no longer leaves its worker stuck when Sortie stops the session, such as when the issue leaves an active state or Sortie shuts down, while the agent's usage limits are being checked. ([#1547](https://github.com/sortie-ai/sortie/issues/1547))
+- A run stopped on an SSH worker host no longer hangs instead of ending. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
+- A Copilot CLI turn on the ACP agent kind that was cancelled or stopped before the model answered no longer reports its spend as unaccounted or lowers the session's token-count capability when Copilot CLI printed a notice of its own first. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 
 ## [1.30.0] - 2026-10-23
 

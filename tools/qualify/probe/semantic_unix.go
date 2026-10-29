@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 
@@ -101,7 +100,7 @@ func launchNativeOneTurn(t *testing.T, coords Coordinates, fixture *sharedFixtur
 		seededID = newRFC4122V4(t)
 		argv = append(argv, substituteSessionID(seedArgs, seededID)...)
 	}
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.newLaunchWorkspace(t), fixture.env, fixture.ownership())
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.newLaunchWorkspace(t), withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
 	fixture.recordNativeOutput(surface, output)
 	return output, seededID, launchErr
 }
@@ -116,7 +115,7 @@ func substituteSessionID(args []string, sessionID string) []string {
 }
 
 func killProtocolSession(fixture *sharedFixture, session domain.Session, sig syscall.Signal) {
-	_ = fixture.groupOf(session).Signal(sig)
+	signalLaunch(fixture.ownership(), fixture.groupOf(session), sig)
 }
 
 // promptNamingProbe builds the instruction an induction turn hands the
@@ -407,7 +406,7 @@ func induceNativeAsyncSignal(t *testing.T, coords Coordinates, fixture *sharedFi
 		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "could not resolve the native entry point"})
 	}
 	workspace := fixture.newLaunchWorkspace(t)
-	launch, err := startBoundedLaunch(coords.CommandPath, argv, workspace, fixture.env, fixture.ownership())
+	launch, err := startBoundedLaunch(coords.CommandPath, argv, workspace, withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
 	if err != nil {
 		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "the native launch did not start"})
 	}
@@ -420,7 +419,7 @@ func induceNativeAsyncSignal(t *testing.T, coords Coordinates, fixture *sharedFi
 		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "the probe was never observed running under this launch"})
 	}
 
-	_ = launch.group.Signal(sig)
+	signalLaunch(fixture.ownership(), launch.group, sig)
 	// The signal is a request: a runtime that ignores it or a descendant
 	// holding the streams open would hold this wait past every bound, so
 	// the group comes down when this wait expires.
@@ -471,8 +470,7 @@ func induceToolServer(t *testing.T, coords Coordinates, fixture *sharedFixture) 
 
 	dir := t.TempDir()
 	callRecordPath := dir + "/calls.jsonl"
-	scriptPath := agenttest.FakeRuntime(t, dir, "mcp-server", mcpToolServerScenario, mcpToolServerParams{RecordPath: callRecordPath})
-	mcpConfigPath := writeToolServerMCPConfig(t, dir, scriptPath)
+	mcpConfigPath := fixture.declareToolServer(t, dir, callRecordPath)
 	policyPath := writeToolServerPolicy(t, dir, coords.Profile)
 
 	argv, err := coords.Profile.EntryArgs(evidence.SurfaceProtocol, coords.Model, policyPath, "")
@@ -521,8 +519,7 @@ func inducePermissionPolicyHumanInput(t *testing.T, coords Coordinates, fixture 
 
 	dir := t.TempDir()
 	callRecordPath := dir + "/calls.jsonl"
-	scriptPath := agenttest.FakeRuntime(t, dir, "mcp-server", mcpToolServerScenario, mcpToolServerParams{RecordPath: callRecordPath})
-	mcpConfigPath := writeToolServerMCPConfig(t, dir, scriptPath)
+	mcpConfigPath := fixture.declareToolServer(t, dir, callRecordPath)
 
 	argv, ok := coords.Profile.AskingArgs(evidence.SurfaceProtocol, coords.Model, "", "")
 	if !ok {
@@ -639,7 +636,7 @@ func induceHumanInputNative(t *testing.T, coords Coordinates, fixture *sharedFix
 		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "the profile states no asking posture for this surface"})
 	}
 	workspace := fixture.newLaunchWorkspace(t)
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, workspace, fixture.env, fixture.ownership())
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, workspace, withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
 	fixture.recordNativeOutput(surface, output)
 	marker := probeStarted(workspace)
 	launch := newNativeLaunchRecord(argv, coords, string(evidence.InputRetryHumanInput), "", launchErr)

@@ -29,7 +29,7 @@ func startLimitsSession(t *testing.T, limitsAnswer, runFixture string) (domain.A
 		answer = "echo '" + limitsAnswer + "'"
 	}
 	script := writeOpenCodeScript(t, dir, `case "$1 $2" in
-  "api experimental.usage.limits") echo called >> '`+callLog+`'; `+answer+`;;
+  "api --standalone") echo called >> '`+callLog+`'; `+answer+`;;
   "session export") echo '{"info":{"id":""},"messages":[]}'; exit 0;;
 esac
 cat '`+runPath+`'`)

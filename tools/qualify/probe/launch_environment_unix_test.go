@@ -254,3 +254,20 @@ func TestValidateEnvNames(t *testing.T) {
 		}
 	})
 }
+
+func TestWithModelEnviron(t *testing.T) {
+	t.Parallel()
+
+	inherited := []string{"PATH=/bin", "OPENCODE_CONFIG_CONTENT={\"model\":\"inherited\"}"}
+	withEnv := profile.RuntimeProfile{ModelEnv: &profile.ModelEnv{Name: "OPENCODE_CONFIG_CONTENT", Value: `{"model":"{model}"}`}}
+
+	got := withModelEnviron(inherited, withEnv, "launch-model")
+
+	want := []string{"PATH=/bin", `OPENCODE_CONFIG_CONTENT={"model":"launch-model"}`}
+	if !slices.Equal(got, want) {
+		t.Errorf("withModelEnviron(%v, model_env, %q) = %v, want %v", inherited, "launch-model", got, want)
+	}
+	if got := withModelEnviron(inherited, profile.RuntimeProfile{}, "launch-model"); !slices.Equal(got, inherited) {
+		t.Errorf("withModelEnviron(%v, no model_env, %q) = %v, want it unchanged", inherited, "launch-model", got)
+	}
+}

@@ -81,6 +81,9 @@ type activeTurn struct {
 	pullPending bool
 	held        *heldEnd
 
+	// pullArmed marks a pull owed while the turn's records read is in flight.
+	pullArmed bool
+
 	// spendEnd and spendLive are what the ledger settles the turn on while its
 	// records read is in flight, so a turn that ends meanwhile settles on them.
 	// spendSettled latches once the ledger has settled the turn, which keeps a
@@ -92,6 +95,8 @@ type activeTurn struct {
 
 	// children is what the turn's updates showed of child sessions.
 	children childSessions
+
+	usageUpdateSeen bool
 }
 
 // childSessions is the child-session state of one running turn, kept in
@@ -202,6 +207,8 @@ type pumpState struct {
 
 	declaration usagesource.Declaration
 
+	loopDone <-chan struct{}
+
 	// ledger is the session's spend accounting, set at the handshake and never
 	// dropped; a session with one has no reader. figureSeen latches once a turn
 	// produced a figure.
@@ -283,8 +290,19 @@ func runPump(state *sessionState) {
 	// stopArm stays nil until abandonment: only then may the pump return on stop
 	// without waiting for the reader.
 	var stopArm <-chan struct{}
+	stopCh := state.stopCh
+	stopRequested := false
+
+	loopDone := make(chan struct{})
+	defer close(loopDone)
+	p.loopDone = loopDone
 
 	for {
+		if stopRequested && p.settleForStop() {
+			p.logDroppedQueue()
+			return
+		}
+
 		var cancelSig <-chan struct{}
 		var deadlineC <-chan time.Time
 		if p.activeTurn != nil {
@@ -321,8 +339,8 @@ func runPump(state *sessionState) {
 			case <-p.replayDeadlineC:
 				p.finalizeReplayQueryOnDeadline()
 			case <-stopArm:
-				p.logDroppedQueue()
-				return
+				stopRequested = true
+				stopArm = nil
 			}
 			continue
 		}
@@ -340,11 +358,29 @@ func runPump(state *sessionState) {
 			p.finalizeActiveTurnOnDeadline()
 		case <-p.replayDeadlineC:
 			p.finalizeReplayQueryOnDeadline()
-		case <-state.stopCh:
-			p.logDroppedQueue()
-			return
+		case <-stopCh:
+			stopRequested = true
+			stopCh = nil
 		}
 	}
+}
+
+// settleForStop reports whether the pump may return. A turn awaiting a records
+// read, drain, or pull is left to that result or its deadline: a stop never cuts
+// a measurement short.
+func (p *pumpState) settleForStop() bool {
+	turn := p.activeTurn
+	if turn == nil {
+		return true
+	}
+	if !turn.awaitsBackgroundResult() {
+		p.recoverThenFinalize(streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), nil))
+	}
+	return p.activeTurn == nil
+}
+
+func (t *activeTurn) awaitsBackgroundResult() bool {
+	return t.recordsPending || t.draining || t.pullPending
 }
 
 func (p *pumpState) handleItem(item pumpItem) {
@@ -671,7 +707,8 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		return
 	}
 
-	p.startPull(turn)
+	p.armPull(turn)
+	defer p.launchPull(turn)
 
 	if msg.Error != nil {
 		p.recoverThenFinalize(promptErrorEvidence(msg.Error))
@@ -781,7 +818,8 @@ func (p *pumpState) settleReply(turn *activeTurn, evidence agentcore.TurnEvidenc
 // startRecordsRead reads the runtime's records for turn on its own goroutine: the
 // read touches the host's disk, and a blocked pump would stop answering the
 // runtime meanwhile. The result returns through the inbox, so the ledger stays
-// on the pump goroutine.
+// on the pump goroutine. The read ends with the main loop, not a stop, so a
+// stopped turn settles on the same reading as one that was not.
 func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEvidence, end usage.TurnEnd, live *usage.SpendReading) {
 	turn.drainEvidence = evidence
 	turn.draining = true
@@ -796,10 +834,10 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 	declaration := p.declaration
 	children := slices.Clone(turn.children.sessions)
 	inbox := state.inbox
-	stop := state.stopCh
+	loopDone := p.loopDone
 
 	go func() {
-		ctx, cancel := contextUntilStop(stop)
+		ctx, cancel := contextUntilStop(loopDone)
 		defer cancel()
 
 		read := readTurnRecords(ctx, state, declaration, children)
@@ -824,6 +862,7 @@ func (p *pumpState) settleSpend(turn *activeTurn, end usage.TurnEnd, live *usage
 	settlement := p.ledger.Settle(end, live, read)
 	turn.recordsPending = false
 	turn.spendSettled = true
+	p.launchPull(turn)
 	p.noteSpendFigure(end, settlement)
 	return &usageObserved{turn: turn, recovered: turn.spend.ApplySettlement(settlement)}
 }
@@ -876,11 +915,10 @@ func pullEnding(end turnEndKind) usage.TurnEnding {
 	}
 }
 
-// startPull runs one usage pull on its own goroutine for a turn whose prompt
-// response arrived and whose ending the usage component pulls after. The result returns through the
-// inbox, so windows are published only from the pump goroutine. The turn's wait
-// is held open for the puller's bound, which a drain's shorter wait would cut.
-func (p *pumpState) startPull(turn *activeTurn) {
+// armPull marks a turn whose ending the usage component pulls after as owing a
+// pull, and holds its wait open for the puller's bound, which a drain's shorter
+// wait would cut. launchPull starts the pull.
+func (p *pumpState) armPull(turn *activeTurn) {
 	ending := pullEnding(turn.pendingEnd)
 	if !p.puller.PullsAfter(ending) || p.pullInFlight {
 		return
@@ -892,12 +930,27 @@ func (p *pumpState) startPull(turn *activeTurn) {
 	}
 
 	turn.pullPending = true
+	turn.pullArmed = true
 	p.pullInFlight = true
 	if turn.deadlineC == nil {
 		cfg := p.state.agentConfig
 		turn.deadlineC = time.After(max(agentcore.ReadTimeout(cfg), agentcore.AuxiliaryTimeout(cfg)))
 	}
+}
 
+// launchPull runs the armed pull on its own goroutine once no records read of
+// the turn is in flight; the result returns through the inbox.
+//
+// The pull and the read each start the runtime on the session's host, and two
+// runs in one workspace can contend for its state, failing the read and costing
+// the figure its served model. settleSpend launches the pull when the read ends.
+func (p *pumpState) launchPull(turn *activeTurn) {
+	if !turn.pullArmed || turn.recordsPending {
+		return
+	}
+	turn.pullArmed = false
+
+	ending := pullEnding(turn.pendingEnd)
 	puller := p.puller
 	inbox := p.state.inbox
 	stop := p.state.stopCh
@@ -1005,6 +1058,7 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	p.observeChildSession(notif.Update.Remainder)
 	p.observeModelReached(sue.kind)
 	if sue.kind == updateUsage {
+		p.observeUsageUpdate()
 		p.publishUsageUpdateWindows(sue.usage.Meta)
 	}
 
@@ -1034,6 +1088,12 @@ func (p *pumpState) observeChildSession(update json.RawMessage) {
 		return
 	}
 	turn.children.note(p.declaration.ChildSession(p.sessionID, update))
+}
+
+func (p *pumpState) observeUsageUpdate() {
+	if p.activeTurn != nil {
+		p.activeTurn.usageUpdateSeen = true
+	}
 }
 
 // publishUsageUpdateWindows publishes the windows the declared runtime reports in
@@ -1109,13 +1169,20 @@ func (p *pumpState) flushAgentMessage() {
 
 // observeModelReached records that the active turn reached the model. A thought
 // chunk counts, since reasoning tokens are billed; a replayed user chunk does
-// not, being this session's own prompt echoed back.
+// not, being this session's own prompt echoed back. Under a declaration that
+// sends a usage_update before each model request, an agent message chunk ahead
+// of the turn's first one is the runtime's own text and does not count.
 func (p *pumpState) observeModelReached(kind sessionUpdateKind) {
 	if p.activeTurn == nil {
 		return
 	}
 	switch kind {
-	case updateAgentMessageChunk, updateAgentThoughtChunk, updateToolCall:
+	case updateAgentMessageChunk:
+		if p.declaration.UsageUpdateBeforeRequest && !p.activeTurn.usageUpdateSeen {
+			return
+		}
+		p.activeTurn.spend.MarkModelReached()
+	case updateAgentThoughtChunk, updateToolCall:
 		p.activeTurn.spend.MarkModelReached()
 	}
 }

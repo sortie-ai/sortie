@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-29T16:39:54Z",
+  "profile_digest": "27dc656261f9876f6ee5c757894d2a6070bca85d8c62dd8a938aa754e5b99244",
+  "collector_digest": "0cf8b00c120efe6f291b8431039e0a119c5bb9362e7390e0978b925b4be2b1bd",
+  "evidence_file": "evidence.jsonl",
+  "evidence_digest": "b83771af58b085eefee10760ee413f15ea2762a3d6ceb4b8bae8ffee2b8e3d08",
+  "requested_model": "google/gemini-2.5-flash-lite",
+  "protocol_version": 1,
+  "session_agents": {
+    "ses_e77764e45fferfHzG4hJSO9mgX": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77765f1effeyH29XBWWPtviRQ": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77766a2affe6x8CKvDnZPf1WR": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77774267ffeQgrVTwn1xx4olt": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e777752f2ffeKheVzE09in1PQS": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77775f88ffedO3T7JZniu4mTc": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77776cbbffeK5O53SRJfTbXP0": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e777776ebffeh7CDeiJGJEl3ar": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77778167ffeh6jcYPurW0yvVV": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e77778cddffeCSaUiCbLn2D4KW": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e777798c6ffe6alayXkXrHX6TK": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    },
+    "ses_e7777b6a2ffeMggCq1EHaMQWF5": {
+      "name": "OpenCode",
+      "version": "2.1.4"
+    }
+  },
+  "credential_mode": {}
+}

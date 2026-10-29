@@ -102,7 +102,7 @@ func pulledRows(t *testing.T) []pulledRow {
 		{
 			runtimeIdentity: runtimes["limits"],
 			name:            "limits command",
-			params:          pullStandInParams{Args: []string{"api", "experimental.usage.limits"}, Stdout: string(waittest.File(t, runtimes["limits"].Fixture))},
+			params:          pullStandInParams{Args: []string{"api", "--standalone", "experimental.usage.limits"}, Stdout: string(waittest.File(t, runtimes["limits"].Fixture))},
 			observedNow:     true,
 			want: []domain.UsageWindow{
 				{Key: "rolling", Label: "Rolling limit", UsedPercent: new(37.5), ResetsAt: time.Unix(1793199600, 0).UTC()},

@@ -52,6 +52,7 @@ func init() {
 		Launches: func(target agentcore.LaunchTarget) bool {
 			return commandNamesRuntime(target, copilotExecutableName, copilotPackageName)
 		},
+		UsageUpdateBeforeRequest: true,
 	})
 }
 

@@ -112,19 +112,21 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: COPILOT_PROVIDER_API_KEY
-            run_filter: '^TestIntegration_ScriptedModel$/^(credential_verification_context|scripted_turn|session_continuation|session_continuation_over_ssh|turn_cancellation_after_output|turn_cancellation_after_output_over_ssh|turn_kill|turn_kill_over_ssh)$'
+            run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
             timeout: 600s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
             source: "npm: @github/copilot (unpinned, installs latest)"
-            clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
-            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
+            clientprotocol_asking_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
             clientprotocol_ssh_install: npm install -g @github/copilot
             clientprotocol_http_tools: "1"
             clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
+            clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: Copilot
 
           - name: GitHub Copilot CLI - ACP (default declaration)
@@ -132,19 +134,21 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: COPILOT_PROVIDER_API_KEY
-            run_filter: '^TestIntegration_ScriptedModel$/^(credential_verification_context|scripted_turn|session_continuation|session_continuation_over_ssh|turn_cancellation_after_output|turn_cancellation_after_output_over_ssh|turn_kill|turn_kill_over_ssh)$'
+            run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
             timeout: 600s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
             source: "npm: @github/copilot (unpinned, installs latest)"
-            clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
-            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=claude-sonnet-4.5 copilot --acp --allow-all-tools"
+            clientprotocol_asking_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=claude-sonnet-4.5 copilot --acp"
+            clientprotocol_ssh_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=claude-sonnet-4.5 copilot --acp --allow-all-tools"
             clientprotocol_ssh_install: npm install -g @github/copilot
             clientprotocol_http_tools: "1"
             clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
+            clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: default
 
           - name: OpenCode - ACP
@@ -152,7 +156,7 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: GOOGLE_GENERATIVE_AI_API_KEY
-            run_filter: ^TestIntegration_ScriptedModel$/
+            run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/clientprotocol/...
             timeout: 300s
             node: true
@@ -162,8 +166,10 @@ jobs:
             clientprotocol_command: "opencode acp"
             clientprotocol_ssh_command: "opencode acp"
             clientprotocol_ssh_install: npm install -g --ignore-scripts=false @opencode/cli@2
+            clientprotocol_http_tools: "1"
             clientprotocol_model_base_url_env: OPENCODE_CONFIG
             clientprotocol_model_document: '{"$schema":"https://opencode.ai/config.json","model":"scripted/scripted-model","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"{url}/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}'
+            clientprotocol_profile: tools/qualify/profiles/opencode.json
             clientprotocol_spend_declaration: OpenCode
             clientprotocol_reported_model_prefix: scripted/
             clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'

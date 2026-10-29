@@ -3,11 +3,14 @@
 package probe
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/tools/qualify/profile"
 )
 
@@ -113,5 +116,38 @@ func TestWriteToolServerPolicy(t *testing.T) {
 	}
 	if rules[0].Decision != "allow" {
 		t.Errorf("writeToolServerPolicy(%q, %q) rule decision = %q, want %q", dir, toolNameFormat, rules[0].Decision, "allow")
+	}
+}
+
+func TestDeclareToolServerFollowsAdvertisedHTTPSupport(t *testing.T) {
+	t.Parallel()
+
+	traces := map[mcpconfig.Transport]string{
+		mcpconfig.TransportHTTP:  `{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":true}}}}`,
+		mcpconfig.TransportStdio: "",
+	}
+	for want, trace := range traces {
+		t.Run(string(want), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeWireTrace(t, dir, trace)
+			recordPath := filepath.Join(dir, "calls.jsonl")
+			servers, err := mcpconfig.Parse((&sharedFixture{wireTraceDir: dir}).declareToolServer(t, dir, recordPath))
+			if err != nil || len(servers) != 1 || servers[0].Transport != want {
+				t.Fatalf("declareToolServer() declared %+v (parse error %v), want one %q server", servers, err, want)
+			}
+			if want != mcpconfig.TransportHTTP {
+				return
+			}
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, servers[0].URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call"}`))
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			if recorded, _ := fileHasContent(recordPath); !recorded {
+				t.Errorf("POST %q = %v, but no tools/call reached %q, want it recorded", servers[0].URL, err, recordPath)
+			}
+		})
 	}
 }

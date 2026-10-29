@@ -73,8 +73,47 @@ func resolveDriftProfilePath(t *testing.T, path string) string {
 	return filepath.Join(root, path)
 }
 
+type profileDeclaration struct {
+	Capability string `json:"capability"`
+	Case       string `json:"case"`
+	Reason     string `json:"reason"`
+	Surface    string `json:"surface"`
+}
+
 type capabilityGapLabelsDocument struct {
-	CapabilityGapLabels []string `json:"capability_gap_labels"`
+	CapabilityGapLabels []string             `json:"capability_gap_labels"`
+	Declarations        []profileDeclaration `json:"declarations"`
+}
+
+func readNamedProfile(t *testing.T) (data []byte, profilePath string, named bool) {
+	t.Helper()
+
+	profilePath, present := os.LookupEnv(capabilityDriftProfileEnv)
+	if !present || strings.TrimSpace(profilePath) == "" {
+		return nil, "", false
+	}
+	data, err := os.ReadFile(resolveDriftProfilePath(t, profilePath)) //nolint:gosec // the coordinate names a repository-tracked or operator-supplied profile
+	if err != nil {
+		t.Fatalf("load the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
+	}
+	return data, profilePath, true
+}
+
+func namedProfileFoldsRuntimeFailure(t *testing.T) bool {
+	t.Helper()
+
+	data, profilePath, named := readNamedProfile(t)
+	if !named {
+		return false
+	}
+	var doc capabilityGapLabelsDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
+	}
+	return slices.ContainsFunc(doc.Declarations, func(d profileDeclaration) bool {
+		return d.Capability == "turn_disposition" && d.Case == "runtime_failure" && d.Reason == "outcome_folded_into_another" &&
+			(d.Surface == "" || d.Surface == "protocol")
+	})
 }
 
 // A profile path naming an unreadable file fails rather than skips, so a typo
@@ -82,16 +121,11 @@ type capabilityGapLabelsDocument struct {
 func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEvent, result domain.TurnResult) {
 	t.Helper()
 
-	profilePath, present := os.LookupEnv(capabilityDriftProfileEnv)
-	if !present || strings.TrimSpace(profilePath) == "" {
+	data, profilePath, named := readNamedProfile(t)
+	if !named {
 		// Returning rather than skipping: the caller's own assertions follow.
 		t.Logf("capability-gap drift comparison not run: %s is unset", capabilityDriftProfileEnv)
 		return
-	}
-	resolvedPath := resolveDriftProfilePath(t, profilePath)
-	data, err := os.ReadFile(resolvedPath) //nolint:gosec // the coordinate names a repository-tracked or operator-supplied profile
-	if err != nil {
-		t.Fatalf("load the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
 	}
 	var doc capabilityGapLabelsDocument
 	if err := json.Unmarshal(data, &doc); err != nil {

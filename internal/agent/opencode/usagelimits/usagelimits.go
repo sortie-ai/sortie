@@ -59,14 +59,16 @@ type rawLimitsAnswer struct {
 }
 
 // Pull runs the usage-limits command through run, which returns the
-// command's standard output, and reads the answer. A run error wrapping
+// command's standard output, and reads the answer. The command asks for a
+// private server because the default one starts a background service that
+// outlives the call and escapes the caller's process group. A run error wrapping
 // [sshutil.ErrConnectionFailed] is returned unchanged, because a dropped
 // connection says nothing about the runtime. Every other failure to get an
 // answer wraps [usage.ErrPullUnsupported]: a build without the command, a
 // missing sign-in, or a command outliving ctx does not start answering
 // within the session.
 func Pull(ctx context.Context, run func(ctx context.Context, args []string) ([]byte, error)) ([]usage.WindowReading, error) {
-	out, err := run(ctx, []string{"api", "experimental.usage.limits"})
+	out, err := run(ctx, []string{"api", "--standalone", "experimental.usage.limits"})
 	if err != nil {
 		if errors.Is(err, sshutil.ErrConnectionFailed) {
 			return nil, err

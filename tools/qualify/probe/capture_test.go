@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/tools/qualify/eval"
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
+	"github.com/sortie-ai/sortie/tools/qualify/evidencetest"
 	"github.com/sortie-ai/sortie/tools/qualify/profile"
 )
 
@@ -227,6 +228,26 @@ func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestComposeLiveScopedDeclarationLeavesAFailedNativeSurfaceItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	p, err := profile.Load(mustRepositoryRoot(t), filepath.Join(stalenessProfilesDir, "kiro-cli.json"))
+	if err != nil {
+		t.Fatalf("profile.Load(kiro-cli.json) error = %v, want nil", err)
+	}
+	p.Declarations = []profile.DeclaredGap{{Capability: evidence.CapabilityTurnDisposition, Case: evidence.CaseRuntimeRefusal, Reason: evidence.DeclaredGapNeverProduced, Surface: evidence.SurfaceProtocol}, {Capability: evidence.CapabilityRetryClassification, Case: evidence.CaseNonRetryableRefusal, Reason: evidence.DeclaredGapNeverProduced, Surface: evidence.SurfaceProtocol}}
+	collected := fullyObservedCollected(p, evidence.GradeUsable, evidence.GradeUsable, evidence.GradeUsable)
+	for _, caseID := range []evidence.Case{evidence.CaseRuntimeRefusal, evidence.CaseNonRetryableRefusal} {
+		collected.semantic[evidence.SurfaceNativeStreamJSON][caseID] = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "launch failed"}
+	}
+	fixture, err := gradedEvidence(p, collected, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
+	}
+	if _, err := eval.ValidateObservations(evidencetest.WriteEvidenceFile(t, fixture.Records), p); err != nil {
+		t.Errorf("ValidateObservations(...) error = %v, want nil: a protocol-scoped declaration leaves the failed native surface its own record", err)
 	}
 }
 

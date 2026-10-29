@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func induceProtocolContinuation(t *testing.T, coords Coordinates, fixture *share
 		return seed, unmetRecall
 	}
 
-	fullCommand := append([]string{coords.CommandPath}, argv...)
+	fullCommand := slices.Concat(modelEnvironPrefix(coords.Profile, coords.Model), []string{coords.CommandPath}, argv)
 	launchConfig := domain.AgentConfig{
 		Kind:           "agent-client-protocol",
 		Command:        strings.Join(fullCommand, " "),
@@ -176,7 +177,7 @@ func induceNativeContinuation(t *testing.T, coords Coordinates, fixture *sharedF
 	}
 	seedArgv = append(seedArgv, substituteSessionID(entry.SeedArgs, correlationID)...)
 
-	seedOutput, seedLaunchErr := launchNativeProbe(t, coords.CommandPath, seedArgv, workspace, fixture.env, fixture.ownership())
+	seedOutput, seedLaunchErr := launchNativeProbe(t, coords.CommandPath, seedArgv, workspace, withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
 	fixture.recordNativeOutput(surface, seedOutput)
 
 	seedLaunch := newNativeLaunchRecord(seedArgv, coords, promptKeyContinuationSeed, correlationID, seedLaunchErr)
@@ -210,7 +211,7 @@ func induceNativeContinuation(t *testing.T, coords Coordinates, fixture *sharedF
 	}
 	recallArgv = append(recallArgv, substituteSessionID(entry.ResumeArgs, resumeSessionID)...)
 
-	recallOutput, recallLaunchErr := launchNativeProbe(t, coords.CommandPath, recallArgv, workspace, fixture.env, fixture.ownership())
+	recallOutput, recallLaunchErr := launchNativeProbe(t, coords.CommandPath, recallArgv, workspace, withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
 	fixture.recordNativeOutput(surface, recallOutput)
 
 	recallLaunch := newNativeLaunchRecord(recallArgv, coords, promptKeyContinuationRecall, "", recallLaunchErr)

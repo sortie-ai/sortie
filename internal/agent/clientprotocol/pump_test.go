@@ -945,13 +945,14 @@ func TestPumpPulledUsage(t *testing.T) {
 			}),
 		}
 
-		p.startPull(turn)
+		p.armPull(turn)
+		p.launchPull(turn)
 
 		if p.pullInFlight || turn.pullPending {
-			t.Errorf("startPull() with a human-input end left pullInFlight = %v, pullPending = %v, want both false", p.pullInFlight, turn.pullPending)
+			t.Errorf("armPull() with a human-input end left pullInFlight = %v, pullPending = %v, want both false", p.pullInFlight, turn.pullPending)
 		}
 		if got := pulls.Load(); got != 0 {
-			t.Errorf("startPull() with a human-input end ran %d pulls, want 0", got)
+			t.Errorf("armPull() with a human-input end ran %d pulls, want 0", got)
 		}
 	})
 
@@ -1004,6 +1005,16 @@ func scriptedSpendDeclaration(live *usage.SpendReading, records []usage.SpendRea
 	}
 }
 
+func mustLedger(t *testing.T, declaration usagesource.Declaration, boundary usage.RecordsRead) *usage.Ledger {
+	t.Helper()
+	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+	if err != nil {
+		t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+	}
+	ledger.Boundary(boundary)
+	return ledger
+}
+
 func TestPumpSpendLedgerSettlesTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1047,12 +1058,7 @@ func TestPumpSpendLedgerSettlesTurn(t *testing.T) {
 			t.Parallel()
 
 			declaration := scriptedSpendDeclaration(tt.live, tt.records, tt.readErr)
-			ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
-			if err != nil {
-				t.Fatalf("usage.NewLedger() error = %v, want nil", err)
-			}
-			ledger.Boundary(usage.RecordsRead{OK: true})
-			state, out, inPw := newDeclaredSession(t, declaration, ledger)
+			state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
 
 			events, result := runPulledUsageTurnResult(t, state, out, inPw)
 
@@ -1100,12 +1106,7 @@ func TestEndUnrepliedSettlesARemoteTurnThroughItsRecordsRead(t *testing.T) {
 	state, _, _ := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
 	state.target = agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}
 	declaration := scriptedSpendDeclaration(nil, nil, nil)
-	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
-	if err != nil {
-		t.Fatalf("usage.NewLedger() error = %v, want nil", err)
-	}
-	ledger.Boundary(usage.RecordsRead{})
-	pump := &pumpState{state: state, ledger: ledger, declaration: declaration}
+	pump := &pumpState{state: state, ledger: mustLedger(t, declaration, usage.RecordsRead{}), declaration: declaration}
 	turn := &activeTurn{sink: make(chan domain.AgentEvent, 16), resultCh: make(chan turnEnd, 1), done: make(chan struct{})}
 	turn.spend.MarkModelReached()
 	pump.activeTurn = turn
@@ -1119,6 +1120,97 @@ func TestEndUnrepliedSettlesARemoteTurnThroughItsRecordsRead(t *testing.T) {
 	end := waittest.Receive(t, turn.resultCh, "turn result")
 	if !end.result.SpendUnaccounted {
 		t.Errorf("turn result SpendUnaccounted = false, want true: a turn that reached the model with no figure")
+	}
+}
+
+func TestPumpAgentTextBeforeTheFirstUsageUpdateIsNotServedOutput(t *testing.T) {
+	t.Parallel()
+
+	const usageUpdateLine = `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"usage_update","used":12000,"size":200000}}}`
+	tests := []struct {
+		name            string
+		lines           []string
+		wantUnaccounted bool
+	}{
+		{name: "text before the usage_update", lines: []string{pulledUsageChunkLine, usageUpdateLine}},
+		{name: "text after the usage_update", lines: []string{usageUpdateLine, pulledUsageChunkLine}, wantUnaccounted: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			declaration := scriptedSpendDeclaration(nil, nil, errors.New("journal unreadable"))
+			declaration.UsageUpdateBeforeRequest = true
+			state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
+			ctx, cancel := context.WithCancel(t.Context())
+			outcomeCh := runTurnAsyncCtx(ctx, state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+			promptID := out.awaitMethod(t, methodSessionPrompt)
+			for _, line := range tt.lines {
+				sendLine(t, inPw, line)
+			}
+			cancel()
+			out.awaitMethod(t, methodSessionCancel)
+			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
+
+			outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+
+			if outcome.result.SpendUnaccounted != tt.wantUnaccounted {
+				t.Errorf("RunTurn() SpendUnaccounted = %v, want %v", outcome.result.SpendUnaccounted, tt.wantUnaccounted)
+			}
+			if lowered := state.caps.tokenCounts == capabilityGap; lowered != tt.wantUnaccounted {
+				t.Errorf("tokenCounts = %q, want the entry lowered = %v", state.caps.tokenCounts, tt.wantUnaccounted)
+			}
+		})
+	}
+}
+
+func TestPumpStopLeavesARecordsReadToSettleTheTurn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		release bool
+		want    domain.TurnResult
+	}{
+		{"a read released after the stop", true, domain.TurnResult{Usage: domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120}, UsageMeasured: true, SpendUnaccounted: true}},
+		{"a read never released", false, domain.TurnResult{SpendUnaccounted: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				started, release := make(chan struct{}, 1), make(chan struct{}, 1)
+				declaration := scriptedSpendDeclaration(nil, nil, nil)
+				declaration.ReadRecords = func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
+					started <- struct{}{}
+					<-release
+					return []usage.SpendReading{spendReading(100, 20, 0, "model-a", "u1")}, nil
+				}
+				state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
+				outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+				out.awaitMethod(t, methodSessionPrompt)
+				sendLine(t, inPw, pulledUsageChunkLine)
+				_ = inPw.Close()
+				waittest.Receive(t, started, "records read start")
+
+				stopped := make(chan struct{})
+				go func() { _ = stopSession(t.Context(), fakeSession(state)); close(stopped) }()
+				waittest.Receive(t, state.stopCh, "the stop request")
+				if tt.release {
+					release <- struct{}{}
+				}
+				outcome := waittest.Receive(t, outcomeCh, "turn outcome after the stop")
+				release <- struct{}{}
+				waittest.Receive(t, stopped, "stopSession to return")
+
+				if got := outcome.result; got.Usage != tt.want.Usage || got.UsageMeasured != tt.want.UsageMeasured || got.SpendUnaccounted != tt.want.SpendUnaccounted {
+					t.Errorf("RunTurn() after a stop = {Usage %+v, UsageMeasured %v, SpendUnaccounted %v}, want {%+v, %v, %v}", got.Usage, got.UsageMeasured, got.SpendUnaccounted, tt.want.Usage, tt.want.UsageMeasured, tt.want.SpendUnaccounted)
+				}
+			})
+		})
 	}
 }
 
@@ -1531,6 +1623,45 @@ func TestPumpPromptErrorKind(t *testing.T) {
 			if !strings.Contains(agentErr.Message, runtimeText) {
 				t.Errorf("RunTurn(prompt error %d) message = %q, want it to carry the runtime text %q", tt.code, agentErr.Message, runtimeText)
 			}
+		})
+	}
+}
+
+func TestLaunchPullWaitsForTheTurnsRecordsRead(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name         string
+		readInFlight bool
+		pullsAtOnce  int32
+	}{{"read in flight", true, 0}, {"no read", false, 1}} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				var pulls atomic.Int32
+				turn := newActiveTurnForDirectDispatch()
+				turn.recordsPending = tt.readInFlight
+				state := &sessionState{logger: discardLogger(), stopCh: make(chan struct{}), inbox: jsonrpc.NewInbox[pumpItem]()}
+				ledger := mustLedger(t, scriptedSpendDeclaration(nil, nil, nil), usage.RecordsRead{})
+				p := &pumpState{state: state, activeTurn: turn, ledger: ledger}
+				p.puller = usage.NewPuller(usage.Source{}, time.Second, false, func(context.Context) ([]usage.WindowReading, error) {
+					pulls.Add(1)
+					return nil, nil
+				})
+
+				p.armPull(turn)
+				p.launchPull(turn)
+				synctest.Wait()
+				if got := pulls.Load(); got != tt.pullsAtOnce {
+					t.Fatalf("pulls after launchPull() = %d, want %d", got, tt.pullsAtOnce)
+				}
+				p.settleSpend(turn, usage.TurnEnd{}, nil, usage.RecordsRead{})
+				synctest.Wait()
+				if got := pulls.Load(); got != 1 {
+					t.Errorf("pulls once the read ended = %d, want 1", got)
+				}
+			})
 		})
 	}
 }

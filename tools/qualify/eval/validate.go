@@ -1242,6 +1242,9 @@ func (v *setValidation) checkExcludedCases(declarations profile.RuntimeProfile) 
 	for _, entry := range declarations.Declarations {
 		matched := false
 		for _, surface := range evidence.DeclarableSurfaces {
+			if !entry.CoversSurface(surface) {
+				continue
+			}
 			if rec := v.semanticRecord(surface, entry.Capability, entry.Case); rec != nil && rec.Grade == evidence.GradeDeclaredGap {
 				matched = true
 				break
@@ -1252,6 +1255,22 @@ func (v *setValidation) checkExcludedCases(declarations profile.RuntimeProfile) 
 		}
 	}
 	return nil
+}
+
+// declaredCoverage returns the declarable measured surfaces a declared_gap grade
+// must cover for one pair. A pair no declaration names is held to all of them,
+// so its stray declared_gap records fail.
+func declaredCoverage(declarations profile.RuntimeProfile, capability evidence.Capability, caseID evidence.Case, declarableMeasured []evidence.Surface) []evidence.Surface {
+	var covered []evidence.Surface
+	for _, surface := range declarableMeasured {
+		if _, declared := declarations.DeclaredOn(surface, capability, caseID); declared {
+			covered = append(covered, surface)
+		}
+	}
+	if len(covered) == 0 {
+		return declarableMeasured
+	}
+	return covered
 }
 
 // notInducibleRequiredSurfaces returns the surface set a not_inducible
@@ -1290,11 +1309,12 @@ func (v *setValidation) checkExcludedCase(declarations profile.RuntimeProfile, c
 	}
 
 	declarableMeasured := evidence.IntersectSurfaces(evidence.DeclarableSurfaces, v.measured)
-	if len(declared) > 0 && len(catalog) > 0 {
+	declaredCovers := declaredCoverage(declarations, capability, caseID, declarableMeasured)
+	if len(declared) > 0 && slices.ContainsFunc(catalog, func(surface evidence.Surface) bool { return slices.Contains(declaredCovers, surface) }) {
 		return fmt.Errorf("capability %s case %s carries both a declared gap and a not-inducible grade", capability, caseID)
 	}
 	if len(declared) > 0 {
-		if missing := missingSurfaces(declared, declarableMeasured); len(missing) > 0 {
+		if missing := missingSurfaces(declared, declaredCovers); len(missing) > 0 {
 			return fmt.Errorf("capability %s case %s declared gap is missing on surfaces %v", capability, caseID, missing)
 		}
 	}
@@ -1317,8 +1337,10 @@ func (v *setValidation) checkExcludedCase(declarations profile.RuntimeProfile, c
 				return fmt.Errorf("capability %s case %s carries differing declared-gap details", capability, caseID)
 			}
 		}
-		if _, found := declarations.Declared(capability, caseID); !found {
-			return fmt.Errorf("capability %s case %s carries a declared gap no declaration authorizes", capability, caseID)
+		for _, surface := range declared {
+			if _, found := declarations.DeclaredOn(surface, capability, caseID); !found {
+				return fmt.Errorf("capability %s case %s carries a declared gap on surface %s no declaration authorizes", capability, caseID, surface)
+			}
 		}
 		if peer, hasPeer := evidence.DeclaredGapPeers[caseID]; hasPeer {
 			peerCapability := evidence.CapabilityOwning(peer)
@@ -1332,7 +1354,8 @@ func (v *setValidation) checkExcludedCase(declarations profile.RuntimeProfile, c
 				peerDeclared = append(peerDeclared, surface)
 				peerDetail = rec.Detail
 			}
-			if missing := missingSurfaces(peerDeclared, declarableMeasured); len(missing) > 0 {
+			peerCovers := declaredCoverage(declarations, peerCapability, peer, declarableMeasured)
+			if missing := missingSurfaces(peerDeclared, peerCovers); len(missing) > 0 {
 				return fmt.Errorf("capability %s case %s's peer %s case %s does not carry a declared gap on surfaces %v", capability, caseID, peerCapability, peer, missing)
 			}
 			if peerDetail != declaredDetail {

@@ -90,6 +90,13 @@ type Declaration struct {
 	// session the runtime ran part of the turn's work in. Nil when the runtime
 	// runs none.
 	ChildSession func(sessionID string, update json.RawMessage) ChildSignal
+
+	// UsageUpdateBeforeRequest declares that the runtime sends a usage_update
+	// session update before each model request of a turn and may write agent
+	// message text of its own before the first one. Agent message text that
+	// arrives before the turn's first usage_update then does not show the turn
+	// reaching the model.
+	UsageUpdateBeforeRequest bool
 }
 
 // LaunchAddition turns off a model request the runtime makes on its own that
