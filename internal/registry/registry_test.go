@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -799,201 +800,126 @@ func TestMCPDialect_DeliversTools(t *testing.T) {
 	}
 }
 
-func TestUsageArrival_ReportsDuringTurn(t *testing.T) {
+func TestAgents_RefusesInvalidUsageSources(t *testing.T) {
 	t.Parallel()
 
+	validLive := usage.Source{
+		Category: usage.SourceOutput,
+		Strategy: usage.StrategyLive,
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+	}
+
 	tests := []struct {
-		name    string
-		arrival UsageArrival
-		want    bool
+		name     string
+		kind     string
+		register func(kind string)
 	}{
-		{"incremental", UsageArrivalIncremental, true},
-		{"turn_end", UsageArrivalTurnEnd, false},
-		{"none", UsageArrivalNone, false},
-		{"undeclared", UsageArrivalUndeclared, false},
-		{"unrecognized value", UsageArrival("bogus"), false},
+		{
+			name: "zero usage sources with metadata",
+			kind: "fixture-zero-sources",
+			register: func(kind string) {
+				Agents.RegisterWithMeta(kind, dummyAgentConstructor(), AgentMeta{})
+			},
+		},
+		{
+			name: "registration without metadata",
+			kind: "fixture-no-meta",
+			register: func(kind string) {
+				Agents.Register(kind, dummyAgentConstructor())
+			},
+		},
+		{
+			name: "records source that is not a journal",
+			kind: "fixture-bad-records",
+			register: func(kind string) {
+				records := usage.Source{Category: usage.SourceOutput, Strategy: usage.StrategyRecords, Spend: validLive.Spend}
+				Agents.RegisterWithMeta(kind, dummyAgentConstructor(), AgentMeta{UsageSources: usage.Sources{Live: validLive, Records: records}})
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tt.arrival.ReportsDuringTurn()
-			if got != tt.want {
-				t.Errorf("UsageArrival(%q).ReportsDuringTurn() = %v, want %v", tt.arrival, got, tt.want)
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("registering agent kind %q did not panic", tt.kind)
+					}
+				}()
+				tt.register(tt.kind)
+			}()
+
+			if Agents.Has(tt.kind) || slices.Contains(Agents.Kinds(), tt.kind) {
+				t.Errorf("Agents lists kind %q after a refused registration, want it absent", tt.kind)
 			}
 		})
 	}
 }
 
-func TestUsageArrival_ReportsAnyFigure(t *testing.T) {
+func TestNewCheckedRegistry(t *testing.T) {
 	t.Parallel()
 
+	errRefused := errors.New("refused")
+	refuseNonRequired := func(_ testConstructor, meta testMeta) error {
+		if !meta.RequiresProject {
+			return errRefused
+		}
+		return nil
+	}
+
 	tests := []struct {
-		name    string
-		arrival UsageArrival
-		want    bool
+		name      string
+		check     func(testConstructor, testMeta) error
+		register  func(*Registry[testConstructor, testMeta])
+		wantStore bool
 	}{
-		{"incremental", UsageArrivalIncremental, true},
-		{"turn_end", UsageArrivalTurnEnd, true},
-		{"none", UsageArrivalNone, false},
-		{"undeclared", UsageArrivalUndeclared, false},
-		{"unrecognized value", UsageArrival("bogus"), false},
+		{
+			name:     "failed check on RegisterWithMeta stores nothing",
+			check:    refuseNonRequired,
+			register: func(r *Registry[testConstructor, testMeta]) { r.RegisterWithMeta("k", dummyConstructor(), testMeta{}) },
+		},
+		{
+			name:     "Register passes the zero metadata to the check",
+			check:    refuseNonRequired,
+			register: func(r *Registry[testConstructor, testMeta]) { r.Register("k", dummyConstructor()) },
+		},
+		{
+			name:  "passing check stores the kind",
+			check: refuseNonRequired,
+			register: func(r *Registry[testConstructor, testMeta]) {
+				r.RegisterWithMeta("k", dummyConstructor(), testMeta{RequiresProject: true})
+			},
+			wantStore: true,
+		},
+		{
+			name:      "nil check accepts every registration",
+			register:  func(r *Registry[testConstructor, testMeta]) { r.Register("k", dummyConstructor()) },
+			wantStore: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tt.arrival.ReportsAnyFigure()
-			if got != tt.want {
-				t.Errorf("UsageArrival(%q).ReportsAnyFigure() = %v, want %v", tt.arrival, got, tt.want)
+			r := NewCheckedRegistry("test", tt.check)
+
+			func() {
+				defer func() {
+					if recovered := recover(); (recovered != nil) == tt.wantStore {
+						t.Errorf("registering kind %q panicked = %v, want %v", "k", recovered != nil, !tt.wantStore)
+					}
+				}()
+				tt.register(r)
+			}()
+
+			if r.Has("k") != tt.wantStore || slices.Contains(r.Kinds(), "k") != tt.wantStore {
+				t.Errorf("Has(%q) = %v, Kinds() = %v, want stored = %v", "k", r.Has("k"), r.Kinds(), tt.wantStore)
 			}
 		})
 	}
-}
-
-func TestUsageAttribution_NamesModel(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		attribution UsageAttribution
-		want        bool
-	}{
-		{"per_model", UsageAttributionPerModel, true},
-		{"session_total", UsageAttributionSessionTotal, false},
-		{"none", UsageAttributionNone, false},
-		{"undeclared", UsageAttributionUndeclared, false},
-		{"unrecognized value", UsageAttribution("bogus"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := tt.attribution.NamesModel()
-			if got != tt.want {
-				t.Errorf("UsageAttribution(%q).NamesModel() = %v, want %v", tt.attribution, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAgentMeta_UsageDisposition(t *testing.T) {
-	t.Parallel()
-
-	t.Run("no rules returns declared pair", func(t *testing.T) {
-		t.Parallel()
-
-		meta := AgentMeta{
-			UsageArrival:     UsageArrivalIncremental,
-			UsageAttribution: UsageAttributionPerModel,
-		}
-
-		arrival, attribution := meta.UsageDisposition(map[string]any{"model_name": "gpt"}, false)
-		if arrival != UsageArrivalIncremental || attribution != UsageAttributionPerModel {
-			t.Errorf("UsageDisposition() = (%q, %q), want (%q, %q)",
-				arrival, attribution, UsageArrivalIncremental, UsageAttributionPerModel)
-		}
-	})
-
-	t.Run("nil passthrough returns declared pair", func(t *testing.T) {
-		t.Parallel()
-
-		meta := AgentMeta{
-			UsageArrival:     UsageArrivalTurnEnd,
-			UsageAttribution: UsageAttributionSessionTotal,
-			UsageSessionRules: []UsageSessionRule{
-				{
-					When:        func(passthrough map[string]any, remote bool) bool { return remote },
-					Arrival:     UsageArrivalNone,
-					Attribution: UsageAttributionNone,
-				},
-			},
-		}
-
-		arrival, attribution := meta.UsageDisposition(nil, false)
-		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
-			t.Errorf("UsageDisposition(nil, false) = (%q, %q), want (%q, %q)",
-				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
-		}
-	})
-
-	t.Run("no rule matches returns declared pair", func(t *testing.T) {
-		t.Parallel()
-
-		meta := AgentMeta{
-			UsageArrival:     UsageArrivalTurnEnd,
-			UsageAttribution: UsageAttributionSessionTotal,
-			UsageSessionRules: []UsageSessionRule{
-				{
-					When:        func(passthrough map[string]any, remote bool) bool { return remote },
-					Arrival:     UsageArrivalNone,
-					Attribution: UsageAttributionNone,
-				},
-			},
-		}
-
-		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
-		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
-			t.Errorf("UsageDisposition(local) = (%q, %q), want (%q, %q)",
-				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
-		}
-	})
-
-	t.Run("rule without a predicate is skipped", func(t *testing.T) {
-		t.Parallel()
-
-		meta := AgentMeta{
-			UsageArrival:     UsageArrivalTurnEnd,
-			UsageAttribution: UsageAttributionSessionTotal,
-			UsageSessionRules: []UsageSessionRule{
-				{
-					Arrival:     UsageArrivalIncremental,
-					Attribution: UsageAttributionPerModel,
-				},
-				{
-					When:        func(passthrough map[string]any, remote bool) bool { return remote },
-					Arrival:     UsageArrivalNone,
-					Attribution: UsageAttributionNone,
-				},
-			},
-		}
-
-		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
-		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
-			t.Errorf("UsageDisposition(local) = (%q, %q), want (%q, %q)",
-				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
-		}
-	})
-
-	t.Run("first matching rule wins over later matching rules", func(t *testing.T) {
-		t.Parallel()
-
-		meta := AgentMeta{
-			UsageArrival:     UsageArrivalIncremental,
-			UsageAttribution: UsageAttributionSessionTotal,
-			UsageSessionRules: []UsageSessionRule{
-				{
-					When:        func(passthrough map[string]any, remote bool) bool { return true },
-					Arrival:     UsageArrivalNone,
-					Attribution: UsageAttributionNone,
-				},
-				{
-					When:        func(passthrough map[string]any, remote bool) bool { return true },
-					Arrival:     UsageArrivalIncremental,
-					Attribution: UsageAttributionPerModel,
-				},
-			},
-		}
-
-		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
-		if arrival != UsageArrivalNone || attribution != UsageAttributionNone {
-			t.Errorf("UsageDisposition() = (%q, %q), want first rule's (%q, %q)",
-				arrival, attribution, UsageArrivalNone, UsageAttributionNone)
-		}
-	})
 }
 
 func TestCredentialEnv(t *testing.T) {

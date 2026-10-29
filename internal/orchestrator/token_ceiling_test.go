@@ -52,7 +52,7 @@ func textLogger() (*lockedBuf, *slog.Logger) {
 func TestFreezeIssueTokenBaseline(t *testing.T) {
 	t.Parallel()
 
-	t.Run("arrival reports no figure emits the cannot-bound warning and still reads the baseline", func(t *testing.T) {
+	t.Run("a session that carries no token figure emits the cannot-bound warning and still reads the baseline", func(t *testing.T) {
 		t.Parallel()
 
 		lb, logger := textLogger()
@@ -60,7 +60,7 @@ func TestFreezeIssueTokenBaseline(t *testing.T) {
 		state.Running["ISS-1"] = &RunningEntry{
 			Identifier:   "ISS-1-ident",
 			AgentKind:    "mock",
-			UsageArrival: registry.UsageArrivalNone,
+			UsageArrival: registry.UsageArrivalTurnEnd,
 		}
 		store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 42, UncachedTokens: 42}}}}
 
@@ -83,9 +83,10 @@ func TestFreezeIssueTokenBaseline(t *testing.T) {
 		lb, logger := textLogger()
 		state := NewState(5000, 4, 100, nil, AgentTotals{})
 		state.Running["ISS-2"] = &RunningEntry{
-			Identifier:   "ISS-2-ident",
-			AgentKind:    "mock",
-			UsageArrival: registry.UsageArrivalIncremental,
+			Identifier:         "ISS-2-ident",
+			AgentKind:          "mock",
+			UsageArrival:       registry.UsageArrivalIncremental,
+			CarriesTokenFigure: true,
 		}
 		wantErr := errors.New("boom")
 		store := &fakeTokenStore{responses: []tokenStoreResponse{{err: wantErr}}}
@@ -637,6 +638,7 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 			SessionID:            sessionID,
 			AgentKind:            "mock",
 			UsageArrival:         arrival,
+			CarriesTokenFigure:   arrival.ReportsAnyFigure(),
 			IssueTokensCompleted: completedTokens,
 			AgentTotalTokens:     sessionTokens,
 			CeilingCancelFunc:    func() {},
@@ -707,6 +709,7 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 		name             string
 		maxTokens        int
 		arrival          registry.UsageArrival
+		carries          bool
 		entryMeasured    bool
 		resultMeasured   bool
 		wantRecord       bool
@@ -716,6 +719,7 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 			name:             "declared arrival, ceiling set, nothing recorded",
 			maxTokens:        500_000,
 			arrival:          registry.UsageArrivalTurnEnd,
+			carries:          true,
 			wantRecord:       true,
 			wantUsageArrival: "turn_end",
 		},
@@ -723,12 +727,14 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 			name:       "no ceiling configured",
 			maxTokens:  0,
 			arrival:    registry.UsageArrivalTurnEnd,
+			carries:    true,
 			wantRecord: false,
 		},
 		{
 			name:          "figures recorded on the entry",
 			maxTokens:     500_000,
 			arrival:       registry.UsageArrivalTurnEnd,
+			carries:       true,
 			entryMeasured: true,
 			wantRecord:    false,
 		},
@@ -736,13 +742,14 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 			name:           "figures recorded only on the worker result",
 			maxTokens:      500_000,
 			arrival:        registry.UsageArrivalTurnEnd,
+			carries:        true,
 			resultMeasured: true,
 			wantRecord:     false,
 		},
 		{
-			name:       "arrival reports no figure, already reported at dispatch",
+			name:       "session carries no figure, already reported at dispatch",
 			maxTokens:  500_000,
-			arrival:    registry.UsageArrivalNone,
+			arrival:    registry.UsageArrivalTurnEnd,
 			wantRecord: false,
 		},
 	}
@@ -759,6 +766,7 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 			entry.AgentKind = "transport"
 			entry.SessionID = "sess-ceil"
 			entry.UsageArrival = tt.arrival
+			entry.CarriesTokenFigure = tt.carries
 			entry.UsageMeasured = tt.entryMeasured
 
 			params := defaultExitParams(t, &mockExitStore{})
@@ -832,9 +840,10 @@ func TestFreezeIssueTokenBaselineThenEvaluateTokenWarning_LatchesAcrossDispatchA
 	state := NewState(5000, 4, 100, nil, AgentTotals{})
 	state.TokenWarningThreshold = 50
 	state.Running["ISS-CROSS"] = &RunningEntry{
-		Identifier:   "ISS-CROSS-ident",
-		AgentKind:    "mock",
-		UsageArrival: registry.UsageArrivalIncremental,
+		Identifier:         "ISS-CROSS-ident",
+		AgentKind:          "mock",
+		UsageArrival:       registry.UsageArrivalIncremental,
+		CarriesTokenFigure: true,
 	}
 	store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 60, UncachedTokens: 60}}}}
 
@@ -1024,9 +1033,10 @@ func TestFreezeIssueTokenBaseline_DispatchTimeReach(t *testing.T) {
 	state := NewState(5000, 4, 100, nil, AgentTotals{})
 	state.TokenWarningThreshold = 50
 	state.Running["ISS-DISPATCH-REACH"] = &RunningEntry{
-		Identifier:   "ISS-DISPATCH-REACH-ident",
-		AgentKind:    "mock",
-		UsageArrival: registry.UsageArrivalIncremental,
+		Identifier:         "ISS-DISPATCH-REACH-ident",
+		AgentKind:          "mock",
+		UsageArrival:       registry.UsageArrivalIncremental,
+		CarriesTokenFigure: true,
 	}
 	store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 60, UncachedTokens: 60}}}}
 

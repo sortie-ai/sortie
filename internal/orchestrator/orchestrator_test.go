@@ -20,6 +20,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
@@ -3109,7 +3110,7 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	agentRegistry := &stubAgentRegistry{
 		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
 		metaFunc: func(string) (registry.AgentMeta, bool) {
-			return registry.AgentMeta{UsageArrival: registry.UsageArrivalIncremental, UsageAttribution: registry.UsageAttributionPerModel}, true
+			return registry.AgentMeta{UsageSources: usage.Sources{Live: tokenLive}}, true
 		},
 	}
 
@@ -8981,22 +8982,9 @@ func TestHandleTick_DispatchFreezesUsageDisposition(t *testing.T) {
 		metaFunc: func(kind string) (registry.AgentMeta, bool) {
 			switch kind {
 			case "mock":
-				return registry.AgentMeta{
-					UsageArrival:     registry.UsageArrivalIncremental,
-					UsageAttribution: registry.UsageAttributionPerModel,
-				}, true
+				return registry.AgentMeta{UsageSources: usage.Sources{Live: tokenLive}}, true
 			case "narrowed-kind":
-				return registry.AgentMeta{
-					UsageArrival:     registry.UsageArrivalTurnEnd,
-					UsageAttribution: registry.UsageAttributionSessionTotal,
-					UsageSessionRules: []registry.UsageSessionRule{
-						{
-							When:        func(map[string]any, bool) bool { return true },
-							Arrival:     registry.UsageArrivalNone,
-							Attribution: registry.UsageAttributionNone,
-						},
-					},
-				}, true
+				return registry.AgentMeta{UsageSources: usage.Sources{Live: vendorOnlyLive}}, true
 			default:
 				return registry.AgentMeta{}, false
 			}
@@ -9029,18 +9017,18 @@ func TestHandleTick_DispatchFreezesUsageDisposition(t *testing.T) {
 	if defaultEntry == nil {
 		t.Fatal("no RunningEntry for the default-kind issue")
 	}
-	if defaultEntry.UsageArrival != registry.UsageArrivalIncremental || defaultEntry.UsageAttribution != registry.UsageAttributionPerModel {
-		t.Errorf("default-kind entry (UsageArrival, UsageAttribution) = (%q, %q), want (%q, %q)",
-			defaultEntry.UsageArrival, defaultEntry.UsageAttribution, registry.UsageArrivalIncremental, registry.UsageAttributionPerModel)
+	if defaultEntry.UsageArrival != registry.UsageArrivalIncremental || defaultEntry.UsageAttribution != registry.UsageAttributionPerModel || !defaultEntry.CarriesTokenFigure {
+		t.Errorf("default-kind entry (UsageArrival, UsageAttribution, CarriesTokenFigure) = (%q, %q, %t), want (%q, %q, true)",
+			defaultEntry.UsageArrival, defaultEntry.UsageAttribution, defaultEntry.CarriesTokenFigure, registry.UsageArrivalIncremental, registry.UsageAttributionPerModel)
 	}
 
 	narrowedEntry := state.Running[narrowedIssue.ID]
 	if narrowedEntry == nil {
 		t.Fatal("no RunningEntry for the rule-routed issue")
 	}
-	if narrowedEntry.UsageArrival != registry.UsageArrivalNone || narrowedEntry.UsageAttribution != registry.UsageAttributionNone {
-		t.Errorf("rule-routed entry (UsageArrival, UsageAttribution) = (%q, %q), want (%q, %q)",
-			narrowedEntry.UsageArrival, narrowedEntry.UsageAttribution, registry.UsageArrivalNone, registry.UsageAttributionNone)
+	if narrowedEntry.UsageArrival != registry.UsageArrivalNone || narrowedEntry.UsageAttribution != registry.UsageAttributionNone || narrowedEntry.CarriesTokenFigure {
+		t.Errorf("vendor-only entry (UsageArrival, UsageAttribution, CarriesTokenFigure) = (%q, %q, %t), want (%q, %q, false)",
+			narrowedEntry.UsageArrival, narrowedEntry.UsageAttribution, narrowedEntry.CarriesTokenFigure, registry.UsageArrivalNone, registry.UsageAttributionNone)
 	}
 
 	exitResults := make(map[string]WorkerResult, 2)

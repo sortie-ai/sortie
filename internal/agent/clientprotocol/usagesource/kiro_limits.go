@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -33,6 +32,7 @@ func init() {
 	// The other engine reports no handshake name, so the launch selects the
 	// declaration for it.
 	declaration := Declaration{
+		Live:        usage.Source{Category: usage.SourceProtocol},
 		Pull:        kiroPullSource,
 		PullWindows: kiroPullWindows,
 		Launches:    kiroLaunches,
@@ -41,26 +41,9 @@ func init() {
 	Declarations.Register(kiroV2AgentName, declaration)
 }
 
-// kiroLaunches reports whether target starts the runtime. A remote command
-// line is a string the remote shell parses, so it is split on whitespace; a
-// wrong match costs one refused request pair before the puller stops.
+// kiroLaunches reports whether target starts the runtime.
 func kiroLaunches(target agentcore.LaunchTarget) bool {
-	if target.RemoteCommand == "" {
-		return namesRuntime(target, kiroExecutableName)
-	}
-	for token := range strings.FieldsSeq(target.RemoteCommand) {
-		base := strings.ToLower(token[strings.LastIndex(token, "/")+1:])
-		for _, suffix := range executableSuffixes {
-			if trimmed, ok := strings.CutSuffix(base, suffix); ok {
-				base = trimmed
-				break
-			}
-		}
-		if base == kiroExecutableName {
-			return true
-		}
-	}
-	return false
+	return commandNamesRuntime(target, kiroExecutableName)
 }
 
 var kiroPullSource = usage.Source{

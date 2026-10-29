@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
@@ -27,11 +28,15 @@ var geminiProjectVars = []string{"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_I
 
 func init() {
 	Declarations.Register(geminiAgentName, Declaration{
+		Live: usage.Source{Category: usage.SourceProtocol},
 		Pull: usage.Source{
 			Strategy: usage.StrategyPull,
 			Windows:  usage.WindowDeclaration{Share: usage.ShareFraction, ShareRemaining: true},
 		},
 		PullWindows: geminiPullWindows,
+		Launches: func(target agentcore.LaunchTarget) bool {
+			return commandNamesRuntime(target, geminiExecutableName, geminiPackageName)
+		},
 	})
 }
 

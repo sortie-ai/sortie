@@ -632,7 +632,7 @@ function hop_route_of(state, issue_id):
 
 See §5.3.9 for match semantics and stage labels. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
-`resolve_attempt_settings` lays the frozen rule's settings block over the top-level block of the frozen kind (§5.3.9) and returns the resolved block, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
+`resolve_attempt_settings` lays the frozen rule's settings block over the top-level block of the frozen kind (§5.3.9) and returns the resolved block, the usage-reporting disposition of the frozen kind, and the error-severity settings checks the block fails. The disposition derives from the sources the kind attaches, so neither the settings block nor the launch mode changes it. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
 
 A poll tick holds an issue that carries a stage hop record until a read shows the hop's target label, so a candidate listing that lags the label write cannot send the issue back to the stage it just left. The hold runs after the issue is admitted as a candidate and before `resolve_rule`:
 
@@ -762,7 +762,7 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
 
   if skipped:
     // A skipped run has no verification request to mark its local usage as
-    // measured, so under usage arrival "none" it reports unmeasured.
+    // measured, so a kind whose derived usage arrival is "none" reports unmeasured.
     run_measured_locally = false
 
   max_turns = config.agent.max_turns

@@ -2,10 +2,8 @@ package usagesource
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
-	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
@@ -34,7 +32,7 @@ func init() {
 				ReasoningInOutput: true,
 			},
 		},
-		PromptSpend: copilotPromptSpend,
+		PromptSpend: standardPromptSpend,
 		Records: usage.Source{
 			Category: usage.SourceJournal,
 			Strategy: usage.StrategyRecords,
@@ -47,48 +45,10 @@ func init() {
 			WrittenAtTurnEnd: true,
 		},
 		ReadRecords: copilotReadRecords,
+		Launches: func(target agentcore.LaunchTarget) bool {
+			return commandNamesRuntime(target, copilotExecutableName, copilotPackageName)
+		},
 	})
-}
-
-type copilotPromptResult struct {
-	Usage json.RawMessage `json:"usage"`
-}
-
-type copilotPromptUsage struct {
-	InputTokens       json.RawMessage `json:"inputTokens"`
-	OutputTokens      json.RawMessage `json:"outputTokens"`
-	CachedReadTokens  json.RawMessage `json:"cachedReadTokens"`
-	CachedWriteTokens json.RawMessage `json:"cachedWriteTokens"`
-}
-
-// copilotPromptSpend reads the process-cumulative counts of a prompt result. It
-// leaves out totalTokens and thoughtTokens: the ledger derives the total, and
-// reasoning is already inside the output count.
-func copilotPromptSpend(result json.RawMessage) *usage.SpendReading {
-	var decoded copilotPromptResult
-	if err := json.Unmarshal(result, &decoded); err != nil || len(decoded.Usage) == 0 || string(decoded.Usage) == "null" {
-		return nil
-	}
-	var counts copilotPromptUsage
-	if err := json.Unmarshal(decoded.Usage, &counts); err != nil {
-		return nil
-	}
-	return &usage.SpendReading{
-		Input:      jsonCount(counts.InputTokens),
-		Output:     jsonCount(counts.OutputTokens),
-		CacheRead:  jsonCount(counts.CachedReadTokens),
-		CacheWrite: jsonCount(counts.CachedWriteTokens),
-	}
-}
-
-// jsonCount returns the integer a JSON member holds, nil for an absent, null,
-// fractional, or non-numeric member.
-func jsonCount(raw json.RawMessage) *int64 {
-	n, err := strconv.ParseInt(string(raw), 10, 64)
-	if err != nil {
-		return nil
-	}
-	return &n
 }
 
 // copilotReadRecords returns the usage records of the session's journal in

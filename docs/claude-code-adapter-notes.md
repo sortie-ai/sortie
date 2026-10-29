@@ -38,7 +38,7 @@ Classification of any such request goes through `agentcore.DecideHumanRequest`. 
 
 This is where the day goes.
 
-The registered kind declares `incremental` arrival and `per_model` attribution: `ParseLine` emits one `token_usage` event per first-seen assistant message id, each carrying `Model: state.lastModel`.
+The registered kind attaches the token counts its stream reports as its live source, which the adapter maps itself, and derives `incremental` arrival and `per_model` attribution from it: `ParseLine` emits one `token_usage` event per first-seen assistant message id, each carrying `Model: state.lastModel`.
 
 Streamed assistant usage is a snapshot, not a final count. The CLI repeats one message identifier across every event of the same model request, and a later event of that identifier can report a larger usage object than an earlier one as generation continues. Deduplicate by that identifier and keep the componentwise maximum; sum the per-identifier maxima to get the turn's provisional figure. Adding the events up as they arrive multiplies the count.
 

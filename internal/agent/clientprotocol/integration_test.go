@@ -67,7 +67,10 @@
 //	                                  whose spend sources the scripted model
 //	                                  cases prove: exact figure, settling source
 //	                                  and strategy, and the kill; unset leaves
-//	                                  spend unproven
+//	                                  spend unproven; "default" proves the
+//	                                  declaration a runtime with none of its own
+//	                                  is measured under, whose figure is a lower
+//	                                  bound
 //
 // Run:
 //
@@ -547,7 +550,8 @@ func writeModelDocument(t *testing.T, path, template, url string) string {
 
 func sshVariant() *fakemodel.SSHVariant {
 	variant := &fakemodel.SSHVariant{
-		Install: os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_INSTALL"),
+		Install:  os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_INSTALL"),
+		LiveOnly: true,
 		RemoteCommand: func(fakemodel.Environment) string {
 			return os.Getenv("SORTIE_CLIENTPROTOCOL_SSH_COMMAND")
 		},
@@ -561,13 +565,42 @@ func sshVariant() *fakemodel.SSHVariant {
 	return variant
 }
 
+const (
+	protocolKind          = "agent-client-protocol"
+	emptyDeclarationsKind = "agent-client-protocol-empty-declarations"
+)
+
+// The binding builds its adapter from the kind registry, which leaves a test no
+// way to set the adapter's declarations; a kind of its own is the only route to
+// an adapter that selects the default declaration whatever the handshake names.
+var registerEmptyDeclarationsKind = sync.OnceFunc(func() {
+	meta, _ := registry.Agents.Meta(protocolKind)
+	registry.Agents.RegisterWithMeta(emptyDeclarationsKind, func() (domain.AgentAdapter, error) {
+		return &ClientProtocolAdapter{declarations: registry.NewRegistry[usagesource.Declaration, struct{}]("usage declaration")}, nil
+	}, meta)
+})
+
+func bindingKind() string {
+	if os.Getenv(spendDeclarationEnv) != usagesource.DefaultName {
+		return protocolKind
+	}
+	registerEmptyDeclarationsKind()
+	return emptyDeclarationsKind
+}
+
 func spendSources(t *testing.T) *fakemodel.SpendSources {
 	t.Helper()
 
-	const variable = "SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION"
+	const variable = spendDeclarationEnv
 	name := os.Getenv(variable)
 	if name == "" {
 		return nil
+	}
+	if name == usagesource.DefaultName {
+		return &fakemodel.SpendSources{
+			Live:       domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive},
+			LowerBound: true,
+		}
 	}
 	declaration, err := usagesource.Declarations.Get(name)
 	if err != nil {
@@ -612,7 +645,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	turnExpect := expectScriptedToolTurn
 	binding := fakemodel.Binding{
-		Kind:                "agent-client-protocol",
+		Kind:                bindingKind(),
 		LocalToolsOverHTTP:  os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") == "1",
 		SSH:                 sshVariant(),
 		Spend:               spendSources(t),

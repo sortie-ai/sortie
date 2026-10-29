@@ -428,6 +428,24 @@ func TestParseSessionExport(t *testing.T) {
 		}
 	})
 
+	t.Run("a step report and an export message with the same tokens give the same counts", func(t *testing.T) {
+		t.Parallel()
+
+		const tokens = `{"input":100,"output":20,"reasoning":7,"cache":{"read":30,"write":5}}`
+		step, err := parseStepFinishPart([]byte(`{"tokens":` + tokens + `}`))
+		if err != nil {
+			t.Fatalf("parseStepFinishPart() error = %v", err)
+		}
+		exported := parseSessionExport([]byte(`{"info":{"id":"ses_x"},"messages":[{"type":"assistant","finish":"stop","tokens":`+tokens+`}]}`), "ses_x", 0)
+
+		got := agentcore.AddUsage(domain.TokenUsage{}, stepTokens(step.Tokens.Input, step.Tokens.Output, step.Tokens.Reasoning, step.Tokens.Cache.Read, step.Tokens.Cache.Write))
+
+		want := domain.TokenUsage{InputTokens: 135, OutputTokens: 27, CacheReadTokens: 30, CacheWriteTokens: 5, TotalTokens: 162}
+		if got != want || exported.Usage != want {
+			t.Errorf("stepTokens(%+v) = %+v, export parser = %+v, want both %+v (cache added to input, reasoning to output)", *step.Tokens, got, exported.Usage, want)
+		}
+	})
+
 	t.Run("a session id mismatch returns zero", func(t *testing.T) {
 		t.Parallel()
 

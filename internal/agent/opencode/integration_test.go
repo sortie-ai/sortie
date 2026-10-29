@@ -161,6 +161,53 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	fakemodel.AssertConformance(t, binding)
 
+	t.Run("export failure leaves the step reports as a lower bound", func(t *testing.T) {
+		runtime := agenttest.WriteScript(t, t.TempDir(), "export-failing-opencode",
+			"if [ \"$1\" = session ] && [ \"$2\" = export ]; then exit 1; fi\nexec "+integrationCommand()+" \"$@\"\n")
+		failing := binding
+		failing.Launch = func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			launch := binding.Launch(t, env)
+			launch.Config.Command = runtime
+			return launch
+		}
+		file := filepath.Join(t.TempDir(), "scripted.txt")
+		if err := os.WriteFile(file, []byte("scripted\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q): %v", file, err)
+		}
+
+		run := fakemodel.RunCustomTurn(t, failing, fakemodel.CustomTurn{
+			Script: []fakemodel.Response{
+				{Call: binding.Read(file), Usage: fakemodel.Usage{Prompt: 211, Candidates: 13, Thoughts: 5, CachedContent: 53}},
+				{Text: "ok", Usage: fakemodel.Usage{Prompt: 307, Candidates: 17, Thoughts: 7, CachedContent: 61}},
+			},
+			Prompt: "Read the file, then reply with the word ok.",
+		})
+
+		if run.Err != nil {
+			t.Fatalf("RunTurn() error = %v", run.Err)
+		}
+		var served domain.TokenUsage
+		for _, ex := range run.Exchanges {
+			if ex.Kind != fakemodel.ExchangeTurn {
+				continue
+			}
+			u := ex.Answer.Usage
+			served = agentcore.AddUsage(served, domain.TokenUsage{
+				InputTokens:     u.Prompt,
+				OutputTokens:    u.Candidates + u.Thoughts,
+				CacheReadTokens: u.CachedContent,
+			})
+		}
+		// OpenCode reports no step tokens for the final text step, so the step sum falls short of what was served.
+		got := run.Result.Usage
+		if got.InputTokens == 0 || got.InputTokens > served.InputTokens || got.OutputTokens > served.OutputTokens || got.CacheReadTokens > served.CacheReadTokens {
+			t.Errorf("RunTurn().Usage = %+v, want a nonzero figure within the served %+v", got, served)
+		}
+		if !run.Result.SpendUnaccounted {
+			t.Error("RunTurn().SpendUnaccounted = false, want true: the failed export leaves the figure a lower bound")
+		}
+	})
+
 	t.Run("free usage limit", func(t *testing.T) {
 		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
 			Script: []fakemodel.Response{{

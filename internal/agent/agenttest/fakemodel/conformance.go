@@ -181,6 +181,10 @@ type SSHVariant struct {
 	// ToolServerSkip, when not empty, skips the scenarios that deliver Sortie's
 	// tool server over SSH with this reason; the other SSH scenarios still run.
 	ToolServerSkip string
+
+	// LiveOnly marks a runtime whose records are not read over SSH yet: an
+	// interrupted remote turn carries what its live source alone reports.
+	LiveOnly bool
 }
 
 // PermissionRefusal is a binding's fixture for the permission refusal
@@ -400,8 +404,8 @@ func requireValidBinding(t *testing.T, b Binding) {
 		t.Fatalf("Binding.PermissionRefusal.Notice is empty, want the notification the adapter emits for the refusal")
 	case b.Spend != nil && b.Spend.Live.Source == "":
 		t.Fatalf("Binding.Spend.Live names no Source, want the category of the live spend source")
-	case b.Spend != nil && b.Spend.Records.Source == "":
-		t.Fatalf("Binding.Spend.Records names no Source, want the category of the records spend source")
+	case b.Spend != nil && b.Spend.Records != (domain.UsageProvenance{}) && b.Spend.Records.Source == "":
+		t.Fatalf("Binding.Spend.Records sets a Strategy but names no Source, want the category of the records spend source or none at all")
 	}
 }
 
@@ -1102,10 +1106,9 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 	}
 	t.Run("resumed usage", func(t *testing.T) {
 		agenttest.AssertLiveUsageCase(t, b.Kind, agenttest.UsageReportingCase{
-			Name:        "resumed turn",
-			Passthrough: b.Passthrough,
-			Events:      turns[resumedEntry].events,
-			Result:      turns[resumedEntry].result,
+			Name:   "resumed turn",
+			Events: turns[resumedEntry].events,
+			Result: turns[resumedEntry].result,
 		})
 		resumedResult := turns[resumedEntry].result
 		if !resumedResult.UsageMeasured {
@@ -1965,10 +1968,10 @@ func answersCall(answer Answer, result ToolResult) bool {
 // AssertExactUsage fails t unless the run's usage figure equals, per class and
 // exactly, the usage the endpoint served in its turn and auxiliary answers, and
 // its per-model split matches the usage served per model, under the usage the
-// kind's registered disposition declares for the run's settings and host. A
-// disposition that reports no usage must produce none. For a binding with
-// Spend, the turn's provenance and completeness must also match the source that
-// settled it.
+// kind's registered sources derive for the run's host. A run whose kind can
+// carry no token figure on that host must produce none and flag its spend
+// unaccounted. For a binding with Spend, the turn's provenance and
+// completeness must also match the source that settled it.
 func AssertExactUsage(t *testing.T, b Binding, run Run) {
 	t.Helper()
 
@@ -1978,40 +1981,72 @@ func AssertExactUsage(t *testing.T, b Binding, run Run) {
 // assertExactUsage is AssertExactUsage with the per-case reporting check
 // injected: a text-only turn carries neither a tool result nor a second usage
 // event, which AssertUsageReportingCase requires to tell the arrivals apart.
-// It is the one place that reads the kind's disposition for a run.
+// It is the one place that reads the kind's sources for a run.
 func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting func(*testing.T, string, agenttest.UsageReportingCase)) {
 	t.Helper()
 
 	meta, _ := registry.Agents.Meta(b.Kind)
-	arrival, attribution := meta.UsageDisposition(run.Settings, run.Environment.Remote)
-	if arrival == registry.UsageArrivalNone {
+	remote := run.Environment.Remote
+	if !meta.UsageSources.CarriesTokenFigure(remote) {
 		agenttest.AssertMeasurementAbsent(t, run.Events, run.Result)
+		if reachedModel(run.Exchanges) && !run.Result.SpendUnaccounted {
+			t.Errorf("Result.SpendUnaccounted = false, want true for a turn that reached the model on a kind that carries no token figure")
+		}
 		if b.Spend != nil && run.Result.UsageProvenance != (domain.UsageProvenance{}) {
-			t.Errorf("Result.UsageProvenance = %+v, want none for a disposition that reports no usage", run.Result.UsageProvenance)
+			t.Errorf("Result.UsageProvenance = %+v, want none for a kind that carries no token figure", run.Result.UsageProvenance)
 		}
 		return
 	}
-	reportViolations(t, exactUsage(run, arrival, attribution,
-		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b), b.Spend))
+
+	arrival, _ := meta.UsageDisposition()
+	settling := usageSettling{
+		recordsUnread:  b.Spend != nil && (b.Spend.Records == (domain.UsageProvenance{}) || remote && b.SSH != nil && b.SSH.LiveOnly),
+		liveLowerBound: b.Spend == nil && meta.UsageSources.Live.Spend.LowerBound,
+	}
+	reportViolations(t, exactUsage(run, arrival,
+		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b), b.Spend, settling))
 	agenttest.AssertUsageContract(t, run.Events)
+	if !run.Result.UsageMeasured && (settling.recordsUnread || settling.liveLowerBound) {
+		return
+	}
 	reporting(t, b.Kind, agenttest.UsageReportingCase{
-		Name:        name,
-		Passthrough: run.Settings,
-		Remote:      run.Environment.Remote,
-		Events:      run.Events,
-		Result:      run.Result,
+		Name:   name,
+		Remote: remote,
+		Events: run.Events,
+		Result: run.Result,
 	})
+}
+
+func reachedModel(exchanges []Exchange) bool {
+	return slices.ContainsFunc(exchanges, func(ex Exchange) bool { return slices.Contains(turnAndAuxiliary, ex.Kind) })
+}
+
+// usageSettling is what a run's registered sources leave unsettled.
+type usageSettling struct {
+	recordsUnread  bool // no records source is read for the run, so an interrupted turn keeps its live figure alone
+	liveLowerBound bool // the kind's live source declares a lower bound and the binding states no provenance
 }
 
 // exactUsage returns the violations of the usage property: a measured figure
 // equal to want, carried by the last usage event, arriving as the disposition
-// declares, and split per model as wantByModel when the disposition declares
-// per-model attribution. A disposition that reports no usage has none to check
-// here. A non-nil spend adds the provenance and completeness the turn's exit
-// reason expects.
-func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.UsageAttribution, want domain.TokenUsage, wantByModel map[string]domain.TokenUsage, spend *SpendSources) []string {
+// declares, and split per model as wantByModel wherever the last usage event
+// names a model or carries a split. A disposition that reports no usage has
+// none to check here. A non-nil spend adds the provenance and completeness the
+// turn's exit reason expects. A figure that settling leaves a lower bound
+// exceeds want in no class and stands in for the exact figure.
+func exactUsage(run Run, arrival registry.UsageArrival, want domain.TokenUsage, wantByModel map[string]domain.TokenUsage, spend *SpendSources, settling usageSettling) []string {
 	v := &findings{property: "exact usage"}
 	if arrival == registry.UsageArrivalNone {
+		return v.items
+	}
+
+	interrupted := run.Result.ExitReason == domain.EventTurnCancelled || run.Result.ExitReason == domain.EventTurnFailed
+	switch {
+	case spend != nil && interrupted && settling.recordsUnread:
+		liveOnlyInterruptedViolations(v, run.Result, want, *spend)
+		return v.items
+	case settling.liveLowerBound && (!run.Result.UsageMeasured || run.Result.SpendUnaccounted):
+		lowerBoundViolations(v, run.Result, want)
 		return v.items
 	}
 
@@ -2045,7 +2080,7 @@ func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.Usa
 			v.add("declared turn_end, the turn reported no token_usage event")
 		}
 	}
-	if attribution == registry.UsageAttributionPerModel && found {
+	if found && (last.Model != "" || len(last.UsageByModel) > 0) {
 		split, exceedsTotals := effectiveSplit(last, reportedModel(run.Events))
 		if exceedsTotals {
 			v.add("the last event carrying usage splits %+v per model, more than its total %+v", last.UsageByModel, last.Usage)
@@ -2058,6 +2093,48 @@ func exactUsage(run Run, arrival registry.UsageArrival, attribution registry.Usa
 		spendProvenanceViolations(v, run.Result, *spend)
 	}
 	return v.items
+}
+
+// liveOnlyInterruptedViolations adds the violations of a turn interrupted after
+// output when no records are read for it: its spend is unaccounted, and it
+// carries either the live source's figure, never above what was served, or no
+// figure and no provenance.
+func liveOnlyInterruptedViolations(v *findings, result domain.TurnResult, served domain.TokenUsage, spend SpendSources) {
+	if !result.SpendUnaccounted {
+		v.add("Result.SpendUnaccounted is false, want true for a %s turn no records settle", result.ExitReason)
+	}
+	if !result.UsageMeasured {
+		if result.UsageProvenance != (domain.UsageProvenance{}) {
+			v.add("Result.UsageProvenance = %+v, want none for a %s turn with no figure", result.UsageProvenance, result.ExitReason)
+		}
+		return
+	}
+	if result.UsageProvenance != spend.Live {
+		v.add("Result.UsageProvenance = %+v, want %+v, the live source, for a %s turn no records settle", result.UsageProvenance, spend.Live, result.ExitReason)
+	}
+	if exceedsInAnyClass(result.Usage, served) {
+		v.add("Result.Usage = %+v exceeds %+v, the usage the endpoint served", result.Usage, served)
+	}
+}
+
+// lowerBoundViolations adds the violations of a turn whose live source
+// declares a lower bound: a turn with no figure flags its spend unaccounted,
+// and a figure marked a lower bound exceeds what was served in no class.
+func lowerBoundViolations(v *findings, result domain.TurnResult, served domain.TokenUsage) {
+	if !result.UsageMeasured {
+		if !result.SpendUnaccounted {
+			v.add("Result.SpendUnaccounted is false, want true for a turn with no figure")
+		}
+		return
+	}
+	if exceedsInAnyClass(result.Usage, served) {
+		v.add("Result.Usage = %+v, a lower bound, exceeds %+v, the usage the endpoint served", result.Usage, served)
+	}
+}
+
+func exceedsInAnyClass(figure, served domain.TokenUsage) bool {
+	return figure.InputTokens > served.InputTokens || figure.OutputTokens > served.OutputTokens ||
+		figure.CacheReadTokens > served.CacheReadTokens || figure.CacheWriteTokens > served.CacheWriteTokens
 }
 
 // spendProvenanceViolations adds the violations of a turn's settling source and

@@ -4902,7 +4902,7 @@ func TestRunWorkerAttempt_UsageArrivalNoneDiscardsFigures(t *testing.T) {
 		}
 	}
 
-	const discardMessage = "token usage discarded: agent kind declares this session reports none"
+	const discardMessage = "token usage discarded: agent kind attaches no source that counts tokens"
 
 	t.Run("none arrival discards every figure and warns exactly once", func(t *testing.T) {
 		t.Parallel()

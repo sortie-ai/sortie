@@ -18,7 +18,7 @@ Upstream source lives in `google-gemini/gemini-cli`. When a symptom looks like a
 
 Gemini has no adapter package, no registered kind, and no adapter metadata. The operator points the generic `agent-client-protocol` kind's `agent.command` at `gemini --acp`; the older `--experimental-acp` spelling is deprecated. Everything below is how Gemini's protocol implementation meets the generic adapter. There is no place in the generic transport to special-case a Gemini quirk.
 
-The one exception is token accounting, which lives in Gemini's own measurement source. The source recognizes a command line that names the `gemini` executable, a path to it, or the `@google/gemini-cli` package, directly or as a wrapper's argument. A command line that hides its runtime is started a second time once the handshake names it, so a wrapped Gemini CLI still reports token usage.
+The one exception is token accounting, which lives in Gemini's own measurement source. The source recognizes a command line that names the `gemini` executable, a path to it, or the `@google/gemini-cli` package, directly or as a wrapper's argument. A command line that hides its runtime is started a second time once the handshake names it, so a wrapped Gemini CLI still reports token usage. On a local launch the source settles the session's figure ahead of the ledger. A source never applies to a remote launch, so Gemini CLI on an SSH worker is measured under the default declaration's mapping as a lower bound.
 
 ## Load-bearing capability observations
 

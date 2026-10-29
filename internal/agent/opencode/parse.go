@@ -296,12 +296,7 @@ func parseSessionExport(data []byte, sessionID string, sinceUnixMS int64) export
 			}
 		}
 
-		messageUsage := domain.TokenUsage{
-			InputTokens:      inputTokens + cacheReadTokens + cacheWriteTokens,
-			OutputTokens:     outputTokens + reasoningTokens,
-			CacheReadTokens:  cacheReadTokens,
-			CacheWriteTokens: cacheWriteTokens,
-		}
+		messageUsage := stepTokens(inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens)
 		sum.Usage = agentcore.AddUsage(sum.Usage, messageUsage)
 		kept = true
 
@@ -358,6 +353,18 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 		state.logger().Warn("no assistant token usage found in opencode export")
 	}
 	return usage
+}
+
+// stepTokens maps the counts of one step or one assistant message to token
+// usage. The runtime reports cache and reasoning counts beside input and
+// output, so they are added into those totals here.
+func stepTokens(input, output, reasoning, cacheRead, cacheWrite int64) domain.TokenUsage {
+	return domain.TokenUsage{
+		InputTokens:      input + cacheRead + cacheWrite,
+		OutputTokens:     output + reasoning,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+	}
 }
 
 // messageCreatedMS extracts time.created (Unix milliseconds) from an

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
@@ -41,8 +42,11 @@ func init() {
 	registry.Agents.RegisterWithMeta(fixtureNotifyAgentKind, func() (domain.AgentAdapter, error) {
 		return nil, fmt.Errorf("%s is resolved through AgentAdapterByKind, never constructed from the registry", fixtureNotifyAgentKind)
 	}, registry.AgentMeta{
-		UsageArrival:     registry.UsageArrivalIncremental,
-		UsageAttribution: registry.UsageAttributionSessionTotal,
+		UsageSources: usage.Sources{Live: usage.Source{
+			Category: usage.SourceOutput,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true},
+		}},
 	})
 
 	registry.Trackers.RegisterWithMeta(fixtureNotifyTrackerKind, func(map[string]any) (domain.TrackerAdapter, error) {

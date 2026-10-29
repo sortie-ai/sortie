@@ -46,6 +46,8 @@ Every grade on this page was measured under a stored device login, the credentia
 
 Token accounting has no source on either surface. The runtime reports spend as an abstract credits figure and context use as a percentage, never as tokens. So token-based budgets are inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn in a vendor extension; the native stream has no token field either. Parity holds on this row because the shortfall is shared; conformance fails because the capability works on neither route. A live run with a one-token `agent.max_tokens` ceiling spent tokens, recorded unaccounted spend, and finished without stopping.
 
+Kiro CLI is measured under the default declaration's spend mapping as a lower bound. Its token fields hold zero, so a turn that reached the model carries no figure and stays unaccounted spend. The credits it reports are not read here.
+
 Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. This runtime never produces either. A request built to trigger one completes normally, so the case is recorded as `outcome_never_produced`.
 
 On the protocol surface, retry classification excludes the human-input case as not applicable. The consent request the asking-posture launch raised offered a refusing option, the client refused it inside the protocol, and the turn went on. That exclusion does not cover a question addressed to a person. On the native stream the case was induced and the row is a gap: a recognized terminal ended the turn even though the probe's marker file shows the block was reached.
@@ -98,7 +100,7 @@ Each `usageBreakdowns` entry with `hasLimit` true becomes one window: `resourceT
 
 The figure trails the spend. A 0.035-credit turn did not move `used` at once or a minute later, and it moved some minutes after. A window pulled when a turn ends therefore shows the usage before that turn and the turns just before it.
 
-The usage declaration is registered under the runtime's name `kiro`, which no handshake reports. The default engine's `agentInfo.name` is `Kiro CLI Agent`, and the v3 engine sends none. So when the handshake name matches no declaration, the declaration is selected by the launch command naming `kiro-cli`.
+The usage declaration is registered under the runtime's name `kiro`, which no handshake reports. The default engine's `agentInfo.name` is `Kiro CLI Agent`, and the v3 engine sends none. So when the handshake reports no name, the declaration is selected by the launch command naming `kiro-cli`.
 
 ## Native headless observations
 

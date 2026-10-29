@@ -2,10 +2,10 @@ package orchestrator
 
 import (
 	"maps"
-	"path/filepath"
 	"slices"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // WorkflowShape reports the effective workflow shape served on the state API.
@@ -196,7 +196,7 @@ func (o *Orchestrator) WorkflowShape() WorkflowShape {
 		Polling: ShapePolling{IntervalMS: cfg.Polling.IntervalMS},
 		Agent: ShapeAgent{
 			Kind:                       cfg.Agent.Kind,
-			UsageArrival:               o.usageArrival(cfg, cfg.Agent.Kind, "", remote),
+			UsageArrival:               o.usageArrival(cfg.Agent.Kind, remote),
 			MaxTurns:                   cfg.Agent.TurnLimit(),
 			StallTimeoutMS:             positiveOrNil(cfg.Agent.StallTimeoutMS),
 			MaxRetryBackoffMS:          cfg.Agent.MaxRetryBackoffMS,
@@ -230,15 +230,15 @@ func (o *Orchestrator) shapeWorker(cfg config.ServiceConfig) (ShapeWorker, bool)
 	return worker, len(hosts) > 0
 }
 
-// usageArrival resolves the arrival a session of kind under ruleName starts
-// with, through the code an attempt uses. Only the arrival leaves: the
-// settings passthrough can hold credentials.
-func (o *Orchestrator) usageArrival(cfg config.ServiceConfig, kind, ruleName string, remote bool) string {
-	settings := config.ResolveAgentSettings(cfg,
-		config.SettingsSelection{Kind: kind, RuleName: ruleName},
-		filepath.Dir(o.workflowManager.WorkflowAbsPath()))
+// usageArrival resolves the arrival a session of kind starts with on the given
+// launch, through the code an attempt uses. A session that can carry no token
+// figure on that launch shows none, as preflight warns.
+func (o *Orchestrator) usageArrival(kind string, remote bool) string {
 	meta, registered := o.preflightParams.AgentRegistry.Meta(kind)
-	arrival, _ := usageDisposition(meta, registered, settings.Passthrough, remote)
+	arrival, _, carriesTokenFigure := usageDisposition(meta, registered, remote)
+	if !carriesTokenFigure {
+		return string(registry.UsageArrivalNone)
+	}
 	return string(arrival)
 }
 
@@ -252,7 +252,7 @@ func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig, remote bool) Shap
 			Name:         rule.Name,
 			Next:         rule.Next,
 			AgentKind:    kind,
-			UsageArrival: o.usageArrival(cfg, kind, rule.Name, remote),
+			UsageArrival: o.usageArrival(kind, remote),
 		}
 		switch {
 		case rule.Stage != "":
@@ -271,7 +271,7 @@ func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig, remote bool) Shap
 	if resolution, ok := defaultSelection(dispatch, cfg.Agent.Kind, ""); ok {
 		fallback = &ShapeSelection{
 			AgentKind:    resolution.AgentKind,
-			UsageArrival: o.usageArrival(cfg, resolution.AgentKind, resolution.RuleName, remote),
+			UsageArrival: o.usageArrival(resolution.AgentKind, remote),
 		}
 	}
 

@@ -2494,16 +2494,18 @@ func TestRuntimeSnapshot_AgentTotalsExclusionCounts(t *testing.T) {
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{UnmeasuredSessions: 5})
 	state.Running["unreported-inc"] = &RunningEntry{
-		Identifier:   "PROJ-1",
-		Issue:        domain.Issue{ID: "unreported-inc", State: "In Progress"},
-		StartedAt:    fixedNow.Add(-time.Minute),
-		UsageArrival: registry.UsageArrivalIncremental,
+		Identifier:         "PROJ-1",
+		Issue:              domain.Issue{ID: "unreported-inc", State: "In Progress"},
+		StartedAt:          fixedNow.Add(-time.Minute),
+		UsageArrival:       registry.UsageArrivalIncremental,
+		CarriesTokenFigure: true,
 	}
 	state.Running["unreported-turnend"] = &RunningEntry{
-		Identifier:   "PROJ-2",
-		Issue:        domain.Issue{ID: "unreported-turnend", State: "In Progress"},
-		StartedAt:    fixedNow.Add(-time.Minute),
-		UsageArrival: registry.UsageArrivalTurnEnd,
+		Identifier:         "PROJ-2",
+		Issue:              domain.Issue{ID: "unreported-turnend", State: "In Progress"},
+		StartedAt:          fixedNow.Add(-time.Minute),
+		UsageArrival:       registry.UsageArrivalTurnEnd,
+		CarriesTokenFigure: true,
 	}
 	state.Running["no-arrival-1"] = &RunningEntry{
 		Identifier:   "PROJ-3",
@@ -2518,11 +2520,12 @@ func TestRuntimeSnapshot_AgentTotalsExclusionCounts(t *testing.T) {
 		UsageArrival: registry.UsageArrivalNone,
 	}
 	state.Running["measured"] = &RunningEntry{
-		Identifier:    "PROJ-5",
-		Issue:         domain.Issue{ID: "measured", State: "In Progress"},
-		StartedAt:     fixedNow.Add(-time.Minute),
-		UsageArrival:  registry.UsageArrivalIncremental,
-		UsageMeasured: true,
+		Identifier:         "PROJ-5",
+		Issue:              domain.Issue{ID: "measured", State: "In Progress"},
+		StartedAt:          fixedNow.Add(-time.Minute),
+		UsageArrival:       registry.UsageArrivalIncremental,
+		UsageMeasured:      true,
+		CarriesTokenFigure: true,
 	}
 
 	result := RuntimeSnapshot(state, fixedNow)
@@ -2653,6 +2656,7 @@ func TestRuntimeSnapshot_TokensAwaited(t *testing.T) {
 		turnCount        int
 		lastEvent        domain.AgentEventType
 		usageMeasured    bool
+		carriesNoFigure  bool
 		wantAwaited      bool
 		wantUnreported   int
 		wantNonReporting int
@@ -2706,6 +2710,12 @@ func TestRuntimeSnapshot_TokensAwaited(t *testing.T) {
 			usageMeasured: true,
 		},
 		{
+			name:             "turn_end session that carries no token figure is non-reporting",
+			arrival:          registry.UsageArrivalTurnEnd,
+			carriesNoFigure:  true,
+			wantNonReporting: 1,
+		},
+		{
 			name:             "arrival none is non-reporting whatever the turn",
 			arrival:          registry.UsageArrivalNone,
 			wantNonReporting: 1,
@@ -2718,13 +2728,14 @@ func TestRuntimeSnapshot_TokensAwaited(t *testing.T) {
 
 			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			state.Running["iss"] = &RunningEntry{
-				Identifier:     "PROJ-1",
-				Issue:          domain.Issue{ID: "iss", State: "In Progress"},
-				StartedAt:      fixedNow.Add(-time.Minute),
-				TurnCount:      tt.turnCount,
-				LastAgentEvent: tt.lastEvent,
-				UsageArrival:   tt.arrival,
-				UsageMeasured:  tt.usageMeasured,
+				Identifier:         "PROJ-1",
+				Issue:              domain.Issue{ID: "iss", State: "In Progress"},
+				StartedAt:          fixedNow.Add(-time.Minute),
+				TurnCount:          tt.turnCount,
+				LastAgentEvent:     tt.lastEvent,
+				UsageArrival:       tt.arrival,
+				UsageMeasured:      tt.usageMeasured,
+				CarriesTokenFigure: tt.arrival.ReportsAnyFigure() && !tt.carriesNoFigure,
 			}
 
 			result := RuntimeSnapshot(state, fixedNow)

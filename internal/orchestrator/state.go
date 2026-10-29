@@ -291,6 +291,10 @@ type RunningEntry struct {
 	UsageArrival     registry.UsageArrival
 	UsageAttribution registry.UsageAttribution
 
+	// CarriesTokenFigure is whether this session's kind can carry a token
+	// figure on its launch, frozen at dispatch and on retry.
+	CarriesTokenFigure bool
+
 	// APIRequestCountAtLastTurnEnd is APIRequestCount as of the most recent
 	// turn-terminal event, zero until the first turn ends.
 	APIRequestCountAtLastTurnEnd int
@@ -2157,13 +2161,13 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	var runningUnreported, runningNonReporting int
 	for _, entry := range state.Running {
 		requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
-		tokensAwaited := !entry.UsageMeasured &&
+		tokensAwaited := entry.CarriesTokenFigure && !entry.UsageMeasured &&
 			usageStillArriving(entry.UsageArrival, entry.TurnCount, entry.LastAgentEvent)
 
 		switch {
-		case entry.UsageArrival == registry.UsageArrivalNone:
+		case !entry.CarriesTokenFigure:
 			runningNonReporting++
-		case entry.UsageArrival.ReportsAnyFigure() && !entry.UsageMeasured:
+		case !entry.UsageMeasured:
 			// A session whose figure is no longer coming is non-reporting,
 			// not still waiting.
 			if tokensAwaited {

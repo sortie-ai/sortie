@@ -85,7 +85,7 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 		return persistence.IssueTokenUsage{RecordedCostUSD: usd, PricedSessions: 1, Sessions: 1}
 	}
 	live := func(inputTokens int64, measured bool) *RunningEntry {
-		return &RunningEntry{AgentKind: "k", UsageArrival: registry.UsageArrivalIncremental, UsageMeasured: measured, AgentInputTokens: inputTokens, AgentTotalTokens: inputTokens}
+		return &RunningEntry{AgentKind: "k", UsageArrival: registry.UsageArrivalIncremental, CarriesTokenFigure: true, UsageMeasured: measured, AgentInputTokens: inputTokens, AgentTotalTokens: inputTokens}
 	}
 
 	tests := []struct {
@@ -113,6 +113,7 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 		{name: "an unpriced row leaves the spend unchanged and incomplete", daily: 5, rows: persistence.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnpricedSessions: 1}, wantUsed: 3},
 		{name: "an unmeasured row leaves the spend unchanged and incomplete", daily: 5, rows: persistence.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnmeasuredSessions: 1}, wantUsed: 3},
 		{name: "a running session that reported nothing keeps the spend complete", daily: 5, rows: recorded(3), running: live(0, false), wantUsed: 3, wantComplete: true},
+		{name: "a running session that carries no token figure leaves the spend incomplete", daily: 5, rows: recorded(3), running: &RunningEntry{AgentKind: "k", UsageArrival: registry.UsageArrivalTurnEnd}, wantUsed: 3},
 		{name: "no setting reads nothing", rows: recorded(5)},
 		{name: "both windows holding return the monthly reason", window: SpendWindowMonthly, daily: 5, monthly: 5, rows: recorded(5), wantSkip: SkipMonthlySpendCeiling, wantUsed: 5, wantComplete: true},
 		{name: "a weekly ceiling at the week's spend holds", window: SpendWindowWeekly, weekly: 5, rows: recorded(5), wantSkip: SkipWeeklySpendCeiling, wantUsed: 5, wantComplete: true},

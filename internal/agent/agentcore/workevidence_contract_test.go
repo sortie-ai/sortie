@@ -386,8 +386,7 @@ func TestWorkEvidenceContract_ObserverWiring(t *testing.T) {
 	registeringPackages := 0
 	for _, dir := range dirOrder {
 		pkg := packages[dir]
-		registers, _, _, _, _ := usageRegistrationFacts(fset, pkg.files)
-		if !registers {
+		if !registersAgentKind(pkg.files) {
 			continue
 		}
 		registeringPackages++

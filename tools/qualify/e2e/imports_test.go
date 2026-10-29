@@ -15,6 +15,7 @@ import (
 // module's own tool-module siblings.
 var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/workspace":                  "computing the isolated git workspace root the fixture tracker uses",
+	"github.com/sortie-ai/sortie/internal/agent/usage":                "declaring the live usage source the fixture agent kind registers",
 	"github.com/sortie-ai/sortie/internal/agent/procutil":             "starting the fake agent's process group and signaling it",
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest": "binding the held launch record of the adapter observer's session",
 	"github.com/sortie-ai/sortie/internal/config":                     "assembling the ServiceConfig the harness's orchestrator runs",

@@ -54,13 +54,13 @@ func recs(readings ...usage.SpendReading) usage.RecordsRead {
 	return usage.RecordsRead{Readings: readings, OK: true}
 }
 
-func newLedger(t *testing.T, withRecords bool, start usage.RecordsRead) *usage.Ledger {
+func newLedger(t *testing.T, withRecords, lowerBound bool, start usage.RecordsRead) *usage.Ledger {
 	t.Helper()
 
 	liveSource := usage.Source{
 		Category: usage.SourceProtocol,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true, LowerBound: lowerBound},
 	}
 	var recordsSource usage.Source
 	if withRecords {
@@ -82,10 +82,11 @@ func TestLedger(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		liveOnly bool
-		start    usage.RecordsRead
-		steps    []step
+		name       string
+		liveOnly   bool
+		lowerBound bool
+		start      usage.RecordsRead
+		steps      []step
 	}{
 		{
 			name:  "split at matching positions, then a model-reaching turn adding nothing has no figure",
@@ -224,6 +225,21 @@ func TestLedger(t *testing.T) {
 			},
 		},
 		{
+			name:       "lower-bound live source settles a figure that is never complete, and an equal reading adds nothing",
+			liveOnly:   true,
+			lowerBound: true,
+			steps: []step{
+				{
+					end: replied, live: live(30, 4),
+					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Provenance: liveProv},
+				},
+				{
+					end: replied, live: live(30, 4),
+					want: usage.Settlement{Run: u(30, 4)},
+				},
+			},
+		},
+		{
 			name:  "floored delta leaves the turn incomplete",
 			start: recs(hist),
 			steps: []step{
@@ -283,7 +299,7 @@ func TestLedger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			l := newLedger(t, !tt.liveOnly, tt.start)
+			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.start)
 
 			for i, st := range tt.steps {
 				if got := l.NeedsRecords(st.end, st.live); got != st.needs {
@@ -303,7 +319,7 @@ func TestLedger(t *testing.T) {
 func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	t.Parallel()
 
-	l := newLedger(t, true, recs(hist))
+	l := newLedger(t, true, false, recs(hist))
 	first := l.Settle(replied, live(30, 4), recs(hist, ra, rb))
 	if first.ByModel == nil {
 		t.Fatalf("Settle() ByModel = nil, want a split")

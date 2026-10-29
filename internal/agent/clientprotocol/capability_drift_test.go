@@ -310,8 +310,9 @@ func TestNightlyReachability(t *testing.T) {
 	}
 
 	type shard struct {
-		command string
-		reaches bool
+		command     string
+		spendSource string
+		reaches     bool
 	}
 	shards := map[shard]string{}
 	commandReached := map[string]bool{}
@@ -347,9 +348,10 @@ func TestNightlyReachability(t *testing.T) {
 			return runPattern.MatchString(caller) && (skipPattern == nil || !skipPattern.MatchString(caller))
 		})
 
-		key := shard{command: command, reaches: reaches}
+		spendSource := nightlyMatrixValue(row.row, env[spendDeclarationEnv])
+		key := shard{command: command, spendSource: spendSource, reaches: reaches}
 		if previous, duplicate := shards[key]; duplicate {
-			t.Errorf("rows %q and %q both drive this package with %s %q and reaches=%v, want one row per runtime and tier", previous, name, capabilityDriftCommandEnv, command, reaches)
+			t.Errorf("rows %q and %q both drive this package with %s %q, %s %q and reaches=%v, want one row per runtime, spend declaration and tier", previous, name, capabilityDriftCommandEnv, command, spendDeclarationEnv, spendSource, reaches)
 		}
 		shards[key] = name
 		if !rowRunsOnlyContextScenario(row.row) {

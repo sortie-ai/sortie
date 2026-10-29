@@ -699,11 +699,19 @@ func contextUntilStop(stop <-chan struct{}) (context.Context, context.CancelFunc
 // needed.
 func (p *pumpState) settleReply(turn *activeTurn, evidence agentcore.TurnEvidence, cancelled bool, live *usage.SpendReading) {
 	end := usage.TurnEnd{Replied: true, Cancelled: cancelled, ModelReached: turn.spend.ModelReached()}
-	if p.ledger.NeedsRecords(end, live) {
+	if p.needsRecordsRead(end, live) {
 		p.startRecordsRead(turn, evidence, end, live)
 		return
 	}
 	p.settleTurn(evidence, p.settleSpend(turn, end, live, usage.RecordsRead{}))
+}
+
+// needsRecordsRead reports whether the ledger needs a records read for the turn
+// and the launch can make one. A launch that reads none settles on the empty
+// read in place: a read that returns through the inbox could lose to the session
+// stopping, which ends the pump with the turn unfinished.
+func (p *pumpState) needsRecordsRead(end usage.TurnEnd, live *usage.SpendReading) bool {
+	return readsRecords(p.state) && p.ledger.NeedsRecords(end, live)
 }
 
 // startRecordsRead reads the runtime's records for turn on its own goroutine: the
@@ -720,17 +728,17 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 	}
 
-	readRecords := p.declaration.ReadRecords
-	runtime := pullRuntime{state: p.state}
-	inbox := p.state.inbox
-	stop := p.state.stopCh
+	state := p.state
+	declaration := p.declaration
+	inbox := state.inbox
+	stop := state.stopCh
 
 	go func() {
 		ctx, cancel := contextUntilStop(stop)
 		defer cancel()
 
-		readings, err := readRecords(ctx, runtime)
-		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, readings: readings, err: err}}})
+		read := readSessionRecords(ctx, state, declaration)
+		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read}}})
 	}()
 }
 
@@ -741,11 +749,7 @@ func (p *pumpState) handleRecordsRead(result *recordsResult) {
 	if turn == nil || turn != result.turn || !turn.recordsPending {
 		return
 	}
-	if result.err != nil {
-		p.state.logger.Debug("usage records read failed", slog.Any("error", result.err))
-	}
-	read := usage.RecordsRead{Readings: result.readings, OK: result.err == nil}
-	p.settleTurn(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, read))
+	p.settleTurn(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, result.read))
 }
 
 // settleSpend runs the ledger over turn and applies the settlement to the turn's
@@ -785,7 +789,7 @@ func (p *pumpState) endUnreplied(ev agentcore.TurnEvidence) {
 		p.settleTurn(ev, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
 	default:
 		end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
-		if p.ledger.NeedsRecords(end, nil) {
+		if p.needsRecordsRead(end, nil) {
 			turn.endSettled = true
 			p.startRecordsRead(turn, ev, end, nil)
 			return
@@ -1251,7 +1255,7 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 		return
 	}
 	end := usage.TurnEnd{ModelReached: turn.spend.ModelReached()}
-	if p.ledger.NeedsRecords(end, nil) {
+	if p.needsRecordsRead(end, nil) {
 		// The elapsed wait is spent; the read gets a wait of its own.
 		turn.deadlineC = nil
 		p.startRecordsRead(turn, ev, end, nil)

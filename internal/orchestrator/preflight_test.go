@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -1260,16 +1261,20 @@ func TestValidateDispatchConfig_UsageReportingWarnings(t *testing.T) {
 
 	noneMeta := func(string) (registry.AgentMeta, bool) {
 		return registry.AgentMeta{
-			MCPDialect:       registry.MCPDialectMCPServersJSON,
-			UsageArrival:     registry.UsageArrivalNone,
-			UsageAttribution: registry.UsageAttributionNone,
+			MCPDialect:   registry.MCPDialectMCPServersJSON,
+			UsageSources: usage.Sources{Live: vendorOnlyLive},
 		}, true
 	}
 	reportingMeta := func(string) (registry.AgentMeta, bool) {
 		return registry.AgentMeta{
-			MCPDialect:       registry.MCPDialectMCPServersJSON,
-			UsageArrival:     registry.UsageArrivalIncremental,
-			UsageAttribution: registry.UsageAttributionPerModel,
+			MCPDialect:   registry.MCPDialectMCPServersJSON,
+			UsageSources: usage.Sources{Live: tokenLive},
+		}, true
+	}
+	journalMeta := func(string) (registry.AgentMeta, bool) {
+		return registry.AgentMeta{
+			MCPDialect:   registry.MCPDialectMCPServersJSON,
+			UsageSources: vendorOnlyJournalSources,
 		}, true
 	}
 	completeEntry := map[string]any{"input_per_mtok": 3.0, "output_per_mtok": 15.0}
@@ -1280,11 +1285,26 @@ func TestValidateDispatchConfig_UsageReportingWarnings(t *testing.T) {
 		maxCostUSD      float64
 		rates           map[string]any
 		priceRates      *pricing.Rates
+		sshHosts        bool
 		meta            func(string) (registry.AgentMeta, bool)
 		check           string
 		wantWarn        bool
 		noKindInMessage bool
 	}{
+		{
+			name:      "agent.max_tokens set against a records-only token source warns for an SSH worker",
+			maxTokens: 50000,
+			sshHosts:  true,
+			meta:      journalMeta,
+			check:     "agent.kind.no_usage_reporting",
+			wantWarn:  true,
+		},
+		{
+			name:      "agent.max_tokens set against a records-only token source draws no warning for a local worker",
+			maxTokens: 50000,
+			meta:      journalMeta,
+			check:     "agent.kind.no_usage_reporting",
+		},
 		{
 			name:      "agent.max_tokens set against a kind resolving to no usage warns",
 			maxTokens: 50000,
@@ -1375,6 +1395,9 @@ func TestValidateDispatchConfig_UsageReportingWarnings(t *testing.T) {
 				}
 				if tt.rates != nil {
 					cfg.SetExtensionSection("token_rates", tt.rates)
+				}
+				if tt.sshHosts {
+					cfg.SetExtensionSection("worker", map[string]any{"ssh_hosts": []any{"host-1"}})
 				}
 				return cfg
 			}

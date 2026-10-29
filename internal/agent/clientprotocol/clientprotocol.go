@@ -11,6 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -22,8 +23,7 @@ func init() {
 		RequiresCommand:               true,
 		ValidateAgentConfig:           validateConfig,
 		MCPDialect:                    registry.MCPDialectACPSession,
-		UsageArrival:                  registry.UsageArrivalTurnEnd,
-		UsageAttribution:              registry.UsageAttributionPerModel,
+		UsageSources:                  usage.Sources{Live: usagesource.Default.Live},
 		CredentialEnv:                 registry.DeclareCredentialEnv(),
 		EffortForwarding:              registry.EffortNotForwarded,
 		UsageLimitRecognition:         registry.UsageLimitNotRecognized,
@@ -34,17 +34,6 @@ func init() {
 			registry.VerificationKeepsUserInstructions,
 			registry.VerificationKeepsSystemPrompt,
 		),
-		UsageSessionRules: []registry.UsageSessionRule{
-			{
-				// The measurement source reads a local filesystem, while a
-				// worker over SSH writes its measurements on the far host. This
-				// pins what a remote session reports today, not what it can ever
-				// report.
-				When:        func(passthrough map[string]any, remote bool) bool { return remote },
-				Arrival:     registry.UsageArrivalNone,
-				Attribution: registry.UsageAttributionNone,
-			},
-		},
 	})
 }
 
@@ -69,6 +58,11 @@ type ClientProtocolAdapter struct {
 	// every production caller reaches only NewClientProtocolAdapter, which
 	// leaves it at its zero value.
 	sources *registry.Registry[usagesource.Constructor, struct{}]
+
+	// declarations is the registry finishSession selects a usage declaration
+	// from. Nil means usagesource.Declarations. Set by a test before
+	// StartSession, as sources is.
+	declarations *registry.Registry[usagesource.Declaration, struct{}]
 }
 
 // NewClientProtocolAdapter constructs a [ClientProtocolAdapter]. The kind's

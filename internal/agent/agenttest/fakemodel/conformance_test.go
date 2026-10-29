@@ -16,8 +16,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest"
 	"github.com/sortie-ai/sortie/internal/agent/toolrelay"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -74,10 +76,10 @@ type conformanceCase[S any] struct {
 }
 
 type conformanceUsageState struct {
-	run         Run
-	arrival     registry.UsageArrival
-	attribution registry.UsageAttribution
-	spend       *SpendSources
+	run      Run
+	arrival  registry.UsageArrival
+	spend    *SpendSources
+	settling usageSettling
 }
 
 type conformanceContainmentState struct {
@@ -243,7 +245,6 @@ func conformanceTokens(input, output, cacheRead, cacheWrite int64) domain.TokenU
 }
 
 func conformancePerModel(s *conformanceUsageState) {
-	s.attribution = registry.UsageAttributionPerModel
 	s.run.Exchanges[conformanceAuxiliaryAt].Model = "model-a"
 	s.run.Exchanges[conformanceFirstTurnAt].Model = "model-a"
 	s.run.Exchanges[conformanceSecondTurnAt].Model = "model-b"
@@ -253,16 +254,47 @@ func conformancePerModel(s *conformanceUsageState) {
 	}
 }
 
+func conformanceLiveOnlyInterrupted(s *conformanceUsageState) {
+	live := domain.UsageProvenance{Source: "protocol", Strategy: 1}
+	s.spend = &SpendSources{Live: live, Records: domain.UsageProvenance{Source: "journal", Strategy: 2}}
+	s.settling.recordsUnread = true
+	s.run.Result.ExitReason = domain.EventTurnCancelled
+	s.run.Result.SpendUnaccounted = true
+	s.run.Result.UsageProvenance = live
+}
+
+func conformanceLiveLowerBound(s *conformanceUsageState) {
+	s.settling.liveLowerBound = true
+}
+
 func conformanceRegisterKinds() {
 	conformanceKindsOnce.Do(func() {
 		refuse := func() (domain.AgentAdapter, error) { return nil, errConformanceFactory }
 		registry.Agents.RegisterWithMeta(conformanceCommandKind, refuse, registry.AgentMeta{
+			UsageSources: usage.Sources{Live: usage.Source{
+				Category: usage.SourceOutput,
+				Strategy: usage.StrategyLive,
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, LowerBound: true},
+			}},
 			RequiresCommand: true,
 			CredentialEnv:   registry.DeclareCredentialEnv(conformanceDeclaredToken),
 
 			VerificationContext: registry.DeclareVerificationContext(),
 		})
-		registry.Agents.RegisterWithMeta(conformancePlainKind, refuse, registry.AgentMeta{})
+		registry.Agents.RegisterWithMeta(conformancePlainKind, refuse, registry.AgentMeta{
+			UsageSources: usage.Sources{
+				Live: usage.Source{
+					Category: usage.SourceOutput,
+					Strategy: usage.StrategyLive,
+					Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
+				},
+				Records: usage.Source{
+					Category: usage.SourceJournal,
+					Strategy: usage.StrategyRecords,
+					Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest},
+				},
+			},
+		})
 	})
 }
 
@@ -558,7 +590,7 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 		"turn outcome":                   turnOutcomeViolations(run, 2),
 		"deterministic tool path":        toolPathViolations(run, conformanceNonce),
 		"tool server":                    toolServerViolations(toolServer, conformanceServerTurn),
-		"exact usage":                    exactUsage(run, registry.UsageArrivalTurnEnd, registry.UsageAttributionNone, served(run.Exchanges, turnAndAuxiliary, Binding{}), nil, nil),
+		"exact usage":                    exactUsage(run, registry.UsageArrivalTurnEnd, served(run.Exchanges, turnAndAuxiliary, Binding{}), nil, nil, usageSettling{}),
 		"credential containment":         containmentViolations(run, streams),
 		"script exhaustion":              exhaustionViolations(exhaustion.run, Binding{}, conformanceNonce, false, exhaustion.failures),
 		"refused call":                   refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
@@ -1202,6 +1234,95 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			want: []string{"SpendUnaccounted"},
 		},
 		{
+			name: "event names a model the endpoint never served, whatever the attribution",
+			mutate: func(s *conformanceUsageState) {
+				s.run.Events[conformanceEventUsageAt].Model = "model-z"
+			},
+			want: []string{"per model, want"},
+		},
+		{name: "interrupted turn no records settle keeps its live figure", mutate: conformanceLiveOnlyInterrupted},
+		{
+			name: "interrupted turn no records settle with no figure and no provenance",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveOnlyInterrupted(s)
+				s.run.Result.UsageMeasured = false
+				s.run.Result.UsageProvenance = domain.UsageProvenance{}
+			},
+		},
+		{
+			name: "interrupted turn no records settle is not flagged unaccounted",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveOnlyInterrupted(s)
+				s.run.Result.SpendUnaccounted = false
+			},
+			want: []string{"SpendUnaccounted is false"},
+		},
+		{
+			name: "interrupted turn no records settle reports above the served usage",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveOnlyInterrupted(s)
+				s.run.Result.Usage.InputTokens++
+			},
+			want: []string{"exceeds"},
+		},
+		{
+			name: "interrupted turn no records settle carries the records provenance",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveOnlyInterrupted(s)
+				s.run.Result.UsageProvenance = s.spend.Records
+			},
+			want: []string{"the live source"},
+		},
+		{
+			name: "interrupted turn no records settle carries provenance with no figure",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveOnlyInterrupted(s)
+				s.run.Result.UsageMeasured = false
+			},
+			want: []string{"want none"},
+		},
+		{
+			name: "lower-bound live source, no figure, flagged unaccounted",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveLowerBound(s)
+				s.run.Result.UsageMeasured = false
+				s.run.Result.SpendUnaccounted = true
+			},
+		},
+		{
+			name: "lower-bound live source, no figure, not flagged",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveLowerBound(s)
+				s.run.Result.UsageMeasured = false
+			},
+			want: []string{"SpendUnaccounted is false"},
+		},
+		{
+			name: "figure marked a lower bound within the served usage",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveLowerBound(s)
+				s.run.Result.SpendUnaccounted = true
+				s.run.Result.Usage.InputTokens--
+			},
+		},
+		{
+			name: "figure marked a lower bound above the served usage",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveLowerBound(s)
+				s.run.Result.SpendUnaccounted = true
+				s.run.Result.Usage.InputTokens++
+			},
+			want: []string{"a lower bound, exceeds"},
+		},
+		{
+			name: "figure marked complete is held to the exact usage",
+			mutate: func(s *conformanceUsageState) {
+				conformanceLiveLowerBound(s)
+				conformanceReport(&s.run, func(u *domain.TokenUsage) { u.InputTokens-- })
+			},
+			want: []string{"Result.Usage ="},
+		},
+		{
 			name: "arrival none checks no figure",
 			mutate: func(s *conformanceUsageState) {
 				s.arrival = registry.UsageArrivalNone
@@ -1286,10 +1407,101 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			return conformanceUsageState{run: conformanceTurnRun(), arrival: registry.UsageArrivalTurnEnd}
 		},
 		func(s conformanceUsageState) []string {
-			return exactUsage(s.run, s.arrival, s.attribution,
-				served(s.run.Exchanges, turnAndAuxiliary, Binding{}), servedByModel(s.run.Exchanges, turnAndAuxiliary, Binding{}), s.spend)
+			return exactUsage(s.run, s.arrival,
+				served(s.run.Exchanges, turnAndAuxiliary, Binding{}), servedByModel(s.run.Exchanges, turnAndAuxiliary, Binding{}), s.spend, s.settling)
 		},
 	)
+}
+
+func TestAssertExactUsageReadsTheKindsSources(t *testing.T) {
+	t.Parallel()
+
+	conformanceRegisterKinds()
+	live := domain.UsageProvenance{Source: "protocol", Strategy: 1}
+	records := domain.UsageProvenance{Source: "journal", Strategy: 2}
+	unmeasured := func(exit domain.AgentEventType) func(run *Run) {
+		return func(run *Run) {
+			run.Events = nil
+			run.Result = domain.TurnResult{ExitReason: exit, SpendUnaccounted: true}
+		}
+	}
+	remote := func(run *Run) { run.Environment.Remote = true }
+	chain := func(mutations ...func(run *Run)) func(run *Run) {
+		return func(run *Run) {
+			for _, mutate := range mutations {
+				mutate(run)
+			}
+		}
+	}
+	tests := []struct {
+		name          string
+		binding       Binding
+		mutate        func(run *Run)
+		wantFailed    bool
+		wantReporting bool
+	}{
+		{
+			name:          "local launch of a kind with a records source carries a figure",
+			binding:       Binding{Kind: conformancePlainKind},
+			wantReporting: true,
+		},
+		{
+			name:    "remote launch of a records-only kind reports no figure and flags its spend",
+			binding: Binding{Kind: conformancePlainKind},
+			mutate:  chain(remote, unmeasured(domain.EventTurnCompleted)),
+		},
+		{
+			name:       "remote launch of a records-only kind leaves its spend unflagged",
+			binding:    Binding{Kind: conformancePlainKind},
+			mutate:     chain(remote, unmeasured(domain.EventTurnCompleted), func(run *Run) { run.Result.SpendUnaccounted = false }),
+			wantFailed: true,
+		},
+		{
+			name:    "lower-bound live source without Spend accepts a turn with no figure",
+			binding: Binding{Kind: conformanceCommandKind},
+			mutate:  unmeasured(domain.EventTurnCompleted),
+		},
+		{
+			name:       "lower-bound live source without Spend rejects an unflagged turn with no figure",
+			binding:    Binding{Kind: conformanceCommandKind},
+			mutate:     chain(unmeasured(domain.EventTurnCompleted), func(run *Run) { run.Result.SpendUnaccounted = false }),
+			wantFailed: true,
+		},
+		{
+			name:    "remote LiveOnly binding accepts an interrupted turn with no figure",
+			binding: Binding{Kind: conformanceCommandKind, Spend: &SpendSources{Live: live, Records: records}, SSH: &SSHVariant{LiveOnly: true}},
+			mutate:  chain(remote, unmeasured(domain.EventTurnCancelled)),
+		},
+		{
+			name:          "remote binding reading records rejects an interrupted turn with no figure",
+			binding:       Binding{Kind: conformanceCommandKind, Spend: &SpendSources{Live: live, Records: records}, SSH: &SSHVariant{}},
+			mutate:        chain(remote, unmeasured(domain.EventTurnCancelled)),
+			wantFailed:    true,
+			wantReporting: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := conformanceTurnRun()
+			if tt.mutate != nil {
+				tt.mutate(&run)
+			}
+			var reported bool
+			stand := new(testing.T)
+
+			assertExactUsage(stand, tt.binding, run, tt.name, func(*testing.T, string, agenttest.UsageReportingCase) { reported = true })
+
+			if stand.Failed() != tt.wantFailed {
+				t.Errorf("assertExactUsage(%s) failed = %v, want %v", tt.name, stand.Failed(), tt.wantFailed)
+			}
+			if reported != tt.wantReporting {
+				t.Errorf("assertExactUsage(%s) ran the per-case reporting check = %v, want %v", tt.name, reported, tt.wantReporting)
+			}
+		})
+	}
 }
 
 func TestConformancePropertyKilledBeforeRecords(t *testing.T) {

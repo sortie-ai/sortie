@@ -182,13 +182,13 @@ func monthBounds(now time.Time) (start, end time.Time) {
 
 // windowUsage folds the running sessions into the usage of the window's
 // finished runs. A session that has reported nothing yet adds no cost and
-// keeps the spend complete; a session whose kind reports no figure at all
-// makes it a lower bound.
+// keeps the spend complete; a session that can carry no token figure makes it
+// a lower bound.
 func windowUsage(rows persistence.IssueTokenUsage, running map[string]*RunningEntry, rates *pricing.Rates) persistence.IssueTokenUsage {
 	u := rows
 	for _, entry := range running {
 		u.UnaccountedTurns += entry.UnaccountedTurns
-		if !entry.UsageArrival.ReportsAnyFigure() {
+		if !entry.CarriesTokenFigure {
 			u.UnmeasuredSessions++
 			continue
 		}

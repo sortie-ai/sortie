@@ -68,7 +68,7 @@ The runtime reports a declared server's startup outcome on `mcpServer/startupSta
 
 Usage does not ride on the turn's completion payload; it arrives on its own notification, and if you go looking for a usage member on the completion event you will not find one.
 
-The registered kind declares `incremental` arrival and `per_model` attribution: the app-server sends one `thread/tokenUsage/updated` notification per model API request, each carrying `Model: state.model`.
+The registered kind attaches the token counts of the app-server's `thread/tokenUsage/updated` notifications as its live source, which the adapter maps itself, and derives `incremental` arrival and `per_model` attribution from it: the app-server sends one `thread/tokenUsage/updated` notification per model API request, each carrying `Model: state.model`.
 
 The totals on that notification are thread-cumulative, spanning every turn of the thread including turns from an earlier run that resumed it. The adapter recovers this run's own contribution through an `agentcore.ResumeBaseline`. The baseline is the resume usage handed over when `thread/resume` succeeds and zero when the adapter starts a thread; when a resumed thread received none, the first notification belonging to the current turn sets it to the total less that notification's `last` usage. A notification belonging to a different turn changes no figure and still counts as a measurement: after `thread/resume` the app-server replays the restored total once under an earlier turn's id. Every turn result carries the baseline's latest reading as its resume figure, because the app-server persists each total as it emits it and restores the last one persisted.
 
