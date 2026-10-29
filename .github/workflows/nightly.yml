@@ -106,6 +106,7 @@ jobs:
             clientprotocol_asking_command: "gemini --acp"
             clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
+            clientprotocol_usage_limit_answer: testdata/usage_limit/gemini_daily_quota_answer.json
 
           - name: GitHub Copilot CLI - ACP
             adapter: acp-copilot
@@ -128,6 +129,7 @@ jobs:
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
             clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: Copilot
+            clientprotocol_usage_limit_answer: testdata/usage_limit/copilot_rate_limit_answer.json
 
           - name: GitHub Copilot CLI - ACP (default declaration)
             adapter: acp-copilot-default
@@ -173,6 +175,7 @@ jobs:
             clientprotocol_spend_declaration: OpenCode
             clientprotocol_reported_model_prefix: scripted/
             clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
+            clientprotocol_usage_limit_answer: testdata/usage_limit/opencode_free_limit_answer.json
 
           - name: Kiro CLI - ACP (scripted)
             adapter: acp-kiro
@@ -359,6 +362,7 @@ jobs:
           SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: ${{ matrix.clientprotocol_spend_declaration }}
           SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: ${{ matrix.clientprotocol_reported_model_prefix }}
           SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
+          SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: ${{ matrix.clientprotocol_usage_limit_answer }}
           SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
           SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
           SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}

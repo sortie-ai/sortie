@@ -212,7 +212,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageAttribution:   registry.UsageAttributionSessionTotal,
 				wantCredentialEnvNames: nil,
 				wantEffortForwarding:   registry.EffortNotForwarded,
-				wantUsageLimit:         registry.UsageLimitNotRecognized,
+				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
 				name:                   "claude-code requires command, declares MCP dialect mcp_servers_json_always_load, derives incremental/per_model usage, declares session_persistence as a resume blocker, and declares its Anthropic credential names",
@@ -237,7 +237,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
 				wantEffortForwarding:   registry.EffortForwarded,
-				wantUsageLimit:         registry.UsageLimitNotRecognized,
+				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
 				name:                   "codex requires command, declares MCP dialect mcp_servers_toml, derives incremental/per_model usage, declares no resume blocker, and declares no credential names",
@@ -259,7 +259,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
 				wantEffortForwarding:   registry.EffortForwarded,
-				wantUsageLimit:         registry.UsageLimitNotRecognized,
+				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
 				name:                   "mock requires nothing, declares MCP dialect none, derives incremental/session_total usage, declares no resume blocker, and declares no credential names",

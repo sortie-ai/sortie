@@ -79,6 +79,47 @@ A runtime declaration can also pull its usage windows when a turn ends, for a ru
 
 A declaration is selected by the name the handshake reports, and a name with no declaration selects the default declaration. When the handshake reports no name, the launch command decides: a command line that names the runtime selects its declaration, so a runtime whose newer engine sends no `agentInfo` still pulls. The command is the configured agent command, which on an SSH worker is the remote command line and never the SSH executable that carries it. A handshake that names a different runtime than the command does selects the handshake's declaration, and the session logs one `Warn` record, `agent runtime differs from its configured command`, with `configured_runtime`, `handshake_runtime`, and `usage_declaration`. The notes of each runtime whose pull the kind runs describe it: `docs/copilot-adapter-notes.md`, `docs/opencode-adapter-notes.md`, `docs/gemini-adapter-notes.md`, and `docs/kiro-adapter-notes.md`.
 
+## Usage-limit refusals
+
+The kind declares that it recognizes a provider usage-limit refusal. The transport consults the usage declaration its session selected and names no runtime: the declaration states which `session/prompt` errors and which notifications of the turn are a refusal or a transient failure, whether the refusal's reset comes from the pull the turn already makes, and which opt-in the `initialize` request carries to receive the notifications. A runtime whose declaration states none keeps today's outcomes: `response_error` for a prompt error, `credential_unverified` for `-32000`, and the stop reason's outcome for a result. Recognition reads only members the runtime itself produces, never message text, `statusCode`, `errorCode`, or a body a provider authored. A recognized refusal ends the turn as `usage_limit`, unless the turn's stop reason is `cancelled`, which stays `cancelled`. A refusal's spend is unknown, never a measured zero, so the run still counts toward `agent.max_sessions`.
+
+What each runtime shows:
+
+| Runtime | Refusal shape | Held on |
+|---|---|---|
+| OpenCode | A prompt error whose `data.errorName` is `provider.free-limit`, `provider.quota`, `provider.budget-limit`, or `provider.model-budget-limit`. The error code is the generic `-32603` and is not read. `provider.rate-limit` is a throttle and stays `response_error`. | The configured model |
+| Copilot CLI | A `session.error` event with `errorType` `quota` or `rate_limit`, which the runtime sends as a notification and then ends the turn with `end_turn`. Any other `errorType`, and any event naming another session, leaves the stop reason's outcome. | The configured model |
+| Gemini CLI | A prompt error with code `429`. Codes `503` and `500` stay `response_error`. | The configured model |
+| Kiro CLI, `--agent-engine v3` | A prompt error, sent as `-32000`, whose `data.errorType` is `UsageLimitReachedError` or `OverageLimitReachedError`. A `data.retryErrorType` of `THROTTLING` is a throttle and ends `response_error`, not a rejected credential. | The whole kind |
+| Kiro CLI, default engine | A `_kiro.dev/error/rate_limit` notification with no `retry_warning` earlier in the turn, followed by a prompt error that is not `-32000`. | The whole kind |
+
+Shared vocabularies back this table. The OpenCode error names live with the `opencode` kind's shared limits package, and the `opencode` kind ends `usage_limit` for the same names. The Copilot `session.error` reading lives in a package the `copilot-cli` kind shares, so both routes read one definition.
+
+The reset instant comes from these sources, tried in this order:
+
+1. The refusal the runtime's own records hold for the turn. OpenCode's protocol error drops the retry delay, so the turn-end records read, the same session export that settles spend, also returns the refused message's error and its retry delay, anchored at the time the runtime recorded the failure. The refusal is used only when it names the same error as the prompt error and carries a delay.
+2. The earliest exhausted window of the pull the turn already makes, for refusals that read windows: OpenCode's console-metered names (`provider.free-limit`, `provider.budget-limit`, `provider.model-budget-limit`), Copilot's `quota`, every Gemini `429`, and every Kiro refusal. OpenCode's `provider.quota` never takes a console window, because any provider can send it, and a Copilot `rate_limit` never does, because no quota snapshot reports a rate limit.
+3. Zero, which the orchestrator treats like `turn_failed` and retries on the exponential backoff. A records read or a pull that fails, times out, finds nothing, or does not apply lands here, and so does a runtime with no pull.
+
+The OpenCode console windows meter a workspace, not a model, so the configured model filters none of them. Gemini's buckets meter one model each. With `agent-client-protocol.model` set, only that model's exhausted bucket supplies a Gemini reset, so a `429` after the runtime's silent retries of a per-minute throttle finds an unexhausted bucket and keeps zero. Without it the refused model is unknown, because the runtime may route a request to another model than the session shows, and every bucket counts. On this kind `model` names the held model and scopes the reset. It does not select the runtime's model, which `agent.command` does.
+
+What an operator sees and controls:
+
+- Copilot sends `session.error` only to a client that subscribed in `initialize`. Sortie subscribes only when `agent.command` names the `copilot` executable or the `@github/copilot` package, so a wrapper script that hides the name receives no subscription and the refused turn ends successful, as before. A runtime also drops events when its notification queue backs up, which loses the subscription's event the same way.
+- Gemini refuses only after its own silent retries, which can run for several minutes before the prompt error arrives. An API-key or Vertex session pulls no bucket, so its reset is zero and the issue retries on backoff.
+- Kiro's credit window resets on the billing-cycle date, read as 00:00 UTC. Whether the pull reports credits above the limit for an account with overage enabled is not established. If it does, a daily or hourly refusal on such an account takes the billing-cycle reset and the hold outlasts the real one; the orchestrator caps the wait.
+- A reset comes from the runtime host's clock. On an SSH worker, skew between the two hosts shifts the instant, and the orchestrator ignores a past instant and caps a far one.
+
+Refusal shapes that carry no structured member stay unrecognized and keep their old outcomes:
+
+- A Kiro default-engine overage, which arrives as a bare `-32603`.
+- A Kiro default-engine throttle or capacity shortage, which a `retry_warning` precedes. A usage limit the service answers at HTTP 429 reads the same way, and so does a refusal that follows a retried throttle in the same turn, because `retry_warning` latches for the turn.
+- A Gemini quota hit during chat compression, which arrives as code `500`.
+- A Copilot refusal on a launch that sent no subscription.
+- A Copilot refusal followed by an automatic switch to another model (`eligibleForAutoSwitch`), which the captures never showed. A turn that switches and finishes would read as refused.
+
+Every fixture behind these rules comes from a real runtime talking to a local stand-in upstream that answered each model request with one refusal. The runtime's frames are its own, while the provider's status, headers, and body are the stand-in's. No real provider refusal was captured on any runtime, so whether a live OpenCode refusal carries a retry delay is not established, and the design treats the delay as optional. The files under `testdata/usage_limit/` carry the provenance of each capture.
+
 ## Session close and delete
 
 Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. The gated suite drives this path against Copilot CLI and OpenCode, whose handshakes advertise `sessionCapabilities.close`.
@@ -89,7 +130,7 @@ When a handshake advertises `sessionCapabilities.delete`, a verification session
 
 The `initialize` wait during credential verification is the larger of `agent.read_timeout_ms` and `agentcore.CredentialExchangeBound`, because a runtime may talk to its own backend before it answers. `kiro-cli` with an API key takes far longer than the 5-second default read timeout to answer `initialize`; with a stored device login it answers in well under a second. With the longer wait, a refused key fails its first prompt with a `-32603` error whose `data` names the invalid bearer token.
 
-A `-32000` response to `initialize`, `session/new`, or `session/prompt` means the runtime refused its credential, on a verification session and a working one alike. A runtime that exits before it answers any startup request gets the shared early-exit report, not a credential diagnosis. A connection lost while the runtime stays alive past the observation grace keeps `port_exit`'s transport message. A failed `session/load` or `session/resume` still falls back to a fresh session and is never read as a credential refusal.
+A `-32000` response to `initialize`, `session/new`, or `session/prompt` means the runtime refused its credential, on a verification session and a working one alike, except where the session's usage declaration reads a `session/prompt` error as a usage-limit refusal or a throttle (see Usage-limit refusals). A runtime that exits before it answers any startup request gets the shared early-exit report, not a credential diagnosis. A connection lost while the runtime stays alive past the observation grace keeps `port_exit`'s transport message. A failed `session/load` or `session/resume` still falls back to a fresh session and is never read as a credential refusal.
 
 ## Session load spacing
 

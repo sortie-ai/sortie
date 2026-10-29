@@ -743,6 +743,42 @@ func TestForkPerTurnSession(t *testing.T) {
 		})
 	}
 
+	windowReset, carriedReset := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name          string
+		hook          bool
+		carried, want time.Time
+	}{
+		{name: "hook fills a zero reset from the exhausted window", hook: true, want: windowReset},
+		{name: "hook keeps the reset the refusal carries", hook: true, carried: carriedReset, want: carriedReset},
+		{name: "no hook leaves a zero reset"},
+	} {
+		t.Run("RefusalWindowReset_"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			hooks := noopHooks()
+			hooks.PullWindows = func(context.Context, usage.TurnEnding) ([]domain.UsageWindow, error) {
+				return []domain.UsageWindow{{Status: domain.UsageWindowExhausted, ResetsAt: windowReset}}, nil
+			}
+			if tc.hook {
+				hooks.RefusalWindowReset = func() bool { return true }
+			}
+			hooks.OnFinalize = func(func(domain.AgentEvent), any, int, error, []string, *domain.AgentError, *TurnSpend) (domain.TurnResult, *domain.AgentError) {
+				return domain.TurnResult{}, &domain.AgentError{Kind: domain.ErrUsageLimit, UsageLimit: &domain.UsageLimit{ResetsAt: tc.carried}}
+			}
+			sess := NewForkPerTurnSession(fakeTarget(t, false, agenttest.OutputScenario, agenttest.Output{Stdout: "line\n"}), hooks, slog.Default(), 0)
+
+			_, err := sess.RunTurn(waittest.Context(t), "p", func(domain.AgentEvent) {})
+
+			var ae *domain.AgentError
+			if !errors.As(err, &ae) || ae.Kind != domain.ErrUsageLimit || ae.UsageLimit == nil {
+				t.Fatalf("RunTurn() error = %v, want a usage_limit error carrying a UsageLimit", err)
+			}
+			if got := ae.UsageLimit.ResetsAt; !got.Equal(tc.want) {
+				t.Errorf("RunTurn() UsageLimit.ResetsAt = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
 	t.Run("Arm7_OnFinalizeError", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()

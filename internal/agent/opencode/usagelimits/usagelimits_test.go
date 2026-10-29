@@ -58,3 +58,60 @@ func TestPull(t *testing.T) {
 		})
 	}
 }
+
+func TestRefusal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		wantRefusal bool
+		wantMetered bool
+	}{
+		{"provider.free-limit", true, true},
+		{"provider.budget-limit", true, true},
+		{"provider.model-budget-limit", true, true},
+		{"provider.quota", true, false},
+		{"provider.rate-limit", false, false},
+		{"Provider.Free-Limit", false, false},
+		{"", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			limit, ok := usagelimits.Refusal(tt.name)
+			metered := usagelimits.ConsoleMetered(tt.name)
+
+			if ok != tt.wantRefusal || limit.ModelOnly != tt.wantRefusal || metered != tt.wantMetered {
+				t.Errorf("Refusal(%q) = %+v, %v, ConsoleMetered = %v, want refusal and ModelOnly %v, ConsoleMetered %v", tt.name, limit, ok, metered, tt.wantRefusal, tt.wantMetered)
+			}
+		})
+	}
+}
+
+func TestRetryAt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		failedAtMS int64
+		delayMS    *int64
+		want       time.Time
+	}{
+		{"delay after the failure", 1793288718816, new(int64(3600000)), time.UnixMilli(1793292318816).UTC()},
+		{"no failure time", 0, new(int64(3600000)), time.Time{}},
+		{"no delay", 1793288718816, nil, time.Time{}},
+		{"zero delay", 1793288718816, new(int64(0)), time.Time{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := usagelimits.RetryAt(tt.failedAtMS, tt.delayMS)
+
+			if !got.Equal(tt.want) || got.Location() != time.UTC {
+				t.Errorf("RetryAt(%s) = %v, want %v (UTC)", tt.name, got, tt.want)
+			}
+		})
+	}
+}

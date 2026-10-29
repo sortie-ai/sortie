@@ -1,0 +1,24 @@
+{
+  "positive": [
+    {"name": "opencode_free_limit", "capture": "opencode_free_limit.jsonl", "export": "opencode_free_limit_export.json", "command": "opencode acp", "wantResetsAtMs": 1793292318816, "wantModelOnly": true},
+    {"name": "opencode_quota", "capture": "opencode_quota.jsonl", "export": "opencode_quota_export.json", "command": "opencode acp", "wantModelOnly": true},
+    {"name": "opencode_budget_limit", "capture": "opencode_budget_limit.jsonl", "export": "opencode_budget_limit_export.json", "command": "opencode acp", "wantModelOnly": true},
+    {"name": "opencode_model_budget_limit", "capture": "opencode_model_budget_limit.jsonl", "export": "opencode_model_budget_limit_export.json", "command": "opencode acp", "wantModelOnly": true},
+    {"name": "copilot_quota", "capture": "copilot_quota.jsonl", "command": "copilot --acp --stdio", "wantModelOnly": true},
+    {"name": "copilot_rate_limit", "capture": "copilot_rate_limit.jsonl", "command": "copilot --acp --stdio", "wantModelOnly": true},
+    {"name": "gemini_daily_quota", "capture": "gemini_daily_quota.jsonl", "command": "gemini --acp", "wantModelOnly": true},
+    {"name": "kiro_v3_monthly", "capture": "kiro_v3_monthly.jsonl", "command": "kiro-cli acp"},
+    {"name": "kiro_v3_overage", "capture": "kiro_v3_overage.jsonl", "command": "kiro-cli acp"},
+    {"name": "kiro_v2_sqe_monthly", "capture": "kiro_v2_sqe_monthly.jsonl", "command": "kiro-cli acp"}
+  ],
+  "negative": [
+    {"name": "kiro default engine throttled after retries", "capture": "kiro_v2_monthly.jsonl", "command": "kiro-cli acp", "wantKind": "response_error"},
+    {"name": "kiro default engine without capacity", "capture": "kiro_v2_capacity.jsonl", "command": "kiro-cli acp", "wantKind": "response_error"},
+    {"name": "kiro v3 client throttle", "capture": "kiro_v3_throttle.jsonl", "command": "kiro-cli acp", "wantKind": "response_error"},
+    {"name": "event of another error type", "capture": "copilot_quota.jsonl", "command": "copilot --acp --stdio", "edits": [{"frame": "sessionEvent", "old": "\"errorType\":\"quota\"", "new": "\"errorType\":\"query\""}]},
+    {"name": "event of another session", "capture": "copilot_quota.jsonl", "command": "copilot --acp --stdio", "edits": [{"frame": "sessionEvent", "old": "7a02266e-564a-4c78-ae4b-e3cf394f6ded", "new": "other-session"}]},
+    {"name": "launch not named for the runtime sends no opt-in", "capture": "copilot_quota.jsonl", "command": "protocol-agent --acp --stdio"},
+    {"name": "credential error code without a verdict", "capture": "gemini_daily_quota.jsonl", "command": "gemini --acp", "edits": [{"frame": "daily quota", "old": "\"code\":429", "new": "\"code\":-32000"}], "wantKind": "credential_unverified"},
+    {"name": "refusal with a cancelled stop reason", "capture": "copilot_quota.jsonl", "command": "copilot --acp --stdio", "edits": [{"frame": "stopReason", "old": "\"end_turn\"", "new": "\"cancelled\""}], "wantKind": "turn_failed"}
+  ]
+}

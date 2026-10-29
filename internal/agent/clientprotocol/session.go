@@ -91,6 +91,14 @@ type sessionState struct {
 
 	credentialVerification bool
 
+	// initializeMeta is the clientCapabilities._meta object the initialize
+	// request carries; nil adds nothing.
+	initializeMeta json.RawMessage
+
+	// configuredModel is the model setting of the settings block, empty when
+	// absent or not a string. It scopes a refusal's reset to the held model.
+	configuredModel string
+
 	launchEnv []string
 
 	// launchAddition is what the launch carried for the selected declaration's
@@ -182,8 +190,9 @@ type usageObserved struct {
 // recordsResult is one turn's records read; turn lets a result arriving after
 // that turn ended be dropped.
 type recordsResult struct {
-	turn *activeTurn
-	read usage.RecordsRead
+	turn    *activeTurn
+	read    usage.RecordsRead
+	refusal usagesource.RecordedRefusal
 }
 
 // pullResult is one turn's usage pull outcome; turn lets a result arriving after
@@ -301,7 +310,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		verification, verificationSwitches, _ = usagesource.ClaimVerification(target, os.Environ())
 	}
 
-	addition := chooseDeclaration(declarations, nil, target).declaration.LaunchAddition
+	launchChoice := chooseDeclaration(declarations, nil, target).declaration
+	addition := launchChoice.LaunchAddition
+	configuredModel, _ := registry.ModelSetting(params.Settings)
 
 	// Every failure below returns without a session, so this is the only release
 	// of what a claim armed across the starts.
@@ -337,6 +348,8 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 			claimed:                claimed,
 			verification:           verification,
 			tools:                  tools,
+			initializeMeta:         launchChoice.InitializeMeta,
+			configuredModel:        configuredModel,
 		}
 		state.drainGrace = a.drainGrace
 		if state.drainGrace <= 0 {
@@ -735,6 +748,7 @@ func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse
 	req := initializeRequest{
 		ProtocolVersion: protocolVersion(pinnedProtocolVersion),
 		ClientCapabilities: &clientCapabilities{
+			Meta:     state.initializeMeta,
 			Fs:       &fileSystemCapabilities{ReadTextFile: &no, WriteTextFile: &no},
 			Terminal: &no,
 		},

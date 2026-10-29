@@ -22,8 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
@@ -136,7 +139,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	t.Setenv("COPILOT_GITHUB_TOKEN", "unused-token-for-quota-endpoint")
 
-	fakemodel.AssertConformance(t, fakemodel.Binding{
+	binding := fakemodel.Binding{
 		Kind:             "copilot-cli",
 		Passthrough:      map[string]any{"model": "scripted-model", "max_autopilot_continues": float64(5)},
 		CredentialEnv:    []string{"COPILOT_PROVIDER_API_KEY"},
@@ -185,7 +188,22 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 				t.Error("state.work.Observed() = false after a scripted turn, want true")
 			}
 		},
-	})
+	}
+	fakemodel.AssertConformance(t, binding)
+
+	// The runtime retries a 429 that names no Retry-After six times before it
+	// refuses.
+	refusal := slices.Repeat([]fakemodel.Response{{Status: http.StatusTooManyRequests, Text: "Rate limit exceeded."}}, 6)
+	for _, remote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("usage limit refusal remote=%v", remote), func(t *testing.T) {
+			run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{Script: refusal, Prompt: "Reply with the word ok.", Remote: remote})
+
+			var agentErr *domain.AgentError
+			if !errors.As(run.Err, &agentErr) || agentErr.Kind != domain.ErrUsageLimit || agentErr.UsageLimit == nil || !agentErr.UsageLimit.ModelOnly {
+				t.Fatalf("RunTurn error = %v, want a model-only usage_limit error", run.Err)
+			}
+		})
+	}
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

@@ -23,8 +23,8 @@ import (
 // ForkPerTurnHooks provides the adapter-specific behavior points plugged into
 // [ForkPerTurnSession]. BuildArgs, ParseLine, GetUsage, GetSessionID, and
 // OnFinalize are required. EmitSessionStartID, PromptOnStdin,
-// FirstEventTimeout, SettleUsage, PullWindows, TurnEnv, Tools, and
-// ToolPlacement are optional, and each zero value keeps the default turn
+// FirstEventTimeout, SettleUsage, PullWindows, RefusalWindowReset, TurnEnv,
+// Tools, and ToolPlacement are optional, and each zero value keeps the default turn
 // behavior.
 type ForkPerTurnHooks struct {
 	// BuildArgs is called once per RunTurn before the subprocess starts.
@@ -151,6 +151,12 @@ type ForkPerTurnHooks struct {
 	// non-empty result reaches the consumer as usage windows; an error is
 	// logged and does not change how the turn ends. Nil disables it.
 	PullWindows func(ctx context.Context, ending usage.TurnEnding) ([]domain.UsageWindow, error)
+
+	// RefusalWindowReset reports, once OnFinalize returned for a turn,
+	// whether that turn's usage_limit refusal reads its reset from the
+	// windows PullWindows returned. A refusal that carries no reset then
+	// takes the earliest exhausted window's. Nil means no turn's does.
+	RefusalWindowReset func() bool
 
 	// TurnEnv returns the started process's environment and the settings
 	// an SSH launch carries. Nil keeps the host environment and no
@@ -660,10 +666,13 @@ loop:
 		s.hooks.SettleUsage(context.WithoutCancel(ctx), emit, &spend)
 	}
 
+	var pulledWindows []domain.UsageWindow
 	if s.hooks.PullWindows != nil {
 		windows, err := s.hooks.PullWindows(ctx, turnEnding(cancelled, endedByHook, trigger, scanErr))
 		if err != nil {
 			logger.Debug("usage pull failed", slog.Any("error", err))
+		} else {
+			pulledWindows = windows
 		}
 		if len(windows) > 0 {
 			EmitUsageWindows(emit, time.Now().UTC(), windows)
@@ -733,11 +742,26 @@ loop:
 	// skeleton calls EmitWarnLines when agentErr is non-nil, so
 	// OnFinalize must not call it.
 	result, agentErr := s.hooks.OnFinalize(emit, lastParsed, exitCode, waitErr, stderrLines, earlyExit, &spend)
+	s.fillRefusalReset(agentErr, pulledWindows)
 	if agentErr != nil {
 		procutil.EmitWarnLines(stderrLines, logger)
 		return result, agentErr
 	}
 	return result, nil
+}
+
+// fillRefusalReset gives a usage_limit error that carries no reset the earliest
+// exhausted window of the turn's pull, when the adapter says this turn's
+// refusal reads its reset from there. A reset the error already carries is
+// kept.
+func (s *ForkPerTurnSession) fillRefusalReset(agentErr *domain.AgentError, windows []domain.UsageWindow) {
+	if s.hooks.RefusalWindowReset == nil || agentErr == nil || agentErr.Kind != domain.ErrUsageLimit {
+		return
+	}
+	if agentErr.UsageLimit == nil || !agentErr.UsageLimit.ResetsAt.IsZero() || !s.hooks.RefusalWindowReset() {
+		return
+	}
+	agentErr.UsageLimit.ResetsAt = usage.RefusalReset(windows, time.Now().UTC())
 }
 
 // turnStdin returns the reader a turn's process reads from: the SSH

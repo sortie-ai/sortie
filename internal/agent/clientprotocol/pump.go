@@ -97,6 +97,17 @@ type activeTurn struct {
 	children childSessions
 
 	usageUpdateSeen bool
+
+	// refusal is the usage-limit refusal the turn's notifications or prompt
+	// error showed, a copy the turn owns. retrying latches once the runtime
+	// announced a retry of a refused request, after which a notified refusal is
+	// no longer the turn's.
+	refusal  *usagesource.Refusal
+	retrying bool
+
+	// pulledWindows are the windows of the turn-end pull, nil when none ran or
+	// it failed.
+	pulledWindows []domain.UsageWindow
 }
 
 // childSessions is the child-session state of one running turn, kept in
@@ -669,12 +680,33 @@ func (p *pumpState) handleMessage(msg *jsonrpc.Message) {
 	case jsonrpc.KindRequest:
 		p.answerMethodNotFound(msg)
 	case jsonrpc.KindNotification:
-		p.state.logger.Debug("unhandled notification", slog.String("method", msg.Method))
+		p.handleTurnNotification(msg)
 	case jsonrpc.KindMalformed:
 		p.emitOrQueue(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: time.Now().UTC(), Message: malformedLineMessage})
 	case jsonrpc.KindStreamEnd:
 		p.handleStreamEndMessage(msg)
 	}
+}
+
+// handleTurnNotification lets the declaration read a notification of the active
+// turn, and records what it shows of a refusal. A notification the declaration
+// does not read, or one outside a turn, is only logged.
+func (p *pumpState) handleTurnNotification(msg *jsonrpc.Message) {
+	turn := p.activeTurn
+	if turn != nil && p.sessionIDKnown && p.declaration.TurnNotification != nil {
+		signal := p.declaration.TurnNotification(p.sessionID, msg.Method, msg.Params)
+		if signal.Retrying {
+			turn.retrying = true
+		}
+		if signal.Refusal != nil && turn.refusal == nil && !turn.retrying {
+			refusal := *signal.Refusal
+			turn.refusal = &refusal
+		}
+		if signal.Retrying || signal.Refusal != nil {
+			return
+		}
+	}
+	p.state.logger.Debug("unhandled notification", slog.String("method", msg.Method))
 }
 
 // handleStreamEndMessage handles a KindStreamEnd message that reached the pump
@@ -711,7 +743,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 	defer p.launchPull(turn)
 
 	if msg.Error != nil {
-		p.recoverThenFinalize(promptErrorEvidence(msg.Error))
+		p.recoverThenFinalize(p.promptErrorEvidence(turn, msg.Error))
 		return
 	}
 
@@ -726,6 +758,9 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 	}
 
 	evidence := stopReasonEvidence(resp.StopReason)
+	if turn.refusal != nil && resp.StopReason != stopReasonCancelled {
+		evidence = refusalEvidence(*turn.refusal, refusalMessage(*turn.refusal))
+	}
 	bound, _ := spendLowerBound(resp.Meta)
 	if bound > 0 {
 		turn.spend.MarkModelReached()
@@ -745,19 +780,60 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 	p.armDrain(turn, evidence, bound)
 }
 
-func promptErrorEvidence(e *jsonrpc.Error) agentcore.TurnEvidence {
-	if e.Code == errorCodeAuthRequired {
+// promptErrorEvidence maps a session/prompt error. The declaration's verdict
+// outranks the authentication-required code, which a runtime also uses for its
+// usage limits; a refusal a notification showed earlier does not.
+func (p *pumpState) promptErrorEvidence(turn *activeTurn, e *jsonrpc.Error) agentcore.TurnEvidence {
+	message := fmt.Sprintf("session/prompt error %d: %s", e.Code, quoteJSONRPCError(e))
+
+	var verdict usagesource.PromptVerdict
+	if p.declaration.PromptError != nil {
+		verdict = p.declaration.PromptError(*e)
+	}
+	switch {
+	case verdict.Refusal != nil:
+		refusal := *verdict.Refusal
+		turn.refusal = &refusal
+		return refusalEvidence(refusal, message)
+	case verdict.Transient:
+		return responseErrorEvidence(message)
+	case e.Code == errorCodeAuthRequired:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrCredentialUnverified,
 			TerminalMessage:   agentcore.CredentialRefusedMessage(quoteJSONRPCError(e)),
 		}
+	case turn.refusal != nil:
+		return refusalEvidence(*turn.refusal, message)
 	}
+	return responseErrorEvidence(message)
+}
+
+func responseErrorEvidence(message string) agentcore.TurnEvidence {
 	return agentcore.TurnEvidence{
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrResponseError,
-		TerminalMessage:   fmt.Sprintf("session/prompt error %d: %s", e.Code, quoteJSONRPCError(e)),
+		TerminalMessage:   message,
 	}
+}
+
+// refusalEvidence carries a copy of the refusal's limit, so a reset filled in
+// later never reaches the refusal the turn keeps.
+func refusalEvidence(r usagesource.Refusal, message string) agentcore.TurnEvidence {
+	limit := r.Limit
+	return agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrUsageLimit,
+		UsageLimit:        &limit,
+		TerminalMessage:   message,
+	}
+}
+
+func refusalMessage(r usagesource.Refusal) string {
+	if r.Message == "" {
+		return "usage-limit refusal"
+	}
+	return fmt.Sprintf("usage-limit refusal: %q", redact.Truncate(r.Message, messageTruncateLimit))
 }
 
 // armDrain runs one turn's measurement wait on its own goroutine: the source is
@@ -840,8 +916,8 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		ctx, cancel := contextUntilStop(loopDone)
 		defer cancel()
 
-		read := readTurnRecords(ctx, state, declaration, children)
-		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read}}})
+		read, refusal := readTurnRecords(ctx, state, declaration, children)
+		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read, refusal: refusal}}})
 	}()
 }
 
@@ -852,7 +928,20 @@ func (p *pumpState) handleRecordsRead(result *recordsResult) {
 	if turn == nil || turn != result.turn || !turn.recordsPending {
 		return
 	}
+	applyRecordedReset(turn, result.refusal)
 	p.settleTurn(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, result.read))
+}
+
+// applyRecordedReset gives the held refusal the reset the runtime's records
+// hold for it. A record naming another refusal, or carrying no reset, leaves
+// the evidence as it stood.
+func applyRecordedReset(turn *activeTurn, recorded usagesource.RecordedRefusal) {
+	limit := turn.drainEvidence.UsageLimit
+	if turn.refusal == nil || turn.refusal.Name == "" || recorded.Name != turn.refusal.Name ||
+		recorded.ResetsAt.IsZero() || limit == nil || turn.drainEvidence.TerminalErrorKind != domain.ErrUsageLimit {
+		return
+	}
+	limit.ResetsAt = recorded.ResetsAt
 }
 
 // settleSpend runs the ledger over turn and applies the settlement to the turn's
@@ -977,6 +1066,8 @@ func (p *pumpState) handlePullResult(result *pullResult) {
 
 	if result.err != nil {
 		p.state.logger.Debug("usage pull failed", slog.Any("error", result.err))
+	} else {
+		turn.pulledWindows = result.windows
 	}
 	if len(result.windows) > 0 {
 		agentcore.EmitUsageWindows(p.publishOrQueue, time.Now().UTC(), result.windows)
@@ -1319,6 +1410,7 @@ func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *u
 	p.flushAgentMessage()
 	p.activeTurn = nil
 	ev = turn.disposition(ev)
+	p.resetFromPulledWindows(turn, ev)
 
 	var recovered *agentcore.RecoveredUsage
 	if observed != nil {
@@ -1339,6 +1431,25 @@ func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *u
 	case turn.resultCh <- turnEnd{result: result, err: agentErr}:
 	case <-turn.done:
 	}
+}
+
+// resetFromPulledWindows fills a zero reset of the turn's refusal from the
+// earliest exhausted window of the turn-end pull. With a configured model, a
+// window the declaration says meters another model is left out. A reset the
+// records already set is never replaced.
+func (p *pumpState) resetFromPulledWindows(turn *activeTurn, ev agentcore.TurnEvidence) {
+	if turn.refusal == nil || !turn.refusal.WindowReset || ev.TerminalErrorKind != domain.ErrUsageLimit ||
+		ev.UsageLimit == nil || !ev.UsageLimit.ResetsAt.IsZero() {
+		return
+	}
+	windows := turn.pulledWindows
+	if model := p.state.configuredModel; model != "" && p.declaration.WindowModel != nil {
+		windows = slices.DeleteFunc(slices.Clone(windows), func(w domain.UsageWindow) bool {
+			metered := p.declaration.WindowModel(w.Key)
+			return metered != "" && metered != model
+		})
+	}
+	ev.UsageLimit.ResetsAt = usage.RefusalReset(windows, time.Now().UTC())
 }
 
 func accountsForWholeTurn(observed *usageObserved) bool {

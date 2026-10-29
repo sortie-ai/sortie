@@ -886,9 +886,9 @@ func TestNewSessionLedgerReadsRecordsOnEveryLaunch(t *testing.T) {
 
 			var reads int
 			decl := scriptedSpendDeclaration(nil, nil, nil)
-			decl.ReadRecords = func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
+			decl.ReadRecords = func(context.Context, usagesource.PullRuntime) (usagesource.Records, error) {
 				reads++
-				return []usage.SpendReading{spendReading(10, 2, 0, "model-a", "u1")}, nil
+				return usagesource.Records{Spend: []usage.SpendReading{spendReading(10, 2, 0, "model-a", "u1")}}, nil
 			}
 			state := &sessionState{logger: discardLogger(), target: tt.target}
 			live := spendReading(100, 20, 0, "", "")
@@ -950,11 +950,11 @@ func TestChildSessionSpendSettlesTheTurn(t *testing.T) {
 				_ = json.Unmarshal(update, &decoded)
 				return decoded.Signal
 			}
-			declaration.ReadRecords = func(_ context.Context, rt usagesource.PullRuntime) ([]usage.SpendReading, error) {
+			declaration.ReadRecords = func(_ context.Context, rt usagesource.PullRuntime) (usagesource.Records, error) {
 				if rt.SessionID() == "child-1" {
-					return []usage.SpendReading{spendReading(50, 5, 0, "model-b", "c1")}, nil
+					return usagesource.Records{Spend: []usage.SpendReading{spendReading(50, 5, 0, "model-b", "c1")}}, nil
 				}
-				return []usage.SpendReading{spendReading(100, 10, 0, "model-a", "p1")}, nil
+				return usagesource.Records{Spend: []usage.SpendReading{spendReading(100, 10, 0, "model-a", "p1")}}, nil
 			}
 			ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
 			if err != nil {

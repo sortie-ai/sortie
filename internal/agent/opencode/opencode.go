@@ -52,15 +52,14 @@ var usageSources = usage.Sources{
 
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
-		RequiresCommand:               true,
-		DefaultCommand:                defaultCommand,
-		ValidateAgentConfig:           validateConfig,
-		MCPDialect:                    registry.MCPDialectMCPMemberJSON,
-		UsageSources:                  usageSources,
-		CredentialEnv:                 registry.DeclareCredentialEnv(),
-		EffortForwarding:              registry.EffortForwarded,
-		UsageLimitRecognition:         registry.UsageLimitNotRecognized,
-		UsageLimitNotRecognizedReason: "the runtime's run error carries no usage-limit form the adapter reads",
+		RequiresCommand:       true,
+		DefaultCommand:        defaultCommand,
+		ValidateAgentConfig:   validateConfig,
+		MCPDialect:            registry.MCPDialectMCPMemberJSON,
+		UsageSources:          usageSources,
+		CredentialEnv:         registry.DeclareCredentialEnv(),
+		EffortForwarding:      registry.EffortForwarded,
+		UsageLimitRecognition: registry.UsageLimitRecognized,
 		VerificationContext: registry.DeclareVerificationContext(
 			registry.VerificationKeepsSomeTools,
 			registry.VerificationKeepsProjectInstructions,
@@ -111,6 +110,9 @@ type sessionState struct {
 	runtimeError  *rawRunError
 	outcome       domain.AgentEventType
 	recovered     bool
+
+	// runtimeErrorAtMS is the timestamp of the event runtimeError came from.
+	runtimeErrorAtMS int64
 }
 
 // NewOpenCodeAdapter creates an [OpenCodeAdapter].
@@ -206,6 +208,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
 	state.finishingStep = false
 	state.runtimeError = nil
+	state.runtimeErrorAtMS = 0
 	state.outcome = domain.EventTurnCompleted
 	state.recovered = false
 
@@ -254,6 +257,7 @@ func newForkSession(state *sessionState) *agentcore.ForkPerTurnSession {
 		ToolPlacement:     state.placeTools,
 	}
 	hooks.PullWindows = usage.NewPuller(usagelimits.Source, agentcore.AuxiliaryTimeout(state.agentConfig), state.credentialVerification, opencodePull(state)).Pull
+	hooks.RefusalWindowReset = state.refusalReadsWindows
 	return agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 }
 
@@ -428,7 +432,7 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 
 	case "error":
 		s.outcome = domain.EventTurnFailed
-		if readings := freeLimitReadings(event.Error); len(readings) > 0 {
+		if readings := freeLimitReadings(event.Error, event.Timestamp); len(readings) > 0 {
 			agentcore.EmitUsageWindows(emit, now, usage.Windows(freeLimitSource, readings, now))
 		}
 		// One failure can surface as two error events: the actionable
@@ -439,6 +443,7 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 		// arrives last.
 		if s.runtimeError == nil || !isMaskedServerError(rawRunErrorMessage(event.Error)) {
 			s.runtimeError = event.Error
+			s.runtimeErrorAtMS = event.Timestamp
 		}
 		return &event, nil
 
@@ -503,9 +508,33 @@ func (s *sessionState) finalizeTurn(emit func(domain.AgentEvent), _ any, exitCod
 		ev.Terminal = agentcore.TerminalFailure
 		ev.TerminalErrorKind = domain.ErrTurnFailed
 		ev.TerminalMessage = rawRunErrorMessage(s.runtimeError) + freeTierRefusalClause(s.runtimeError, s.passthrough)
+		if limit, ok := s.refusal(); ok {
+			ev.TerminalErrorKind = domain.ErrUsageLimit
+			ev.UsageLimit = &limit
+		}
 	}
 
 	return s.usage.Finalize(emit, s.logger(), ev, s.currentSessionID(), 0, nil, *spend)
+}
+
+// refusal returns the usage limit the turn's runtime error is, with the reset
+// the error's own delay gives; ok is false for any other error.
+func (s *sessionState) refusal() (domain.UsageLimit, bool) {
+	if s.runtimeError == nil {
+		return domain.UsageLimit{}, false
+	}
+	limit, ok := usagelimits.Refusal(s.runtimeError.Type)
+	if !ok {
+		return domain.UsageLimit{}, false
+	}
+	limit.ResetsAt = usagelimits.RetryAt(s.runtimeErrorAtMS, s.runtimeError.RetryAfterMs)
+	return limit, true
+}
+
+// refusalReadsWindows reports whether the turn's runtime error is a refusal the
+// OpenCode console meters, so an exhausted console window may supply its reset.
+func (s *sessionState) refusalReadsWindows() bool {
+	return s.runtimeError != nil && usagelimits.ConsoleMetered(s.runtimeError.Type)
 }
 
 func (s *sessionState) logger() *slog.Logger {

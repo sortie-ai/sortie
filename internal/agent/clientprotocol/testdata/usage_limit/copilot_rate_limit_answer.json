@@ -1,0 +1,7 @@
+{
+  "status": 429,
+  "header": {},
+  "body": {"error": {"message": "Rate limit reached for requests", "type": "requests", "code": "rate_limit_exceeded"}},
+  "model_only": true,
+  "requests": 6
+}

@@ -3,7 +3,9 @@
 // credential-verification additions that drop a runtime's agent context, and
 // usage declarations (what a runtime's protocol messages report about provider
 // usage windows and spend, how to pull those windows when a turn ends, and how
-// to read the runtime's own per-request spend records).
+// to read the runtime's own per-request spend records), and which of the
+// runtime's prompt errors and turn notifications are provider usage-limit
+// refusals or transient failures.
 //
 // The transport names no runtime. It asks each source three questions in
 // order: does it claim this launch, does the handshake report the runtime's
@@ -19,9 +21,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -70,10 +75,11 @@ type Declaration struct {
 	Records usage.Source
 
 	// ReadRecords reads every spend record of the session from the runtime's
-	// host, in the order the runtime wrote them. A missing journal returns no
-	// readings and no error; any other failure returns an error and no
-	// readings. Nil exactly when Records.Spend.Shape is usage.SpendUndeclared.
-	ReadRecords func(ctx context.Context, rt PullRuntime) ([]usage.SpendReading, error)
+	// host, in the order the runtime wrote them, and the refusal its records
+	// hold for the session's current turn. A missing journal returns no
+	// records and no error; any other failure returns an error and no
+	// records. Nil exactly when Records.Spend.Shape is usage.SpendUndeclared.
+	ReadRecords func(ctx context.Context, rt PullRuntime) (Records, error)
 
 	// Launches reports whether target starts this runtime, local or remote. It
 	// selects the declaration for a launch whose handshake reports no name, and
@@ -97,6 +103,84 @@ type Declaration struct {
 	// arrives before the turn's first usage_update then does not show the turn
 	// reaching the model.
 	UsageUpdateBeforeRequest bool
+
+	// InitializeMeta is the clientCapabilities._meta object the initialize
+	// request carries when this declaration's Launches matches the launch.
+	// Nil adds nothing.
+	InitializeMeta json.RawMessage
+
+	// PromptError reads a session/prompt error response. Nil when the
+	// runtime's prompt errors carry nothing the declaration reads.
+	PromptError func(e jsonrpc.Error) PromptVerdict
+
+	// TurnNotification reads a notification of session sessionID whose method
+	// is neither session/update nor session/request_permission. Nil when the
+	// runtime sends none the declaration reads.
+	TurnNotification func(sessionID, method string, params json.RawMessage) TurnSignal
+
+	// WindowModel returns the model the pulled window with this key meters,
+	// or "" when it meters every model. Nil when no pulled window meters a
+	// single model.
+	WindowModel func(key string) string
+}
+
+// Refusal is a provider usage-limit refusal a declaration read off a
+// session/prompt error or a notification of the turn.
+type Refusal struct {
+	// Name is the runtime's own name for the refusal, which its records
+	// repeat. Empty when it keeps none.
+	Name string
+
+	// Message is the runtime's own text for a refusal a notification reports.
+	// Empty otherwise.
+	Message string
+
+	// Limit is the model scope of the refusal. ResetsAt stays zero: the records
+	// read and the pulled windows supply it.
+	Limit domain.UsageLimit
+
+	// WindowReset reports that the reset is read from the exhausted windows of
+	// the turn-end pull.
+	WindowReset bool
+}
+
+// PromptVerdict is what a declaration reads off one session/prompt error.
+type PromptVerdict struct {
+	// Refusal is non-nil when the error is a provider usage-limit refusal.
+	Refusal *Refusal
+
+	// Transient is true when the runtime classifies the error as a transient
+	// provider failure.
+	Transient bool
+}
+
+// TurnSignal is what one notification of the turn shows about a refusal.
+type TurnSignal struct {
+	// Refusal is non-nil when the notification reports a refusal.
+	Refusal *Refusal
+
+	// Retrying is true when the runtime announced a retry of a refused model
+	// request of the turn.
+	Retrying bool
+}
+
+// Records is what one read of a session's records returned.
+type Records struct {
+	// Spend holds every spend record, in the order the runtime wrote them.
+	Spend []usage.SpendReading
+
+	// Refusal is zero when the session's current turn records none.
+	Refusal RecordedRefusal
+}
+
+// RecordedRefusal is the provider usage-limit refusal a session's records hold
+// for its current turn.
+type RecordedRefusal struct {
+	// Name is the runtime's own name for the refusal. Empty when none.
+	Name string
+
+	// ResetsAt is in UTC and zero when the record carries no usable delay.
+	ResetsAt time.Time
 }
 
 // LaunchAddition turns off a model request the runtime makes on its own that
@@ -204,7 +288,8 @@ func (d Declaration) Effective() Declaration {
 
 // checkDeclaration refuses a declaration the transport cannot measure a
 // session with: the transport reads spend only off the prompt result, through
-// the ledger.
+// the ledger. It also refuses an InitializeMeta that no launch selects or that
+// is not a JSON object.
 func checkDeclaration(d Declaration, _ struct{}) error {
 	effective := d.Effective()
 	if err := (usage.Sources{Live: effective.Live, Records: d.Records}).Check(); err != nil {
@@ -219,6 +304,10 @@ func checkDeclaration(d Declaration, _ struct{}) error {
 		return errors.New("PromptSpend must be set exactly when the live source declares a spend shape")
 	case (d.ReadRecords == nil) != (d.Records.Spend.Shape == usage.SpendUndeclared):
 		return errors.New("ReadRecords must be set exactly when the records source declares a spend shape")
+	case d.InitializeMeta != nil && d.Launches == nil:
+		return errors.New("InitializeMeta requires Launches")
+	case d.InitializeMeta != nil && !isJSONObject(d.InitializeMeta):
+		return errors.New("InitializeMeta must be a JSON object")
 	case d.Live.Spend.DuringTurn:
 		return errors.New("live source reports during the turn, but the transport reads spend off the prompt result only")
 	case effective.Live.Spend.Shape != usage.SpendUndeclared:
@@ -227,6 +316,11 @@ func checkDeclaration(d Declaration, _ struct{}) error {
 		}
 	}
 	return nil
+}
+
+func isJSONObject(raw []byte) bool {
+	_, ok := jsonObject(raw)
+	return ok
 }
 
 // Reader is one measurement source. The transport declares its own interface

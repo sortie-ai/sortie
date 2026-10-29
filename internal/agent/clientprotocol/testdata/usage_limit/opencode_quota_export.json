@@ -1,0 +1,75 @@
+{
+  "info": {
+    "id": "ses_e77a0ddb7ffe1dlxp5Oso7Eq8N",
+    "projectID": "16d41ce9c1e2ca87e4face6cc2317d5dc9af46b0",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "failed",
+    "time": {
+      "created": 1793289298522,
+      "updated": 1793289298585,
+      "idle": 1793289298588
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e77a0ddb7ffe1dlxp5Oso7Eq8N]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1885f2265001KOcFZMRm5FCS0d",
+      "time": {
+        "created": 1793289298552
+      },
+      "text": "[redacted:text:msg_1885f2265001KOcFZMRm5FCS0d]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1885f2280001wAbf4XVlZ0O0YM",
+      "time": {
+        "created": 1793289298567,
+        "completed": 1793289298585
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "scripted-model",
+        "providerID": "scripted"
+      },
+      "content": [],
+      "finish": "error",
+      "error": {
+        "type": "provider.quota",
+        "message": "Insufficient credits.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"Insufficient credits.\", \"status\": \"PAYMENT_REQUIRED\"}}"
+        }
+      }
+    },
+    {
+      "id": "msg_1885f229c001Ok0dtc4JIIqn3G",
+      "time": {
+        "created": 1793289298588
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "provider.quota",
+        "message": "Insufficient credits.",
+        "status": 402,
+        "response": {
+          "body": "{\"error\": {\"code\": 402, \"message\": \"Insufficient credits.\", \"status\": \"PAYMENT_REQUIRED\"}}"
+        }
+      }
+    }
+  ]
+}

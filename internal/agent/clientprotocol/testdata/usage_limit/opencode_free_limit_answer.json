@@ -1,0 +1,6 @@
+{
+  "status": 429,
+  "header": {"Retry-After": "3600"},
+  "body": {"type": "error", "error": {"type": "FreeUsageLimitError", "message": "Rate limit exceeded. Please try again later."}},
+  "model_only": true
+}
