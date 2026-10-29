@@ -26,11 +26,13 @@ A release with a single fix, or a security release, gets a short announcement: o
 
 # How it reads
 
-- Plain, factual and calm. Short sentences, one idea each, common words over rare precise ones. Present tense for what the release does.
-- Describe what changes for the user, never the mechanism. "Agents no longer get stuck after a restart", not anything about process groups or goroutines.
+- Plain, factual and calm. Short sentences, one idea each, common words over rare precise ones. Present tense and active voice: "Sortie now retries", not "retries are now performed". State facts without hedging.
+- Describe what changes for the user, never the mechanism. "Agents no longer get stuck after a restart", not anything about process groups or goroutines. Use the words an operator who just downloaded the update knows: never internal names from the code, the specification or the dashboard's own source, database tables or columns, or made-up labels. Call each feature by one name throughout.
 - Name an identifier only when the reader needs it to act on the sentence: the flag or setting that turns a feature on, the value an upgrade note asks them to change. Put it in backticks, and keep them rare: most paragraphs in the examples have none. Describe a setting by what it does, and leave its value lists, limits and defaults to the changelog. No issue or pull request numbers, file paths, function names, or version numbers other than this release's.
-- Prose paragraphs, separated by one blank line. No headings, bullet lists, bold, tables, emoji or exclamation marks.
+- Prose paragraphs, each on a single line and separated by one blank line; never wrap a paragraph across lines. The last paragraph never restates the opening. No headings, bullet lists, bold, tables, emoji or exclamation marks.
 - No marketing: never "excited", "thrilled", "huge", "powerful", "seamless", "we're happy to", "this release brings", "TL;DR". A fix stated plainly reads as competence.
+- No filler: never "leverage", "utilize", "facilitate", "robust", "performant", "numerous", "note that", "in order to", and never open a paragraph with "Additionally", "Furthermore" or "Moreover". Vary how paragraphs open instead of repeating one sentence pattern.
+- American English. No em-dashes: use a comma, a period or parentheses. Straight quotes, the Oxford comma, and commas and periods outside closing quotation marks.
 - Do not address the maintainers or mention that the text was generated.
 
 # Before you answer
