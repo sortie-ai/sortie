@@ -567,6 +567,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -606,6 +607,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/release-contributors.sh '${{ needs.validate.outputs.tag }}'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install Claude
+        run: npm install -g --ignore-scripts=false @anthropic-ai/claude-code
+
+      - name: Draft release announcement
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          RELEASE_ANNOUNCEMENT_MODEL: ${{ vars.RELEASE_ANNOUNCEMENT_MODEL }}
+        run: |
+          scripts/release-announcement.sh '${{ needs.validate.outputs.version }}' > "${RUNNER_TEMP}/announcement.md"
+          {
+            echo "### Release announcement"
+            echo ""
+            cat "${RUNNER_TEMP}/announcement.md"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create tag
         run: |
@@ -678,7 +702,7 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean ${{ inputs.dry_run && '--skip=publish --skip=announce' || '' }}
+          args: release --clean --release-notes ${{ runner.temp }}/announcement.md ${{ inputs.dry_run && '--skip=publish --skip=announce' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

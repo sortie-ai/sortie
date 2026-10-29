@@ -7,7 +7,7 @@ _Requires write access to `sortie-ai/sortie` and `sortie-ai/docs`, approver righ
 3. Run `make price-table`, or merge the open price-table refresh PR.
 4. Check that `README.md` matches the release.
 5. Commit to `main` and wait for CI to pass.
-6. Run the `Release` workflow with version `X.Y.Z` and `dry_run` checked.
+6. Run the `Release` workflow with version `X.Y.Z` and `dry_run` checked, and read the release announcement it drafted in the run summary. Claude writes it from the `[X.Y.Z]` changelog section, and the real run drafts it again for the GitHub release. The `RELEASE_ANNOUNCEMENT_MODEL` repository variable picks the model.
 7. Copy the `[X.Y.Z]` section of `CHANGELOG.md` into `sortie-ai/docs/changelog.md` with a `{ #X.Y.Z }` heading anchor, and add its compare link to the footer.
 8. Draft the release announcement and add it to `sortie-ai/docs`.
 9. Run the `Release` workflow with `dry_run` unchecked.
