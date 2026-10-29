@@ -23,11 +23,9 @@ fi
 
 releases=$(gh api "repos/${repo}/releases?per_page=100")
 
-announcements=$(printf '%s\n' "$releases" | jq -r --arg skip "v${skip}" --argjson limit "$limit" '
-	def note:
-		((.body // "") | gsub("\r"; "") | split("\n")) as $lines
-		| ([$lines | index("---"), index("## New Contributors")] | map(select(. != null)) | min // ($lines | length)) as $end
-		| $lines[:$end] | join("\n") | sub("\\s+$"; "");
+announcements=$(printf '%s\n' "$releases" | jq -r -L "${SCRIPT_DIR}/lib" --arg skip "v${skip}" --argjson limit "$limit" '
+	include "release-note";
+	def note: .body | release_note;
 	[.[]
 		| select((.draft or .prerelease) | not)
 		| select(.tag_name != $skip)

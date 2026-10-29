@@ -852,3 +852,15 @@ jobs:
             echo "**Platforms:** linux/amd64, linux/arm64" >> "$GITHUB_STEP_SUMMARY"
             echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  post-release:
+    name: Post-release
+    needs: [validate, release, docker]
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/post-release.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+    secrets:
+      DISCORD_WEBHOOK_ANNOUNCEMENTS: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}

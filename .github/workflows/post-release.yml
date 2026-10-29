@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
+name: Post-release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+    secrets:
+      DISCORD_WEBHOOK_ANNOUNCEMENTS:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  discord:
+    name: Announce on Discord
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Post announcement
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_ANNOUNCEMENTS }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${VERSION#[vV]}"
+
+          # The announcement links to this release's entry in the docs changelog.
+          version_re=$(printf '%s' "${VERSION}" | sed 's/\./\\./g')
+          until curl -fsS https://docs.sortie-ai.com/changelog/ | grep -qE "#${version_re}([^0-9A-Za-z.-]|$)"; do
+            sleep 60
+          done
+
+          gh release view "v${VERSION}" --json body >release.json
+          jq -r -L scripts/lib 'include "release-note"; .body | release_note' release.json >note.md
+
+          {
+            printf '## Sortie %s is out\n\n' "${VERSION}"
+            cat note.md
+            printf '\n**Full list of changes:** <https://docs.sortie-ai.com/changelog/#%s>\n' "${VERSION}"
+            printf '**Install instructions:** <https://docs.sortie-ai.com/getting-started/installation/>\n'
+          } >message.md
+
+          scripts/discord-notify.sh <message.md
