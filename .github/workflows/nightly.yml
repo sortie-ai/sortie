@@ -106,7 +106,7 @@ jobs:
             clientprotocol_asking_command: "gemini --acp"
             clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
-            clientprotocol_usage_limit_answer: testdata/usage_limit/gemini-daily-quota-answer.json
+            clientprotocol_usage_limit_answer: testdata/usage_limit/gemini_daily_quota_answer.json
 
           - name: GitHub Copilot CLI - ACP
             adapter: acp-copilot
@@ -129,7 +129,7 @@ jobs:
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
             clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: Copilot
-            clientprotocol_usage_limit_answer: testdata/usage_limit/copilot-rate-limit-answer.json
+            clientprotocol_usage_limit_answer: testdata/usage_limit/copilot_rate_limit_answer.json
 
           - name: GitHub Copilot CLI - ACP (default declaration)
             adapter: acp-copilot-default
@@ -175,7 +175,7 @@ jobs:
             clientprotocol_spend_declaration: OpenCode
             clientprotocol_reported_model_prefix: scripted/
             clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
-            clientprotocol_usage_limit_answer: testdata/usage_limit/opencode-free-limit-answer.json
+            clientprotocol_usage_limit_answer: testdata/usage_limit/opencode_free_limit_answer.json
 
           - name: Kiro CLI - ACP (scripted)
             adapter: acp-kiro

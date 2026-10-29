@@ -30,15 +30,15 @@ Answer documents (*-answer.json)
 Each document is what the stand-in upstream served, in the shape the gated
 suite reads: status, header, body, and the expected model_only, plus requests
 when the runtime retries the refusal (default 1).
-- opencode-free-limit-answer.json: HTTP 429 with Retry-After 3600 and the
+- opencode_free_limit_answer.json: HTTP 429 with Retry-After 3600 and the
   FreeUsageLimitError body. It is the answer the committed OpenCode
   integration test scripts for the opencode kind.
-- copilot-rate-limit-answer.json: HTTP 429 with no Retry-After and the
+- copilot_rate_limit_answer.json: HTTP 429 with no Retry-After and the
   bring-your-own-key rate-limit body, as served by the Copilot sleuth
   harness (fakeapi.py) in the run behind copilot_rate_limit.jsonl. The
   requests member is the number of model requests Copilot CLI 1.0.105 makes
   before it ends the turn with the refusal; the capture holds that many
   model.call_failure events and a live run served exactly that many.
-- gemini-daily-quota-answer.json: HTTP 429 with the free-tier daily quota
+- gemini_daily_quota_answer.json: HTTP 429 with the free-tier daily quota
   body and no Retry-After header, as served by the Gemini sleuth repro
   (fake_google.py) in its daily mode.
