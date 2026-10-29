@@ -168,31 +168,22 @@ func TestParseRefusesAnotherSession(t *testing.T) {
 	}
 }
 
-func TestParseRefusesAFinishedMessageWithoutTokens(t *testing.T) {
+func TestParseKeepsAFinishedMessageWithoutTokensUncounted(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		data      []byte
-		sessionID string
-	}{
-		{"cancel capture", loadFixture(t, "cancel-export.json"), "ses_e7ac4d139ffeivndL710DYWtze"},
-		{"child cancel capture", loadFixture(t, "child-cancel-child-export.json"), "ses_e79773346ffeKVGj032T0Q7h9p"},
-		{"beside a counted message", exportDoc(
-			`{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}`,
-			`{"type":"assistant","finish":"error","tokens":null}`), "ses_t"},
+	records := mustParse(t, exportDoc(
+		`{"id":"msg_counted","type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}`,
+		`{"id":"msg_aborted","type":"assistant","finish":"error","tokens":null,"time":{"created":7}}`), "ses_t")
+
+	if len(records) != 2 {
+		t.Fatalf("Parse() = %d records, want 2", len(records))
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			records, err := Parse(tt.data, tt.sessionID)
-
-			if !errors.Is(err, ErrUnrecordedMessage) || len(records) != 0 {
-				t.Errorf("Parse(%s) = %d records, %v, want none and ErrUnrecordedMessage", tt.name, len(records), err)
-			}
-		})
+	aborted := records[1]
+	if aborted.Spend.Identity != "msg_aborted" || aborted.CreatedMS != 7 {
+		t.Errorf("Parse() aborted record identity = %q, created = %d, want msg_aborted, 7", aborted.Spend.Identity, aborted.CreatedMS)
+	}
+	if _, ok := usage.Normalize(aborted.Spend, usage.SpendDeclaration{}); ok {
+		t.Errorf("Normalize(aborted record) ok = true, want its spend unknown")
 	}
 }
 
