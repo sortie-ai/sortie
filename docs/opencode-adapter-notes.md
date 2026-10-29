@@ -99,7 +99,7 @@ A failed or empty export must never lower a figure the run has already reported.
 
 The run stream carries no subscription window. Two other places do.
 
-The pull runs `opencode api experimental.usage.limits` once a turn that reached the runtime has ended, through the same auxiliary launch the export uses, locally or over the session's SSH launch. It runs on empty stdin. A cancelled turn and a credential-verification session do not pull. The command exists only on releases that ship the usage-limits subsystem. On an older build it fails or hangs until the bound, and a command that fails to start, exits non-zero, outlives the bound, or prints no object ends the session's pulls. Do not gate the pull on a version check.
+The pull runs `opencode api experimental.usage.limits` once a turn that reached the runtime has ended, through the same auxiliary launch the export uses, locally or over the session's SSH launch. The `agent-client-protocol` declaration runs the same command, with the configured command cut after the `opencode` word like its export, locally or over the session's SSH launch, while the session's `opencode acp` process runs. It runs on empty stdin. A cancelled turn and a credential-verification session do not pull. The command exists only on releases that ship the usage-limits subsystem. On an older build it fails or hangs until the bound, and on either kind a command that fails to start, exits non-zero, outlives the bound, or prints no object ends the session's pulls. A failed SSH connection costs that turn's limits only, and the next turn pulls again. Do not gate the pull on a version check.
 
 The answer is a JSON object, with the payload under `data` next to a `location` member. Trimmed:
 

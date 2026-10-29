@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,10 +51,9 @@ func TestMain(m *testing.M) {
 	// inherited GitHub token would reach the real endpoint; the live suite
 	// keeps it.
 	if os.Getenv("SORTIE_COPILOT_TEST") != "1" {
-		quota := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		quotaEndpoint = quota.URL
+		for _, name := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
+			_ = os.Unsetenv(name)
+		}
 	}
 	agenttest.Main(m, fakeScenarios)
 }

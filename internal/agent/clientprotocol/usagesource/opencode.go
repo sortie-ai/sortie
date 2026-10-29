@@ -10,6 +10,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
+	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -50,6 +51,8 @@ func init() {
 				ReasoningInOutput: false,
 			},
 		},
+		Pull:         usagelimits.Source,
+		PullWindows:  opencodePullWindows,
 		PromptSpend:  opencodePromptSpend,
 		ChildSession: opencodeChildSession,
 		Records: usage.Source{
@@ -123,22 +126,19 @@ func opencodeReadRecords(ctx context.Context, rt PullRuntime) ([]usage.SpendRead
 	return readings, nil
 }
 
-// exportCommand cuts the configured agent command at its runtime word, keeping
-// a launcher, env assignments, or a path before it and dropping what follows,
-// so the export runs the binary and environment the session runs. A command
-// that names no runtime falls back to the executable on PATH.
+// exportCommand is the session export, run as the session's own runtime.
 func exportCommand(words []string, id string) agentcore.HostCommand {
-	cmd := agentcore.HostCommand{
-		Args:      sessionexport.Args(id),
-		InSession: true,
-		Limit:     usage.MaxRecordsBytes,
-	}
-	if i := runtimeWordIndex(words, opencodeExecutableName, opencodePackageNames...); i >= 0 {
-		cmd.LaunchWords = i + 1
-	} else {
-		cmd.Name = opencodeExecutableName
-	}
+	cmd := runtimeCommand(words, sessionexport.Args(id), opencodeExecutableName, opencodePackageNames...)
+	cmd.Limit = usage.MaxRecordsBytes
 	return cmd
+}
+
+// opencodePullWindows asks the runtime's own limits command, run as the
+// session's own runtime.
+func opencodePullWindows(ctx context.Context, rt PullRuntime) ([]usage.WindowReading, error) {
+	return usagelimits.Pull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
+		return rt.RunHostCommand(ctx, runtimeCommand(rt.CommandWords(), args, opencodeExecutableName, opencodePackageNames...))
+	})
 }
 
 // opencodeChildSession reads what one session update shows of a subagent

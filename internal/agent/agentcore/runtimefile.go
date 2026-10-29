@@ -250,13 +250,20 @@ func (t LaunchTarget) captureHost(ctx context.Context, env []string, cmd HostCom
 	if err := t.checkLaunchWords(cmd); err != nil {
 		return nil, procutil.CaptureResult{}, err
 	}
-	switch {
-	case t.RemoteCommand == "":
+	if t.RemoteCommand == "" {
 		return t.captureLocal(ctx, env, cmd, maxBytes)
-	case cmd.LaunchWords > 0:
-		return t.captureRemote(ctx, remotePrefix(t.RemoteCommand, cmd.LaunchWords), cmd.Args, maxBytes, cmd.Settings)
 	}
-	return t.captureRemote(ctx, sshutil.QuoteArgv(append([]string{cmd.Name}, cmd.Args...)), nil, maxBytes, cmd.Settings)
+	command, args := t.remoteHostCommand(cmd)
+	return t.captureRemote(ctx, command, args, maxBytes, cmd.Settings)
+}
+
+// remoteHostCommand returns the remote shell fragment for hc and the
+// arguments that follow it, each quoted by the launch.
+func (t LaunchTarget) remoteHostCommand(hc HostCommand) (string, []string) {
+	if hc.LaunchWords > 0 {
+		return remotePrefix(t.RemoteCommand, hc.LaunchWords), hc.Args
+	}
+	return sshutil.QuoteArgv(append([]string{hc.Name}, hc.Args...)), nil
 }
 
 // checkLaunchWords refuses a command that names its program twice or not at
@@ -271,7 +278,9 @@ func (t LaunchTarget) checkLaunchWords(cmd HostCommand) error {
 	return nil
 }
 
-func (t LaunchTarget) captureLocal(ctx context.Context, env []string, hc HostCommand, maxBytes int64) (*cappedWriter, procutil.CaptureResult, error) {
+// localHostCmd builds the local process for hc, bound to the verified
+// workspace with env when hc runs InSession.
+func (t LaunchTarget) localHostCmd(ctx context.Context, env []string, hc HostCommand) (*exec.Cmd, error) {
 	program, args := hc.Name, hc.Args
 	if hc.LaunchWords > 0 {
 		program = t.Command
@@ -281,8 +290,16 @@ func (t LaunchTarget) captureLocal(ctx context.Context, env []string, hc HostCom
 	if hc.InSession {
 		cmd.Env = env
 		if agentErr := t.BindWorkspace(cmd); agentErr != nil {
-			return nil, procutil.CaptureResult{}, fmt.Errorf("host command %q: %w", hc.label(), agentErr)
+			return nil, fmt.Errorf("host command %q: %w", hc.label(), agentErr)
 		}
+	}
+	return cmd, nil
+}
+
+func (t LaunchTarget) captureLocal(ctx context.Context, env []string, hc HostCommand, maxBytes int64) (*cappedWriter, procutil.CaptureResult, error) {
+	cmd, err := t.localHostCmd(ctx, env, hc)
+	if err != nil {
+		return nil, procutil.CaptureResult{}, err
 	}
 	stdout := &cappedWriter{max: maxBytes}
 	result, startErr := procutil.RunCapture(ctx, cmd, t.StopGrace, procutil.CaptureParams{Stdout: stdout})

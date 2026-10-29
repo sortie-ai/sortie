@@ -1,4 +1,4 @@
-package copilot
+package quota
 
 import (
 	"bufio"
@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"slices"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
@@ -47,63 +45,21 @@ type headlessQuotaSnapshot struct {
 	ResetDate              string   `json:"resetDate"`
 }
 
-// headlessQuota asks a one-shot copilot server for the account's quota
+// askHeadless asks a one-shot copilot server for the account's quota
 // windows over JSON-RPC on stdio, with the runtime's own sign-in. It returns
 // one reading per limited quota; an error answer from the server wraps
 // [usage.ErrPullUnsupported].
-func headlessQuota(ctx context.Context, target agentcore.LaunchTarget, env []string) ([]usage.WindowReading, error) {
-	runCtx, stopProcess := context.WithCancel(ctx)
-	defer stopProcess()
-
-	stdinReader, stdin := io.Pipe()
-	defer func() { _ = stdinReader.Close() }() //nolint:errcheck // unblocks a pending write once the server is gone
-
-	cmd, agentErr := target.AuxiliaryCommand(runCtx, headlessArgs, stdinReader, env)
-	if agentErr != nil {
-		return nil, fmt.Errorf("build copilot headless command: %w", agentErr)
-	}
-	logger := slog.Default()
-	procutil.SetGroupCancel(cmd, target.StopGrace)
-	pipes, _, err := procutil.StartWithOwnedPipes(runCtx, cmd, logger)
-	if err != nil {
-		return nil, fmt.Errorf("start copilot headless server: %w", err)
-	}
-	defer pipes.Close() //nolint:errcheck,gosec // best-effort cleanup; runs after the reap wait below
-
-	// Stderr is drained and dropped: the server runs with the turn's credentials.
-	go func() { _, _ = io.Copy(io.Discard, pipes.Stderr) }() //nolint:errcheck // ends when pipes close
-
-	reaper := procutil.StartReaper(cmd, logger)
-	defer func() { <-reaper.Done() }()
-	exchangeDone := make(chan struct{})
-	procutil.StartOutputRelease(procutil.OutputReleaseParams{
-		Pipes:      pipes,
-		Reaped:     reaper.Done(),
-		ReaderDone: exchangeDone,
-		Logger:     logger,
+func askHeadless(ctx context.Context, rt Runtime) ([]usage.WindowReading, error) {
+	var readings []usage.WindowReading
+	err := rt.Exchange(ctx, headlessArgs, MaxAnswerBytes, func(stdin io.Writer, stdout io.Reader) error {
+		var exchangeErr error
+		readings, exchangeErr = headlessExchange(stdin, stdout)
+		return exchangeErr
 	})
-	defer func() {
-		_ = stdin.Close() //nolint:errcheck // the exchange is over or abandoned
-		stopProcess()
-	}()
-
-	type outcome struct {
-		readings []usage.WindowReading
-		err      error
+	if err != nil {
+		return nil, fmt.Errorf("query copilot quota: %w", err)
 	}
-	done := make(chan outcome, 1)
-	go func() {
-		defer close(exchangeDone)
-		readings, err := headlessExchange(stdin, pipes.Stdout)
-		done <- outcome{readings: readings, err: err}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("query copilot quota: %w", ctx.Err())
-	case res := <-done:
-		return res.readings, res.err
-	}
+	return readings, nil
 }
 
 func headlessExchange(stdin io.Writer, stdout io.Reader) ([]usage.WindowReading, error) {
@@ -126,17 +82,13 @@ func headlessCall(stdin io.Writer, stdout *bufio.Reader, id int, method string) 
 	if err != nil {
 		return nil, fmt.Errorf("encode %s request: %w", method, err)
 	}
-	if err := writeContentLengthFramed(stdin, payload); err != nil {
+	if err := jsonrpc.WriteContentLengthFrame(stdin, payload); err != nil {
 		return nil, fmt.Errorf("send %s request: %w", method, err)
 	}
 
 	for {
-		length, err := readContentLengthHeader(stdout)
+		body, err := jsonrpc.ReadContentLengthFrame(stdout, MaxAnswerBytes)
 		if err != nil {
-			return nil, fmt.Errorf("read %s answer: %w", method, err)
-		}
-		body := make([]byte, length)
-		if _, err := io.ReadFull(stdout, body); err != nil {
 			return nil, fmt.Errorf("read %s answer: %w", method, err)
 		}
 

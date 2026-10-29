@@ -271,6 +271,7 @@ func runPump(state *sessionState) {
 		tracker:      agentcore.NewToolTracker(),
 		openRequests: make(map[jsonrpc.ID]string),
 	}
+	defer p.finalizeDecidedTurn()
 
 	doneCh := state.conn.Done()
 	doneFired := false
@@ -862,12 +863,26 @@ func (p *pumpState) endUnreplied(ev agentcore.TurnEvidence) {
 	}
 }
 
+// pullEnding names a turn's pending end in the terms the usage component's
+// pull policy reads.
+func pullEnding(end turnEndKind) usage.TurnEnding {
+	switch end {
+	case turnEndCancelled:
+		return usage.EndingCancelled
+	case turnEndHumanInput:
+		return usage.EndingHumanInput
+	default:
+		return usage.EndingAnswered
+	}
+}
+
 // startPull runs one usage pull on its own goroutine for a turn whose prompt
-// response arrived and that nobody cancelled. The result returns through the
+// response arrived and whose ending the usage component pulls after. The result returns through the
 // inbox, so windows are published only from the pump goroutine. The turn's wait
 // is held open for the puller's bound, which a drain's shorter wait would cut.
 func (p *pumpState) startPull(turn *activeTurn) {
-	if p.puller == nil || p.pullInFlight || turn.pendingEnd != turnEndNone {
+	ending := pullEnding(turn.pendingEnd)
+	if !p.puller.PullsAfter(ending) || p.pullInFlight {
 		return
 	}
 	select {
@@ -891,7 +906,7 @@ func (p *pumpState) startPull(turn *activeTurn) {
 		ctx, cancel := contextUntilStop(stop)
 		defer cancel()
 
-		windows, err := puller.Pull(ctx)
+		windows, err := puller.Pull(ctx, ending)
 		inbox.Put(pumpItem{control: &pumpControl{pulled: &pullResult{turn: turn, windows: windows, err: err}}})
 	}()
 }
@@ -1304,25 +1319,33 @@ func (p *pumpState) beginEndAttempt(kind turnEndKind, detail string) {
 	}
 }
 
+// finalizeDecidedTurn ends the active turn on the disposition it already has,
+// when it has one, and reports whether it did. The wait elapsing, or the pump
+// exiting, costs a held turn its windows and a draining turn its figure, never
+// its outcome; the pull or read behind either delivers into an inbox no one
+// reads once the pump is gone, and RunTurn would wait on the turn for good.
+func (p *pumpState) finalizeDecidedTurn() bool {
+	turn := p.activeTurn
+	switch {
+	case turn == nil:
+		return false
+	case turn.held != nil:
+		p.finalizeTurnWithUsage(turn.held.evidence, turn.held.observed)
+	case turn.recordsPending:
+		p.finalizeTurnWithUsage(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
+	case turn.draining:
+		p.finalizeTurn(turn.drainEvidence)
+	default:
+		return false
+	}
+	return true
+}
+
 // finalizeActiveTurnOnDeadline ends the active turn once its bounded wait for
 // the prompt response has elapsed; pendingEnd overrides the evidence given here.
 func (p *pumpState) finalizeActiveTurnOnDeadline() {
 	turn := p.activeTurn
-	if turn == nil {
-		return
-	}
-	// The wait elapsing costs a held turn its windows and a draining turn its
-	// figure, never its outcome.
-	if held := turn.held; held != nil {
-		p.finalizeTurnWithUsage(held.evidence, held.observed)
-		return
-	}
-	if turn.recordsPending {
-		p.finalizeTurnWithUsage(turn.drainEvidence, p.settleSpend(turn, turn.spendEnd, turn.spendLive, usage.RecordsRead{}))
-		return
-	}
-	if turn.draining {
-		p.finalizeTurn(turn.drainEvidence)
+	if turn == nil || p.finalizeDecidedTurn() {
 		return
 	}
 	ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalFailure, TerminalErrorKind: domain.ErrTurnFailed}

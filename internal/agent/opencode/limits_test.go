@@ -3,14 +3,20 @@
 package opencode
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
 func startLimitsSession(t *testing.T, limitsAnswer, runFixture string) (domain.AgentAdapter, domain.Session, string) {
@@ -54,8 +60,7 @@ func TestRunTurn_PulledLimitWindows(t *testing.T) {
 		turns  int
 		want   []domain.UsageWindow
 	}{
-		{"signed in", string(loadFixture(t, "api-limits-signed.json")), 1, signedIn},
-		{"no console sign-in", `{"data":null}`, 2, nil},
+		{"signed in", string(loadFixture(t, "../usagelimits/testdata/api-limits-signed.json")), 1, signedIn},
 		{"command fails", "", 2, nil},
 	}
 	for _, tt := range tests {
@@ -117,6 +122,25 @@ func TestRunTurn_FreeUsageLimitWindow(t *testing.T) {
 				if got := w.ResetsAt.Sub(w.ReportedAt); got != time.Hour {
 					t.Errorf("window ResetsAt - ReportedAt = %v, want %v", got, time.Hour)
 				}
+			}
+		})
+	}
+}
+
+func TestOpencodePull_ConnectionFailureClass(t *testing.T) {
+	t.Parallel()
+
+	for _, exitCode := range []int{255, 1} {
+		t.Run("exit "+strconv.Itoa(exitCode), func(t *testing.T) {
+			t.Parallel()
+
+			command := agenttest.FakeRuntime(t, t.TempDir(), "ssh", agenttest.OutputScenario, agenttest.Output{ExitCode: exitCode})
+			state := &sessionState{target: agentcore.LaunchTarget{Command: command, WorkspacePath: t.TempDir(), SSHHost: "user@stand-in-host", RemoteCommand: "opencode"}}
+
+			_, err := opencodePull(state)(waittest.Context(t))
+
+			if got, want := errors.Is(err, sshutil.ErrConnectionFailed), exitCode == 255; got != want {
+				t.Errorf("errors.Is(opencodePull() error, ErrConnectionFailed) = %v, want %v for ssh exit %d (error: %v)", got, want, exitCode, err)
 			}
 		})
 	}

@@ -5,14 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
@@ -66,7 +64,7 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 		return
 	}
 
-	if err := writeContentLengthFramed(stdin, payload); err != nil {
+	if err := jsonrpc.WriteContentLengthFrame(stdin, payload); err != nil {
 		logger.Warn("failed to delete credential verification session", slog.Any("error", err))
 		return
 	}
@@ -82,16 +80,6 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 }
 
 var errSessionDeleteNotSuccessful = errors.New("session.delete reported success: false")
-
-// writeContentLengthFramed uses the Content-Length framing the Copilot
-// server expects, as its SDK does, rather than newline-delimited JSON.
-func writeContentLengthFramed(w io.Writer, payload []byte) error {
-	if _, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(payload)); err != nil {
-		return err
-	}
-	_, err := w.Write(payload)
-	return err
-}
 
 type sessionDeleteResponse struct {
 	ID     *int `json:"id"`
@@ -113,13 +101,8 @@ func readSessionDeleteResponse(ctx context.Context, r io.Reader) (bool, error) {
 	go func() {
 		br := bufio.NewReader(r)
 		for {
-			length, err := readContentLengthHeader(br)
+			body, err := jsonrpc.ReadContentLengthFrame(br, maxSessionDeleteResponseLength)
 			if err != nil {
-				done <- outcome{err: err}
-				return
-			}
-			body := make([]byte, length)
-			if _, err := io.ReadFull(br, body); err != nil {
 				done <- outcome{err: err}
 				return
 			}
@@ -141,34 +124,4 @@ func readSessionDeleteResponse(ctx context.Context, r io.Reader) (bool, error) {
 	case res := <-done:
 		return res.success, res.err
 	}
-}
-
-func readContentLengthHeader(br *bufio.Reader) (int, error) {
-	length := -1
-	for {
-		line, err := br.ReadString('\n')
-		if err != nil {
-			return 0, err
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-		name, value, ok := strings.Cut(line, ":")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
-			continue
-		}
-		n, convErr := strconv.Atoi(strings.TrimSpace(value))
-		if convErr != nil {
-			return 0, fmt.Errorf("invalid Content-Length header %q: %w", value, convErr)
-		}
-		if n > maxSessionDeleteResponseLength {
-			return 0, fmt.Errorf("content-length %d exceeds %d byte limit", n, maxSessionDeleteResponseLength)
-		}
-		length = n
-	}
-	if length < 0 {
-		return 0, fmt.Errorf("message carries no Content-Length header")
-	}
-	return length, nil
 }

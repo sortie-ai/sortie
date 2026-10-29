@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -566,14 +568,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
 
-	if !params.CredentialVerification {
-		// The adapter sets no TurnEnv hook, so a turn runs with the host
-		// environment and a nil env reads exactly that.
-		puller := usage.NewPuller(quotaSource, agentcore.AuxiliaryTimeout(params.AgentConfig), func(ctx context.Context) ([]usage.WindowReading, error) {
-			return pullQuota(ctx, target, nil)
-		})
-		hooks.PullWindows = puller.Pull
-	}
+	// The adapter sets no TurnEnv hook, so a turn runs with the host
+	// environment and a nil env reads exactly that.
+	hooks.PullWindows = usage.NewPuller(quota.Source, agentcore.AuxiliaryTimeout(params.AgentConfig), params.CredentialVerification, copilotPull(target)).Pull
 
 	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 
@@ -626,4 +623,32 @@ func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session
 		deleteVerificationSession(ctx, state.target, state.copilotSessionID, agentcore.AuxiliaryTimeout(state.agentConfig), state.agentConfig.StopGraceMS, state.logger())
 	}
 	return stopErr
+}
+
+// hostQuotaRuntime reaches the Copilot runtime through the session's launch
+// target.
+type hostQuotaRuntime struct {
+	target agentcore.LaunchTarget
+}
+
+func (r hostQuotaRuntime) Env(name string) (string, bool) {
+	return r.target.RuntimeEnv(nil, name)
+}
+
+func (r hostQuotaRuntime) Exchange(ctx context.Context, args []string, limit int64, exchange func(stdin io.Writer, stdout io.Reader) error) error {
+	return r.target.RunHostExchange(ctx, nil, agentcore.HostCommand{
+		LaunchWords: len(r.target.CommandWords()),
+		Args:        args,
+		InSession:   true,
+		Limit:       limit,
+	}, exchange)
+}
+
+// copilotPull returns the quota pull for one session. A turn runs with the
+// host environment and the adapter sets no TurnEnv hook, so a nil env reads
+// exactly that.
+func copilotPull(target agentcore.LaunchTarget) func(context.Context) ([]usage.WindowReading, error) {
+	return func(ctx context.Context) ([]usage.WindowReading, error) {
+		return quota.Pull(ctx, hostQuotaRuntime{target: target})
+	}
 }
