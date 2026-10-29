@@ -855,7 +855,7 @@ jobs:
 
   post-release:
     name: Post-release
-    needs: [validate, release]
+    needs: [validate, release, docker]
     if: ${{ !inputs.dry_run }}
     permissions:
       contents: read

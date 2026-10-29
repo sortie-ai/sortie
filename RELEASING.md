@@ -12,6 +12,6 @@ _Requires write access to `sortie-ai/sortie` and `sortie-ai/docs`, approver righ
 8. Draft the release announcement and add it to `sortie-ai/docs`.
 9. Run the `Release` workflow with `dry_run` unchecked.
 10. Approve the signing request in SignPath within an hour, while the workflow waits on it.
-11. Commit and push `sortie-ai/docs`, then deploy the docs site.
+11. Commit and push `sortie-ai/docs`, then deploy the docs site within two hours of the release. The Discord announcement goes out once the deployed changelog lists the release.
 12. Close the `X.Y.Z` milestone.
 13. Set the next milestone as the default on the Sortie Roadmap board.

@@ -24,7 +24,7 @@ jobs:
   discord:
     name: Announce on Discord
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +39,12 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           VERSION="${VERSION#[vV]}"
+
+          # The announcement links to this release's entry in the docs changelog.
+          version_re=$(printf '%s' "${VERSION}" | sed 's/\./\\./g')
+          until curl -fsS https://docs.sortie-ai.com/changelog/ | grep -qE "#${version_re}([^0-9A-Za-z.-]|$)"; do
+            sleep 60
+          done
 
           gh release view "v${VERSION}" --json body >release.json
           jq -r -L scripts/lib 'include "release-note"; .body | release_note' release.json >note.md
