@@ -70,7 +70,7 @@ A source is one channel through which a runtime reports spend. Every source decl
 - for records on disk, whether a request's record is written when the request completes or only when the turn ends;
 - the unit of any amount it reports.
 
-The component applies the declaration and MUST NOT read a field the declaration does not map. Each message and each record is checked against its source's mapping on its own: one that lacks a field the mapping needs yields an unknown amount, never zero. Sortie MUST NOT refuse or trust a build of a runtime because of its version.
+The component applies the declaration and MUST NOT read a field the declaration does not map. Each message and each record is checked against its source's mapping on its own: one that lacks a field the mapping needs yields an unknown amount, never zero. A runtime's version never decides how its spend is counted: Sortie MUST NOT trust or discard a build's figures, or choose which of its sources to read, because of its version. Whether Sortie supports a runtime at all is a separate decision this rule does not govern.
 
 A cumulative value becomes a delta against the previous value from the same source within its scope. A value below the previous one is a reset and MUST NOT be recorded as negative spend: what was counted before it stays counted, and the new value counts only from the point the source's scope says the counter restarted. Where the component cannot establish that point, the turn's figure is a lower bound.
 
