@@ -40,8 +40,8 @@ jobs:
         run: |
           VERSION="${VERSION#[vV]}"
 
-          gh release view "v${VERSION}" --json body \
-            | jq -r -L scripts/lib 'include "release-note"; .body | release_note' >note.md
+          gh release view "v${VERSION}" --json body >release.json
+          jq -r -L scripts/lib 'include "release-note"; .body | release_note' release.json >note.md
 
           {
             printf '## Sortie %s is out\n\n' "${VERSION}"
