@@ -129,7 +129,7 @@ The answer is a JSON object, with the payload under `data` next to a `location` 
 
 The command answers only for a runtime signed in to the OpenCode console. Without that sign-in the payload is `{"data":null}`, which carries no `go` and ends the session's pulls. The runtime makes the console calls itself with the console credential it holds; Sortie neither reads nor sends that credential.
 
-The command goes through the runtime's background service, not through an in-process server. That is the service every launch avoids with `--standalone`, so this is the one invocation that uses it, and it starts the service when none is running. Two consequences follow. The service keeps the environment of whichever client started it first and outlives Sortie, so a service an operator already runs answers for its own state. And a service from another release already holding the default port makes the command collide with it until the port is changed with `opencode service set port`. A plain `opencode serve` route returns 401 without the service credential that `api` supplies, so do not call the HTTP route directly.
+With `--standalone` the command answers in its own process, so it neither starts the background service nor reads the state of one an operator already runs. A plain `opencode serve` route returns 401 without the service credential that `api` supplies, so do not call the HTTP route directly.
 
 The free hosted model reports its limit in the stream instead. When the limit is hit the run prints an error envelope with `type` set to `provider.free-limit`, status 429, and `retryAfterMs`:
 
@@ -184,7 +184,7 @@ A stored provider login authenticates a run. Every grade on this page was measur
 
 Protocol session continuation blocks both verdicts: it is a gap where the native stream is usable. Permission handling, the human-input case on the protocol surface, the runtime failure case on the protocol surface, and the success turn on the native stream stay unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
 
-The protocol wire carries no token figure. Sortie takes the figure from the runtime's session export, the same source the native kind settles from. The ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at 53750 token(s) ... token budget hold"). The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
+No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's session export, the same source the native kind settles from. The ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at 53750 token(s) ... token budget hold"). The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
 The native stream carries no token figure on its terminal either. `opencode run --format json` has no terminal envelope: the stream ends with a `text` event or with nothing. A `step_finish` event carries tokens only on a tool step, so the final text step of a turn reports none. Turn disposition on this surface is not observed for that reason: the success turn ended with no end-of-turn terminal the profile can recognize, so there is no disposition to grade.
 

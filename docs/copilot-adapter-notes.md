@@ -156,7 +156,7 @@ A stored login authenticates a run. Every grade on this page was measured under 
 
 No row blocks transport parity. Turn disposition and retry classification are not observed on either surface, because the refusal cases never occurred, and that is what holds both verdicts at unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
 
-The protocol wire carries no token figure. Sortie takes the figure from the runtime's own records, the session-state journal that the native kind reads too. The effective adapter returned a measured figure from that source, and the ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at ... token(s), the issue entered the token budget hold") and dispatched nothing in the quiet window after it. The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
+No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's own records, the session-state journal that the native kind reads too. The effective adapter returned a measured figure from that source, and the ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at ... token(s), the issue entered the token budget hold") and dispatched nothing in the quiet window after it. The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
 The native stream carries no token figure either. Its terminal event reports premium requests, a vendor unit, and no token counts. That row is a known gap with an owner, not a finding about this runtime.
 

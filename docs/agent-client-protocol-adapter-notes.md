@@ -83,7 +83,7 @@ A declaration is selected by the name the handshake reports, and a name with no 
 
 Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. The gated suite drives this path against Copilot CLI and OpenCode, whose handshakes advertise `sessionCapabilities.close`.
 
-When a handshake advertises `sessionCapabilities.delete`, a verification session's teardown sends `session/delete` instead, so the verification conversation does not stay in the runtime's store. No measured runtime advertises it.
+When a handshake advertises `sessionCapabilities.delete`, a verification session's teardown sends `session/delete` instead, so the verification conversation does not stay in the runtime's store. OpenCode advertises it, and its credential-verification session was deleted through the protocol. Copilot CLI does not advertise it.
 
 ## Credential verification
 
