@@ -33,12 +33,13 @@ const defaultCommand = "opencode"
 
 // usageSources: each step_finish report carries the step's token counts, and
 // the session export holds the counts per model for every finished message.
-// The adapter maps both itself.
+// The adapter maps both itself. The final text step reports no tokens, so the
+// step sum is a lower bound.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, LowerBound: true},
 	},
 	Records: usage.Source{
 		Category: usage.SourceJournal,
