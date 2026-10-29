@@ -146,7 +146,7 @@ func captureAgentConfig(t *testing.T, command string, expect captureExpectation,
 		events:     events,
 	}
 	wrapperPath := filepath.Join(dir, "capture.sh")
-	wrapper := fmt.Sprintf("#!/bin/sh\nset -eu\n[ \"$*\" = %q ] || exec \"$@\"\ntee %q | \"$@\" | tee %q\n", command, capture.clientPath, capture.agentPath)
+	wrapper := fmt.Sprintf("#!/bin/sh\nset -eu\ncase \"$*\" in %[1]q|%[1]q\" \"*) ;; *) exec \"$@\" ;; esac\ntee %[2]q | \"$@\" | tee %[3]q\n", command, capture.clientPath, capture.agentPath)
 	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o700); err != nil {
 		t.Fatalf("integrationAgentConfig() write capture wrapper: %v", err)
 	}
@@ -674,17 +674,18 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	turnExpect := expectScriptedToolTurn
 	binding := fakemodel.Binding{
-		SortieStatus:        statusCall(t),
-		Kind:                bindingKind(),
-		LocalToolsOverHTTP:  os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") == "1",
-		SSH:                 sshVariant(),
-		Spend:               spendSources(t),
-		ReportedModelPrefix: os.Getenv("SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX"),
-		Passthrough:         map[string]any{},
-		CredentialEnv:       credentialNames,
-		UserInstructions:    os.Getenv("SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS"),
-		VerificationContext: claimedVerificationContext(os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")),
-		Read:                fakemodel.ReadFile,
+		SortieStatus:         statusCall(t),
+		Kind:                 bindingKind(),
+		RuntimeFailureFolded: namedProfileFoldsRuntimeFailure(t),
+		LocalToolsOverHTTP:   os.Getenv("SORTIE_CLIENTPROTOCOL_HTTP_TOOLS") == "1",
+		SSH:                  sshVariant(),
+		Spend:                spendSources(t),
+		ReportedModelPrefix:  os.Getenv("SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX"),
+		Passthrough:          map[string]any{},
+		CredentialEnv:        credentialNames,
+		UserInstructions:     os.Getenv("SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS"),
+		VerificationContext:  claimedVerificationContext(os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")),
+		Read:                 fakemodel.ReadFile,
 		PermissionRefusal: &fakemodel.PermissionRefusal{
 			Guarded: fakemodel.CatFile,
 			Notice:  agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).Notice,
