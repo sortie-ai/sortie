@@ -204,18 +204,10 @@ func stepSpendReading(t *rawStepTokens) usage.SpendReading {
 	return usage.SpendReading{
 		Input:      sessionexport.Count(t.Input),
 		Output:     sessionexport.Count(t.Output),
-		Reasoning:  countOmittedAtZero(t.Reasoning),
-		CacheRead:  countOmittedAtZero(t.Cache.Read),
-		CacheWrite: countOmittedAtZero(t.Cache.Write),
+		Reasoning:  sessionexport.CountOmittedAtZero(t.Reasoning),
+		CacheRead:  sessionexport.CountOmittedAtZero(t.Cache.Read),
+		CacheWrite: sessionexport.CountOmittedAtZero(t.Cache.Write),
 	}
-}
-
-func countOmittedAtZero(raw json.RawMessage) *int64 {
-	if len(raw) == 0 {
-		var zero int64
-		return &zero
-	}
-	return sessionexport.Count(raw)
 }
 
 // freeTierRefusalClause returns a clause naming the free-tier-required

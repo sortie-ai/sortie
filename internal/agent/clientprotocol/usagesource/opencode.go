@@ -95,19 +95,10 @@ func opencodePromptSpend(result json.RawMessage) *usage.SpendReading {
 	return &usage.SpendReading{
 		Input:      jsonCount(counts.InputTokens),
 		Output:     jsonCount(counts.OutputTokens),
-		Reasoning:  omittedAtZero(counts.ThoughtTokens),
-		CacheRead:  omittedAtZero(counts.CachedReadTokens),
-		CacheWrite: omittedAtZero(counts.CachedWriteTokens),
+		Reasoning:  sessionexport.CountOmittedAtZero(counts.ThoughtTokens),
+		CacheRead:  sessionexport.CountOmittedAtZero(counts.CachedReadTokens),
+		CacheWrite: sessionexport.CountOmittedAtZero(counts.CachedWriteTokens),
 	}
-}
-
-// omittedAtZero reads a count the runtime leaves out when it is zero.
-func omittedAtZero(raw json.RawMessage) *int64 {
-	if len(raw) == 0 {
-		var zero int64
-		return &zero
-	}
-	return jsonCount(raw)
 }
 
 // opencodeReadRecords returns the records of the session's export, in message

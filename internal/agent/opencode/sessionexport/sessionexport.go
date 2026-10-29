@@ -47,6 +47,16 @@ func Count(raw json.RawMessage) *int64 {
 	return &n
 }
 
+// CountOmittedAtZero returns [Count] of a counter the runtime leaves out when
+// it is zero, so an absent member reads zero.
+func CountOmittedAtZero(raw json.RawMessage) *int64 {
+	if len(raw) == 0 {
+		var zero int64
+		return &zero
+	}
+	return Count(raw)
+}
+
 // Parse returns the records of the finished assistant messages of an export,
 // in document order. A message counts when it has a non-empty finish and a
 // tokens object, an aborted one that kept its tokens included. The session
