@@ -3,7 +3,8 @@
 # Usage: discord-notify.sh < message.txt
 #        discord-notify.sh --embed < embed.json
 #
-# Without a flag stdin is the plain-text message; with --embed it is one
+# Without a flag stdin is plain text, posted as consecutive messages split at
+# paragraph breaks when it exceeds one message; with --embed it is one
 # Discord embed object.
 #
 # The endpoint comes from DISCORD_WEBHOOK. Nothing about the request is
@@ -25,8 +26,15 @@ readonly EMBED_TITLE_LIMIT=256
 build_body() {
 	case "${1:-}" in
 	'')
-		jq -Rs --argjson limit "$CONTENT_LIMIT" \
-			'{content: .[0:$limit], allowed_mentions: {parse: []}}'
+		jq -Rsc --argjson limit "$CONTENT_LIMIT" '
+			split("\n\n")
+			| reduce .[] as $p ([];
+				if . != [] and ((.[-1] + "\n\n" + $p) | length) <= $limit
+				then .[-1] += "\n\n" + $p
+				else . + [$p[0:$limit]]
+				end)
+			| .[]
+			| {content: ., allowed_mentions: {parse: []}}'
 		;;
 	--embed)
 		jq -c --argjson limit "$EMBED_TITLE_LIMIT" \
@@ -39,13 +47,8 @@ build_body() {
 	esac
 }
 
-main() {
-	require_tools curl jq
-	require_env DISCORD_WEBHOOK
-
-	_body=$(build_body "$@")
-
-	if ! _status=$(printf '%s' "$_body" | curl -s -o /dev/null -w '%{http_code}' \
+post() {
+	if ! _status=$(printf '%s' "$1" | curl -s -o /dev/null -w '%{http_code}' \
 		--max-time 30 \
 		-X POST \
 		-H 'Content-Type: application/json' \
@@ -62,6 +65,19 @@ main() {
 		return 1
 		;;
 	esac
+}
+
+main() {
+	require_tools curl jq
+	require_env DISCORD_WEBHOOK
+
+	_bodies=$(build_body "$@")
+
+	while IFS= read -r _body; do
+		post "$_body" || return 1
+	done <<EOF
+${_bodies}
+EOF
 }
 
 main "$@"
