@@ -95,32 +95,6 @@ homebrew_casks:
               must_succeed: false
           end
 
-changelog:
-  sort: asc
-  use: git
-  groups:
-    - title: Features
-      regexp: '^.*?feat(\([^)]+\))??!?:.+$'
-      order: 0
-    - title: Bug Fixes
-      regexp: '^.*?fix(\([^)]+\))??!?:.+$'
-      order: 1
-    - title: Performance
-      regexp: '^.*?perf(\([^)]+\))??!?:.+$'
-      order: 2
-    - title: Others
-      order: 999
-  filters:
-    exclude:
-      - "(?i)^docs[:(]"
-      - "(?i)^tests?[:(]"
-      - "(?i)^chore[:(]"
-      - "(?i)^ci[:(]"
-      - "(?i)^style[:(]"
-      - "(?i)^refactor[:(]"
-      - "(?i)^Merge pull request #"
-      - "(?i)^Merge (remote-tracking )?branch '"
-
 release:
   github:
     owner: sortie-ai
