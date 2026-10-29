@@ -17,7 +17,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 version=${1:?usage: release-announcement.sh <version>}
 model=${RELEASE_ANNOUNCEMENT_MODEL:-claude-opus-5-5}
 
-require_tools claude jq git awk curl
+require_tools claude jq git awk gh
 
 # Bare mode reads no federation variables, so Claude Code reaches federation
 # only through an apiKeyHelper.
