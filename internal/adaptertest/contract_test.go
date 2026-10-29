@@ -197,6 +197,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate":      {reason: "shared Copilot CLI journal location, read caps, and record parser; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport":    {reason: "shared OpenCode session export arguments and document parser; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/copilot/quota":             {reason: "shared Copilot CLI quota windows read from its endpoint or headless server; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/claude/ratelimit":          {reason: "shared Claude Code subscription rate-limit windows read from its stream and its usage endpoint; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits":       {reason: "shared Copilot CLI session-error refusal vocabulary; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits":      {reason: "shared OpenCode console usage limits read from the runtime usage command; registers no kind and holds no adapter", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},

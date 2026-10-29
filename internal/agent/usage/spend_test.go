@@ -62,6 +62,14 @@ func turnWith(in, out, reasoning, cr int64) *usage.SpendReading {
 	return r
 }
 
+func entry(model string, in, out int64) usage.SpendReading {
+	r := turnWith(in, out, 0, 0)
+	r.Model = model
+	return *r
+}
+
+func entries(rs ...usage.SpendReading) *usage.SpendReading { return &usage.SpendReading{ByModel: rs} }
+
 func withKids(read usage.RecordsRead, kids ...usage.SpendReading) usage.RecordsRead {
 	read.ChildReadings, read.ChildrenOK = kids, true
 	return read
@@ -335,6 +343,44 @@ func TestLedger(t *testing.T) {
 			steps:    []step{{end: replied, live: turnWith(30, 4, -1, 0), want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv}}},
 		},
 		{
+			name:    "per-turn entries settle their sum split per trimmed entry model, over the records split and Model, and an unnamed entry adds to the counts only",
+			perTurn: true,
+			start:   recs(hist),
+			steps: []step{{
+				end: replied, needs: true, read: recs(hist, ra, rb),
+				live: &usage.SpendReading{Model: "m9", ByModel: []usage.SpendReading{entry(" m1 ", 10, 2), entry("m2", 5, 1), entry("m1", 4, 1), entry("", 3, 1)}},
+				want: usage.Settlement{Run: u(22, 5), ByModel: byModel{"m1": u(14, 3), "m2": u(5, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:    "per-turn entry with a nil count is no figure, so the records settle the turn",
+			perTurn: true,
+			start:   recs(hist),
+			steps: []step{{
+				end: replied, needs: true, read: recs(hist, ra, rb),
+				live: entries(entry("m1", 10, 2), usage.SpendReading{Model: "m2", Input: new(int64(5))}),
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+			}},
+		},
+		{
+			name:    "per-turn entries naming no model leave the split to the records",
+			perTurn: true,
+			start:   recs(hist),
+			steps: []step{{
+				end: replied, needs: true, read: recs(hist, ra, rb),
+				live: entries(entry("", 20, 3), entry(" ", 10, 1)),
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:     "entries are not read under a process-cumulative declaration",
+			liveOnly: true,
+			steps: []step{{
+				end: replied, live: &usage.SpendReading{Input: new(int64(30)), Output: new(int64(4)), CacheRead: new(int64(0)), CacheWrite: new(int64(0)), Model: "m1", ByModel: []usage.SpendReading{entry("m2", 1, 1)}},
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+			}},
+		},
+		{
 			name:       "lower-bound live source leaves a records-settled turn incomplete",
 			lowerBound: true,
 			start:      recs(hist),
@@ -404,6 +450,96 @@ func TestLedger(t *testing.T) {
 
 				if !reflect.DeepEqual(got, st.want) {
 					t.Fatalf("step %d: Settle(%+v) = %+v, want %+v", i, st.end, got, st.want)
+				}
+			}
+		})
+	}
+}
+
+func newObservingLedger(t *testing.T, duringTurn bool) *usage.Ledger {
+	t.Helper()
+
+	l, err := usage.NewLedger(usage.Source{
+		Category: usage.SourceProtocol,
+		Strategy: usage.StrategyLive,
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendPerTurn, ReasoningInOutput: true, DuringTurn: duringTurn},
+	}, usage.Source{})
+	if err != nil {
+		t.Fatalf("NewLedger() = %v, want nil", err)
+	}
+	return l
+}
+
+func TestLedger_ObserveRequest(t *testing.T) {
+	t.Parallel()
+
+	type obs struct {
+		settleFirst bool
+		reading     usage.SpendReading
+		want        domain.TokenUsage
+		wantNew     bool
+	}
+	tests := []struct {
+		name       string
+		noDuring   bool
+		observings []obs
+	}{
+		{
+			name: "repeats hold the per-class maximum and report the identity new once",
+			observings: []obs{
+				{reading: rec("a", "m1", 10, 1), want: u(10, 1), wantNew: true},
+				{reading: rec("a", "m1", 5, 4), want: u(10, 4)},
+				{reading: rec("a", "m1", 8, 2), want: u(10, 4)},
+				{reading: rec("b", "m1", 7, 2), want: u(17, 6), wantNew: true},
+			},
+		},
+		{
+			name: "a reading without identity changes nothing",
+			observings: []obs{
+				{reading: rec("", "m1", 10, 1)},
+				{reading: rec("a", "m1", 3, 1), want: u(3, 1), wantNew: true},
+			},
+		},
+		{
+			name: "a reading that does not normalize changes nothing",
+			observings: []obs{
+				{reading: rec("a", "m1", 3, 1), want: u(3, 1), wantNew: true},
+				{reading: usage.SpendReading{Identity: "b", Input: new(int64(9))}, want: u(3, 1)},
+				{reading: rec("b", "m1", 2, 1), want: u(5, 2), wantNew: true},
+			},
+		},
+		{
+			name:     "a live declaration without DuringTurn changes nothing",
+			noDuring: true,
+			observings: []obs{
+				{reading: rec("a", "m1", 3, 1)},
+				{reading: rec("a", "m1", 3, 1)},
+			},
+		},
+		{
+			name: "the next turn's first reading starts from zero after Settle",
+			observings: []obs{
+				{reading: rec("a", "m1", 10, 1), want: u(10, 1), wantNew: true},
+				{settleFirst: true, reading: rec("a", "m1", 4, 1), want: u(4, 1), wantNew: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l := newObservingLedger(t, !tt.noDuring)
+
+			for i, o := range tt.observings {
+				if o.settleFirst {
+					l.Settle(replied, nil, unread)
+				}
+
+				got, gotNew := l.ObserveRequest(o.reading)
+
+				if got != o.want || gotNew != o.wantNew {
+					t.Fatalf("observation %d: ObserveRequest(%q) = %+v, %v, want %+v, %v", i, o.reading.Identity, got, gotNew, o.want, o.wantNew)
 				}
 			}
 		})

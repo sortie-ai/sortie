@@ -1,6 +1,9 @@
 package agentcore
 
 import (
+	"context"
+	"time"
+
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -61,6 +64,22 @@ func (s *TurnSpend) ApplySettlement(settlement usage.Settlement) *RecoveredUsage
 	}
 	s.provenance = settlement.Provenance
 	return &RecoveredUsage{Run: settlement.Run, ByModel: settlement.ByModel, Model: settlement.Model}
+}
+
+// SettleSpend settles one turn through the ledger and returns the figure it
+// produced, or nil when it has none. It calls read, bounded by timeout, only
+// when the ledger needs the records. ledger must be non-nil, read reports
+// every failure as OK false, and the call is not safe for concurrent use with
+// other calls on the same ledger.
+func SettleSpend(ctx context.Context, ledger *usage.Ledger, end usage.TurnEnd, live *usage.SpendReading,
+	read func(context.Context) usage.RecordsRead, timeout time.Duration, spend *TurnSpend) *RecoveredUsage {
+	records := usage.RecordsRead{}
+	if ledger.NeedsRecords(end, live) {
+		readCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		records = read(readCtx)
+	}
+	return spend.ApplySettlement(ledger.Settle(end, live, records))
 }
 
 // ModelReached reports whether the runtime served this turn output.

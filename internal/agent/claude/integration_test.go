@@ -11,6 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -140,6 +141,10 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		UserInstructions:    filepath.Join(".claude", "CLAUDE.md"),
 		ProjectInstructions: "CLAUDE.md",
 		Read:                fakemodel.ReadFile,
+		Spend: &fakemodel.SpendSources{
+			Live:    domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive},
+			Records: domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+		},
 		SSH: &fakemodel.SSHVariant{
 			Package:       "@anthropic-ai/claude-code",
 			HostCommand:   integrationCommand(t),

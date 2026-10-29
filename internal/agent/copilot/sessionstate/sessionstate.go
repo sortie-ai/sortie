@@ -26,10 +26,6 @@ const (
 	// MaxFileBytes is the largest journal a reader takes, the limit every
 	// records reader applies. Larger files are rejected without being read.
 	MaxFileBytes = usage.MaxRecordsBytes
-
-	// MaxLineBytes is the largest single journal line a reader scans,
-	// matching the stdout scanner cap the fork-per-turn skeleton uses.
-	MaxLineBytes = 10 * 1024 * 1024
 )
 
 const usageRecordType = "session.usage_record"

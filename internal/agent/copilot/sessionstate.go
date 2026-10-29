@@ -11,6 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -67,7 +68,7 @@ func readSessionUsage(path string) (current domain.TokenUsage, byModel map[strin
 	defer f.Close() //nolint:errcheck // read-only handle
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), sessionstate.MaxLineBytes)
+	scanner.Buffer(make([]byte, 0, 64*1024), usage.MaxRecordLineBytes)
 
 	var records []shutdownEvent
 	for scanner.Scan() {
@@ -86,7 +87,7 @@ func readSessionUsage(path string) (current domain.TokenUsage, byModel map[strin
 	if scanErr := scanner.Err(); scanErr != nil {
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			return domain.TokenUsage{}, nil, "", false,
-				fmt.Errorf("session-state events file line exceeds %d bytes: %w", sessionstate.MaxLineBytes, errSessionStateCapExceeded)
+				fmt.Errorf("session-state events file line exceeds %d bytes: %w", usage.MaxRecordLineBytes, errSessionStateCapExceeded)
 		}
 		return domain.TokenUsage{}, nil, "", false, fmt.Errorf("scan session-state events file: %w", scanErr)
 	}
