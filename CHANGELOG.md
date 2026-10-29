@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A run stopped on an SSH worker host no longer hangs instead of ending. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 - A Copilot CLI turn on the ACP agent kind that was cancelled or stopped before the model answered no longer reports its spend as unaccounted or lowers the session's token-count capability when Copilot CLI printed a notice of its own first. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 - On the ACP agent kind, a GitHub Copilot CLI usage-limit refusal no longer ends the turn as successful, and a Kiro CLI v3 engine usage-limit refusal or throttle is no longer reported as a rejected credential. ([#1524](https://github.com/sortie-ai/sortie/issues/1524))
+- A `claude-code` turn that is stopped, killed, or ends without its final report now counts the requests it completed, read from Claude Code's session journal on the host that ran it, over SSH included, and a continued session leaves out earlier runs' spend whatever Claude Code release runs it. ([#1537](https://github.com/sortie-ai/sortie/issues/1537))
 
 ## [1.30.0] - 2026-10-23
 
