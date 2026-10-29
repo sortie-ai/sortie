@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-29T17:33:41Z",
+  "profile_digest": "224fe9f628e5a35b019f6efca024de32ccea77a265b312918190a4de5fd7274e",
+  "collector_digest": "5ac66ec6b287448eb98d2053eb5867b703c9b8196cc79859888c22a7afa84125",
+  "evidence_file": "evidence.jsonl",
+  "evidence_digest": "96e0004f76ec22a70966949776085bf7973726a67a957e36e8525584f25ec369",
+  "requested_model": "claude-haiku-5.5",
+  "protocol_version": 1,
+  "session_agents": {
+    "090c7f2c-d03a-4027-88bb-ece7c6ae3c66": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "2aa7b3ac-4730-4ce0-8159-5f65472a3fcb": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "447cb96c-b568-405a-ac47-92844abf3dea": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "5257e83f-b5f1-4306-b240-2a8ae49db3dc": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "5e4b4310-fb82-43d2-8875-0ea6285c4d6d": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "61157f7b-2567-4331-8210-5d555f857fd8": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "73e30540-fc87-4110-9606-c0d37682c3e3": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "8c4b09ed-75f6-4fe7-8eea-48c1051e9cb3": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "9c098088-49b4-40dd-b16a-10cac3a922d9": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "a5b0172b-77b8-413e-ba81-ac203169161b": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "dab53e26-592b-4ab2-81c5-c55dc2c3e143": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "e813bb67-0f23-415e-bbae-a396b6c48e20": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    },
+    "eda90309-d9b7-47be-a9ac-383885183700": {
+      "name": "Copilot",
+      "version": "1.0.105"
+    }
+  },
+  "credential_mode": {}
+}

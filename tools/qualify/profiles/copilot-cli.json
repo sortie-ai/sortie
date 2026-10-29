@@ -1,0 +1,154 @@
+{
+  "schema_version": 4,
+  "runtime_id": "copilot-cli",
+  "identity_tokens": [
+    "copilot"
+  ],
+  "notes_path": "docs/copilot-adapter-notes.md",
+  "measurement_path": "tools/qualify/probe/testdata/copilot-cli/measurement.json",
+  "published_sample": "examples/WORKFLOW.agent-client-protocol.copilot.md",
+  "tool_name_format": "{server}-{tool}",
+  "project_config_paths": [
+    ".mcp.json",
+    ".github/agents",
+    ".github/copilot-instructions.md",
+    ".github/instructions",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md"
+  ],
+  "config_root_env_names": [
+    "COPILOT_HOME"
+  ],
+  "version_args": [
+    "--version"
+  ],
+  "model_args": [
+    "--model",
+    "{model}"
+  ],
+  "capability_gap_labels": [],
+  "probe_prompts": {
+    "success": "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
+    "runtime_refusal": "Decline to continue this turn and report your refusal outcome without calling a tool.",
+    "tool_call": "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
+    "continuation_seed": "Remember the phrase {nonce} for the rest of this conversation and reply exactly STORED.",
+    "continuation_recall": "Reply with the phrase from earlier in this conversation and no other text."
+  },
+  "entry_points": {
+    "protocol": {
+      "args": [
+        "--acp",
+        "--model",
+        "{model}",
+        "--allow-all-tools"
+      ],
+      "asking_args": [
+        "--acp",
+        "--model",
+        "{model}"
+      ]
+    },
+    "native_json": {
+      "args": [
+        "--model",
+        "{model}",
+        "--allow-all-tools",
+        "--output-format",
+        "json",
+        "-p",
+        "{prompt}"
+      ]
+    },
+    "native_stream_json": {
+      "resume_args": [
+        "--resume",
+        "{session_id}"
+      ],
+      "args": [
+        "--model",
+        "{model}",
+        "--allow-all-tools",
+        "--output-format",
+        "json",
+        "-p",
+        "{prompt}"
+      ],
+      "asking_args": [
+        "--model",
+        "{model}",
+        "--output-format",
+        "json",
+        "-p",
+        "{prompt}"
+      ]
+    }
+  },
+  "recognizers": {
+    "native_json": {
+      "locator": {
+        "mode": "first_value"
+      },
+      "error_members": [
+        "error"
+      ],
+      "success_member": "response",
+      "status_member": "",
+      "status_cases": {},
+      "status_end_turn": [],
+      "model_request_path": []
+    },
+    "native_stream_json": {
+      "locator": {
+        "mode": "discriminated",
+        "discriminator_key": "type",
+        "discriminator_value": "result"
+      },
+      "error_members": [],
+      "success_member": "exitCode",
+      "status_member": "",
+      "status_cases": {},
+      "status_end_turn": [],
+      "model_request_path": [],
+      "session_id_path": [
+        "sessionId"
+      ]
+    }
+  },
+  "declarations": [
+    {
+      "capability": "turn_disposition",
+      "case": "runtime_failure",
+      "reason": "outcome_folded_into_another",
+      "surface": "protocol"
+    }
+  ],
+  "absent_surfaces": [
+    {
+      "surface": "native_json",
+      "reason": "surface_not_offered"
+    }
+  ],
+  "not_inducible_cases": [
+    {
+      "surface": "native_stream_json",
+      "case": "limit_reached",
+      "reason": "prompt_channel_too_small"
+    },
+    {
+      "surface": "native_stream_json",
+      "case": "cancellation",
+      "reason": "terminal_written_at_exit_only"
+    },
+    {
+      "surface": "native_stream_json",
+      "case": "human_input",
+      "reason": "terminal_vocabulary_closed"
+    },
+    {
+      "surface": "native_stream_json",
+      "case": "runtime_failure",
+      "reason": "output_channel_silent_on_failure"
+    }
+  ]
+}
