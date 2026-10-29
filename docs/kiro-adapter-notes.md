@@ -102,6 +102,15 @@ The figure trails the spend. A 0.035-credit turn did not move `used` at once or 
 
 The usage declaration is registered under the runtime's name `kiro`, which no handshake reports. The default engine's `agentInfo.name` is `Kiro CLI Agent`, and the v3 engine sends none. So when the handshake reports no name, the declaration is selected by the launch command naming `kiro-cli`.
 
+The two engines report a refusal differently, and the same declaration reads both. Neither is held on a model, because Kiro's credits and request counts belong to the account.
+
+- The `--agent-engine v3` engine classifies the provider's error into `data.errorType` and its retry class into `data.retryErrorType`, and sends every classified error as `-32000`. An `errorType` of `UsageLimitReachedError` or `OverageLimitReachedError` ends the turn `usage_limit`, whatever the code. A `retryErrorType` of `THROTTLING` (a client, service, or model throttle) ends `response_error`. The declaration's verdict outranks the `-32000` rule, so neither reads as a rejected credential.
+- The default engine sends a `_kiro.dev/error/rate_limit` notification for a usage limit, and also for throttles and capacity shortages, then a `-32603` prompt error whose `data` is a string. It retries a throttled or capacity-short request first and announces each retry with a `retry_warning` update. A notification with no `retry_warning` earlier in the turn is the usage-limit shape, and the turn ends `usage_limit` when the prompt error that follows is not `-32000`. A notification after a `retry_warning` ends `response_error`. Recognition rests on the absence of the retry announcement because no structured member separates the cases.
+
+Some refusals stay `response_error`. A default-engine overage limit arrives as a bare `-32603` with nothing structured. A default-engine monthly limit the service answers at HTTP 429 is retried like a throttle and so reads as one, and sources disagree on which status the service uses. A usage limit that follows a retried throttle in the same turn reads as a throttle too, because the retry announcement holds for the rest of the turn.
+
+The reset comes from the earliest exhausted credit window of the pull, which resets on the billing-cycle date at 00:00 UTC. A daily or hourly limit on an account with overage enabled is the unobserved case: if the pull reports credits above the limit for such an account, the window reads exhausted and the refusal waits for the billing-cycle reset, which the orchestrator caps. When the pull fails or no window is exhausted, the refusal carries no reset and retries on the exponential backoff.
+
 ## Native headless observations
 
 `kiro-cli chat --output-format stream-json` emits JSON Lines on stdout, one event per line. It opens with a run-started event, closes with a run-finished event carrying a status, a stop reason, and the final text, and reports a failure as a run-error event. The mode needs the second-generation agent engine and refuses to start on the first.

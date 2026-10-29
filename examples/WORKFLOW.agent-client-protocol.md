@@ -65,7 +65,8 @@ server:
        3. --approval-mode yolo auto-approves every tool, shell included.
        4. --policy is the narrower alternative to yolo.
        5. Confirm the credential first: gemini -p "reply with ok"
-       6. No --model is pinned above; this kind has no model key.
+       6. No --model is pinned above; the kind's model key only names
+          the model a usage-limit hold stops, never the one Gemini runs.
        7. Run this agent inside a hardened sandbox.
        8. max_turns: 15 above is a sample default, not a route property.
 
