@@ -47,8 +47,6 @@ func TestParseCaptures(t *testing.T) {
 		{"two-turns-export.json", "ses_e7ac6691effe73waoQYzNihPM6", []counts{{15681, 2, 0, 1536}, {827, 2, 0, 17152}}},
 		{"flash-latest-export.json", "ses_e7ac4b348ffeP2wfjLJwh4m3tB", []counts{{17283, 1, 39, 0}, {2924, 17, 52, 15232}, {2221, 14, 62, 16108}}},
 		{"child-cancel-parent-export.json", "ses_e79773d5cffeGZOgs16v5Zm70A", []counts{{102, 106, 79, 17152}}},
-		{"child-cancel-child-export.json", "ses_e79773346ffeKVGj032T0Q7h9p", nil},
-		{"cancel-export.json", "ses_e7ac4d139ffeivndL710DYWtze", nil},
 	}
 
 	for _, tt := range tests {
@@ -77,7 +75,6 @@ func TestParseSkipsMessagesThatAreNotFinishedAssistantsWithTokens(t *testing.T) 
 	}{
 		{"unfinished assistant", `{"type":"assistant",` + tokens + `}`},
 		{"user message", `{"type":"user","finish":"stop",` + tokens + `}`},
-		{"tokens null", `{"type":"assistant","finish":"error","tokens":null}`},
 	}
 
 	for _, tt := range tests {
@@ -168,6 +165,34 @@ func TestParseRefusesAnotherSession(t *testing.T) {
 
 	if !errors.Is(err, ErrOtherSession) || len(records) != 0 {
 		t.Errorf("Parse(two-turns, other session) = %d records, %v, want none and ErrOtherSession", len(records), err)
+	}
+}
+
+func TestParseRefusesAFinishedMessageWithoutTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		data      []byte
+		sessionID string
+	}{
+		{"cancel capture", loadFixture(t, "cancel-export.json"), "ses_e7ac4d139ffeivndL710DYWtze"},
+		{"child cancel capture", loadFixture(t, "child-cancel-child-export.json"), "ses_e79773346ffeKVGj032T0Q7h9p"},
+		{"beside a counted message", exportDoc(
+			`{"type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}`,
+			`{"type":"assistant","finish":"error","tokens":null}`), "ses_t"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			records, err := Parse(tt.data, tt.sessionID)
+
+			if !errors.Is(err, ErrUnrecordedMessage) || len(records) != 0 {
+				t.Errorf("Parse(%s) = %d records, %v, want none and ErrUnrecordedMessage", tt.name, len(records), err)
+			}
+		})
 	}
 }
 

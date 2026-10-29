@@ -20,6 +20,10 @@ import (
 // ErrOtherSession marks an export whose info.id is not the session asked for.
 var ErrOtherSession = errors.New("session export of another session")
 
+// ErrUnrecordedMessage marks an export with a finished assistant message that
+// carries no tokens object: an aborted request whose spend is recorded nowhere.
+var ErrUnrecordedMessage = errors.New("session export has a finished message without tokens")
+
 // Record is one finished assistant message of an export.
 type Record struct {
 	// Spend holds the counts as exported, with Model and Identity.
@@ -58,11 +62,12 @@ func CountOmittedAtZero(raw json.RawMessage) *int64 {
 }
 
 // Parse returns the records of the finished assistant messages of an export,
-// in document order. A message counts when it has a non-empty finish and a
-// tokens object, an aborted one that kept its tokens included. The session
-// aggregate in info is never read: it also holds requests no message
-// records. Parse refuses data above [usage.MaxRecordsBytes], a document that
-// does not decode, and a document of another session ([ErrOtherSession]).
+// in document order. A message counts when it has a non-empty finish, an
+// aborted one that kept its tokens included. The session aggregate in info is
+// never read: it also holds requests no message records. Parse refuses data
+// above [usage.MaxRecordsBytes], a document that does not decode, a document
+// of another session ([ErrOtherSession]), and one with a finished message
+// without tokens ([ErrUnrecordedMessage]).
 func Parse(data []byte, sessionID string) ([]Record, error) {
 	if len(data) > usage.MaxRecordsBytes {
 		return nil, fmt.Errorf("session export exceeds %d bytes", usage.MaxRecordsBytes)
@@ -94,7 +99,7 @@ func Parse(data []byte, sessionID string) ([]Record, error) {
 		}
 		tokens, ok := decodeObject[exportTokens](m.Tokens)
 		if !ok {
-			continue
+			return nil, ErrUnrecordedMessage
 		}
 		cache, _ := decodeObject[exportCache](tokens.Cache)
 		model, _ := decodeObject[exportModel](m.Model)
