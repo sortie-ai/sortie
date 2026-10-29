@@ -124,6 +124,23 @@ jobs:
             clientprotocol_user_instructions: .copilot/copilot-instructions.md
             clientprotocol_spend_declaration: Copilot
 
+          - name: GitHub Copilot CLI - ACP (default declaration)
+            adapter: acp-copilot-default
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: COPILOT_PROVIDER_API_KEY
+            run_filter: ^TestIntegration_ScriptedModel$/^credential_verification_context$
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 300s
+            node: true
+            install: npm install -g @github/copilot
+            version_cmd: copilot --version
+            source: "npm: @github/copilot (unpinned, installs latest)"
+            clientprotocol_command: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+            clientprotocol_model_base_url_env: COPILOT_PROVIDER_BASE_URL
+            clientprotocol_user_instructions: .copilot/copilot-instructions.md
+            clientprotocol_spend_declaration: default
+
           - name: OpenCode - ACP
             adapter: acp-opencode
             kind: agent

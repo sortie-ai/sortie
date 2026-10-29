@@ -57,6 +57,14 @@ var streamSource = usage.Source{Windows: usage.WindowDeclaration{
 	},
 }}
 
+// usageSources: the stream carries the token counts, which the adapter maps
+// itself after each model request.
+var usageSources = usage.Sources{Live: usage.Source{
+	Category: usage.SourceOutput,
+	Strategy: usage.StrategyLive,
+	Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true, ServedModel: true},
+}}
+
 func init() {
 	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
 		RequiresCommand:        true,
@@ -64,8 +72,7 @@ func init() {
 		ValidateAgentConfig:    validateConfig,
 		MCPDialect:             registry.MCPDialectMCPServersJSONAlwaysLoad,
 		SessionResumeBlockedBy: sessionResumeBlockedBy,
-		UsageArrival:           registry.UsageArrivalIncremental,
-		UsageAttribution:       registry.UsageAttributionPerModel,
+		UsageSources:           usageSources,
 		UsageLimitRecognition:  registry.UsageLimitRecognized,
 		CredentialEnv:          registry.DeclareCredentialEnv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
 		VerificationContext:    registry.DeclareVerificationContext(),

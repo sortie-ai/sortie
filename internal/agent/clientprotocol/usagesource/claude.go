@@ -21,22 +21,25 @@ func init() {
 
 // claudeLiveSource holds the same table as the Claude Code stream source,
 // because the bridge forwards the SDK's rate limit report unchanged.
-var claudeLiveSource = usage.Source{Windows: usage.WindowDeclaration{
-	Share: usage.ShareFraction,
-	Statuses: map[string]domain.UsageWindowStatus{
-		"allowed":         domain.UsageWindowAllowed,
-		"allowed_warning": domain.UsageWindowWarning,
-		"rejected":        domain.UsageWindowExhausted,
+var claudeLiveSource = usage.Source{
+	Category: usage.SourceProtocol,
+	Windows: usage.WindowDeclaration{
+		Share: usage.ShareFraction,
+		Statuses: map[string]domain.UsageWindowStatus{
+			"allowed":         domain.UsageWindowAllowed,
+			"allowed_warning": domain.UsageWindowWarning,
+			"rejected":        domain.UsageWindowExhausted,
+		},
+		Spans: map[string]usage.Span{
+			"five_hour":                  {Minutes: 300},
+			"seven_day":                  {Minutes: 10080},
+			"seven_day_opus":             {Minutes: 10080, Scope: "Opus"},
+			"seven_day_sonnet":           {Minutes: 10080, Scope: "Sonnet"},
+			"seven_day_overage_included": {Minutes: 10080},
+			"overage":                    {Scope: "extra usage"},
+		},
 	},
-	Spans: map[string]usage.Span{
-		"five_hour":                  {Minutes: 300},
-		"seven_day":                  {Minutes: 10080},
-		"seven_day_opus":             {Minutes: 10080, Scope: "Opus"},
-		"seven_day_sonnet":           {Minutes: 10080, Scope: "Sonnet"},
-		"seven_day_overage_included": {Minutes: 10080},
-		"overage":                    {Scope: "extra usage"},
-	},
-}}
+}
 
 type claudeRateLimit struct {
 	Status        string   `json:"status"`

@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -281,8 +282,6 @@ func TestAbandonedTurnIsNotStarted(t *testing.T) {
 	}
 }
 
-// This kind's normalization table never emits domain.EventTokenUsage, so a
-// usage_update observed mid-turn must still leave the measurement contract empty.
 func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 	t.Parallel()
 
@@ -310,7 +309,7 @@ func TestAssertUsageReporting(t *testing.T) {
 	t.Parallel()
 
 	measuredEvents, measuredOutcome := measuredSessionTurn(t)
-	unmeasuredEvents, unmeasuredOutcome := unmeasuredSessionTurn(t)
+	remoteEvents, remoteOutcome := remoteLedgerSessionTurn(t)
 
 	agenttest.AssertUsageReporting(t, "agent-client-protocol", []agenttest.UsageReportingCase{
 		{
@@ -319,10 +318,10 @@ func TestAssertUsageReporting(t *testing.T) {
 			Result: measuredOutcome.result,
 		},
 		{
-			Name:   "a session with no measurement source reports no figure",
+			Name:   "a remote session settles one figure per turn from the prompt result",
 			Remote: true,
-			Events: unmeasuredEvents,
-			Result: unmeasuredOutcome.result,
+			Events: remoteEvents,
+			Result: remoteOutcome.result,
 		},
 	})
 }
@@ -348,14 +347,19 @@ func measuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
 	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
 }
 
-func unmeasuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
+func remoteLedgerSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
 	t.Helper()
 
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-	markSessionKnown(state)
+	live := spendReading(1100, 70, 0, "", "")
+	declaration := scriptedSpendDeclaration(&live, nil, nil)
+	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+	if err != nil {
+		t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+	}
+	ledger.Boundary(usage.RecordsRead{})
+	state, out, inPw := newDeclaredSession(t, declaration, ledger)
 
-	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
+	return measuredTurn(t, state, inPw, out, nil)
 }
 
 func indexOfStepName(t *testing.T, names []string, name string) int {
@@ -396,8 +400,6 @@ func TestDefaultTeardownOrderIncludesCloseSession(t *testing.T) {
 	}
 }
 
-// A zero-value closeSessionID means the handshake never advertised
-// session/close, so the step writes and logs nothing.
 func TestCloseSessionSkipsWhenIdentifierEmpty(t *testing.T) {
 	t.Parallel()
 

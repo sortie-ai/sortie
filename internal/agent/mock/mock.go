@@ -13,43 +13,29 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
+
+// usageSources: the mock reports the counts its configuration sets, which no
+// runtime output backs, so it maps them itself after each turn.
+var usageSources = usage.Sources{Live: usage.Source{
+	Category: usage.SourceOutput,
+	Strategy: usage.StrategyLive,
+	Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true},
+}}
 
 func init() {
 	registry.Agents.RegisterWithMeta("mock", NewMockAdapter, registry.AgentMeta{
 		MCPDialect:            registry.MCPDialectNone,
 		MCPDialectNoneReason:  "launches no process",
 		UsageLimitRecognition: registry.UsageLimitRecognized,
-		UsageArrival:          registry.UsageArrivalIncremental,
-		UsageAttribution:      registry.UsageAttributionSessionTotal,
+		UsageSources:          usageSources,
 		CredentialEnv:         registry.DeclareCredentialEnv(),
 		EffortForwarding:      registry.EffortNotForwarded,
 		VerificationContext:   registry.DeclareVerificationContext(),
-		UsageSessionRules: []registry.UsageSessionRule{
-			{
-				// Shares the session's own read of report_token_usage so
-				// the two cannot disagree.
-				When: func(passthrough map[string]any, remote bool) bool {
-					return !typeutil.BoolFrom(passthrough, "report_token_usage", true)
-				},
-				Arrival:     registry.UsageArrivalNone,
-				Attribution: registry.UsageAttributionNone,
-			},
-			{
-				// Ordered after the report_token_usage rule: no usage
-				// event is emitted for a model to ride on when both
-				// keys are set.
-				When: func(passthrough map[string]any, remote bool) bool {
-					v, ok := passthrough["model_name"].(string)
-					return ok && v != ""
-				},
-				Arrival:     registry.UsageArrivalIncremental,
-				Attribution: registry.UsageAttributionPerModel,
-			},
-		},
 	})
 }
 
@@ -125,9 +111,11 @@ type mockToolCall struct {
 // report_token_usage defaults to true; when false, the adapter emits no
 // token_usage event, leaves [domain.TurnResult] Usage at the zero
 // value, and reports UsageMeasured false, simulating a runtime that
-// reported nothing. A verification session's turn emits no event,
-// consumes no turn_outcomes entry, and fails with credential_error when
-// it is set.
+// reported nothing: a turn that served output then carries
+// SpendUnaccounted, an amount unknown. The error outcome does not carry
+// it, because its terminal event bypasses the shared disposition. A
+// verification session's turn emits no event, consumes no turn_outcomes
+// entry, and fails with credential_error when it is set.
 //
 // turn_outcomes entries are completed, failed, cancelled, error,
 // input_required, incomplete, and usage_limit. A usage_limit turn
@@ -283,7 +271,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	if state.reportTokenUsage && outcome != usageLimitOutcome {
 		state.accrueTurnUsage()
 	}
-	usage := state.usage
+	cumulative := state.usage
 	m.mu.Unlock()
 
 	// Artificial delay (outside lock).
@@ -325,7 +313,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		tokenEvt := domain.AgentEvent{
 			Type:      domain.EventTokenUsage,
 			Timestamp: time.Now().UTC(),
-			Usage:     usage,
+			Usage:     cumulative,
 			Model:     state.modelName,
 			Message:   "mock token usage",
 		}
@@ -346,58 +334,94 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
-	if outcome == "input_required" {
+	spend := turnSpend(state, outcome)
+
+	switch outcome {
+	case "input_required":
 		ev := agentcore.TurnEvidence{
 			Terminal:        agentcore.TerminalHumanInputRequired,
 			TerminalMessage: fmt.Sprintf("mock turn %s", outcome),
 		}
 		meta := agentcore.TurnMeta{
 			SessionID:     session.ID,
-			Usage:         usage,
+			Usage:         cumulative,
 			UsageMeasured: state.reportTokenUsage,
 		}
-		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta, agentcore.TurnSpend{})
-	}
-
-	if outcome == "incomplete" {
+		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta, spend)
+	case "incomplete":
 		ev := agentcore.TurnEvidence{
 			Terminal:        agentcore.TerminalIncomplete,
 			TerminalMessage: "mock turn incomplete",
 		}
 		meta := agentcore.TurnMeta{
 			SessionID:     session.ID,
-			Usage:         usage,
+			Usage:         cumulative,
 			UsageMeasured: state.reportTokenUsage,
 		}
-		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta, agentcore.TurnSpend{})
-	}
-
-	exitReason, errKind, isError := outcomeToEvent(outcome)
-	params.OnEvent(domain.AgentEvent{
-		Type:      exitReason,
-		Timestamp: time.Now().UTC(),
-		Message:   fmt.Sprintf("mock turn %s", outcome),
-	})
-
-	turnResult := domain.TurnResult{
-		SessionID:     session.ID,
-		ExitReason:    exitReason,
-		Usage:         usage,
-		UsageMeasured: state.reportTokenUsage,
-	}
-
-	if isError {
-		agentErr := &domain.AgentError{
-			Kind:    errKind,
+		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta, spend)
+	case "error":
+		params.OnEvent(domain.AgentEvent{
+			Type:      domain.EventTurnEndedWithError,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("mock turn %s", outcome),
+		})
+		result := domain.TurnResult{
+			SessionID:     session.ID,
+			ExitReason:    domain.EventTurnEndedWithError,
+			Usage:         cumulative,
+			UsageMeasured: state.reportTokenUsage,
+		}
+		return result, &domain.AgentError{
+			Kind:    domain.ErrPortExit,
 			Message: fmt.Sprintf("mock turn %s", outcome),
 		}
-		if errKind == domain.ErrUsageLimit {
-			agentErr.UsageLimit = &domain.UsageLimit{ResetsAt: state.usageLimitResetsAt}
-		}
-		return turnResult, agentErr
 	}
 
-	return turnResult, nil
+	ev := agentcore.TurnEvidence{
+		Terminal:        scriptedTerminal(outcome),
+		TerminalMessage: fmt.Sprintf("mock turn %s", outcome),
+	}
+	if outcome == usageLimitOutcome {
+		ev.TerminalErrorKind = domain.ErrUsageLimit
+		ev.UsageLimit = &domain.UsageLimit{ResetsAt: state.usageLimitResetsAt}
+	}
+	// The terminal event carries no usage: the token_usage event above is
+	// the turn's one figure.
+	meta := agentcore.TurnMeta{SessionID: session.ID, UsageMeasured: state.reportTokenUsage}
+	result, agentErr := agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta, spend)
+	result.Usage = cumulative
+	if agentErr == nil {
+		return result, nil
+	}
+	return result, agentErr
+}
+
+// turnSpend is the spend evidence of a turn that served output: its amount
+// is settled when the mock reports usage and unknown when it does not. A
+// usage_limit turn was refused, so it spent nothing.
+func turnSpend(state *mockSessionState, outcome string) agentcore.TurnSpend {
+	var spend agentcore.TurnSpend
+	if outcome == usageLimitOutcome {
+		return spend
+	}
+	spend.MarkModelReached()
+	if state.reportTokenUsage {
+		spend.MarkSettled()
+	}
+	return spend
+}
+
+// scriptedTerminal maps a turn_outcomes entry that ends through the shared
+// disposition to the runtime's terminal report.
+func scriptedTerminal(outcome string) agentcore.TerminalReport {
+	switch outcome {
+	case "failed", usageLimitOutcome:
+		return agentcore.TerminalFailure
+	case "cancelled":
+		return agentcore.TerminalCancelled
+	default:
+		return agentcore.TerminalSuccess
+	}
 }
 
 // StopSession returns nil or an error when the session's settings carry
@@ -418,24 +442,6 @@ func (s mockSettings) outcomeAt(index int) string {
 		return s.turnOutcomes[index]
 	}
 	return "completed"
-}
-
-// outcomeToEvent maps an outcome config string to the corresponding
-// terminal event type, error kind, and whether an error should be
-// returned to the caller.
-func outcomeToEvent(outcome string) (domain.AgentEventType, domain.AgentErrorKind, bool) {
-	switch outcome {
-	case "failed":
-		return domain.EventTurnFailed, domain.ErrTurnFailed, true
-	case "cancelled":
-		return domain.EventTurnCancelled, domain.ErrTurnCancelled, true
-	case "error":
-		return domain.EventTurnEndedWithError, domain.ErrPortExit, true
-	case usageLimitOutcome:
-		return domain.EventTurnFailed, domain.ErrUsageLimit, true
-	default:
-		return domain.EventTurnCompleted, "", false
-	}
 }
 
 // int64FromConfig extracts an int64 value from a config map, accepting

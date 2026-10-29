@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
@@ -12,11 +13,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// usageReader supplies token measurements read outside the wire, for a runtime
-// without a spend declaration. A reader that fails to claim the launch target,
-// recognize the handshake's runtime name, or produce a record on its first
-// drain is dropped, leaving the session unmeasured and the token ceiling
-// inactive.
+// usageReader supplies token measurements read outside the wire. A confirmed
+// reader settles the session ahead of the spend ledger. A reader that fails to
+// claim the launch target, recognize the handshake's runtime name, or produce a
+// record on its first drain is dropped, leaving the session unmeasured and the
+// token ceiling inactive.
 //
 // Drain reports whether a measurement exists; Completeness grades how far the
 // figure it just returned was proven to reach.
@@ -103,39 +104,73 @@ func settleUsageSources(claims usageClaims, info *implementation, remote bool) u
 	return verdict
 }
 
-// selectDeclaration returns the declaration registered under the handshake's
-// name, or the zero Declaration. It claims nothing, so a remote launch is
-// selected like a local one.
-func selectDeclaration(declarations *registry.Registry[usagesource.Declaration, struct{}], info *implementation) usagesource.Declaration {
-	if info == nil || info.Name == "" {
-		return usagesource.Declaration{}
-	}
-	declaration, err := declarations.Get(info.Name)
-	if err != nil {
-		return usagesource.Declaration{}
-	}
-	return declaration
+// declarationChoice is the declaration a session is measured under and what
+// selected it.
+type declarationChoice struct {
+	// declaration is the effective declaration: spend mapped, by Default when
+	// the selected one maps none.
+	declaration usagesource.Declaration
+
+	// key is the registry key of the selected declaration, or
+	// usagesource.DefaultName.
+	key string
+
+	// configured is the key of the declaration the configured command names,
+	// empty when none does.
+	configured string
+
+	// mismatch is true when the configured command names a runtime the
+	// handshake does not confirm.
+	mismatch bool
 }
 
-// selectDeclarationByLaunch returns the first declaration whose Launches accepts
-// target, for a runtime whose handshake names no registered declaration.
-func selectDeclarationByLaunch(declarations *registry.Registry[usagesource.Declaration, struct{}], target agentcore.LaunchTarget) usagesource.Declaration {
-	for _, kind := range declarations.Kinds() {
+// chooseDeclaration selects the declaration a session is measured under. The
+// runtime the handshake names wins; a handshake naming a runtime with no
+// declaration selects usagesource.Default, and one naming nothing keeps the
+// declaration the configured command names. It claims nothing, so a remote
+// launch is chosen like a local one.
+func chooseDeclaration(declarations *registry.Registry[usagesource.Declaration, struct{}], info *implementation, target agentcore.LaunchTarget) declarationChoice {
+	named := ""
+	if info != nil {
+		named = info.Name
+	}
+	launches := func(kind string) bool {
 		declaration, err := declarations.Get(kind)
-		if err == nil && declaration.Launches != nil && declaration.Launches(target) {
-			return declaration
+		return err == nil && declaration.Launches != nil && declaration.Launches(target)
+	}
+
+	configured := ""
+	for _, kind := range declarations.Kinds() {
+		if launches(kind) {
+			configured = kind
+			break
 		}
 	}
-	return usagesource.Declaration{}
-}
 
-// resolveDeclaration returns the declaration registered under the handshake's
-// name, else the one that claims the launch target.
-func resolveDeclaration(declarations *registry.Registry[usagesource.Declaration, struct{}], info *implementation, target agentcore.LaunchTarget) usagesource.Declaration {
-	if info != nil && declarations.Has(info.Name) {
-		return selectDeclaration(declarations, info)
+	var key string
+	switch {
+	case named != "" && declarations.Has(named):
+		key = named
+	case named != "":
+		key = usagesource.DefaultName
+	case configured != "":
+		key = configured
+	default:
+		key = usagesource.DefaultName
 	}
-	return selectDeclarationByLaunch(declarations, target)
+
+	declaration := usagesource.Default
+	if key != usagesource.DefaultName {
+		declaration, _ = declarations.Get(key) // a key chosen from the registry resolves
+	}
+
+	confirmed := named == "" || (declarations.Has(named) && launches(named))
+	return declarationChoice{
+		declaration: declaration.Effective(),
+		key:         key,
+		configured:  configured,
+		mismatch:    configured != "" && !confirmed,
+	}
 }
 
 // pullRuntime is a declaration's only path to the session's connection, launch
@@ -192,6 +227,28 @@ func newSessionPuller(decl usagesource.Declaration, state *sessionState, credent
 	return usage.NewPuller(decl.Pull, agentcore.AuxiliaryTimeout(state.agentConfig), func(ctx context.Context) ([]usage.WindowReading, error) {
 		return decl.PullWindows(ctx, runtime)
 	})
+}
+
+// readsRecords reports whether the session's launch can read records. A remote
+// launch cannot.
+func readsRecords(state *sessionState) bool {
+	return state.target.RemoteCommand == ""
+}
+
+// readSessionRecords reads every spend record of the session from the runtime's
+// host under the read timeout. A launch that reads none returns the empty read,
+// which the ledger takes as a failed one.
+func readSessionRecords(ctx context.Context, state *sessionState, decl usagesource.Declaration) usage.RecordsRead {
+	if !readsRecords(state) {
+		return usage.RecordsRead{}
+	}
+	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
+	defer cancel()
+	readings, err := decl.ReadRecords(readCtx, pullRuntime{state: state})
+	if err != nil {
+		state.logger.Debug("usage records read failed", slog.Any("error", err))
+	}
+	return usage.RecordsRead{Readings: readings, OK: err == nil}
 }
 
 // releaseUsageSources closes every claimed source and the verification addition.

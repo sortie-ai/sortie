@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -32,11 +33,14 @@ type Constructor func() Reader
 var Sources = registry.NewRegistry[Constructor, struct{}]("usage source")
 
 // Declaration is one runtime's usage declaration on the generic protocol kind,
-// selected from the name the runtime gives in its handshake, or by Launches
-// when no declaration is registered under that name.
+// selected from the name the runtime gives in its handshake. A declaration that
+// maps no spend of its own reads spend under Default (see Effective). Launches
+// also selects the declaration the configured command names, which the
+// handshake's name confirms or overrides.
 type Declaration struct {
 	// Live is the runtime's live source: its protocol messages and what they
-	// mean.
+	// mean. Its Category is usage.SourceProtocol. A zero Spend means the
+	// declaration maps no spend of its own and reads it under Default.
 	Live usage.Source
 
 	// UsageUpdateWindows reads the usage windows one usage_update session
@@ -56,7 +60,8 @@ type Declaration struct {
 	// PromptSpend reads the spend a session/prompt result reports, under
 	// Live.Spend. It returns nil when the result carries no usage, and a count
 	// is nil wherever its member is absent, null, or not a JSON integer. Nil
-	// exactly when Live.Spend.Shape is usage.SpendUndeclared.
+	// exactly when Live.Spend.Shape is usage.SpendUndeclared; Effective supplies
+	// Default's when the declaration maps none.
 	PromptSpend func(result json.RawMessage) *usage.SpendReading
 
 	// Records is the runtime's records source: the per-request spend records
@@ -69,10 +74,10 @@ type Declaration struct {
 	// readings. Nil exactly when Records.Spend.Shape is usage.SpendUndeclared.
 	ReadRecords func(ctx context.Context, rt PullRuntime) ([]usage.SpendReading, error)
 
-	// Launches reports whether target starts this runtime. It selects the
-	// declaration for a launch whose handshake name matches no registered
-	// declaration, including a handshake that reports no name. Nil when the
-	// handshake name alone selects the runtime.
+	// Launches reports whether target starts this runtime, local or remote. It
+	// selects the declaration for a launch whose handshake reports no name, and
+	// identifies the configured runtime a handshake name is compared against.
+	// Nil when the handshake name alone selects the runtime.
 	Launches func(target agentcore.LaunchTarget) bool
 }
 
@@ -120,7 +125,47 @@ var ErrMethodNotFound = errors.New("method not found")
 // Declarations is the registry every runtime's declaration adds itself to,
 // exactly once, from an init function in its own file. The key is the
 // runtime's name exactly as its handshake reports it.
-var Declarations = registry.NewRegistry[Declaration, struct{}]("usage declaration")
+//
+// Registration refuses a declaration [checkDeclaration] rejects, and the key
+// [DefaultName] is reserved.
+var Declarations = registry.NewCheckedRegistry("usage declaration", checkDeclaration, DefaultName)
+
+// Effective returns d with Default's spend mapping when d maps no spend of its
+// own, that is, when its live source declares neither a token shape nor a
+// vendor unit. Every other field is kept.
+func (d Declaration) Effective() Declaration {
+	if d.Live.Spend.Shape != usage.SpendUndeclared || d.Live.Spend.VendorUnit != "" {
+		return d
+	}
+	d.Live.Spend = Default.Live.Spend
+	d.PromptSpend = Default.PromptSpend
+	return d
+}
+
+// checkDeclaration refuses a declaration the transport cannot measure a
+// session with: the transport reads spend only off the prompt result, through
+// the ledger.
+func checkDeclaration(d Declaration, _ struct{}) error {
+	effective := d.Effective()
+	if err := (usage.Sources{Live: effective.Live, Records: d.Records}).Check(); err != nil {
+		return err
+	}
+	switch {
+	case d.Live.Category != usage.SourceProtocol:
+		return fmt.Errorf("live source category %q is not %q", d.Live.Category, usage.SourceProtocol)
+	case (d.PromptSpend == nil) != (d.Live.Spend.Shape == usage.SpendUndeclared):
+		return errors.New("PromptSpend must be set exactly when the live source declares a spend shape")
+	case (d.ReadRecords == nil) != (d.Records.Spend.Shape == usage.SpendUndeclared):
+		return errors.New("ReadRecords must be set exactly when the records source declares a spend shape")
+	case d.Live.Spend.DuringTurn:
+		return errors.New("live source reports during the turn, but the transport reads spend off the prompt result only")
+	case effective.Live.Spend.Shape != usage.SpendUndeclared:
+		if _, err := usage.NewLedger(effective.Live, d.Records); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Reader is one measurement source. The transport declares its own interface
 // with this method set and holds values of it.
@@ -229,14 +274,25 @@ var VerificationAdditions = registry.NewRegistry[func() VerificationAddition, st
 // append to an executable name; namesRuntime strips at most one.
 var executableSuffixes = []string{".cmd", ".ps1", ".exe", ".js"}
 
-// namesRuntime reports whether the tokens of target's command line name the
-// executable or one of the npm packages. A remote launch names nothing: its
-// command line is a string the remote shell parses, not tokens Sortie owns.
+// namesRuntime reports whether the tokens of a local launch's command line name
+// the executable or one of the npm packages. A remote launch names nothing here:
+// measurement sources and verification additions claim local launches only.
 func namesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
+	return target.RemoteCommand == "" && commandNamesRuntime(target, executable, packages...)
+}
+
+// commandNamesRuntime reports whether the configured agent command names the
+// executable or one of the npm packages. A remote launch scans the
+// whitespace-separated words of RemoteCommand, a string the remote shell parses,
+// and never Command, which is the SSH executable. A wrong match on a remote
+// launch costs one refused request pair before a puller stops.
+func commandNamesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
+	var tokens []string
 	if target.RemoteCommand != "" {
-		return false
+		tokens = strings.Fields(target.RemoteCommand)
+	} else {
+		tokens = append([]string{target.Command}, target.Args...)
 	}
-	tokens := append([]string{target.Command}, target.Args...)
 	for i, token := range tokens {
 		var optionValue bool
 		if i > 0 {

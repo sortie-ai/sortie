@@ -31,14 +31,30 @@ import (
 // defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "opencode"
 
+// usageSources: each step_finish report carries the step's token counts, and
+// the session export holds the counts per model for every finished message.
+// The adapter maps both itself. The final text step reports no tokens, so the
+// step sum is a lower bound.
+var usageSources = usage.Sources{
+	Live: usage.Source{
+		Category: usage.SourceOutput,
+		Strategy: usage.StrategyLive,
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, LowerBound: true},
+	},
+	Records: usage.Source{
+		Category: usage.SourceJournal,
+		Strategy: usage.StrategyRecords,
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
+	},
+}
+
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
 		RequiresCommand:               true,
 		DefaultCommand:                defaultCommand,
 		ValidateAgentConfig:           validateConfig,
 		MCPDialect:                    registry.MCPDialectMCPMemberJSON,
-		UsageArrival:                  registry.UsageArrivalTurnEnd,
-		UsageAttribution:              registry.UsageAttributionPerModel,
+		UsageSources:                  usageSources,
 		CredentialEnv:                 registry.DeclareCredentialEnv(),
 		EffortForwarding:              registry.EffortForwarded,
 		UsageLimitRecognition:         registry.UsageLimitNotRecognized,
@@ -68,6 +84,10 @@ type sessionState struct {
 	runStartedAtMS int64
 	usage          *agentcore.TurnEndUsage
 	mu             sync.Mutex
+
+	// liveSinceSettled sums the step reports' counts that no export figure
+	// has replaced yet. Carried across turns, touched only from the hooks.
+	liveSinceSettled domain.TokenUsage
 
 	// fork owns the turn subprocess lifecycle. Built by newForkSession.
 	fork *agentcore.ForkPerTurnSession
@@ -369,6 +389,9 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 			return nil, nil
 		}
 		spend.MarkModelReached()
+		if t := part.Tokens; t != nil {
+			s.liveSinceSettled = agentcore.AddUsage(s.liveSinceSettled, stepTokens(t.Input, t.Output, t.Reasoning, t.Cache.Read, t.Cache.Write))
+		}
 		agentcore.EmitNotification(emit, "")
 		if stepFinishEndsTurn(part.Reason) {
 			s.finishingStep = true
@@ -404,13 +427,16 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 
 // settleUsage reads the session export for every ending of a started turn.
 // An export read after a finishing step covers the whole session, and a
-// clean exit settles it in finalizeTurn.
+// clean exit settles it in finalizeTurn. An export that recovers nothing
+// leaves the step reports' counts as the turn's figure, unsettled.
 func (s *sessionState) settleUsage(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
 	recovered := recoverUsage(ctx, s, runWindow(s))
 	if recovered == nil {
+		s.usage.ReportLive(emit, s.liveSinceSettled)
 		return
 	}
 	s.usage.Settle(emit, recovered)
+	s.liveSinceSettled = domain.TokenUsage{}
 	s.recovered = true
 	if s.finishingStep {
 		spend.MarkSettled()

@@ -940,6 +940,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.UsageLimitNotified = popped.UsageLimitNotified
 		entry.Continuation = popped.Continuation
 		entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
+		entry.CarriesTokenFigure = attemptSettings.CarriesTokenFigure
 		freezeIssueTokenBaseline(ctx, state, issueID, params.Store, params.Logger)
 		recordRunningPass(ctx, params.Store, issueID, entry, log)
 	}

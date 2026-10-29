@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Agents on SSH worker hosts can now use Sortie's tools and the HTTP tool servers configured under `mcp_config`. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - When an agent's provider usage limit runs out, Sortie now waits for the reported reset instead of retrying, and keeps dispatching work to other agents and models in the meantime. ([#1523](https://github.com/sortie-ai/sortie/issues/1523))
 - The dashboard Overview page now shows each agent's plan usage limits, such as 5-hour, weekly, or monthly limits, with how much is used and when each resets, for Claude Code, Codex, Copilot CLI, OpenCode, Gemini CLI, and Kiro CLI, in one 'Usage' section with the spend budget. The JSON API serves them as `rate_limits`. ([#1388](https://github.com/sortie-ai/sortie/issues/1388))
-- Copilot CLI on the `agent-client-protocol` agent kind now reports its token usage and the models that served it on local runs, so `agent.max_tokens` and the cost limits apply to it. ([#1483](https://github.com/sortie-ai/sortie/issues/1483))
+- Agents on the Agent Client Protocol (ACP) agent kind now report their token usage on local and SSH worker runs, so `agent.max_tokens` and the cost limits apply to them. Copilot CLI also reports the models that served it on local runs, and an agent without dedicated support is counted as a lower bound. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1534](https://github.com/sortie-ai/sortie/issues/1534))
+- An OpenCode run whose session export fails now reports the token usage its output carried, as a lower bound. ([#1534](https://github.com/sortie-ai/sortie/issues/1534))
 
 ### Changed
 
@@ -28,11 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - When Copilot CLI fails to start, the error now includes the runtime's own output, and the issue is retried with backoff. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - The JSON API schema now lists every reason a held issue can report; clients should still accept reasons they do not know. ([#1523](https://github.com/sortie-ai/sortie/issues/1523))
 - The dashboard now labels a run that stopped while its agent waited for an answer as 'Needed input', and a run whose agent asked for a person as 'Action required'.
+- An agent that identifies itself as a different runtime than its configured command names is now measured as the runtime it identifies as, and Sortie logs a warning. ([#1534](https://github.com/sortie-ai/sortie/issues/1534))
+- The JSON API now reports `usage_attribution` `session_total` for ACP sessions, and the agent kind's `usage_arrival` for a running Copilot CLI session on an SSH worker, where it reported `none`. ([#1534](https://github.com/sortie-ai/sortie/issues/1534))
 
 ### Fixed
 
 - The OpenCode credential check no longer calls tools or writes into the issue workspace. ([#1514](https://github.com/sortie-ai/sortie/issues/1514))
-- A credential that Claude Code, Codex, or an agent on the Agent Client Protocol (ACP) refuses during a turn is now reported as `credential_unverified`, as it is at session start. ([#1514](https://github.com/sortie-ai/sortie/issues/1514))
+- A credential that Claude Code, Codex, or an agent on the ACP refuses during a turn is now reported as `credential_unverified`, as it is at session start. ([#1514](https://github.com/sortie-ai/sortie/issues/1514))
 - A Codex turn that fails on a connection error now keeps its error message. ([#1514](https://github.com/sortie-ai/sortie/issues/1514))
 - Claude Code and Copilot CLI on an SSH worker host no longer exit at startup when the workspace is not on storage shared with the host. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - Copilot CLI and other ACP agents that accept only HTTP tool servers can now use Sortie's tools. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))

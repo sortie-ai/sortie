@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -30,9 +31,13 @@ var Trackers = NewRegistry[TrackerConstructor, TrackerMeta]("tracker")
 type AgentConstructor func() (domain.AgentAdapter, error)
 
 // Agents is the default agent adapter registry. Adapter packages
-// register themselves via [Registry.Register] in their init functions;
-// the orchestrator resolves adapters via [Registry.Get] at runtime.
-var Agents = NewRegistry[AgentConstructor, AgentMeta]("agent")
+// register themselves via [Registry.RegisterWithMeta] in their init
+// functions; the orchestrator resolves adapters via [Registry.Get] at
+// runtime. A registration whose [AgentMeta.UsageSources] fails its check
+// panics, so [Registry.Register] without metadata always panics here.
+var Agents = NewCheckedRegistry("agent", func(_ AgentConstructor, meta AgentMeta) error {
+	return meta.UsageSources.Check()
+})
 
 // CIProviderConstructor creates a [domain.CIStatusProvider] from
 // a maximum log-line count and opaque adapter-specific configuration.
@@ -161,9 +166,8 @@ type AgentDeprecation struct {
 	Replacement string
 }
 
-// AgentMeta holds optional agent-adapter-declared properties queried
-// by the orchestrator at preflight time. Zero value means no special
-// requirements.
+// AgentMeta holds the agent-adapter-declared properties queried by the
+// orchestrator at preflight time.
 type AgentMeta struct {
 	// Deprecation is nil when the kind is not deprecated. Non-nil
 	// declares the kind deprecated in favor of Deprecation.Replacement:
@@ -207,21 +211,10 @@ type AgentMeta struct {
 	// safe for concurrent use.
 	SessionResumeBlockedBy func(passthrough map[string]any) string
 
-	// UsageArrival and UsageAttribution declare the disposition of a
-	// locally launched session of this kind, constructed from an
-	// empty passthrough. The empty values mean undeclared.
-	UsageArrival     UsageArrival
-	UsageAttribution UsageAttribution
-
-	// UsageSessionRules are evaluated in order; the first rule whose
-	// When reports true supplies the pair. Empty means the declared
-	// pair holds for every session of this kind. UsageSessionRules
-	// MUST leave the declared pair reachable: at least one
-	// (passthrough, remote) combination MUST match none of the
-	// rules. This is what keeps a conformance assertion's coverage
-	// requirement satisfiable for every registry-conformant kind,
-	// including one whose rules are numerous.
-	UsageSessionRules []UsageSessionRule
+	// UsageSources declares the usage sources every session of this kind
+	// attaches, local or remote. The kind's arrival and attribution derive
+	// from it. Required.
+	UsageSources usage.Sources
 
 	// CredentialEnv declares the environment variable names this
 	// kind's runtime reads as the credential for its default
@@ -360,118 +353,46 @@ func (v VerificationContext) Keeps(r VerificationResidual) bool {
 	return slices.Contains(v.residuals, r)
 }
 
-// UsageArrival declares when a usage figure for the agent session
-// becomes available to the orchestrator. The empty value means
-// undeclared.
-type UsageArrival string
+// UsageArrival is when a session's token figure reaches the orchestrator.
+type UsageArrival = usage.Arrival
+
+// UsageAttribution is what a session's token figure names.
+type UsageAttribution = usage.Attribution
 
 const (
-	// UsageArrivalUndeclared is the zero value: the adapter has not
-	// declared when its usage figures arrive.
-	UsageArrivalUndeclared UsageArrival = ""
+	// UsageArrivalUndeclared is the zero value.
+	UsageArrivalUndeclared = usage.ArrivalUndeclared
 
-	// UsageArrivalIncremental declares that the adapter emits one
-	// domain.EventTokenUsage carrying the run-cumulative figure per
-	// model API request the turn makes, while the turn's work is
-	// still in flight. A turn making N requests delivers N events.
-	// api_request_count is a request count for a session of this
-	// arrival once a figure has arrived, and for one that has not
-	// yet begun a turn, which has genuinely issued no request. In
-	// between, a runtime that stops delivering the per-request
-	// event leaves the count at zero while the declaration still
-	// promises one, and that zero measures nothing.
-	UsageArrivalIncremental UsageArrival = "incremental"
+	// UsageArrivalIncremental is a figure reported after each model request
+	// while the turn runs.
+	UsageArrivalIncremental = usage.ArrivalIncremental
 
-	// UsageArrivalTurnEnd declares that the adapter emits at most
-	// one domain.EventTokenUsage per turn, and only after the
-	// turn's work is over and before the turn's terminal event.
-	// api_request_count is not a count of API requests for a kind
-	// declaring this value.
-	UsageArrivalTurnEnd UsageArrival = "turn_end"
+	// UsageArrivalTurnEnd is at most one figure per turn, settled after the
+	// turn's work is over.
+	UsageArrivalTurnEnd = usage.ArrivalTurnEnd
 
-	// UsageArrivalNone declares that no usage figure is ever
-	// produced: no domain.EventTokenUsage event, no non-zero
-	// domain.TokenUsage on any event, domain.TurnResult.UsageMeasured
-	// false on every turn.
-	UsageArrivalNone UsageArrival = "none"
+	// UsageArrivalNone is no attached source counting tokens.
+	UsageArrivalNone = usage.ArrivalNone
+
+	// UsageAttributionUndeclared is the zero value.
+	UsageAttributionUndeclared = usage.AttributionUndeclared
+
+	// UsageAttributionPerModel is a session at least one of whose usage
+	// events names a model.
+	UsageAttributionPerModel = usage.AttributionPerModel
+
+	// UsageAttributionSessionTotal is a session whose kind guarantees no
+	// model name.
+	UsageAttributionSessionTotal = usage.AttributionSessionTotal
+
+	// UsageAttributionNone is no figure to attribute.
+	UsageAttributionNone = usage.AttributionNone
 )
 
-// UsageAttribution declares what a usage figure from this adapter
-// attributes to. The empty value means undeclared.
-type UsageAttribution string
-
-const (
-	// UsageAttributionUndeclared is the zero value: the adapter has
-	// not declared what its usage figures attribute to.
-	UsageAttributionUndeclared UsageAttribution = ""
-
-	// UsageAttributionPerModel declares that at least one event
-	// carrying a non-zero Usage also carries a non-empty Model, so a
-	// figure can be attributed to the model that produced it.
-	UsageAttributionPerModel UsageAttribution = "per_model"
-
-	// UsageAttributionSessionTotal declares that no event carrying a
-	// non-zero Usage carries a Model: figures are session-level
-	// totals with no model attribution.
-	UsageAttributionSessionTotal UsageAttribution = "session_total"
-
-	// UsageAttributionNone declares that there is no figure to
-	// attribute.
-	UsageAttributionNone UsageAttribution = "none"
-)
-
-// UsageSessionRule states the pair in force for a session that meets
-// a condition the declared pair does not describe. When reads only
-// the resolved adapter passthrough and the launch mode; it reaches no
-// adapter state and performs no I/O, MUST NOT retain or mutate the
-// passthrough map, and MUST NOT close over adapter state.
-type UsageSessionRule struct {
-	When        func(passthrough map[string]any, remote bool) bool
-	Arrival     UsageArrival
-	Attribution UsageAttribution
-}
-
-// UsageDisposition returns the arrival and attribution in force for
-// one session of this kind, given its launch mode and its resolved
-// adapter passthrough. remote is true when the session runs over SSH.
-// It applies the first UsageSessionRules entry whose When reports
-// true, and returns the declared pair when no rule matches.
-//
-// A resolved pair MUST satisfy INV-1 (arrival is UsageArrivalNone if
-// and only if attribution is UsageAttributionNone) and MUST satisfy
-// INV-3 (every resolvable pair, declared or ruled, names a value
-// inside the declared set). A declaration reflects the code path
-// that always runs, not one a runtime release can starve (INV-2).
-func (m AgentMeta) UsageDisposition(passthrough map[string]any, remote bool) (UsageArrival, UsageAttribution) {
-	for _, rule := range m.UsageSessionRules {
-		if rule.When != nil && rule.When(passthrough, remote) {
-			return rule.Arrival, rule.Attribution
-		}
-	}
-	return m.UsageArrival, m.UsageAttribution
-}
-
-// ReportsDuringTurn reports whether a figure of this arrival reaches
-// the orchestrator while a turn is running. True for
-// UsageArrivalIncremental; false for every other value, including a
-// value outside the declared set.
-func (a UsageArrival) ReportsDuringTurn() bool {
-	return a == UsageArrivalIncremental
-}
-
-// ReportsAnyFigure reports whether a session of this arrival ever
-// produces a usage figure. True for UsageArrivalIncremental and
-// UsageArrivalTurnEnd; false for every other value, including a value
-// outside the declared set.
-func (a UsageArrival) ReportsAnyFigure() bool {
-	return a == UsageArrivalIncremental || a == UsageArrivalTurnEnd
-}
-
-// NamesModel reports whether a figure of this attribution names the
-// model that produced it. True for UsageAttributionPerModel; false
-// for every other value, including a value outside the declared set.
-func (t UsageAttribution) NamesModel() bool {
-	return t == UsageAttributionPerModel
+// UsageDisposition returns the arrival and attribution derived from the
+// kind's UsageSources.
+func (m AgentMeta) UsageDisposition() (UsageArrival, UsageAttribution) {
+	return m.UsageSources.Disposition()
 }
 
 // MCPDialect names the tool-server configuration syntax the shared delivery
@@ -538,6 +459,7 @@ type AgentConfigFields struct {
 type Registry[T any, M any] struct {
 	name     string
 	reserved []string
+	check    func(value T, meta M) error
 	mu       sync.RWMutex
 	adapters map[string]T
 	meta     map[string]M
@@ -556,8 +478,19 @@ func NewRegistry[T any, M any](name string, reserved ...string) *Registry[T, M] 
 	}
 }
 
+// NewCheckedRegistry creates an empty [Registry] like [NewRegistry] whose
+// [Registry.Register] and [Registry.RegisterWithMeta] also run check on the
+// value and metadata being registered. A nil check accepts every
+// registration.
+func NewCheckedRegistry[T any, M any](name string, check func(value T, meta M) error, reserved ...string) *Registry[T, M] {
+	r := NewRegistry[T, M](name, reserved...)
+	r.check = check
+	return r
+}
+
 // Register associates a kind string with a constructor function.
-// Panics if kind is empty, reserved, or already registered. Registration is
+// Panics if kind is empty, reserved, already registered, or refused by the
+// registry's check, which receives the zero metadata. Registration is
 // expected during init(); duplicate registration is a programming
 // error. The zero value of M is stored as metadata so that [Meta]
 // returns (zero, true) for kinds registered without explicit metadata.
@@ -574,13 +507,15 @@ func (r *Registry[T, M]) Register(kind string, constructor T) {
 	if _, exists := r.adapters[kind]; exists {
 		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))
 	}
-	r.adapters[kind] = constructor
 	var zero M
+	r.panicIfRefused(kind, constructor, zero)
+	r.adapters[kind] = constructor
 	r.meta[kind] = zero
 }
 
 // RegisterWithMeta associates a kind string with a constructor and
-// declared metadata. Panics on the same conditions as [Register].
+// declared metadata. Panics on the same conditions as [Registry.Register],
+// the check receiving meta.
 func (r *Registry[T, M]) RegisterWithMeta(kind string, constructor T, meta M) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -594,8 +529,19 @@ func (r *Registry[T, M]) RegisterWithMeta(kind string, constructor T, meta M) {
 	if _, exists := r.adapters[kind]; exists {
 		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))
 	}
+	r.panicIfRefused(kind, constructor, meta)
 	r.adapters[kind] = constructor
 	r.meta[kind] = meta
+}
+
+// panicIfRefused panics when the registry's check rejects the registration.
+func (r *Registry[T, M]) panicIfRefused(kind string, value T, meta M) {
+	if r.check == nil {
+		return
+	}
+	if err := r.check(value, meta); err != nil {
+		panic(fmt.Sprintf("registry: %s kind %q refused: %v", r.name, kind, err))
+	}
 }
 
 // Meta returns the metadata for the given kind and a boolean

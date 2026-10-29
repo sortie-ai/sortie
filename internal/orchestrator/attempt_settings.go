@@ -16,6 +16,10 @@ type AttemptSettings struct {
 	UsageArrival     registry.UsageArrival
 	UsageAttribution registry.UsageAttribution
 
+	// CarriesTokenFigure reports whether the kind's sources can carry a
+	// token figure on this attempt's launch.
+	CarriesTokenFigure bool
+
 	// Refusals are the error-severity checks the block fails; an attempt
 	// with any starts no session.
 	Refusals []PreflightError
@@ -30,25 +34,27 @@ func (o *Orchestrator) resolveAttemptSettings(cfg config.ServiceConfig, selectio
 		filepath.Dir(o.workflowManager.WorkflowAbsPath()))
 	meta, registered := o.preflightParams.AgentRegistry.Meta(selection.AgentKind)
 
-	arrival, attribution := usageDisposition(meta, registered, settings.Passthrough, sshHost != "")
+	arrival, attribution, carriesTokenFigure := usageDisposition(meta, registered, sshHost != "")
 	refusals, _ := settingsDiagnostics(cfg, meta, registered, settings, sshHost != "")
 
 	return AttemptSettings{
-		Settings:         settings,
-		UsageArrival:     arrival,
-		UsageAttribution: attribution,
-		Refusals:         refusals,
+		Settings:           settings,
+		UsageArrival:       arrival,
+		UsageAttribution:   attribution,
+		CarriesTokenFigure: carriesTokenFigure,
+		Refusals:           refusals,
 	}
 }
 
-// usageDisposition returns the usage arrival and attribution a session of
-// meta reports under passthrough, the undeclared pair for a kind the
-// registry does not hold.
-func usageDisposition(meta registry.AgentMeta, registered bool, passthrough map[string]any, remote bool) (registry.UsageArrival, registry.UsageAttribution) {
+// usageDisposition returns the usage arrival and attribution derived from
+// meta's sources and whether a session on the given launch can carry a token
+// figure, the undeclared pair and false for a kind the registry does not hold.
+func usageDisposition(meta registry.AgentMeta, registered bool, remote bool) (registry.UsageArrival, registry.UsageAttribution, bool) {
 	if !registered {
-		return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+		return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared, false
 	}
-	return meta.UsageDisposition(passthrough, remote)
+	arrival, attribution := meta.UsageDisposition()
+	return arrival, attribution, meta.UsageSources.CarriesTokenFigure(remote)
 }
 
 // settingsDiagnostics runs every check that reads a resolved settings
@@ -70,8 +76,7 @@ func settingsDiagnostics(cfg config.ServiceConfig, meta registry.AgentMeta, regi
 		})
 	}
 
-	arrival, _ := meta.UsageDisposition(settings.Passthrough, remote)
-	if !arrival.ReportsAnyFigure() {
+	if !meta.UsageSources.CarriesTokenFigure(remote) {
 		if cfg.Agent.MaxTokens != 0 {
 			warns = append(warns, PreflightWarning{
 				Check: "agent.kind.no_usage_reporting",

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -52,6 +54,134 @@ func assertKiroAgentDefinition(t *testing.T, dir string) {
 	}
 	if _, ok := agent["model"]; ok {
 		t.Errorf("sortie_verify.json carries a model field, want none: the launch's own --model must stand")
+	}
+}
+
+func TestEveryDeclarationPassesTheRegistrationCheck(t *testing.T) {
+	t.Parallel()
+
+	declarations := map[string]Declaration{DefaultName: Default}
+	for _, kind := range Declarations.Kinds() {
+		declaration, err := Declarations.Get(kind)
+		if err != nil {
+			t.Fatalf("Declarations.Get(%q) error = %v", kind, err)
+		}
+		declarations[kind] = declaration
+	}
+
+	for name, declaration := range declarations {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := checkDeclaration(declaration, struct{}{}); err != nil {
+				t.Errorf("checkDeclaration(%q) = %v, want nil", name, err)
+			}
+		})
+	}
+}
+
+func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
+	t.Parallel()
+
+	noPromptSpend := Default
+	noPromptSpend.PromptSpend = nil
+	tests := []struct {
+		name        string
+		key         string
+		declaration Declaration
+	}{
+		{"zero live source", "refused-zero-live", Declaration{}},
+		{"declared spend without a prompt reader", "refused-no-prompt-spend", noPromptSpend},
+		{"the reserved default key", DefaultName, Default},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			panicked := registerPanics(tt.key, tt.declaration)
+
+			if !panicked {
+				t.Errorf("Declarations.Register(%q) did not panic, want a refusal", tt.key)
+			}
+			if tt.key != DefaultName && Declarations.Has(tt.key) {
+				t.Errorf("Declarations.Has(%q) = true, want a refused declaration stored nowhere", tt.key)
+			}
+		})
+	}
+}
+
+func registerPanics(key string, declaration Declaration) (panicked bool) {
+	defer func() { panicked = recover() != nil }()
+	Declarations.Register(key, declaration)
+	return false
+}
+
+func TestEffectiveSuppliesTheDefaultMappingOnlyWhenNoneIsDeclared(t *testing.T) {
+	t.Parallel()
+
+	own := Default
+	own.Live.Spend.LowerBound = false
+	own.Live.Spend.CacheInInput = false
+	vendorOnly := Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{VendorUnit: "credits"}}}
+	tests := []struct {
+		name          string
+		declaration   Declaration
+		wantSpend     usage.SpendDeclaration
+		wantPromptHas bool
+	}{
+		{"windows only", Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive}}, Default.Live.Spend, true},
+		{"its own token mapping", own, own.Live.Spend, true},
+		{"a vendor unit alone", vendorOnly, vendorOnly.Live.Spend, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.declaration.Effective()
+
+			if !reflect.DeepEqual(got.Live.Spend, tt.wantSpend) {
+				t.Errorf("Effective().Live.Spend = %+v, want %+v", got.Live.Spend, tt.wantSpend)
+			}
+			if (got.PromptSpend != nil) != tt.wantPromptHas {
+				t.Errorf("Effective().PromptSpend set = %v, want %v", got.PromptSpend != nil, tt.wantPromptHas)
+			}
+		})
+	}
+}
+
+func TestDeclarationLaunchesFollowTheConfiguredCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		kind   string
+		target agentcore.LaunchTarget
+		want   bool
+	}{
+		{"executable with its flag", copilotHandshakeName, agentcore.LaunchTarget{Command: "copilot", Args: []string{"--acp"}}, true},
+		{"npm package through a launcher", geminiAgentName, agentcore.LaunchTarget{Command: "npx", Args: []string{"@google/gemini-cli@latest", "--acp"}}, true},
+		{"wrapper command", copilotHandshakeName, agentcore.LaunchTarget{Command: "env", Args: []string{"MODEL=x", "copilot", "--acp"}}, true},
+		{"another runtime's command", copilotHandshakeName, agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, false},
+		{"remote command named, ssh as the executable", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "kiro-cli acp --model x"}, true},
+		{"remote command naming nothing", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
+		{"runtime named only in the ssh arguments", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", Args: []string{"kiro-cli"}, SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			declaration, err := Declarations.Get(tt.kind)
+			if err != nil {
+				t.Fatalf("Declarations.Get(%q) error = %v", tt.kind, err)
+			}
+
+			if got := declaration.Launches(tt.target); got != tt.want {
+				t.Errorf("%q Launches(%+v) = %v, want %v", tt.kind, tt.target, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -31,7 +31,7 @@ func mustCopilotDeclaration(t *testing.T) Declaration {
 	return declaration
 }
 
-func TestCopilotPromptSpend(t *testing.T) {
+func TestStandardPromptSpend(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -45,43 +45,43 @@ func TestCopilotPromptSpend(t *testing.T) {
 			want:   &usage.SpendReading{Input: new(int64(40352)), Output: new(int64(4)), CacheRead: new(int64(0)), CacheWrite: new(int64(40348))},
 		},
 		{
-			name:   "second turn of a process",
-			result: `{"stopReason":"end_turn","usage":{"inputTokens":80757,"outputTokens":8,"totalTokens":80765,"thoughtTokens":0,"cachedReadTokens":40348,"cachedWriteTokens":40401}}`,
-			want:   &usage.SpendReading{Input: new(int64(80757)), Output: new(int64(8)), CacheRead: new(int64(40348)), CacheWrite: new(int64(40401))},
-		},
-		{
-			name:   "first turn after session load with thought tokens",
-			result: `{"stopReason":"end_turn","usage":{"inputTokens":29094,"outputTokens":42,"totalTokens":29136,"thoughtTokens":36,"cachedReadTokens":0,"cachedWriteTokens":29084}}`,
-			want:   &usage.SpendReading{Input: new(int64(29094)), Output: new(int64(42)), CacheRead: new(int64(0)), CacheWrite: new(int64(29084))},
-		},
-		{
-			name:   "second turn after session load with thought tokens",
+			name:   "thought and total tokens are not read",
 			result: `{"stopReason":"end_turn","usage":{"inputTokens":58233,"outputTokens":80,"totalTokens":58313,"thoughtTokens":67,"cachedReadTokens":29084,"cachedWriteTokens":29129}}`,
 			want:   &usage.SpendReading{Input: new(int64(58233)), Output: new(int64(80)), CacheRead: new(int64(29084)), CacheWrite: new(int64(29129))},
 		},
 		{name: "usage null", result: `{"stopReason":"end_turn","usage":null}`},
 		{name: "usage absent", result: `{"stopReason":"end_turn"}`},
+		{name: "result is not an object", result: `[]`},
 		{
 			name:   "negative member kept for the ledger to refuse",
 			result: `{"usage":{"inputTokens":10,"outputTokens":-4,"cachedReadTokens":0,"cachedWriteTokens":0}}`,
 			want:   &usage.SpendReading{Input: new(int64(10)), Output: new(int64(-4)), CacheRead: new(int64(0)), CacheWrite: new(int64(0))},
 		},
 		{
-			name:   "fractional member is an absent count",
-			result: `{"usage":{"inputTokens":10.5,"outputTokens":4,"cachedReadTokens":0,"cachedWriteTokens":0}}`,
-			want:   &usage.SpendReading{Output: new(int64(4)), CacheRead: new(int64(0)), CacheWrite: new(int64(0))},
+			name:   "absent member is an unknown count, not zero",
+			result: `{"usage":{"inputTokens":10,"cachedReadTokens":0,"cachedWriteTokens":0}}`,
+			want:   &usage.SpendReading{Input: new(int64(10)), CacheRead: new(int64(0)), CacheWrite: new(int64(0))},
+		},
+		{
+			name:   "null member is an unknown count, not zero",
+			result: `{"usage":{"inputTokens":10,"outputTokens":null,"cachedReadTokens":0,"cachedWriteTokens":0}}`,
+			want:   &usage.SpendReading{Input: new(int64(10)), CacheRead: new(int64(0)), CacheWrite: new(int64(0))},
+		},
+		{
+			name:   "fractional and string members are unknown counts",
+			result: `{"usage":{"inputTokens":10.5,"outputTokens":"4","cachedReadTokens":0,"cachedWriteTokens":0}}`,
+			want:   &usage.SpendReading{CacheRead: new(int64(0)), CacheWrite: new(int64(0))},
 		},
 	}
 
-	promptSpend := mustCopilotDeclaration(t).PromptSpend
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := promptSpend([]byte(tt.result))
+			got := standardPromptSpend([]byte(tt.result))
 
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("PromptSpend(%s) = %s, want %s", tt.result, spendJSON(t, got), spendJSON(t, tt.want))
+				t.Errorf("standardPromptSpend(%s) = %s, want %s", tt.result, spendJSON(t, got), spendJSON(t, tt.want))
 			}
 		})
 	}
@@ -144,35 +144,6 @@ func TestCopilotReadRecordsRefusesUnsafeSessionID(t *testing.T) {
 			}
 			if len(readings) != 0 || scans != 0 {
 				t.Errorf("ReadRecords(session %q) = %d readings after %d scans, want none", id, len(readings), scans)
-			}
-		})
-	}
-}
-
-func TestDeclarationsSpendParsers(t *testing.T) {
-	t.Parallel()
-
-	for _, kind := range Declarations.Kinds() {
-		t.Run(kind, func(t *testing.T) {
-			t.Parallel()
-
-			declaration, err := Declarations.Get(kind)
-			if err != nil {
-				t.Fatalf("Declarations.Get(%q): %v", kind, err)
-			}
-			live := declaration.Live.Spend.Shape != usage.SpendUndeclared
-			records := declaration.Records.Spend.Shape != usage.SpendUndeclared
-
-			if live && declaration.PromptSpend == nil {
-				t.Errorf("declaration %q declares live spend and has no PromptSpend", kind)
-			}
-			if records && declaration.ReadRecords == nil {
-				t.Errorf("declaration %q declares records spend and has no ReadRecords", kind)
-			}
-			if live {
-				if _, err := usage.NewLedger(declaration.Live, declaration.Records); err != nil {
-					t.Errorf("NewLedger(%q declarations) = %v, want nil", kind, err)
-				}
 			}
 		})
 	}

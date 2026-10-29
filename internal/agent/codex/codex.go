@@ -39,14 +39,21 @@ const defaultCommand = "codex app-server"
 // window states its own length and name.
 var appServerSource = usage.Source{Windows: usage.WindowDeclaration{Share: usage.SharePercent}}
 
+// usageSources: the app-server stream carries the token counts, which the
+// adapter maps itself after each model request.
+var usageSources = usage.Sources{Live: usage.Source{
+	Category: usage.SourceOutput,
+	Strategy: usage.StrategyLive,
+	Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true, ServedModel: true},
+}}
+
 func init() {
 	registry.Agents.RegisterWithMeta("codex", NewCodexAdapter, registry.AgentMeta{
 		RequiresCommand:       true,
 		DefaultCommand:        defaultCommand,
 		ValidateAgentConfig:   validateConfig,
 		MCPDialect:            registry.MCPDialectMCPServersTOML,
-		UsageArrival:          registry.UsageArrivalIncremental,
-		UsageAttribution:      registry.UsageAttributionPerModel,
+		UsageSources:          usageSources,
 		UsageLimitRecognition: registry.UsageLimitRecognized,
 		CredentialEnv:         registry.DeclareCredentialEnv(),
 		EffortForwarding:      registry.EffortForwarded,

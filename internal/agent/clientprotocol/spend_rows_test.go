@@ -33,12 +33,18 @@ func unnamedSpendDeclarations(t *testing.T, doc nightlyWorkflowDocument) []strin
 	t.Helper()
 
 	named := declarationsNamedByRows(doc)
-	var unnamed []string
+	declarations := map[string]usagesource.Declaration{usagesource.DefaultName: usagesource.Default}
 	for _, name := range usagesource.Declarations.Kinds() {
 		declaration, err := usagesource.Declarations.Get(name)
 		if err != nil {
 			t.Fatalf("Declarations.Get(%q) error = %v", name, err)
 		}
+		declarations[name] = declaration
+	}
+
+	var unnamed []string
+	for _, name := range slices.Sorted(maps.Keys(declarations)) {
+		declaration := declarations[name]
 		declaresSpend := declaration.Live.Spend.Shape != usage.SpendUndeclared ||
 			declaration.Records.Spend.Shape != usage.SpendUndeclared
 		if declaresSpend && !named[name] {

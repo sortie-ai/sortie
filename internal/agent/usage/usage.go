@@ -31,6 +31,8 @@ const (
 const (
 	// SourceProtocol is the agent protocol's own messages on the session's standard streams.
 	SourceProtocol domain.UsageSource = "protocol"
+	// SourceOutput is the runtime's own output on the session's standard streams, in a format of its own.
+	SourceOutput domain.UsageSource = "output"
 	// SourceJournal is the runtime's own session records on its host, an entry per model request.
 	SourceJournal domain.UsageSource = "journal"
 )

@@ -577,6 +577,10 @@ func rateLimitUpdateLine(t *testing.T) string {
 	return `{"jsonrpc":"2.0","method":"session/update","params":` + params + `}`
 }
 
+func declarationFor(info *implementation, target agentcore.LaunchTarget) usagesource.Declaration {
+	return chooseDeclaration(usagesource.Declarations, info, target).declaration
+}
+
 func eventsOfTurnUnder(t *testing.T, declaration usagesource.Declaration, lines ...string) []domain.AgentEvent {
 	t.Helper()
 
@@ -620,8 +624,8 @@ func TestPumpUsageUpdateWindowsFollowTheRuntimeDeclaration(t *testing.T) {
 		declaration usagesource.Declaration
 		wantWindow  bool
 	}{
-		{"declared runtime name", selectDeclaration(usagesource.Declarations, loadAgentInfoFixture(t, "rate_limit_bridge.json")), true},
-		{"undeclared runtime name", selectDeclaration(usagesource.Declarations, &implementation{Name: "undeclared-runtime"}), false},
+		{"declared runtime name", declarationFor(loadAgentInfoFixture(t, "rate_limit_bridge.json"), agentcore.LaunchTarget{}), true},
+		{"undeclared runtime name", declarationFor(&implementation{Name: "undeclared-runtime"}, agentcore.LaunchTarget{}), false},
 		{"zero declaration", usagesource.Declaration{}, false},
 	}
 
@@ -667,7 +671,7 @@ func TestPumpWindowEventDoesNotSplitAnAgentMessage(t *testing.T) {
 		return fmt.Sprintf(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":%q},"messageId":"message-1"}}}`, text)
 	}
 	plan := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"plan","entries":[]}}}`
-	declaration := selectDeclaration(usagesource.Declarations, loadAgentInfoFixture(t, "rate_limit_bridge.json"))
+	declaration := declarationFor(loadAgentInfoFixture(t, "rate_limit_bridge.json"), agentcore.LaunchTarget{})
 
 	events := eventsOfTurnUnder(t, declaration, chunk("hello "), rateLimitUpdateLine(t), chunk("world"), plan)
 
@@ -724,7 +728,7 @@ func loadPulledUsageRuntime(t *testing.T) pulledUsageRuntime {
 
 func newPulledUsageSession(t *testing.T, info *implementation, target agentcore.LaunchTarget) (*sessionState, *outboundReader, *io.PipeWriter) {
 	t.Helper()
-	return newDeclaredSession(t, resolveDeclaration(usagesource.Declarations, info, target), nil)
+	return newDeclaredSession(t, declarationFor(info, target), nil)
 }
 
 func newDeclaredSession(t *testing.T, declaration usagesource.Declaration, ledger *usage.Ledger) (*sessionState, *outboundReader, *io.PipeWriter) {
@@ -1031,6 +1035,33 @@ func TestPumpSpendLedgerSettlesTurn(t *testing.T) {
 				t.Errorf("token_usage at %d, turn completed at %d, want the figure first", usageAt, endAt)
 			}
 		})
+	}
+}
+
+func TestEndUnrepliedSettlesARemoteTurnWithoutARecordsRead(t *testing.T) {
+	t.Parallel()
+
+	state, _, _ := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
+	state.target = agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}
+	declaration := scriptedSpendDeclaration(nil, nil, nil)
+	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+	if err != nil {
+		t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+	}
+	ledger.Boundary(usage.RecordsRead{})
+	pump := &pumpState{state: state, ledger: ledger, declaration: declaration}
+	turn := &activeTurn{sink: make(chan domain.AgentEvent, 16), resultCh: make(chan turnEnd, 1), done: make(chan struct{})}
+	turn.spend.MarkModelReached()
+	pump.activeTurn = turn
+
+	pump.endUnreplied(streamEndedEvidence(state, "stream ended", nil))
+
+	if pump.activeTurn != nil || turn.recordsPending {
+		t.Fatalf("endUnreplied() left the turn active (recordsPending %v), want it settled in place: a read returning through the inbox can lose to the session stopping", turn.recordsPending)
+	}
+	end := waittest.Receive(t, turn.resultCh, "turn result")
+	if !end.result.SpendUnaccounted {
+		t.Errorf("turn result SpendUnaccounted = false, want true: a turn that reached the model with no figure")
 	}
 }
 

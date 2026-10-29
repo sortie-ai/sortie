@@ -204,18 +204,18 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			wantUsageLimit         registry.UsageLimitRecognition
 		}{
 			{
-				name:                   "agent-client-protocol requires command, declares MCP dialect acp_session, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
+				name:                   "agent-client-protocol requires command, declares MCP dialect acp_session, derives turn_end/session_total usage, declares no resume blocker, and declares no credential names",
 				kind:                   "agent-client-protocol",
 				wantCommand:            true,
 				wantMCPDialect:         registry.MCPDialectACPSession,
 				wantUsageArrival:       registry.UsageArrivalTurnEnd,
-				wantUsageAttribution:   registry.UsageAttributionPerModel,
+				wantUsageAttribution:   registry.UsageAttributionSessionTotal,
 				wantCredentialEnvNames: nil,
 				wantEffortForwarding:   registry.EffortNotForwarded,
 				wantUsageLimit:         registry.UsageLimitNotRecognized,
 			},
 			{
-				name:                   "claude-code requires command, declares MCP dialect mcp_servers_json_always_load, declares incremental/per_model usage, declares session_persistence as a resume blocker, and declares its Anthropic credential names",
+				name:                   "claude-code requires command, declares MCP dialect mcp_servers_json_always_load, derives incremental/per_model usage, declares session_persistence as a resume blocker, and declares its Anthropic credential names",
 				kind:                   "claude-code",
 				wantCommand:            true,
 				wantMCPDialect:         registry.MCPDialectMCPServersJSONAlwaysLoad,
@@ -229,7 +229,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
-				name:                   "copilot-cli requires command, declares MCP dialect mcp_servers_json, declares turn_end/per_model usage, declares no resume blocker, and declares its GitHub-token credential names",
+				name:                   "copilot-cli requires command, declares MCP dialect mcp_servers_json, derives turn_end/per_model usage, declares no resume blocker, and declares its GitHub-token credential names",
 				kind:                   "copilot-cli",
 				wantCommand:            true,
 				wantMCPDialect:         registry.MCPDialectMCPServersJSON,
@@ -240,7 +240,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageLimit:         registry.UsageLimitNotRecognized,
 			},
 			{
-				name:                   "codex requires command, declares MCP dialect mcp_servers_toml, declares incremental/per_model usage, declares no resume blocker, and declares no credential names",
+				name:                   "codex requires command, declares MCP dialect mcp_servers_toml, derives incremental/per_model usage, declares no resume blocker, and declares no credential names",
 				kind:                   "codex",
 				wantCommand:            true,
 				wantMCPDialect:         registry.MCPDialectMCPServersTOML,
@@ -251,7 +251,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
-				name:                   "opencode requires command, declares MCP dialect mcp_member_json, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
+				name:                   "opencode requires command, declares MCP dialect mcp_member_json, derives turn_end/per_model usage, declares no resume blocker, and declares no credential names",
 				kind:                   "opencode",
 				wantCommand:            true,
 				wantMCPDialect:         registry.MCPDialectMCPMemberJSON,
@@ -262,7 +262,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageLimit:         registry.UsageLimitNotRecognized,
 			},
 			{
-				name:                   "mock requires nothing, declares MCP dialect none, declares incremental/session_total usage, declares no resume blocker, and declares no credential names",
+				name:                   "mock requires nothing, declares MCP dialect none, derives incremental/session_total usage, declares no resume blocker, and declares no credential names",
 				kind:                   "mock",
 				wantMCPDialect:         registry.MCPDialectNone,
 				wantUsageArrival:       registry.UsageArrivalIncremental,
@@ -307,11 +307,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 					t.Errorf("Agents.Meta(%q).MCPDialect = %q, want %q", tt.kind, meta.MCPDialect, tt.wantMCPDialect)
 				}
 				assertMCPDialectDeclaration(t, tt.kind, meta)
-				if meta.UsageArrival != tt.wantUsageArrival {
-					t.Errorf("Agents.Meta(%q).UsageArrival = %q, want %q", tt.kind, meta.UsageArrival, tt.wantUsageArrival)
+				if err := meta.UsageSources.Check(); err != nil {
+					t.Errorf("Agents.Meta(%q).UsageSources.Check() = %v, want nil", tt.kind, err)
 				}
-				if meta.UsageAttribution != tt.wantUsageAttribution {
-					t.Errorf("Agents.Meta(%q).UsageAttribution = %q, want %q", tt.kind, meta.UsageAttribution, tt.wantUsageAttribution)
+				arrival, attribution := meta.UsageDisposition()
+				if arrival != tt.wantUsageArrival || attribution != tt.wantUsageAttribution {
+					t.Errorf("Agents.Meta(%q).UsageDisposition() = %q, %q, want %q, %q", tt.kind, arrival, attribution, tt.wantUsageArrival, tt.wantUsageAttribution)
 				}
 
 				if !meta.CredentialEnv.Declared() {

@@ -986,27 +986,114 @@ func TestRunTurn_SSH_CompletedTurnWithExit255IsNotAConnectionFailure(t *testing.
 	}
 }
 
-func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
+const emptyExport = `{"info":{"id":"ses_abc123"},"messages":[]}`
+
+func exportOf(input, output int) string {
+	return fmt.Sprintf(`{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop","model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"tokens":{"input":%d,"output":%d,"cache":{"read":0,"write":0}}}]}`, input, output)
+}
+
+func stepRun(input, output int) string {
+	return fmt.Sprintf(`{"type":"step_start","timestamp":1777197446593,"sessionID":"ses_abc123","part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}
+{"type":"text","timestamp":1777197446597,"sessionID":"ses_abc123","part":{"id":"prt_2","messageID":"msg_1","sessionID":"ses_abc123","type":"text","text":"done","time":{"start":1777197446595,"end":1777197446596}}}
+{"type":"step_finish","timestamp":1777197446660,"sessionID":"ses_abc123","part":{"id":"prt_3","reason":"stop","messageID":"msg_1","sessionID":"ses_abc123","type":"step-finish","tokens":{"total":%d,"input":%d,"output":%d,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}
+`, input+output, input, output)
+}
+
+func writeStepScript(t *testing.T, dir string) (script, runPath, exportPath string) {
+	t.Helper()
+
+	runPath = filepath.Join(dir, "run.jsonl")
+	exportPath = filepath.Join(dir, "export.json")
+	script = writeOpenCodeScript(t, dir, `case "$1 $2" in
+  "session export") cat '`+exportPath+`'; exit 0;;
+esac
+cat '`+runPath+`'`)
+	return script, runPath, exportPath
+}
+
+func TestRunTurn_StepReportSettlement(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
-	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSession(t, a, tmpDir, script)
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
+	tests := []struct {
+		name            string
+		export          string
+		stepInput       int
+		stepOutput      int
+		wantInput       int64
+		wantOutput      int64
+		wantMeasured    bool
+		wantUnaccounted bool
+	}{
+		{"export recovering nothing reports the step sum unsettled", emptyExport, 14406, 21, 14406, 21, true, true},
+		{"steps adding no input and no output report no figure", emptyExport, 0, 0, 0, 0, false, true},
+		{"export recovering a genuine zero is a measured zero", exportOf(0, 0), 14406, 21, 0, 0, true, false},
+		{"export recovering a figure reports it alone", exportOf(10, 20), 14406, 21, 10, 20, true, false},
 	}
 
-	agenttest.AssertMeasurementAbsent(t, events, result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     0,
-		Work:         agentcore.WorkPresent,
-	}, result, err)
+			dir := t.TempDir()
+			script, runPath, exportPath := writeStepScript(t, dir)
+			writeFixtureFile(t, dir, filepath.Base(runPath), stepRun(tt.stepInput, tt.stepOutput))
+			writeFixtureFile(t, dir, filepath.Base(exportPath), tt.export)
+			a, _ := NewOpenCodeAdapter()
+
+			events, result, err := collectEvents(t, a, mustStartSession(t, a, dir, script), "work")
+			if err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+
+			if result.Usage.InputTokens != tt.wantInput || result.Usage.OutputTokens != tt.wantOutput {
+				t.Errorf("RunTurn().Usage = in:%d out:%d, want in:%d out:%d", result.Usage.InputTokens, result.Usage.OutputTokens, tt.wantInput, tt.wantOutput)
+			}
+			if result.UsageMeasured != tt.wantMeasured {
+				t.Errorf("RunTurn().UsageMeasured = %v, want %v", result.UsageMeasured, tt.wantMeasured)
+			}
+			if result.SpendUnaccounted != tt.wantUnaccounted {
+				t.Errorf("RunTurn().SpendUnaccounted = %v, want %v", result.SpendUnaccounted, tt.wantUnaccounted)
+			}
+			if !tt.wantMeasured {
+				agenttest.AssertMeasurementAbsent(t, events, result)
+			}
+		})
+	}
+}
+
+func TestRunTurn_StepCountsCarryUntilAnExportReplacesThem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script, runPath, exportPath := writeStepScript(t, dir)
+	a, _ := NewOpenCodeAdapter()
+	session := mustStartSession(t, a, dir, script)
+
+	turns := []struct {
+		name            string
+		input, output   int
+		export          string
+		wantIn, wantOut int64
+	}{
+		{"first turn without an export keeps its step counts", 100, 10, emptyExport, 100, 10},
+		{"second turn carries the first turn's counts", 50, 5, emptyExport, 150, 15},
+		{"an export figure replaces the carried counts", 20, 2, exportOf(400, 40), 400, 40},
+		{"counts after an export start from zero", 7, 1, emptyExport, 407, 41},
+	}
+
+	for _, tt := range turns {
+		writeFixtureFile(t, dir, filepath.Base(runPath), stepRun(tt.input, tt.output))
+		writeFixtureFile(t, dir, filepath.Base(exportPath), tt.export)
+
+		_, result, err := collectEvents(t, a, session, "work")
+		if err != nil {
+			t.Fatalf("%s: RunTurn() error = %v", tt.name, err)
+		}
+
+		if result.Usage.InputTokens != tt.wantIn || result.Usage.OutputTokens != tt.wantOut {
+			t.Errorf("%s: RunTurn().Usage = in:%d out:%d, want in:%d out:%d", tt.name, result.Usage.InputTokens, result.Usage.OutputTokens, tt.wantIn, tt.wantOut)
+		}
+	}
 }
 
 func TestRunTurn_CleanExitWithoutStepFinishSettlesSpend(t *testing.T) {
@@ -1049,60 +1136,6 @@ cat '`+runPath+`'`)
 	if result.Usage.InputTokens != 10 || result.Usage.OutputTokens != 20 || result.Usage.TotalTokens != 30 {
 		t.Errorf("RunTurn().Usage = {input %d, output %d, total %d}, want {10, 20, 30} from the export",
 			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens)
-	}
-}
-
-func TestRunTurn_UsageMeasured_TrueWhenTheExportIsAGenuineZero(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-
-	runFixture := loadFixture(t, "simple_turn.jsonl")
-	runPath := filepath.Join(tmpDir, "run.jsonl")
-	if err := os.WriteFile(runPath, runFixture, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	exportPath := filepath.Join(tmpDir, "export.json")
-	const export = `{"info":{"id":"ses_abc123"},"messages":[{"type":"assistant","finish":"stop",` +
-		`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
-		`"tokens":{"input":0,"output":0,"total":0,"cache":{"read":0,"write":0}}}]}`
-	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	script := writeOpenCodeScript(t, tmpDir, `case "$1 $2" in
-  "session export") cat '`+exportPath+`'; exit 0;;
-esac
-cat '`+runPath+`'`)
-
-	a, _ := NewOpenCodeAdapter()
-	session := mustStartSession(t, a, tmpDir, script)
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	if !result.UsageMeasured {
-		t.Error("UsageMeasured = false; the export was readable and reported zero")
-	}
-	if result.Usage.InputTokens != 0 || result.Usage.OutputTokens != 0 {
-		t.Errorf("Usage = in:%d out:%d, want in:0 out:0",
-			result.Usage.InputTokens, result.Usage.OutputTokens)
-	}
-
-	var usageEvents []domain.AgentEvent
-	for _, ev := range events {
-		if ev.Type == domain.EventTokenUsage {
-			usageEvents = append(usageEvents, ev)
-		}
-	}
-	if len(usageEvents) != 1 {
-		t.Fatalf("token-usage events = %d, want exactly 1", len(usageEvents))
-	}
-	if usageEvents[0].Model != "anthropic/claude-sonnet-4-5" {
-		t.Errorf("Model = %q, want the model the export named", usageEvents[0].Model)
 	}
 }
 

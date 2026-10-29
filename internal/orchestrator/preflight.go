@@ -218,10 +218,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	// remote decides the launch mode every kind's usage disposition is
-	// resolved under: worker.ssh_hosts is the one configuration key
-	// that can produce a remote session, so its presence decides the
-	// mode for every session this configuration can produce.
+	// worker.ssh_hosts is the one configuration key that can produce a
+	// remote session, so its presence decides whether a kind can carry a
+	// token figure for every session this configuration can produce.
 	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker")).SSHHosts) > 0
 
 	// Adapter-specific agent config validation, for every distinct kind

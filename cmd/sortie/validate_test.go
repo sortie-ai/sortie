@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -1731,7 +1732,14 @@ var registerDeprecatedOrderFixture = sync.OnceFunc(func() {
 		func() (domain.AgentAdapter, error) {
 			return nil, errors.New("fixture kind is never constructed")
 		},
-		registry.AgentMeta{Deprecation: &registry.AgentDeprecation{Replacement: "mock"}})
+		registry.AgentMeta{
+			Deprecation: &registry.AgentDeprecation{Replacement: "mock"},
+			UsageSources: usage.Sources{Live: usage.Source{
+				Category: usage.SourceOutput,
+				Strategy: usage.StrategyLive,
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+			}},
+		})
 })
 
 func TestWorkflowAdvisories_EffortAdvisoryFollowsDeprecations(t *testing.T) {

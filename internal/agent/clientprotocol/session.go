@@ -171,13 +171,11 @@ type usageObserved struct {
 	completeness usagesource.Completeness
 }
 
-// recordsResult is one turn's records read outcome; turn lets a result arriving
-// after that turn ended be dropped. A non-nil err means the read did not
-// complete.
+// recordsResult is one turn's records read; turn lets a result arriving after
+// that turn ended be dropped.
 type recordsResult struct {
-	turn     *activeTurn
-	readings []usage.SpendReading
-	err      error
+	turn *activeTurn
+	read usage.RecordsRead
 }
 
 // pullResult is one turn's usage pull outcome; turn lets a result arriving after
@@ -210,16 +208,15 @@ type handshakeFacts struct {
 	// confirmed; it is the only way the pump receives a source.
 	reader usageReader
 
-	// declaration is the zero Declaration when none is registered.
+	// declaration is the effective declaration the session is measured under.
 	declaration usagesource.Declaration
 
 	// puller is nil when the declaration has no pull or the session verifies a
 	// credential.
 	puller *usage.Puller
 
-	// ledger is nil when the declaration declares no spend, the launch is
-	// remote, or the declaration is unsupported; a session with a ledger has no
-	// reader.
+	// ledger is nil when the declaration declares no spend or is unsupported, and
+	// when a confirmed measurement source settles the session instead.
 	ledger *usage.Ledger
 }
 
@@ -277,6 +274,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	sources := a.sources
 	if sources == nil {
 		sources = usagesource.Sources
+	}
+
+	declarations := a.declarations
+	if declarations == nil {
+		declarations = usagesource.Declarations
 	}
 
 	claims := claimUsageSources(sources, target)
@@ -458,7 +460,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		}
 
 		if len(verdict.released) == 0 && !relaunchArmed {
-			session, err := finishSession(ctx, state, params, target, initResp, verdict)
+			session, err := finishSession(ctx, state, params, target, initResp, verdict, declarations)
 			started = err == nil
 			return session, err
 		}
@@ -484,8 +486,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 }
 
 // finishSession completes the final start; verdict.confirmed's source, or nil,
-// is the only reader the pump receives, and none when the session has a ledger.
-func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, verdict usageVerdict) (domain.Session, error) {
+// is the only reader the pump receives, and a session with a reader has no
+// ledger.
+func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, verdict usageVerdict, declarations *registry.Registry[usagesource.Declaration, struct{}]) (domain.Session, error) {
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	teardownOnFailure := func() {
 		graceCtx, cancel := context.WithTimeout(ctx, grace)
@@ -530,10 +533,18 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		state.closeMethod = methodSessionClose
 	}
 
+	choice := chooseDeclaration(declarations, initResp.AgentInfo, target)
+	if choice.mismatch {
+		state.logger.Warn("agent runtime differs from its configured command",
+			slog.String("configured_runtime", choice.configured),
+			slog.String("handshake_runtime", initResp.AgentInfo.Name),
+			slog.String("usage_declaration", choice.key),
+		)
+	}
 	facts := &handshakeFacts{
 		toolServersDelivered: len(wired) > 0,
 		caps:                 caps,
-		declaration:          resolveDeclaration(usagesource.Declarations, initResp.AgentInfo, target),
+		declaration:          choice.declaration,
 	}
 	state.sessionID = sessionID
 	facts.puller = newSessionPuller(facts.declaration, state, params.CredentialVerification)
@@ -541,9 +552,10 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
 	}
-	facts.ledger = newSessionLedger(ctx, state, facts.declaration)
-	if facts.ledger == nil && verdict.confirmed != nil {
+	if verdict.confirmed != nil {
 		facts.reader = verdict.confirmed.source
+	} else {
+		facts.ledger = newSessionLedger(ctx, state, choice.declaration)
 	}
 
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
@@ -562,15 +574,12 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 	}, nil
 }
 
-// newSessionLedger returns the session's spend ledger, or nil when the launch is
-// remote, the declaration declares no spend, or the ledger refuses it. The
-// records already on the host are read here, before the first prompt, so none of
-// them is counted as this run's spend.
+// newSessionLedger returns the session's spend ledger, or nil when the
+// declaration declares no spend or the ledger refuses it. The records already
+// on the host are read here, before the first prompt, so none of them is
+// counted as this run's spend.
 func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration) *usage.Ledger {
-	if state.target.RemoteCommand != "" {
-		return nil
-	}
-	if decl.Live.Spend.Shape == usage.SpendUndeclared && decl.Records.Spend.Shape == usage.SpendUndeclared {
+	if decl.Live.Spend.Shape == usage.SpendUndeclared {
 		return nil
 	}
 	ledger, err := usage.NewLedger(decl.Live, decl.Records)
@@ -578,17 +587,9 @@ func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource
 		state.logger.Warn("spend declaration unsupported", slog.Any("error", err))
 		return nil
 	}
-	if decl.ReadRecords == nil {
-		return ledger
+	if decl.ReadRecords != nil {
+		ledger.Boundary(readSessionRecords(ctx, state, decl))
 	}
-
-	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
-	defer cancel()
-	readings, err := decl.ReadRecords(readCtx, pullRuntime{state: state})
-	if err != nil {
-		state.logger.Debug("usage records read failed", slog.Any("error", err))
-	}
-	ledger.Boundary(usage.RecordsRead{Readings: readings, OK: err == nil})
 	return ledger
 }
 

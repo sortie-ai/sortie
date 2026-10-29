@@ -59,29 +59,33 @@ const copilotToolDeniedCode = "denied"
 
 const defaultCommand = "copilot"
 
+// usageSources: the result event reports premium requests, a vendor unit, and
+// the session-state journal holds the token counts per model.
+var usageSources = usage.Sources{
+	Live: usage.Source{
+		Category: usage.SourceOutput,
+		Strategy: usage.StrategyLive,
+		Spend:    usage.SpendDeclaration{VendorUnit: "premium requests"},
+	},
+	Records: usage.Source{
+		Category: usage.SourceJournal,
+		Strategy: usage.StrategyRecords,
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
+	},
+}
+
 func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
 		RequiresCommand:               true,
 		DefaultCommand:                defaultCommand,
 		ValidateAgentConfig:           validateConfig,
 		MCPDialect:                    registry.MCPDialectMCPServersJSON,
-		UsageArrival:                  registry.UsageArrivalTurnEnd,
-		UsageAttribution:              registry.UsageAttributionPerModel,
+		UsageSources:                  usageSources,
 		CredentialEnv:                 registry.DeclareCredentialEnv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
 		VerificationContext:           registry.DeclareVerificationContext(registry.VerificationKeepsSomeTools, registry.VerificationKeepsSystemPrompt),
 		EffortForwarding:              registry.EffortForwarded,
 		UsageLimitRecognition:         registry.UsageLimitNotRecognized,
 		UsageLimitNotRecognizedReason: "the adapter reads a session error as message text only",
-		UsageSessionRules: []registry.UsageSessionRule{
-			{
-				// Mirrors sessionState.recoverUsage's own remote
-				// condition: over SSH, the post-exit journal read is
-				// skipped entirely, so nothing ever arrives.
-				When:        func(passthrough map[string]any, remote bool) bool { return remote },
-				Arrival:     registry.UsageArrivalNone,
-				Attribution: registry.UsageAttributionNone,
-			},
-		},
 	})
 }
 
@@ -174,6 +178,8 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) (recovered *agentcore.R
 	sessionID := s.copilotSessionID
 	validID := sessionID != "" && sessionstate.ValidSessionID(sessionID)
 
+	// The journal is opened with local file access, so a remote launch has
+	// none to read.
 	if remote || !validID {
 		if sessionID != "" && !validID && !s.sessionIDRejectionLogged {
 			logger.Warn("copilot session id rejected for session-state read",
@@ -226,7 +232,8 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) (recovered *agentcore.R
 // session the run creates, the figure handed over for a resumed one, and
 // otherwise the newest record of the resumed session's local journal. A
 // remote launch, an invalid session id, or an unreadable journal leaves the
-// baseline unknown; none fails the session start.
+// baseline unknown; none fails the session start. A remote launch is skipped
+// because the journal is opened with local file access.
 func seedResumeBaseline(params domain.StartSessionParams, target agentcore.LaunchTarget, sessionID string, logger *slog.Logger) agentcore.ResumeBaseline {
 	switch {
 	case params.ResumeSessionID == "":

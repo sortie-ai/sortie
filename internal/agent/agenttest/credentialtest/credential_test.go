@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -27,23 +28,31 @@ func credentialTestConstructor() (domain.AgentAdapter, error) {
 func init() {
 	registry.Agents.RegisterWithMeta(credentialTestKindWithCommand, credentialTestConstructor, registry.AgentMeta{
 		RequiresCommand: true,
+		UsageSources: usage.Sources{Live: usage.Source{
+			Category: usage.SourceOutput,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		}},
 	})
 	registry.Agents.RegisterWithMeta(credentialTestKindWithoutCommand, credentialTestConstructor, registry.AgentMeta{
 		RequiresCommand: false,
+		UsageSources: usage.Sources{Live: usage.Source{
+			Category: usage.SourceOutput,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		}},
 	})
 	registry.Agents.RegisterWithMeta(credentialTestKindUsage, credentialTestConstructor, registry.AgentMeta{
-		UsageArrival:     registry.UsageArrivalIncremental,
-		UsageAttribution: registry.UsageAttributionPerModel,
-		UsageSessionRules: []registry.UsageSessionRule{
-			{
-				When:        func(_ map[string]any, remote bool) bool { return remote },
-				Arrival:     registry.UsageArrivalNone,
-				Attribution: registry.UsageAttributionNone,
+		UsageSources: usage.Sources{
+			Live: usage.Source{
+				Category: usage.SourceOutput,
+				Strategy: usage.StrategyLive,
+				Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
 			},
-			{
-				When:        func(passthrough map[string]any, _ bool) bool { return passthrough["usage"] == "off" },
-				Arrival:     registry.UsageArrivalNone,
-				Attribution: registry.UsageAttributionNone,
+			Records: usage.Source{
+				Category: usage.SourceJournal,
+				Strategy: usage.StrategyRecords,
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
 			},
 		},
 	})
@@ -146,10 +155,13 @@ func (a *usageAdapter) RunTurn(_ context.Context, _ domain.Session, params domai
 func (a *usageAdapter) StopSession(context.Context, domain.Session) error { return nil }
 
 func measuredUsageAdapter(model string) *usageAdapter {
-	usage := domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
+	figure := domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
 	return &usageAdapter{
-		events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usage, Model: model}},
-		result: domain.TurnResult{SessionID: "sess-usage", ExitReason: domain.EventTurnCompleted, Usage: usage, UsageMeasured: true},
+		events: []domain.AgentEvent{
+			{Type: domain.EventTokenUsage, Usage: figure, Model: model},
+			{Type: domain.EventTurnCompleted},
+		},
+		result: domain.TurnResult{SessionID: "sess-usage", ExitReason: domain.EventTurnCompleted, Usage: figure, UsageMeasured: true},
 	}
 }
 
@@ -283,12 +295,11 @@ func TestVerifyLiveUsage(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		adapter     *usageAdapter
-		params      domain.StartSessionParams
-		passthrough map[string]any
-		wantFatal   bool
-		wantFailed  bool
+		name       string
+		adapter    *usageAdapter
+		params     domain.StartSessionParams
+		wantFatal  bool
+		wantFailed bool
 	}{
 		{
 			name:    "measured turn naming a model passes",
@@ -308,16 +319,10 @@ func TestVerifyLiveUsage(t *testing.T) {
 			wantFailed: true,
 		},
 		{
-			name:       "ssh session resolves the remote rule",
+			name:       "ssh session carries no figure from a records-only source",
 			adapter:    measuredUsageAdapter("gpt-6-astra"),
 			params:     domain.StartSessionParams{SSHHost: "user@stand-in-host"},
 			wantFailed: true,
-		},
-		{
-			name:        "passthrough reaches the session rule",
-			adapter:     measuredUsageAdapter("gpt-6-astra"),
-			passthrough: map[string]any{"usage": "off"},
-			wantFailed:  true,
 		},
 	}
 
@@ -327,7 +332,7 @@ func TestVerifyLiveUsage(t *testing.T) {
 
 			var got domain.TurnResult
 			stand, returned := runOnStandIn(func(stand *testing.T) {
-				got = VerifyLiveUsage(stand, credentialTestKindUsage, tt.adapter, tt.params, tt.passthrough)
+				got = VerifyLiveUsage(stand, credentialTestKindUsage, tt.adapter, tt.params, nil)
 			})
 
 			if stand.Failed() != tt.wantFailed {

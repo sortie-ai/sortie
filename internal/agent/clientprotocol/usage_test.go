@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -126,8 +130,6 @@ func quotaMeta(input, output int64) json.RawMessage {
 		`,"output_tokens":` + strconv.FormatInt(output, 10) + `}}}`)
 }
 
-// measuredTurn drives one whole turn: a tool call that completes, then a prompt
-// result carrying the wire extension.
 func measuredTurn(t *testing.T, state *sessionState, inPw interface {
 	Write([]byte) (int, error)
 }, out *outboundReader, meta json.RawMessage) ([]domain.AgentEvent, turnOutcome) {
@@ -789,6 +791,121 @@ func TestSettleOffersNoRecognizerForARemoteLaunch(t *testing.T) {
 
 			if got := verdict.recognizer != nil; got != tt.wantRecognizer {
 				t.Errorf("settleUsageSources(remote=%v).recognizer set = %v, want %v", tt.remote, got, tt.wantRecognizer)
+			}
+		})
+	}
+}
+
+func launchedBy(executable string) func(agentcore.LaunchTarget) bool {
+	return func(target agentcore.LaunchTarget) bool {
+		tokens := append([]string{target.Command}, target.Args...)
+		return slices.Contains(append(tokens, strings.Fields(target.RemoteCommand)...), executable)
+	}
+}
+
+func fixtureDeclarations(t *testing.T) *registry.Registry[usagesource.Declaration, struct{}] {
+	t.Helper()
+
+	declarations := registry.NewRegistry[usagesource.Declaration, struct{}]("usage declaration")
+	windowsOnly := usagesource.Declaration{Live: usage.Source{Category: usage.SourceProtocol}}
+	for name, launches := range map[string]func(agentcore.LaunchTarget) bool{
+		"alpha": launchedBy("alpha-cli"),
+		"beta":  launchedBy("beta-cli"),
+		"gamma": nil,
+	} {
+		declaration := windowsOnly
+		declaration.Launches = launches
+		declarations.Register(name, declaration)
+	}
+	return declarations
+}
+
+func TestChooseDeclaration(t *testing.T) {
+	t.Parallel()
+
+	declarations := fixtureDeclarations(t)
+	local := agentcore.LaunchTarget{Command: "alpha-cli", Args: []string{"--acp"}}
+	tests := []struct {
+		name           string
+		info           *implementation
+		target         agentcore.LaunchTarget
+		wantKey        string
+		wantConfigured string
+		wantMismatch   bool
+	}{
+		{"handshake confirms the command", &implementation{Name: "alpha"}, local, "alpha", "alpha", false},
+		{"handshake names another declared runtime", &implementation{Name: "beta"}, local, "beta", "alpha", true},
+		{"handshake names a declaration with no launch matcher", &implementation{Name: "gamma"}, local, "gamma", "alpha", true},
+		{"handshake names an undeclared runtime", &implementation{Name: "undeclared-runtime"}, local, usagesource.DefaultName, "alpha", true},
+		{"no handshake name keeps the command's declaration", nil, local, "alpha", "alpha", false},
+		{"empty handshake name keeps the command's declaration", &implementation{}, local, "alpha", "alpha", false},
+		{"no name and a command naming nothing", nil, agentcore.LaunchTarget{Command: "agent"}, usagesource.DefaultName, "", false},
+		{"undeclared name and a command naming nothing", &implementation{Name: "undeclared-runtime"}, agentcore.LaunchTarget{Command: "agent"}, usagesource.DefaultName, "", false},
+		{"wrapper command", nil, agentcore.LaunchTarget{Command: "env", Args: []string{"MODEL=x", "alpha-cli", "--acp"}}, "alpha", "alpha", false},
+		{"remote target whose command is ssh", nil, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "beta-cli acp --model x"}, "beta", "beta", false},
+		{"remote target naming nothing", nil, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent --acp"}, usagesource.DefaultName, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := chooseDeclaration(declarations, tt.info, tt.target)
+
+			if got.key != tt.wantKey || got.configured != tt.wantConfigured || got.mismatch != tt.wantMismatch {
+				t.Errorf("chooseDeclaration(%+v, %+v) = {key %q, configured %q, mismatch %v}, want {%q, %q, %v}",
+					tt.info, tt.target, got.key, got.configured, got.mismatch, tt.wantKey, tt.wantConfigured, tt.wantMismatch)
+			}
+			if got.declaration.Live.Spend.Shape == usage.SpendUndeclared || got.declaration.PromptSpend == nil {
+				t.Errorf("chooseDeclaration(%+v, %+v) declaration maps no spend, want the default mapping where the selected one maps none", tt.info, tt.target)
+			}
+		})
+	}
+}
+
+func TestNewSessionLedgerReadsRecordsOnLocalLaunchesOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		target    agentcore.LaunchTarget
+		wantReads int
+		wantOK    bool
+	}{
+		{"local launch", agentcore.LaunchTarget{Command: "agent"}, 1, true},
+		{"remote launch", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var reads int
+			decl := scriptedSpendDeclaration(nil, nil, nil)
+			decl.ReadRecords = func(context.Context, usagesource.PullRuntime) ([]usage.SpendReading, error) {
+				reads++
+				return []usage.SpendReading{spendReading(10, 2, 0, "model-a", "u1")}, nil
+			}
+			state := &sessionState{logger: discardLogger(), target: tt.target}
+			live := spendReading(100, 20, 0, "", "")
+
+			ledger := newSessionLedger(t.Context(), state, decl)
+
+			if ledger == nil {
+				t.Fatalf("newSessionLedger(%+v) = nil, want a ledger built from the declaration's live and records sources", tt.target)
+			}
+			if reads != tt.wantReads {
+				t.Errorf("newSessionLedger(%+v) ran ReadRecords %d times, want %d", tt.target, reads, tt.wantReads)
+			}
+			settlement := ledger.Settle(usage.TurnEnd{Replied: true, ModelReached: true}, &live, usage.RecordsRead{OK: true})
+			if !settlement.Figure || settlement.Run.InputTokens != 100 || settlement.Run.OutputTokens != 20 {
+				t.Errorf("Settle() = {Figure %v, Run %+v}, want the live figure 100/20", settlement.Figure, settlement.Run)
+			}
+
+			read := readSessionRecords(t.Context(), state, decl)
+
+			if read.OK != tt.wantOK || (len(read.Readings) != 0) != tt.wantOK {
+				t.Errorf("readSessionRecords(%+v) = {OK %v, %d readings}, want OK %v", tt.target, read.OK, len(read.Readings), tt.wantOK)
 			}
 		})
 	}

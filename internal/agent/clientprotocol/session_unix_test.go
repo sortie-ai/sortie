@@ -1158,9 +1158,6 @@ func awaitSourceOpened(t *testing.T, source *scriptedUsageSource, sessionID stri
 	})
 }
 
-// scriptedUsageSource is a usagesource.Reader test double whose claim and
-// recognition decisions a test scripts directly, so the launch/settle/
-// release cycle can be driven without a real vendor-specific source.
 type scriptedUsageSource struct {
 	mu sync.Mutex
 
@@ -1260,9 +1257,6 @@ func (s *scriptedUsageSource) closeCallCount() int {
 	return s.closeCalls
 }
 
-// newPrivateUsageRegistry builds a registry fit for ClientProtocolAdapter.sources,
-// holding the given sources under their own kind. It never touches
-// usagesource.Sources, the shared registry every production launch reads.
 func newPrivateUsageRegistry(sources ...*scriptedUsageSource) *registry.Registry[usagesource.Constructor, struct{}] {
 	reg := registry.NewRegistry[usagesource.Constructor, struct{}]("usage source")
 	for _, source := range sources {
@@ -1308,9 +1302,11 @@ func TestStartSessionSettlesToTheSourceTheHandshakeRecognizes(t *testing.T) {
 		name         string
 		bClaimsFirst bool
 		wantStarts   int
+		declared     bool
 	}{
 		{name: "both sources claim the first offer", bClaimsFirst: true, wantStarts: 2},
 		{name: "the second source refuses the first offer", bClaimsFirst: false, wantStarts: 1},
+		{name: "a declaration that maps spend does not displace the confirmed source", bClaimsFirst: false, wantStarts: 1, declared: true},
 	}
 
 	for _, tt := range tests {
@@ -1336,6 +1332,10 @@ func TestStartSessionSettlesToTheSourceTheHandshakeRecognizes(t *testing.T) {
 			})
 
 			adapter := &ClientProtocolAdapter{sources: sources}
+			if tt.declared {
+				adapter.declarations = registry.NewRegistry[usagesource.Declaration, struct{}]("usage declaration")
+				adapter.declarations.Register(sourceA.kind, usagesource.Default)
+			}
 			session, err := startTestSession(context.Background(), adapter, domain.StartSessionParams{
 				WorkspacePath: t.TempDir(),
 				AgentConfig:   domain.AgentConfig{Command: agentPath},
@@ -1457,8 +1457,8 @@ func TestStartSessionReleasesAClaimedSourceTheHandshakeDoesNotRecognize(t *testi
 	if result.UsageMeasured {
 		t.Error("result.UsageMeasured = true, want false: no source was confirmed")
 	}
-	if !hasNoticeContaining(events, capabilityLabelTokenCounts) {
-		t.Errorf("no gap notice naming %q; events = %+v", capabilityLabelTokenCounts, events)
+	if hasNoticeContaining(events, capabilityLabelTokenCounts) {
+		t.Errorf("gap notice naming %q, want none: the default declaration's ledger delivers token counts; events = %+v", capabilityLabelTokenCounts, events)
 	}
 }
 

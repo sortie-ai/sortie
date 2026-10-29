@@ -34,10 +34,13 @@ func init() {
 
 func runHeadlessServerScenario(_ []string, params headlessServerParams) int {
 	signal.Ignore(syscall.SIGTERM)
-	var seen []string
 	record := func(event string) {
-		seen = append(seen, event)
-		_ = os.WriteFile(params.CapturePath, []byte(strings.Join(seen, " ")), 0o600)
+		f, err := os.OpenFile(params.CapturePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return
+		}
+		_, _ = f.WriteString(event + " ")
+		_ = f.Close()
 	}
 
 	br := bufio.NewReader(os.Stdin)
@@ -106,13 +109,11 @@ func TestHeadlessQuota(t *testing.T) {
 		_, captured, err := runHeadlessQuota(t, headlessReplies(t))
 
 		want := []string{"connect", "account.getQuota"}
-		// Windows ends the server's process tree at once, so it never reads
-		// the closed stdin that a Unix server reads before its stop grace.
-		if runtime.GOOS != "windows" {
-			want = append(want, "stdin-closed")
-		}
-		if err != nil || !slices.Equal(captured, want) {
-			t.Errorf("headlessQuota() events = %q, error %v, want %q and nil", captured, err, want)
+		wantClosed := append(slices.Clone(want), "stdin-closed")
+		// Windows ends the server without a stop grace, so whether it reads the closed stdin first is a race.
+		ok := slices.Equal(captured, wantClosed) || runtime.GOOS == "windows" && slices.Equal(captured, want)
+		if err != nil || !ok {
+			t.Errorf("headlessQuota() events = %q, error %v, want %q and nil", captured, err, wantClosed)
 		}
 	})
 

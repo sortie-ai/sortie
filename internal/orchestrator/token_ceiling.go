@@ -83,7 +83,7 @@ func (e *RunningEntry) issueUncachedTokens() int64 {
 // baseline from the first usage event onward and the entry serves the issue's
 // spend whether or not a ceiling is set. Without a ceiling a failed read
 // emits nothing. Must run on the single-writer event loop, after
-// entry.UsageArrival has been assigned.
+// entry.UsageArrival and entry.CarriesTokenFigure have been assigned.
 func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string, store issueTokenStore, logger *slog.Logger) {
 	entry, ok := state.Running[issueID]
 	if !ok {
@@ -107,18 +107,18 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 	}
 	entry.IssueTokensCompleted = usage.UncachedTokens
 	entry.IssueUsage = &usage
-	if entry.UsageArrival.ReportsAnyFigure() {
+	if entry.CarriesTokenFigure {
 		reachTokenWarning(state, issueID, entry, logger)
 	}
 }
 
 // warnCeilingUnboundAtDispatch records what the ceiling cannot bound at dispatch. A run
-// whose arrival reports no figure is unbounded whatever the baseline read
+// that can carry no token figure is unbounded whatever the baseline read
 // did, so a failed read rides on that record rather than claiming the
 // ceiling bounds this session.
 func warnCeilingUnboundAtDispatch(log *slog.Logger, budgetTokens int, entry *RunningEntry, readErr error) {
 	switch {
-	case !entry.UsageArrival.ReportsAnyFigure():
+	case !entry.CarriesTokenFigure:
 		attrs := []any{
 			slog.String("agent_kind", entry.AgentKind),
 			slog.String("usage_arrival", string(entry.UsageArrival)),
@@ -346,12 +346,12 @@ func warnTokenBudgetIncomplete(log *slog.Logger, usage persistence.IssueTokenUsa
 }
 
 // warnCeilingMeasuredNothing records one ended run whose ceiling was set
-// and whose arrival declared that figures report, yet recorded none. Must
+// and whose kind can carry a token figure, yet recorded none. Must
 // be called once per run from the exit path with the run's settled
-// verdict. A kind whose arrival reports no figure is announced at dispatch
+// verdict. A run that can carry no token figure is announced at dispatch
 // instead and skipped here.
 func warnCeilingMeasuredNothing(log *slog.Logger, entry *RunningEntry, budgetTokens int, measured bool) {
-	if budgetTokens <= 0 || measured || !entry.UsageArrival.ReportsAnyFigure() {
+	if budgetTokens <= 0 || measured || !entry.CarriesTokenFigure {
 		return
 	}
 	log.Warn("run reported no token usage, token ceiling could not bound it",

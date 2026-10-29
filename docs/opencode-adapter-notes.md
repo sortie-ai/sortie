@@ -79,9 +79,11 @@ The hosted free-tier model refuses any request whose tool set lacks its shell to
 
 ## Usage accounting
 
-Step-scoped token counts on the stream are not a running total. Between the tool step and the final text step of one turn the numbers move in both directions, so summing them across steps is wrong and taking the last one is wrong too.
+Step-scoped token counts on the stream are not a running total. Between the tool step and the final text step of one turn the numbers move in both directions, so taking the last one is wrong.
 
-The kind declares `turn_end` arrival and `per_model` attribution. After the subprocess exits, `queryExportUsage` runs a sanitized session export and reports the figure through the shared turn-end report, with the model of the last kept message. The export also runs over SSH, so remote launches are measured too, unlike `copilot-cli`. The export is sanitized so tool output never reaches a log. The figure also carries a per-model split, each kept message counting under its provider and model.
+The kind attaches each `step_finish` part's `tokens` as its live source and the session export as its records source, and derives `turn_end` arrival and `per_model` attribution from them. After the subprocess exits, `queryExportUsage` runs a sanitized session export and reports the figure through the shared turn-end report, with the model of the last kept message. The export also runs over SSH, so remote launches are measured too, unlike `copilot-cli`. The export is sanitized so tool output never reaches a log. The figure also carries a per-model split, each kept message counting under its provider and model.
+
+The adapter sums the step reports of a turn as they arrive, and the export settles every turn. A figure the export recovers replaces the step counts, and the two are never added. A turn whose export recovers nothing keeps the counts its step reports carried, as a lower bound, and carries unaccounted spend. The final text step of a turn emits no `step_finish` tokens, so that sum falls short of the turn's spend; step reports that add no input and no output tokens leave it with no figure.
 
 The adapter sums per-message figures and ignores the export's session aggregate, for two reasons. The aggregate covers the whole session, including earlier runs, while Sortie reports per run. And its total also includes cache and reasoning tokens, so it is not input plus output. The adapter selects assistant messages by session ID and, on a resumed session, by creation time at or after the run start.
 
@@ -89,7 +91,7 @@ A message counts only once its `finish` field is set. The runtime saves an assis
 
 The configuration document disables the runtime's title agent. Its request is billed but recorded in no message, so the sum would miss it.
 
-A failed or empty export must never lower a figure the run has already reported. The settle step skips the update entirely rather than replacing a settled value with zero.
+A failed or empty export must never lower a figure the run has already reported. When the export recovers nothing, the settle step reports the turn's step counts instead of a zero, and a turn without step counts reports nothing.
 
 ## Usage limits
 

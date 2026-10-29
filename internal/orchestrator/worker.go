@@ -698,7 +698,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return true
 		}
 		if !discardWarned {
-			logger.Warn("token usage discarded: agent kind declares this session reports none",
+			logger.Warn("token usage discarded: agent kind attaches no source that counts tokens",
 				slog.String("agent_kind", agentKind),
 			)
 			discardWarned = true

@@ -111,31 +111,24 @@ func assertUsageContract(t contractReporter, events []domain.AgentEvent) {
 	}
 }
 
-// UsageReportingCase is one turn of one kind, captured under the
-// passthrough and launch mode the fixture was built with.
+// UsageReportingCase is one turn of one kind, captured under the launch mode
+// the fixture was built with.
 type UsageReportingCase struct {
-	Name        string
-	Passthrough map[string]any
-	Remote      bool
-	Events      []domain.AgentEvent
-	Result      domain.TurnResult
+	Name   string
+	Remote bool
+	Events []domain.AgentEvent
+	Result domain.TurnResult
 }
 
 // AssertUsageReporting fails t unless every case agrees with the pair
-// kind resolves for it, and unless the cases together reach the
-// declared pair and every entry in [registry.AgentMeta.UsageSessionRules].
-// It resolves kind's registered [registry.AgentMeta] through
-// [registry.Agents.Meta] itself, so a caller cannot hand it a pair the
-// kind did not register.
+// kind derives from its registered usage sources, and with whether those
+// sources can carry a token figure on the case's launch. It resolves
+// kind's registered [registry.AgentMeta] through [registry.Agents.Meta]
+// itself, so a caller cannot hand it a pair the kind did not register.
 func AssertUsageReporting(t *testing.T, kind string, cases []UsageReportingCase) {
 	t.Helper()
 	assertUsageReporting(t, kind, cases)
 }
-
-// unreachedRuleIndex is the sentinel reached-set member standing for
-// the declared pair: a case reaches it when no UsageSessionRules
-// entry's When matched.
-const unreachedRuleIndex = -1
 
 func assertUsageReporting(t contractReporter, kind string, cases []UsageReportingCase) {
 	t.Helper()
@@ -149,38 +142,24 @@ func assertUsageReporting(t contractReporter, kind string, cases []UsageReportin
 		return
 	}
 
-	reached := make(map[int]bool)
+	arrival, attribution := meta.UsageDisposition()
 	for _, tc := range cases {
-		ruleIndex := unreachedRuleIndex
-		for i, rule := range meta.UsageSessionRules {
-			if rule.When != nil && rule.When(tc.Passthrough, tc.Remote) {
-				ruleIndex = i
-				break
-			}
-		}
-		reached[ruleIndex] = true
-
-		arrival, attribution := meta.UsageDisposition(tc.Passthrough, tc.Remote)
-		assertResolvedUsageReporting(t, tc, arrival, attribution)
-	}
-
-	for i := unreachedRuleIndex; i < len(meta.UsageSessionRules); i++ {
-		if !reached[i] {
-			if i == unreachedRuleIndex {
-				t.Errorf("no case reaches the declared pair (kind %q)", kind)
-				continue
-			}
-			t.Errorf("no case reaches UsageSessionRules[%d] (kind %q)", i, kind)
-		}
+		assertResolvedUsageReporting(t, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure(tc.Remote))
 	}
 }
 
 // assertResolvedUsageReporting checks one case's events and result
-// against the pair meta.UsageDisposition resolved for it, per the two
-// admissible shapes UsageArrivalIncremental and UsageArrivalTurnEnd
-// are exact complements of on a stream that can tell them apart.
-func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution) {
+// against the pair meta.UsageDisposition derived and whether the kind can
+// carry a token figure on the case's launch, per the two admissible shapes
+// UsageArrivalIncremental and UsageArrivalTurnEnd are exact complements of
+// on a stream that can tell them apart.
+func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution, carriesTokenFigure bool) {
 	t.Helper()
+
+	if !carriesTokenFigure {
+		assertMeasurementAbsent(t, tc.Events, tc.Result)
+		return
+	}
 
 	var usageIdx []int
 	lastToolResult := -1
@@ -197,8 +176,6 @@ func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arr
 	switch arrival {
 	case registry.UsageArrivalUndeclared:
 		t.Errorf("case %q: want a kind that declares a usage arrival", tc.Name)
-	case registry.UsageArrivalNone:
-		assertMeasurementAbsent(t, tc.Events, tc.Result)
 	case registry.UsageArrivalIncremental, registry.UsageArrivalTurnEnd:
 		if lastToolResult < 0 && len(usageIdx) < 2 {
 			t.Errorf("case %q: the stream carries neither a tool result nor a second usage event, so it cannot show which arrival produced it", tc.Name)
@@ -271,20 +248,15 @@ func assertUsageAttribution(t contractReporter, tc UsageReportingCase, arrival r
 			t.Errorf("case %q: declared per_model, no usage-bearing event named a model", tc.Name)
 		}
 	case registry.UsageAttributionSessionTotal:
-		for i, event := range tc.Events {
-			if event.Usage != (domain.TokenUsage{}) && event.Model != "" {
-				t.Errorf("case %q: event %d: declared session_total, a usage-bearing event named a model %q", tc.Name, i, event.Model)
-			}
-		}
+		// A figure may still name a model when a source the session attaches names it.
 	default:
 		t.Errorf("case %q: attribution %q is a value outside the declared set", tc.Name, attribution)
 	}
 }
 
 // AssertUsageReportingCase fails t unless tc agrees with the pair kind
-// resolves for it, applying the per-case check [AssertUsageReporting]
-// applies to each of its cases. Unlike it, it requires no declared pair
-// or session rule to be reached, so one case suffices.
+// derives from its registered usage sources, applying the per-case check
+// [AssertUsageReporting] applies to each of its cases.
 func AssertUsageReportingCase(t *testing.T, kind string, tc UsageReportingCase) {
 	t.Helper()
 	assertUsageReportingCase(t, kind, tc)
@@ -297,15 +269,15 @@ func assertUsageReportingCase(t contractReporter, kind string, tc UsageReporting
 	if !registered {
 		return
 	}
-	arrival, attribution := meta.UsageDisposition(tc.Passthrough, tc.Remote)
-	assertResolvedUsageReporting(kindReporter{contractReporter: t, kind: kind}, tc, arrival, attribution)
+	arrival, attribution := meta.UsageDisposition()
+	assertResolvedUsageReporting(kindReporter{contractReporter: t, kind: kind}, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure(tc.Remote))
 }
 
 // AssertLiveUsageCase fails t unless tc, any single text turn such as
 // the verification turn of a suite's working-credential case or the
 // resumed turn of the scripted continuation scenario, agrees with the
-// pair kind resolves for it. Under arrival none it asserts no
-// measurement. Under a figure-reporting arrival a measured turn must
+// pair kind derives for it. When kind's sources can carry no token figure
+// on tc's launch it asserts no measurement. Otherwise a measured turn must
 // report positive input and output tokens and satisfy the usage
 // contract, and an unmeasured turn must flag its spend unaccounted and
 // carry no measurement. A measured turn that also flags its spend
@@ -325,13 +297,15 @@ func assertLiveUsageCase(t contractReporter, kind string, tc UsageReportingCase)
 		return
 	}
 	t = kindReporter{contractReporter: t, kind: kind}
-	arrival, attribution := meta.UsageDisposition(tc.Passthrough, tc.Remote)
+	if !meta.UsageSources.CarriesTokenFigure(tc.Remote) {
+		assertMeasurementAbsent(t, tc.Events, tc.Result)
+		return
+	}
+	arrival, attribution := meta.UsageDisposition()
 
 	switch arrival {
 	case registry.UsageArrivalUndeclared:
 		t.Errorf("case %q: want a kind that declares a usage arrival", tc.Name)
-	case registry.UsageArrivalNone:
-		assertMeasurementAbsent(t, tc.Events, tc.Result)
 	case registry.UsageArrivalIncremental, registry.UsageArrivalTurnEnd:
 		if !tc.Result.UsageMeasured {
 			assertUnaccountedSpend(t, tc)

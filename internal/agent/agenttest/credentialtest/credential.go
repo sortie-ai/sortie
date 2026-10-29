@@ -144,9 +144,10 @@ func VerifyLive(adapter domain.AgentAdapter, params domain.StartSessionParams) (
 // VerifyLiveUsage runs [agentcore.VerifyCredential] against a real
 // runtime with the bounds [VerifyLive] uses, fails t when verification
 // errors, and asserts through [agenttest.AssertLiveUsageCase] that the
-// verification turn reported usage as kind declares for the session
-// passthrough configures. It returns the turn's result.
-func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, params domain.StartSessionParams, passthrough map[string]any) domain.TurnResult {
+// verification turn reported usage as kind's registered usage sources
+// declare for the session's launch. The trailing map argument is unused. It
+// returns the turn's result.
+func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, params domain.StartSessionParams, _ map[string]any) domain.TurnResult {
 	t.Helper()
 
 	var mu sync.Mutex
@@ -168,11 +169,10 @@ func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, par
 	mu.Lock()
 	defer mu.Unlock()
 	agenttest.AssertLiveUsageCase(t, kind, agenttest.UsageReportingCase{
-		Name:        "working credential",
-		Passthrough: passthrough,
-		Remote:      params.SSHHost != "",
-		Events:      events,
-		Result:      result,
+		Name:   "working credential",
+		Remote: params.SSHHost != "",
+		Events: events,
+		Result: result,
 	})
 	return result
 }

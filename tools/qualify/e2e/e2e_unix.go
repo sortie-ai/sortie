@@ -19,6 +19,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
@@ -42,7 +43,14 @@ const fixtureAgentKind = "qualification-e2e-fixture"
 func init() {
 	registry.Agents.RegisterWithMeta(fixtureAgentKind, func() (domain.AgentAdapter, error) {
 		return nil, fmt.Errorf("%s is resolved through AgentAdapterByKind, never constructed from the registry", fixtureAgentKind)
-	}, registry.AgentMeta{RequiresCommand: true})
+	}, registry.AgentMeta{
+		RequiresCommand: true,
+		UsageSources: usage.Sources{Live: usage.Source{
+			Category: usage.SourceOutput,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		}},
+	})
 }
 
 // The fixture's active and non-active handoff states, and its single issue's

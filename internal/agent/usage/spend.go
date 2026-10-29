@@ -21,6 +21,9 @@ const (
 	SpendProcessCumulative
 	// SpendPerRequest is one model request's own counts, with its identity.
 	SpendPerRequest
+	// SpendAdapterMapped is token counts the kind's adapter reads and maps
+	// itself; the ledger refuses it.
+	SpendAdapterMapped
 )
 
 // SpendDeclaration is a source's declaration of what its spend counts
@@ -40,6 +43,18 @@ type SpendDeclaration struct {
 	// ServedModel declares that each reading names the model that served
 	// its request.
 	ServedModel bool
+
+	// DuringTurn declares that the source reports after each model request
+	// while the turn runs.
+	DuringTurn bool
+
+	// LowerBound declares that a figure the source settles is never
+	// complete: the runtime may spend more than it reports.
+	LowerBound bool
+
+	// VendorUnit is the plural unit name of a report that carries no token
+	// counts.
+	VendorUnit string
 }
 
 // SpendReading is one report of spend as a parser read it. A nil count is
@@ -137,8 +152,8 @@ type Ledger struct {
 // NewLedger returns a ledger for a live source of SpendProcessCumulative
 // shape and, when records is not the zero Source, a records source of
 // SpendPerRequest shape. Both declarations must place cache inside input
-// and reasoning inside output; any other declaration returns an error
-// wrapping ErrSpendUnsupported.
+// and reasoning inside output; any other declaration, SpendAdapterMapped
+// included, returns an error wrapping ErrSpendUnsupported.
 func NewLedger(live, records Source) (*Ledger, error) {
 	if !declares(live, StrategyLive, SpendProcessCumulative) {
 		return nil, fmt.Errorf("live source: %w", ErrSpendUnsupported)
@@ -247,8 +262,8 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 	return l.settlement(Settlement{
 		Figure:        true,
 		Spent:         arm.delta.InputTokens+arm.delta.OutputTokens > 0,
-		Complete:      complete,
-		CoversSession: complete,
+		Complete:      complete && !l.live.LowerBound,
+		CoversSession: complete && !l.live.LowerBound,
 		Provenance:    l.liveProvenance,
 	}, added)
 }

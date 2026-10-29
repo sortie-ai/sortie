@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -44,7 +45,13 @@ var closeTokenSeq atomic.Int64
 func registerCloseableAdapters() {
 	closeableOnce.Do(func() {
 		registry.Trackers.Register("closeable-file", newCloseableFileTracker)
-		registry.Agents.Register("closeable-mock", newCloseableMockAgent)
+		registry.Agents.RegisterWithMeta("closeable-mock", newCloseableMockAgent, registry.AgentMeta{
+			UsageSources: usage.Sources{Live: usage.Source{
+				Category: usage.SourceOutput,
+				Strategy: usage.StrategyLive,
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+			}},
+		})
 	})
 }
 
