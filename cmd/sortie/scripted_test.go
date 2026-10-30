@@ -16,8 +16,6 @@ const (
 	scriptedModelAssertFuncName = "AssertConformance"
 )
 
-var scriptedModelSpendPending = []string{"opencode"}
-
 func TestEveryCommandKindHasScriptedModelCoverage(t *testing.T) {
 	t.Parallel()
 
@@ -44,26 +42,13 @@ func TestEveryCommandKindHasScriptedModelCoverage(t *testing.T) {
 		t.Errorf("agent kind(s) %v deliver tools but their fakemodel.Binding declares no SSH variant, want an SSH field naming the runtime package, an install script or a skip reason", noSSH)
 	}
 
-	unopted, stale := spendRatchetViolations(kinds, scriptedModelSpendPending, mcpCompletenessAgentRoot, scriptedModelImportPath)
-	if len(unopted) != 0 {
+	if unopted := spendRatchetViolations(kinds, mcpCompletenessAgentRoot, scriptedModelImportPath); len(unopted) != 0 {
 		t.Errorf("agent kind(s) %v have a fakemodel.Binding without a Spend field, want one naming the spend sources their runtime declares", unopted)
-	}
-	if len(stale) != 0 {
-		t.Errorf("agent kind(s) %v set Spend but are still in scriptedModelSpendPending, want them removed from the set", stale)
 	}
 }
 
-func spendRatchetViolations(kinds, pending []string, agentRoot, importPath string) (unopted, stale []string) {
-	lacking := kindsMissingBindingKey(kinds, agentRoot, importPath, "Spend")
-	for _, kind := range kinds {
-		switch isLacking, isPending := slices.Contains(lacking, kind), slices.Contains(pending, kind); {
-		case isLacking && !isPending:
-			unopted = append(unopted, kind)
-		case !isLacking && isPending:
-			stale = append(stale, kind)
-		}
-	}
-	return unopted, stale
+func spendRatchetViolations(kinds []string, agentRoot, importPath string) []string {
+	return kindsMissingBindingKey(kinds, agentRoot, importPath, "Spend")
 }
 
 func kindsMissingBindingKey(kinds []string, agentRoot, importPath, key string) []string {
@@ -240,8 +225,7 @@ func TestSpendRatchetViolations(t *testing.T) {
 	for _, tt := range []struct{ dir, kind, body string }{
 		{"opted-dir", "opted-kind", `Spend: &fakemodel.SpendSources{}`},
 		{"nil-spend-dir", "nil-spend-kind", `Spend: nil`},
-		{"pending-dir", "pending-kind", `Kind: "pending-kind"`},
-		{"stale-dir", "stale-kind", `Spend: &fakemodel.SpendSources{}`},
+		{"absent-dir", "absent-kind", `Kind: "absent-kind"`},
 	} {
 		writeFixtureFile(t, filepath.Join(root, tt.dir), "register.go", `package fixture
 
@@ -265,15 +249,11 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 `)
 	}
 
-	kinds := []string{"opted-kind", "nil-spend-kind", "pending-kind", "stale-kind"}
-	pending := []string{"pending-kind", "stale-kind"}
+	kinds := []string{"opted-kind", "nil-spend-kind", "absent-kind"}
 
-	unopted, stale := spendRatchetViolations(kinds, pending, root, scriptedModelImportPath)
+	unopted := spendRatchetViolations(kinds, root, scriptedModelImportPath)
 
-	if want := []string{"nil-spend-kind"}; !slices.Equal(unopted, want) {
-		t.Errorf("spendRatchetViolations(%v, %v) unopted = %v, want %v", kinds, pending, unopted, want)
-	}
-	if want := []string{"stale-kind"}; !slices.Equal(stale, want) {
-		t.Errorf("spendRatchetViolations(%v, %v) stale = %v, want %v", kinds, pending, stale, want)
+	if want := []string{"nil-spend-kind", "absent-kind"}; !slices.Equal(unopted, want) {
+		t.Errorf("spendRatchetViolations(%v, %q) = %v, want %v", kinds, root, unopted, want)
 	}
 }

@@ -1,0 +1,206 @@
+{
+  "info": {
+    "id": "ses_e737d08b8ffeydhSupdjhqQAAy",
+    "projectID": "6cc41184d682dd7a4d2c84410ac1b661e54d7e38",
+    "model": {
+      "id": "gemini-2.5-flash",
+      "providerID": "google",
+      "variant": "default"
+    },
+    "cost": 0.016758,
+    "tokens": {
+      "input": 54235,
+      "output": 80,
+      "reasoning": 115,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793358756634,
+      "updated": 1793358761517,
+      "busy": 1793358759041,
+      "idle": 1793358761520
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e737d08b8ffeydhSupdjhqQAAy]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18c82fb2d0010CutMgbm3JwHp2",
+      "time": {
+        "created": 1793358756813
+      },
+      "text": "[redacted:text:msg_18c82fb2d0010CutMgbm3JwHp2]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18c82fbd800157fY0B3mhDaRnu",
+      "time": {
+        "created": 1793358756829,
+        "streamed": 1793358758004,
+        "completed": 1793358758006
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "[redacted:text:msg_18c82fbd800157fY0B3mhDaRnu]",
+          "native": {
+            "redacted": "text-native:msg_18c82fbd800157fY0B3mhDaRnu"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.0053579,
+      "tokens": {
+        "input": 17693,
+        "output": 1,
+        "reasoning": 19,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18c8300780019GxcYexC60F5zP",
+      "time": {
+        "created": 1793358758008
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_18c8303b7001gP1TUgvGkOJqre",
+      "time": {
+        "created": 1793358759052
+      },
+      "text": "[redacted:text:msg_18c8303b7001gP1TUgvGkOJqre]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18c830495001LqXhqww8lHz3TQ",
+      "time": {
+        "created": 1793358759066,
+        "streamed": 1793358760824,
+        "completed": 1793358760840
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "tool_cf1a9d0e6a9046c897de563e4bd7f9c1",
+          "name": "read",
+          "executed": false,
+          "native": {
+            "redacted": "tool-native:msg_18c830495001LqXhqww8lHz3TQ"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "redacted": "tool-input:msg_18c830495001LqXhqww8lHz3TQ"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "[redacted:tool-output:msg_18c830495001LqXhqww8lHz3TQ]"
+              }
+            ],
+            "metadata": {
+              "redacted": "tool-metadata:msg_18c830495001LqXhqww8lHz3TQ"
+            }
+          },
+          "time": {
+            "created": 1793358760815,
+            "ran": 1793358760818,
+            "completed": 1793358760838
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "STOP",
+      "cost": 0.005769,
+      "tokens": {
+        "input": 17780,
+        "output": 78,
+        "reasoning": 96,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18c830b9000146RHUfs5QtsyBl",
+      "metadata": {
+        "redacted": "message-metadata:msg_18c830b9000146RHUfs5QtsyBl"
+      },
+      "time": {
+        "created": 1793358760848
+      },
+      "type": "system",
+      "text": "[redacted:system:msg_18c830b9000146RHUfs5QtsyBl]",
+      "description": "Instructions updated: core/codemode, core/mcp-guidance"
+    },
+    {
+      "id": "msg_18c830b96001lR1XlMWhZ9BfIq",
+      "time": {
+        "created": 1793358760858,
+        "streamed": 1793358761515,
+        "completed": 1793358761517
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "[redacted:text:msg_18c830b96001lR1XlMWhZ9BfIq]"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.005631099999999999,
+      "tokens": {
+        "input": 18762,
+        "output": 1,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18c830e30001YvAZSUo9Qn3L3t",
+      "time": {
+        "created": 1793358761520
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

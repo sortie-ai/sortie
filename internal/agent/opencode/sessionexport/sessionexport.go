@@ -18,18 +18,17 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
+// Records declares the session export as a records source for every OpenCode
+// route: one message per finished request, cache outside input, reasoning
+// outside output, written when its request completes.
+var Records = usage.Source{
+	Category: usage.SourceJournal,
+	Strategy: usage.StrategyRecords,
+	Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
+}
+
 // ErrOtherSession marks an export whose info.id is not the session asked for.
 var ErrOtherSession = errors.New("session export of another session")
-
-// Record is one finished assistant message of an export.
-type Record struct {
-	// Spend holds the counts as exported, with Model and Identity.
-	Spend usage.SpendReading
-
-	// CreatedMS is time.created in Unix milliseconds; 0 when absent or not an
-	// integer.
-	CreatedMS int64
-}
 
 // SessionError is the error one export message records.
 type SessionError struct {
@@ -51,9 +50,25 @@ func Args(sessionID string) []string {
 	return []string{"session", "export", "--standalone", "--sanitize", sessionID}
 }
 
-// Count returns the integer a JSON member holds, nil for an absent, null,
+// Tokens maps an OpenCode tokens object, as the run stream's step reports and
+// the export's messages carry it, to a reading. A count is nil for an absent,
+// null, fractional, or non-numeric member, and every count is nil when raw is
+// not an object. The reading names no identity and no model.
+func Tokens(raw json.RawMessage) usage.SpendReading {
+	tokens, _ := decodeObject[exportTokens](raw)
+	cache, _ := decodeObject[exportCache](tokens.Cache)
+	return usage.SpendReading{
+		Input:      count(tokens.Input),
+		Output:     count(tokens.Output),
+		Reasoning:  count(tokens.Reasoning),
+		CacheRead:  count(cache.Read),
+		CacheWrite: count(cache.Write),
+	}
+}
+
+// count returns the integer a JSON member holds, nil for an absent, null,
 // fractional, or non-numeric member.
-func Count(raw json.RawMessage) *int64 {
+func count(raw json.RawMessage) *int64 {
 	n, err := strconv.ParseInt(string(raw), 10, 64)
 	if err != nil {
 		return nil
@@ -61,57 +76,44 @@ func Count(raw json.RawMessage) *int64 {
 	return &n
 }
 
-// CountOmittedAtZero returns [Count] of a counter the runtime leaves out when
+// CountOmittedAtZero returns the integer of a counter the runtime leaves out when
 // it is zero, so an absent member reads zero.
 func CountOmittedAtZero(raw json.RawMessage) *int64 {
 	if len(raw) == 0 {
 		var zero int64
 		return &zero
 	}
-	return Count(raw)
+	return count(raw)
 }
 
-// Parse returns the records of the finished assistant messages of an export,
-// in document order. A message counts when it has a non-empty finish. One
-// without a tokens object, an aborted request whose spend is recorded
-// nowhere, keeps its identity and creation time with every count unknown, so
-// a caller can still place it in the session's history. The session
-// aggregate in info is never read: it also holds requests no message
-// records. Parse refuses data above [usage.MaxRecordsBytes], a document that
-// does not decode, and a document of another session ([ErrOtherSession]).
-func Parse(data []byte, sessionID string) ([]Record, error) {
+// Parse returns one reading per finished assistant message of an export, in
+// document order. A message counts when it has a non-empty finish. One without
+// a tokens object, an aborted request whose spend is recorded nowhere, keeps
+// its identity with every count unknown, so a caller can still place it in
+// the session's history. The session aggregate in info is never read: it also
+// holds requests no message records. Parse refuses data above
+// [usage.MaxRecordsBytes], a document that does not decode, and a document of
+// another session ([ErrOtherSession]).
+func Parse(data []byte, sessionID string) ([]usage.SpendReading, error) {
 	doc, err := decodeExport(data, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	var records []Record
+	var readings []usage.SpendReading
 	for _, m := range doc.Messages {
 		if m.Type != "assistant" || m.Finish == "" {
 			continue
 		}
-		tokens, _ := decodeObject[exportTokens](m.Tokens)
-		cache, _ := decodeObject[exportCache](tokens.Cache)
+		reading := Tokens(m.Tokens)
+		reading.Identity = m.ID
 		model, _ := decodeObject[exportModel](m.Model)
-		created, _ := decodeObject[exportTime](m.Time)
-
-		record := Record{Spend: usage.SpendReading{
-			Input:      Count(tokens.Input),
-			Output:     Count(tokens.Output),
-			Reasoning:  Count(tokens.Reasoning),
-			CacheRead:  Count(cache.Read),
-			CacheWrite: Count(cache.Write),
-			Identity:   m.ID,
-		}}
 		if model.ProviderID != "" && model.ID != "" {
-			record.Spend.Model = model.ProviderID + "/" + model.ID
+			reading.Model = model.ProviderID + "/" + model.ID
 		}
-		if ms := Count(created.Created); ms != nil {
-			record.CreatedMS = *ms
-		}
-		records = append(records, record)
+		readings = append(readings, reading)
 	}
-	return records, nil
+	return readings, nil
 }
 
 type exportMessage struct {
@@ -172,7 +174,7 @@ func LastError(data []byte, sessionID string) (SessionError, bool, error) {
 		times, _ := decodeObject[exportTime](message.Time)
 		return SessionError{
 			Type:         *failure.Type,
-			RetryAfterMS: Count(failure.RetryAfterMS),
+			RetryAfterMS: count(failure.RetryAfterMS),
 			FailedAtMS:   failedAtMS(times),
 		}, true, nil
 	}
@@ -181,7 +183,7 @@ func LastError(data []byte, sessionID string) (SessionError, bool, error) {
 
 func failedAtMS(t exportTime) int64 {
 	for _, raw := range []json.RawMessage{t.Completed, t.Created} {
-		if ms := Count(raw); ms != nil {
+		if ms := count(raw); ms != nil {
 			return *ms
 		}
 	}

@@ -26,7 +26,7 @@ func exportDoc(messages ...string) []byte {
 	return []byte(`{"info":{"id":"ses_t"},"messages":[` + strings.Join(messages, ",") + `]}`)
 }
 
-func mustParse(t *testing.T, data []byte, sessionID string) []Record {
+func mustParse(t *testing.T, data []byte, sessionID string) []usage.SpendReading {
 	t.Helper()
 	records, err := Parse(data, sessionID)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestParseCaptures(t *testing.T) {
 
 			var got []counts
 			for _, r := range mustParse(t, loadFixture(t, tt.fixture), tt.sessionID) {
-				got = append(got, counts{*r.Spend.Input, *r.Spend.Output, *r.Spend.Reasoning, *r.Spend.CacheRead})
+				got = append(got, counts{*r.Input, *r.Output, *r.Reasoning, *r.CacheRead})
 			}
 
 			if !slices.Equal(got, tt.want) {
@@ -96,27 +96,22 @@ func TestParseMapsMembers(t *testing.T) {
 	tests := []struct {
 		name    string
 		message string
-		want    Record
+		want    usage.SpendReading
 	}{
 		{
 			"every member",
 			`{"id":"msg_1","type":"assistant","finish":"stop",` +
-				`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},"time":{"created":1793236506454},` +
+				`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
 				`"tokens":{"input":3000,"output":500,"reasoning":70,"cache":{"read":400,"write":900}}}`,
-			Record{
-				Spend: usage.SpendReading{
-					Input: new(int64(3000)), Output: new(int64(500)), Reasoning: new(int64(70)), CacheRead: new(int64(400)), CacheWrite: new(int64(900)),
-					Model: "anthropic/claude-sonnet-4-5", Identity: "msg_1",
-				},
-				CreatedMS: 1793236506454,
+			usage.SpendReading{
+				Input: new(int64(3000)), Output: new(int64(500)), Reasoning: new(int64(70)), CacheRead: new(int64(400)), CacheWrite: new(int64(900)),
+				Model: "anthropic/claude-sonnet-4-5", Identity: "msg_1",
 			},
 		},
 		{
-			"unusable members",
-			`{"id":"msg_1","type":"assistant","finish":"stop",` +
-				`"model":{"providerID":"anthropic"},"time":{"created":1.5},` +
-				`"tokens":{"input":null,"output":1.5,"reasoning":1e2}}`,
-			Record{Spend: usage.SpendReading{Identity: "msg_1"}},
+			"model without an id",
+			`{"id":"msg_1","type":"assistant","finish":"stop","model":{"providerID":"anthropic"}}`,
+			usage.SpendReading{Identity: "msg_1"},
 		},
 	}
 
@@ -126,7 +121,7 @@ func TestParseMapsMembers(t *testing.T) {
 
 			got := mustParse(t, exportDoc(tt.message), "ses_t")
 
-			if want := []Record{tt.want}; !reflect.DeepEqual(got, want) {
+			if want := []usage.SpendReading{tt.want}; !reflect.DeepEqual(got, want) {
 				t.Errorf("Parse(%s) = %+v, want %+v", tt.message, got, want)
 			}
 		})
@@ -150,7 +145,7 @@ func TestParseLeavesTheSessionAggregateOut(t *testing.T) {
 
 	var sum int64
 	for _, r := range mustParse(t, data, "ses_e7ac6691effe73waoQYzNihPM6") {
-		sum += *r.Spend.Input
+		sum += *r.Input
 	}
 
 	if sum >= doc.Info.Tokens.Input {
@@ -173,17 +168,54 @@ func TestParseKeepsAFinishedMessageWithoutTokensUncounted(t *testing.T) {
 
 	records := mustParse(t, exportDoc(
 		`{"id":"msg_counted","type":"assistant","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}`,
-		`{"id":"msg_aborted","type":"assistant","finish":"error","tokens":null,"time":{"created":7}}`), "ses_t")
+		`{"id":"msg_aborted","type":"assistant","finish":"error","tokens":null}`), "ses_t")
 
 	if len(records) != 2 {
 		t.Fatalf("Parse() = %d records, want 2", len(records))
 	}
 	aborted := records[1]
-	if aborted.Spend.Identity != "msg_aborted" || aborted.CreatedMS != 7 {
-		t.Errorf("Parse() aborted record identity = %q, created = %d, want msg_aborted, 7", aborted.Spend.Identity, aborted.CreatedMS)
+	if aborted.Identity != "msg_aborted" {
+		t.Errorf("Parse() aborted reading identity = %q, want msg_aborted", aborted.Identity)
 	}
-	if _, ok := usage.Normalize(aborted.Spend, usage.SpendDeclaration{}); ok {
+	if _, ok := usage.Normalize(aborted, usage.SpendDeclaration{}); ok {
 		t.Errorf("Normalize(aborted record) ok = true, want its spend unknown")
+	}
+}
+
+func TestTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want usage.SpendReading
+	}{
+		{
+			"every member",
+			`{"input":1,"output":2,"reasoning":3,"cache":{"read":4,"write":5}}`,
+			usage.SpendReading{Input: new(int64(1)), Output: new(int64(2)), Reasoning: new(int64(3)), CacheRead: new(int64(4)), CacheWrite: new(int64(5))},
+		},
+		{"absent members", `{"input":1,"cache":{"write":5}}`, usage.SpendReading{Input: new(int64(1)), CacheWrite: new(int64(5))}},
+		{"null members", `{"input":null,"output":null,"reasoning":null,"cache":{"read":null,"write":null}}`, usage.SpendReading{}},
+		{"fractional members", `{"input":1.5,"output":2.5,"reasoning":3.5,"cache":{"read":4.5,"write":5.5}}`, usage.SpendReading{}},
+		{"non-number members", `{"input":"1","output":true,"reasoning":[],"cache":{"read":{},"write":"5"}}`, usage.SpendReading{}},
+		{"cache that is not an object", `{"input":1,"cache":5}`, usage.SpendReading{Input: new(int64(1))}},
+		{"null", `null`, usage.SpendReading{}},
+		{"array", `[1,2]`, usage.SpendReading{}},
+		{"number", `5`, usage.SpendReading{}},
+		{"string", `"tokens"`, usage.SpendReading{}},
+		{"absent", ``, usage.SpendReading{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := Tokens(json.RawMessage(tt.raw))
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Tokens(%s) = %+v, want %+v", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 

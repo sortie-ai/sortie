@@ -28,9 +28,8 @@ type RecoveredUsage struct {
 // TurnEndUsage is the usage state of one session of a kind whose figure
 // settles only after a turn's work is over. It owns the session's
 // run-cumulative snapshot and measurement verdict, and reports each
-// recovered figure, or the live counts no recovered figure covers yet, as
-// the turn's one usage event. One value serves one session; it is not safe
-// for concurrent use.
+// recovered figure as the turn's one usage event. One value serves one
+// session; it is not safe for concurrent use.
 type TurnEndUsage struct {
 	acc      RunUsage
 	measured bool
@@ -53,10 +52,9 @@ func (u *TurnEndUsage) ByModel() map[string]domain.TokenUsage {
 	return u.acc.ByModel()
 }
 
-// Measured reports whether a figure has been reported yet, by Settle with
-// a non-nil recovered figure or by ReportLive with counts that add input or
-// output tokens. It is false for a value from NewTurnEndUsage until then,
-// and true from that call on.
+// Measured reports whether Settle has reported a non-nil recovered figure
+// yet. It is false for a value from NewTurnEndUsage until then, and true
+// from that call on.
 func (u *TurnEndUsage) Measured() bool {
 	return u.measured
 }
@@ -77,28 +75,6 @@ func (u *TurnEndUsage) Settle(emit func(domain.AgentEvent), recovered *Recovered
 		Usage:        snapshot,
 		UsageByModel: u.acc.ByModel(),
 		Model:        strings.TrimSpace(recovered.Model),
-	})
-}
-
-// ReportLive reports the live counts no settled figure covers yet and emits
-// one [domain.EventTokenUsage] event carrying the resulting snapshot and the
-// settled per-model split, with no model name. Counts that add no input and
-// no output tokens report nothing: no event, and the snapshot and the
-// measured verdict stay as they were, so they never become a measured zero.
-//
-// A later [TurnEndUsage.Settle] with a figure replaces these counts instead of
-// adding to them, and the snapshot never falls.
-func (u *TurnEndUsage) ReportLive(emit func(domain.AgentEvent), sinceSettled domain.TokenUsage) {
-	if sinceSettled.InputTokens == 0 && sinceSettled.OutputTokens == 0 {
-		return
-	}
-	snapshot := u.acc.SetTurnProvisional(sinceSettled)
-	u.measured = true
-	emit(domain.AgentEvent{
-		Type:         domain.EventTokenUsage,
-		Timestamp:    time.Now().UTC(),
-		Usage:        snapshot,
-		UsageByModel: u.acc.ByModel(),
 	})
 }
 

@@ -19,12 +19,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-// usageSources: the mock reports the counts its configuration sets, which no
-// runtime output backs, so it maps them itself after each turn.
+// usageSources: the mock reports the counts its configuration sets as a
+// running total since its session state began.
 var usageSources = usage.Sources{Live: usage.Source{
 	Category: usage.SourceOutput,
 	Strategy: usage.StrategyLive,
-	Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true},
+	Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true},
 }}
 
 func init() {

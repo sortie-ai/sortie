@@ -1,7 +1,8 @@
 // Package opencode implements [domain.AgentAdapter] for the OpenCode CLI.
 // It launches one `opencode run --format json` subprocess per turn,
-// normalizes stdout envelopes into domain events, and recovers final token
-// usage with `opencode session export --standalone --sanitize`.
+// normalizes stdout envelopes into domain events, and settles token usage
+// through the usage ledger from the run's step reports and the session export
+// (`opencode session export --standalone --sanitize`).
 //
 // The CLI accepts no MCP configuration path, so the adapter places the
 // session's tool-server delivery as the "mcp" member of the inline
@@ -10,16 +11,18 @@
 package opencode
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
+	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
 	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -33,21 +36,17 @@ import (
 // defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "opencode"
 
-// usageSources: each step_finish report carries the step's token counts, and
-// the session export holds the counts per model for every finished message.
-// The adapter maps both itself. The final text step reports no tokens, so the
-// step sum is a lower bound.
+// usageSources: each step_finish report carries one request's token counts,
+// and the session export holds the counts per model for every finished
+// message. The turn's final text step prints no report, so the reports alone
+// never account a whole turn and the export settles it.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, LowerBound: true},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest},
 	},
-	Records: usage.Source{
-		Category: usage.SourceJournal,
-		Strategy: usage.StrategyRecords,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
-	},
+	Records: sessionexport.Records,
 }
 
 func init() {
@@ -74,21 +73,18 @@ var _ domain.AgentAdapter = (*OpenCodeAdapter)(nil)
 type OpenCodeAdapter struct{}
 
 type sessionState struct {
-	target         agentcore.LaunchTarget
-	agentConfig    domain.AgentConfig
-	passthrough    passthroughConfig
-	sessionID      string
-	sessionOpened  bool
-	baseLogger     *slog.Logger
-	tools          *agentcore.ToolSession
-	createdSession bool
-	runStartedAtMS int64
-	usage          *agentcore.TurnEndUsage
-	mu             sync.Mutex
+	target        agentcore.LaunchTarget
+	agentConfig   domain.AgentConfig
+	passthrough   passthroughConfig
+	sessionID     string
+	sessionOpened bool
+	baseLogger    *slog.Logger
+	tools         *agentcore.ToolSession
+	usage         *agentcore.TurnEndUsage
+	mu            sync.Mutex
 
-	// liveSinceSettled sums the step reports' counts that no export figure
-	// has replaced yet. Carried across turns, touched only from the hooks.
-	liveSinceSettled domain.TokenUsage
+	// ledger settles every turn; built in StartSession and never reset.
+	ledger *usage.Ledger
 
 	// fork owns the turn subprocess lifecycle. Built by newForkSession.
 	fork *agentcore.ForkPerTurnSession
@@ -105,11 +101,17 @@ type sessionState struct {
 
 	// Per-turn state, reset by RunTurn and touched only from the hooks,
 	// which run on RunTurn's goroutine.
-	work          *agentcore.WorkObserver
-	finishingStep bool
-	runtimeError  *rawRunError
-	outcome       domain.AgentEventType
-	recovered     bool
+	work         *agentcore.WorkObserver
+	runtimeError *rawRunError
+	outcome      domain.AgentEventType
+
+	// settling is the report of the step that ended the turn; nil when none
+	// arrived.
+	settling *usage.SpendReading
+
+	// children are the subagent calls the turn showed, in first-sighting
+	// order.
+	children []childSession
 
 	// runtimeErrorAtMS is the timestamp of the event runtimeError came from.
 	runtimeErrorAtMS int64
@@ -140,6 +142,16 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 	}
 
 	baseLogger := slog.Default().With(slog.String("component", "opencode-adapter"))
+
+	ledger, ledgerErr := usage.NewLedger(usageSources.Live, usageSources.Records)
+	if ledgerErr != nil {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrResponseError,
+			Message: "usage ledger refused the kind's sources",
+			Err:     ledgerErr,
+		}
+	}
+
 	tools, toolsErr := agentcore.ResolveToolDelivery(ctx, params, target, registry.MCPDialectMCPMemberJSON, baseLogger)
 	if toolsErr != nil {
 		return domain.Session{}, toolsErr
@@ -152,9 +164,8 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		sessionID:              params.ResumeSessionID,
 		baseLogger:             baseLogger,
 		tools:                  tools,
-		createdSession:         params.ResumeSessionID == "",
-		runStartedAtMS:         time.Now().UnixMilli(),
 		usage:                  agentcore.NewTurnEndUsage(),
+		ledger:                 ledger,
 		credentialVerification: params.CredentialVerification,
 
 		reducedVerificationContext: params.ReducedVerificationContext(),
@@ -163,6 +174,14 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 	if versionErr := checkRuntimeVersion(ctx, state); versionErr != nil {
 		_ = tools.Close()
 		return domain.Session{}, versionErr
+	}
+
+	if params.ResumeSessionID == "" {
+		ledger.SessionCreated()
+	} else {
+		readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(params.AgentConfig))
+		ledger.Boundary(state.readRecords(readCtx))
+		cancel()
 	}
 
 	var mcp []byte
@@ -206,11 +225,11 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	}
 
 	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
-	state.finishingStep = false
 	state.runtimeError = nil
 	state.runtimeErrorAtMS = 0
 	state.outcome = domain.EventTurnCompleted
-	state.recovered = false
+	state.settling = nil
+	state.children = nil
 
 	return state.fork.RunTurn(ctx, params.Prompt, params.OnEvent)
 }
@@ -261,31 +280,12 @@ func newForkSession(state *sessionState) *agentcore.ForkPerTurnSession {
 	return agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 }
 
-// opencodePull returns the session's usage-limits pull, which launches the
-// usage command the way the session launches its other auxiliary commands.
+// opencodePull returns the session's usage-limits pull, which runs the usage
+// command through the same host-command operation as the session export.
 func opencodePull(state *sessionState) func(context.Context) ([]usage.WindowReading, error) {
 	return func(ctx context.Context) ([]usage.WindowReading, error) {
 		return usagelimits.Pull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
-			cmd, err := auxiliaryCommand(ctx, state, args)
-			if err != nil {
-				return nil, fmt.Errorf("build opencode usage limits command: %w", err)
-			}
-
-			var stdout bytes.Buffer
-			result, startErr := procutil.RunCapture(ctx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
-				Stdout: &stdout,
-				Logger: state.logger(),
-			})
-			if startErr != nil {
-				return nil, fmt.Errorf("start opencode usage limits: %w", startErr)
-			}
-			if result.WaitErr != nil {
-				if state.target.RemoteCommand != "" && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
-					return nil, fmt.Errorf("run opencode usage limits: %w: %w", sshutil.ErrConnectionFailed, result.WaitErr)
-				}
-				return nil, fmt.Errorf("run opencode usage limits: %w", result.WaitErr)
-			}
-			return stdout.Bytes(), nil
+			return state.target.RunHostCommand(ctx, buildRunEnv(os.Environ()), state.runtimeCommand(args, 0))
 		})
 	}
 }
@@ -400,6 +400,7 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 		}
 		s.work.ObserveToolActivity()
 		spend.MarkModelReached()
+		s.noteSubagentCall(part)
 		call := agentcore.MapToolCall(toolMappings, part.Tool, part.State.Input)
 		emit(domain.AgentEvent{
 			Type:           domain.EventToolResult,
@@ -419,14 +420,12 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 			return nil, nil
 		}
 		spend.MarkModelReached()
-		if t := part.Tokens; t != nil {
-			if stepUsage, ok := usage.Normalize(stepSpendReading(t), usageSources.Live.Spend); ok {
-				s.liveSinceSettled = agentcore.AddUsage(s.liveSinceSettled, stepUsage)
-			}
-		}
+		reading := sessionexport.Tokens(part.Tokens)
+		reading.Identity = part.ID
+		s.ledger.ObserveRequest(reading)
 		agentcore.EmitNotification(emit, "")
 		if stepFinishEndsTurn(part.Reason) {
-			s.finishingStep = true
+			s.settling = &reading
 			return &event, nil
 		}
 
@@ -458,23 +457,27 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 	return nil, nil
 }
 
-// settleUsage reads the session export for every ending of a started turn.
-// An export read after a finishing step covers the whole session, and a
-// clean exit settles it in finalizeTurn. An export that recovers nothing
-// leaves the step reports' counts as the turn's figure, unsettled.
-func (s *sessionState) settleUsage(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
-	recovered := recoverUsage(ctx, s, runWindow(s))
-	if recovered == nil {
-		s.usage.ReportLive(emit, s.liveSinceSettled)
+// settleUsage hands the turn's step reports and session export to the ledger.
+// The runtime ends a turn itself when its finishing step reports or its process
+// exits clean; an error envelope leaves the turn unsettled.
+func (s *sessionState) settleUsage(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend, exitedClean bool) {
+	end := usage.TurnEnd{
+		Replied:         s.runtimeError == nil && (s.settling != nil || exitedClean),
+		ModelReached:    spend.ModelReached(),
+		Children:        len(s.children) > 0,
+		ChildrenSettled: s.childrenSettled(),
+	}
+	recovered := agentcore.SettleSpend(ctx, s.ledger, end, s.settling, s.readRecords, agentcore.ReadTimeout(s.agentConfig), spend)
+	s.usage.Settle(emit, recovered)
+}
+
+// noteSubagentCall records the turn's first sighting of a subagent call.
+func (s *sessionState) noteSubagentCall(part rawToolPart) {
+	child, ok := subagentCall(part, s.currentSessionID())
+	if !ok || slices.ContainsFunc(s.children, func(seen childSession) bool { return seen.call == child.call }) {
 		return
 	}
-	s.usage.Settle(emit, recovered)
-	s.liveSinceSettled = domain.TokenUsage{}
-	s.recovered = true
-	if s.finishingStep {
-		spend.MarkSettled()
-		spend.MarkSessionTotal()
-	}
+	s.children = append(s.children, child)
 }
 
 // finalizeTurn builds the disposition of a turn whose process exited. The
@@ -487,13 +490,6 @@ func (s *sessionState) finalizeTurn(emit func(domain.AgentEvent), _ any, exitCod
 		}
 		posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused)
 		agentcore.EmitNotification(emit, posture.Notice)
-	}
-
-	// The runtime does not always print a closing step_finish, and the
-	// export read after a clean exit is final.
-	if s.recovered && waitErr == nil && exitCode == 0 {
-		spend.MarkSettled()
-		spend.MarkSessionTotal()
 	}
 
 	ev := agentcore.TurnEvidence{
@@ -613,35 +609,4 @@ func isMaskedServerError(message string) bool {
 // continuing with another step after tool calls.
 func stepFinishEndsTurn(reason string) bool {
 	return reason != "tool-calls"
-}
-
-// recoverUsage runs the session export and returns what it recovered, or
-// nil when it recovered nothing.
-func recoverUsage(ctx context.Context, state *sessionState, sinceUnixMS int64) *agentcore.RecoveredUsage {
-	usage := queryExportUsage(ctx, state, sinceUnixMS)
-	if !hasUsage(usage) {
-		return nil
-	}
-	return &agentcore.RecoveredUsage{
-		Run:     usage.Usage,
-		Model:   usage.Model,
-		ByModel: usage.ByModel,
-	}
-}
-
-// runWindow is the timestamp the export filters messages by: the run's start
-// for a session this adapter did not create, so the history a resumed
-// session brought with it stays out while every turn of this run stays in,
-// and none at all for one it did, where every message belongs to this run.
-func runWindow(state *sessionState) int64 {
-	if state.createdSession {
-		return 0
-	}
-	return state.runStartedAtMS
-}
-
-// hasUsage reports whether the export recovered a figure, zero included: a
-// known zero spend must not read as an unknown one.
-func hasUsage(usage exportUsage) bool {
-	return usage.Recovered
 }

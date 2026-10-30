@@ -1,0 +1,151 @@
+{
+  "info": {
+    "id": "ses_e732952b9ffen0Tu4sZr9FibFc",
+    "projectID": "56739981e34bf725de2ccf3f759173e7fda8d854",
+    "model": {
+      "id": "gemini-2.5-flash",
+      "providerID": "google",
+      "variant": "default"
+    },
+    "cost": 0.0111582,
+    "tokens": {
+      "input": 36394,
+      "output": 27,
+      "reasoning": 69,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793364242134,
+      "updated": 1793364244714,
+      "busy": 1793364242261,
+      "idle": 1793364244716
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e732952b9ffen0Tu4sZr9FibFc]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18cd6aede001ec2ynu1inM0ztp",
+      "time": {
+        "created": 1793364242272
+      },
+      "text": "[redacted:text:msg_18cd6aede001ec2ynu1inM0ztp]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18cd6af67001LUVuuRmDeaRxYC",
+      "time": {
+        "created": 1793364242284,
+        "streamed": 1793364243659,
+        "completed": 1793364243961
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "tool_f4478a0ef750404c9a96209fba63b20e",
+          "name": "subagent",
+          "executed": false,
+          "native": {
+            "redacted": "tool-native:msg_18cd6af67001LUVuuRmDeaRxYC"
+          },
+          "state": {
+            "status": "error",
+            "input": {
+              "redacted": "tool-input:msg_18cd6af67001LUVuuRmDeaRxYC"
+            },
+            "error": {
+              "type": "tool.execution",
+              "message": "Subagent failed (sessionID: ses_e73294b36ffe7Ols49Tj4Nvc80): models/sortie-missing-model is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods."
+            },
+            "metadata": {
+              "redacted": "tool-metadata:msg_18cd6af67001LUVuuRmDeaRxYC"
+            }
+          },
+          "time": {
+            "created": 1793364243650,
+            "ran": 1793364243654,
+            "completed": 1793364243959
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "STOP",
+      "cost": 0.0055553,
+      "tokens": {
+        "input": 17726,
+        "output": 26,
+        "reasoning": 69,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18cd6b5fe001grsPBs5LKtbZlk",
+      "metadata": {
+        "redacted": "message-metadata:msg_18cd6b5fe001grsPBs5LKtbZlk"
+      },
+      "time": {
+        "created": 1793364243966
+      },
+      "type": "system",
+      "text": "[redacted:system:msg_18cd6b5fe001grsPBs5LKtbZlk]",
+      "description": "Instructions updated: core/codemode, core/mcp-guidance"
+    },
+    {
+      "id": "msg_18cd6b604001ZQ6f02Xp4ianFx",
+      "time": {
+        "created": 1793364243977,
+        "streamed": 1793364244713,
+        "completed": 1793364244714
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "[redacted:text:msg_18cd6b604001ZQ6f02Xp4ianFx]"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.0056029,
+      "tokens": {
+        "input": 18668,
+        "output": 1,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18cd6b8ec002Rh34F4OQxBGdr0",
+      "time": {
+        "created": 1793364244716
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

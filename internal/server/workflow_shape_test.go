@@ -77,7 +77,7 @@ func reportingAgentMeta() registry.AgentMeta {
 	return registry.AgentMeta{UsageSources: usage.Sources{Live: usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true},
 	}}}
 }
 
@@ -91,7 +91,7 @@ func journaledAgentMeta() registry.AgentMeta {
 		Records: usage.Source{
 			Category: usage.SourceJournal,
 			Strategy: usage.StrategyRecords,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
 		},
 	}}
 }

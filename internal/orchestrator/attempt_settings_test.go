@@ -14,7 +14,7 @@ var (
 	tokenLive = usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true, ServedModel: true},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true, ServedModel: true},
 	}
 	vendorOnlyLive = usage.Source{
 		Category: usage.SourceOutput,
@@ -24,7 +24,7 @@ var (
 	journalRecords = usage.Source{
 		Category: usage.SourceJournal,
 		Strategy: usage.StrategyRecords,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
 	}
 
 	vendorOnlyJournalSources = usage.Sources{Live: vendorOnlyLive, Records: journalRecords}

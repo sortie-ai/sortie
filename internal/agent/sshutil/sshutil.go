@@ -121,6 +121,12 @@ type SSHOptions struct {
 	// StopGrace is how long the remote agent has between SIGTERM and SIGKILL
 	// once its SSH connection is gone, rounded up to whole seconds.
 	StopGrace time.Duration
+
+	// ExitBarrier, when non-empty, is a name from [NewExitBarrier] that the
+	// remote agent tree holds until it has exited, so [AwaitExitCommand] can
+	// wait for that exit from a second connection after this one is gone.
+	// Empty leaves the launch without a barrier.
+	ExitBarrier string
 }
 
 func (o SSHOptions) forwardHostPort() (int, bool) {
@@ -279,13 +285,18 @@ var supervisor string
 
 // supervisedAgent runs agent under supervisor, which ends the session's
 // process group once the SSH connection is gone, granting the agent grace
-// rounded up to whole seconds between SIGTERM and SIGKILL.
-func supervisedAgent(agent string, grace time.Duration) string {
-	graceSeconds := strconv.Itoa(int((grace + time.Second - 1) / time.Second))
+// rounded up to whole seconds between SIGTERM and SIGKILL. A non-empty
+// barrier names the exit barrier the agent tree holds.
+func supervisedAgent(agent string, grace time.Duration, barrier string) string {
+	hold := ""
+	if barrier != "" {
+		hold = "sortie_hold_barrier " + shellQuote(exitBarrierPath(barrier)) + "\n"
+	}
 	return "{\n" + supervisor +
 		"sortie_agent() {\n" + agent + "\n}\n" +
+		hold +
 		`sortie_start_agent sortie_agent "$@"` + "\n" +
-		"sortie_supervise " + graceSeconds + "\n}"
+		"sortie_supervise " + strconv.Itoa(wholeSeconds(grace)) + "\n}"
 }
 
 // shellBlanks holds the trailing characters a POSIX shell either
@@ -368,15 +379,19 @@ func endsInEscape(s string) bool {
 // opts.Forward.Render(WidestOutcome); [SSHLaunch.StdinReader] and
 // [SSHLaunch.PrefixStdin] pad the real rendering to it.
 //
+// With a non-empty opts.ExitBarrier, the agent tree holds that barrier from
+// its start until it has exited; see [AwaitExitCommand].
+//
 // With a non-empty opts.Unset, the remote shell also unsets each named
 // variable after the import step, when there is one, and before the
 // agent command runs, so the agent does not inherit a variable the
 // remote host's login environment sets.
 //
 // BuildSSHLaunch panics when an opts.Env entry's Name, a late entry's Name or
-// an opts.Unset name fails [IsEnvName] or is reserved, and when
-// opts.Forward.HostPort is outside 1..65535; the message names the entry's
-// index and carries neither its Name nor its Value.
+// an opts.Unset name fails [IsEnvName] or is reserved, when
+// opts.Forward.HostPort is outside 1..65535, and when opts.ExitBarrier is not
+// a name [NewExitBarrier] returns; the message names the entry's index and
+// carries neither its Name nor its Value.
 func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []string, opts SSHOptions) SSHLaunch {
 	sshOpts := buildSSHOpts(host, opts)
 
@@ -392,7 +407,10 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	if len(opts.Unset) > 0 {
 		agent = "unset " + strings.Join(opts.Unset, " ") + " && " + agent
 	}
-	agent = supervisedAgent(agent, opts.StopGrace)
+	if opts.ExitBarrier != "" && !isExitBarrierName(opts.ExitBarrier) {
+		panic("sshutil: BuildSSHLaunch: invalid exit barrier name")
+	}
+	agent = supervisedAgent(agent, opts.StopGrace, opts.ExitBarrier)
 
 	if opts.Forward != nil {
 		return buildForwardedLaunch(sshOpts, workspacePath, agent, opts)

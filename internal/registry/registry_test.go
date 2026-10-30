@@ -806,7 +806,7 @@ func TestAgents_RefusesInvalidUsageSources(t *testing.T) {
 	validLive := usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 	}
 
 	tests := []struct {

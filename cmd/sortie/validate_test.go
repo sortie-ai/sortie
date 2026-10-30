@@ -1737,7 +1737,7 @@ var registerDeprecatedOrderFixture = sync.OnceFunc(func() {
 			UsageSources: usage.Sources{Live: usage.Source{
 				Category: usage.SourceOutput,
 				Strategy: usage.StrategyLive,
-				Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 			}},
 		})
 })

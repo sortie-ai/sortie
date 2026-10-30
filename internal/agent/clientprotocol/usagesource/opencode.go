@@ -52,21 +52,11 @@ func init() {
 				ReasoningInOutput: false,
 			},
 		},
-		Pull:         usagelimits.Source,
-		PullWindows:  opencodePullWindows,
-		PromptSpend:  opencodePromptSpend,
-		ChildSession: opencodeChildSession,
-		Records: usage.Source{
-			Category: usage.SourceJournal,
-			Strategy: usage.StrategyRecords,
-			Spend: usage.SpendDeclaration{
-				Shape:             usage.SpendPerRequest,
-				CacheInInput:      false,
-				ReasoningInOutput: false,
-				ServedModel:       true,
-			},
-			WrittenAtTurnEnd: false,
-		},
+		Pull:           usagelimits.Source,
+		PullWindows:    opencodePullWindows,
+		PromptSpend:    opencodePromptSpend,
+		ChildSession:   opencodeChildSession,
+		Records:        sessionexport.Records,
 		ReadRecords:    opencodeReadRecords,
 		LaunchAddition: LaunchAddition{Name: opencodeConfigVariable, Merge: opencodeDisableTitle},
 		Launches: func(target agentcore.LaunchTarget) bool {
@@ -135,13 +125,9 @@ func opencodeReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
 	if err != nil {
 		return Records{}, fmt.Errorf("run session export: %w", err)
 	}
-	exported, err := sessionexport.Parse(out, id)
+	readings, err := sessionexport.Parse(out, id)
 	if err != nil {
 		return Records{}, err
-	}
-	readings := make([]usage.SpendReading, len(exported))
-	for i, record := range exported {
-		readings[i] = record.Spend
 	}
 	return Records{Spend: readings, Refusal: opencodeRecordedRefusal(out, id)}, nil
 }
