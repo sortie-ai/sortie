@@ -1072,7 +1072,6 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	p.observeModelReached(sue.kind)
 	if sue.kind == updateUsage {
 		p.observeUsageUpdate()
-		p.publishUsageUpdateWindows(sue.usage.Meta)
 	}
 
 	result := applySessionUpdate(p.tracker, sue)
@@ -1107,25 +1106,6 @@ func (p *pumpState) observeUsageUpdate() {
 	if p.activeTurn != nil {
 		p.activeTurn.usageUpdateSeen = true
 	}
-}
-
-// publishUsageUpdateWindows publishes the windows the declared runtime reports in
-// a usage_update's _meta. It uses publishOrQueue so the notification does not
-// complete the agent message being accumulated.
-func (p *pumpState) publishUsageUpdateWindows(meta json.RawMessage) {
-	if p.declaration.UsageUpdateWindows == nil {
-		return
-	}
-	readings, err := p.declaration.UsageUpdateWindows(meta)
-	if err != nil {
-		p.state.logger.Debug("usage_update meta unreadable", slog.Any("error", err))
-	}
-	at := time.Now().UTC()
-	windows := usage.Windows(p.declaration.Live, readings, at)
-	if len(windows) == 0 {
-		return
-	}
-	agentcore.EmitUsageWindows(p.publishOrQueue, at, windows)
 }
 
 func sameMessageID(a, b *messageId) bool {

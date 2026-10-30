@@ -559,52 +559,21 @@ func TestPumpAgentMessageChunksAreCoalesced(t *testing.T) {
 	}
 }
 
-func loadAgentInfoFixture(t *testing.T, name string) *implementation {
+func loadAgentInfoFixture(t *testing.T) *implementation {
 	t.Helper()
-	data, err := os.ReadFile("testdata/agent_info/" + name)
+	data, err := os.ReadFile("testdata/agent_info/pulled_usage_agent.json")
 	if err != nil {
-		t.Fatalf("loadAgentInfoFixture(%q): %v", name, err)
+		t.Fatalf("loadAgentInfoFixture(): %v", err)
 	}
 	var info implementation
 	if err := json.Unmarshal(data, &info); err != nil {
-		t.Fatalf("loadAgentInfoFixture(%q): %v", name, err)
+		t.Fatalf("loadAgentInfoFixture(): %v", err)
 	}
 	return &info
 }
 
-func rateLimitUpdateLine(t *testing.T) string {
-	t.Helper()
-	params := strings.ReplaceAll(strings.TrimSpace(string(loadSessionUpdateFixture(t, "usage_update_rate_limit_meta.json"))), "<session>", "sess-test")
-	return `{"jsonrpc":"2.0","method":"session/update","params":` + params + `}`
-}
-
 func declarationFor(info *implementation, target agentcore.LaunchTarget) usagesource.Declaration {
 	return chooseDeclaration(usagesource.Declarations, info, target).declaration
-}
-
-func eventsOfTurnUnder(t *testing.T, declaration usagesource.Declaration, lines ...string) []domain.AgentEvent {
-	t.Helper()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-	state.inbox.Put(pumpItem{control: &pumpControl{handshake: &handshakeFacts{declaration: declaration}}})
-	markSessionKnown(state)
-
-	var events []domain.AgentEvent
-	outcomeCh := runTurnAsync(state, domain.RunTurnParams{
-		Prompt:  "go",
-		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
-	})
-	promptID := out.awaitMethod(t, methodSessionPrompt)
-	for _, line := range lines {
-		sendLine(t, inPw, line)
-	}
-	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
-
-	if outcome := waittest.Receive(t, outcomeCh, "turn outcome"); outcome.err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
-	}
-	return events
 }
 
 func windowEvents(events []domain.AgentEvent) []domain.AgentEvent {
@@ -615,79 +584,6 @@ func windowEvents(events []domain.AgentEvent) []domain.AgentEvent {
 		}
 	}
 	return withWindows
-}
-
-func TestPumpUsageUpdateWindowsFollowTheRuntimeDeclaration(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		declaration usagesource.Declaration
-		wantWindow  bool
-	}{
-		{"declared runtime name", declarationFor(loadAgentInfoFixture(t, "rate_limit_bridge.json"), agentcore.LaunchTarget{}), true},
-		{"undeclared runtime name", declarationFor(&implementation{Name: "undeclared-runtime"}, agentcore.LaunchTarget{}), false},
-		{"zero declaration", usagesource.Declaration{}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := windowEvents(eventsOfTurnUnder(t, tt.declaration, rateLimitUpdateLine(t)))
-
-			if !tt.wantWindow {
-				if len(got) != 0 {
-					t.Fatalf("usage_update events carrying windows = %+v, want none", got)
-				}
-				return
-			}
-			if len(got) != 1 || len(got[0].UsageWindows) != 1 {
-				t.Fatalf("usage_update events carrying windows = %+v, want one event with one window", got)
-			}
-			event, window := got[0], got[0].UsageWindows[0]
-			if event.Type != domain.EventNotification || event.Message != "" {
-				t.Errorf("window event = {Type %q, Message %q}, want an empty notification", event.Type, event.Message)
-			}
-			if window.Key != "five_hour" || window.Label != "5-hour limit" || window.Status != domain.UsageWindowWarning {
-				t.Errorf("window = {Key %q, Label %q, Status %q}, want {%q, %q, %q}", window.Key, window.Label, window.Status, "five_hour", "5-hour limit", domain.UsageWindowWarning)
-			}
-			if window.UsedPercent == nil || *window.UsedPercent != 90 {
-				t.Errorf("window UsedPercent = %v, want 90", window.UsedPercent)
-			}
-			if want := time.Unix(1700000000, 0).UTC(); !window.ResetsAt.Equal(want) {
-				t.Errorf("window ResetsAt = %v, want %v", window.ResetsAt, want)
-			}
-			if window.ReportedAt.IsZero() || !window.ReportedAt.Equal(event.Timestamp) {
-				t.Errorf("window ReportedAt = %v, want the event timestamp %v", window.ReportedAt, event.Timestamp)
-			}
-		})
-	}
-}
-
-func TestPumpWindowEventDoesNotSplitAnAgentMessage(t *testing.T) {
-	t.Parallel()
-
-	chunk := func(text string) string {
-		return fmt.Sprintf(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":%q},"messageId":"message-1"}}}`, text)
-	}
-	plan := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"plan","entries":[]}}}`
-	declaration := declarationFor(loadAgentInfoFixture(t, "rate_limit_bridge.json"), agentcore.LaunchTarget{})
-
-	events := eventsOfTurnUnder(t, declaration, chunk("hello "), rateLimitUpdateLine(t), chunk("world"), plan)
-
-	counts := map[string]int{}
-	for _, e := range events {
-		if e.Type == domain.EventNotification {
-			counts[e.Message]++
-		}
-	}
-	if counts["hello world"] != 1 || counts["hello "] != 0 || counts["world"] != 0 {
-		t.Errorf("agent message notifications around a window-bearing usage_update = %v, want %q once and neither half", counts, "hello world")
-	}
-	if got := len(windowEvents(events)); got != 1 {
-		t.Errorf("events carrying windows = %d, want 1", got)
-	}
 }
 
 const pulledUsageChunkLine = `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"},"messageId":"message-1"}}}`
@@ -831,7 +727,7 @@ func TestPumpPulledUsage(t *testing.T) {
 
 	runtime := loadPulledUsageRuntime(t)
 
-	pulledAgent := loadAgentInfoFixture(t, "pulled_usage_agent.json")
+	pulledAgent := loadAgentInfoFixture(t)
 	fallbackReplies := []usageReply{{method: runtime.Execute}, {method: runtime.GetUsage, fixture: "get_usage_result.json"}}
 	tests := []struct {
 		name       string
@@ -873,7 +769,7 @@ func TestPumpPulledUsage(t *testing.T) {
 	t.Run("a runtime that knows neither method is not asked again", func(t *testing.T) {
 		t.Parallel()
 
-		state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t, "pulled_usage_agent.json"), agentcore.LaunchTarget{})
+		state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t), agentcore.LaunchTarget{})
 
 		first := runPulledUsageTurn(t, state, out, inPw, usageReply{method: runtime.Execute}, usageReply{method: runtime.GetUsage})
 		second := runPulledUsageTurn(t, state, out, inPw)
@@ -888,7 +784,7 @@ func TestPumpPulledUsage(t *testing.T) {
 		t.Parallel()
 
 		synctest.Test(t, func(t *testing.T) {
-			state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t, "pulled_usage_agent.json"), agentcore.LaunchTarget{})
+			state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t), agentcore.LaunchTarget{})
 			outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
 
 			promptID := out.awaitMethod(t, methodSessionPrompt)
@@ -908,7 +804,7 @@ func TestPumpPulledUsage(t *testing.T) {
 	t.Run("a cancelled turn sends no usage request", func(t *testing.T) {
 		t.Parallel()
 
-		state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t, "pulled_usage_agent.json"), agentcore.LaunchTarget{})
+		state, out, inPw := newPulledUsageSession(t, loadAgentInfoFixture(t), agentcore.LaunchTarget{})
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		var events []domain.AgentEvent

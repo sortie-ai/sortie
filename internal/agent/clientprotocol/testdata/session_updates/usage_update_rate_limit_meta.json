@@ -1,1 +1,0 @@
-{"sessionId":"<session>","update":{"_meta":{"_claude/model":"claude-sonnet-4-6","_claude/rateLimit":{"rateLimitType":"five_hour","resetsAt":1700000000,"status":"allowed_warning","utilization":0.9}},"sessionUpdate":"usage_update","size":200000,"used":2}}
