@@ -6,7 +6,7 @@ Eligibility: qualified
 
 Product conformance: qualified
 
-The two verdicts are computed separately, and both turn on token accounting. The protocol wire itself carries no usable token figure, but a measurement source outside the protocol supplies one, which puts the protocol route level with the richest native reference. Product conformance holds too: a live run through Sortie's orchestrator with a one-token `agent.max_tokens` ceiling stopped at the ceiling and dispatched nothing after it.
+The two verdicts are computed separately, and both turn on token accounting. The protocol route's figure comes from the prompt result's per-turn counts and the runtime's chat journal, which puts it level with the richest native reference. Product conformance holds too: a live run through Sortie's orchestrator with a one-token `agent.max_tokens` ceiling stopped at the ceiling and dispatched nothing after it.
 
 ## Where to get the volatile facts
 
@@ -18,7 +18,7 @@ Upstream source lives in `google-gemini/gemini-cli`. When a symptom looks like a
 
 Gemini has no adapter package, no registered kind, and no adapter metadata. The operator points the generic `agent-client-protocol` kind's `agent.command` at `gemini --acp`; the older `--experimental-acp` spelling is deprecated. Everything below is how Gemini's protocol implementation meets the generic adapter. There is no place in the generic transport to special-case a Gemini quirk.
 
-The one exception is token accounting, which lives in Gemini's own measurement source. The source recognizes a command line that names the `gemini` executable, a path to it, or the `@google/gemini-cli` package, directly or as a wrapper's argument. A command line that hides its runtime is started a second time once the handshake names it, so a wrapped Gemini CLI still reports token usage. On a local launch the source settles the session's figure ahead of the ledger. A source never applies to a remote launch, so Gemini CLI on an SSH worker is measured under the default declaration's mapping as a lower bound.
+The one exception is token accounting, which lives in the usage declaration for `gemini-cli`. The handshake name selects the declaration, so a wrapped command line still reports token usage, with no second launch. The figure comes from the prompt result's `usage` and the chat journal, on a local launch and on an SSH worker. The journal is found by a name pattern under `GEMINI_CLI_HOME`, else the home directory, locally or through the shared remote read.
 
 ## Load-bearing capability observations
 
@@ -26,7 +26,7 @@ Token accounting is the one row that carries both verdicts. Session continuation
 
 On the protocol surface, retry classification excludes the human-input case as not applicable. The consent request the asking-posture launch raised offered a refusing option, the client refused it inside the protocol, and the turn went on. That exclusion does not cover a question addressed to a person. The native surfaces have no terminal vocabulary for the human-input outcome at all.
 
-The protocol wire has no token figure Sortie can use. The prompt result's extension block has input and output counts but no cache-read, reasoning, or tool counters, so it is only a presence signal and a lower bound. The figure that reaches the budget comes from the runtime's own telemetry and session journal. That figure carries a per-model split by each record's or message's model. Both native surfaces report token counts directly: the JSON surface per model, the streaming JSON surface in a flatter form.
+The prompt result's `usage` member carries the turn's input, output, reasoning, and cache-read counts, and its `totalTokens` leaves reasoning out, so Sortie never reads it. The `_meta.quota` block stays a presence signal, and its per-model block is unread, because after a tool call it names the requested model and not the one that served the request. The chat journal records each completed request with the model it was sent to, and the figure's per-model split comes from it; a model alias the API serves under another name appears as the alias. A session on a concrete model reports complete figures. A session on an auto selector (`auto`, `auto-gemini-3`, `auto-gemini-2.5`) or with no model named reports lower bounds, because the request that picks the model is in neither source. Web search and web fetch are requests outside the main chat that no source records, as are the loop check, history compression, invalid streams and subagents; dynamic routing escapes only when the operator adds a model definition with `tier: "auto"` under a name that does not start with `auto`; a turn containing one of these requests reads complete. Both native surfaces report token counts directly: the JSON surface per model, the streaming JSON surface in a flatter form.
 
 - protocol turn_disposition: Observed: usable
 - protocol retry_classification: Observed: usable
