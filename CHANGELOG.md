@@ -51,6 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A Copilot CLI turn on the ACP agent kind that was cancelled or stopped before the model answered no longer reports its spend as unaccounted or lowers the session's token-count capability when Copilot CLI printed a notice of its own first. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 - On the ACP agent kind, a GitHub Copilot CLI usage-limit refusal no longer ends the turn as successful, and a Kiro CLI v3 engine usage-limit refusal or throttle is no longer reported as a rejected credential. ([#1524](https://github.com/sortie-ai/sortie/issues/1524))
 - A `claude-code` turn that is stopped, killed, or ends without its final report now counts the requests it completed, read from Claude Code's session journal on the host that ran it, over SSH included, and a continued session leaves out earlier runs' spend whatever Claude Code release runs it. ([#1537](https://github.com/sortie-ai/sortie/issues/1537))
+- A `codex` turn that is killed, stopped, or ends without Codex's completion report now counts every request it completed, read from Codex's session rollout file on the host that ran it, over SSH included, a continued session no longer reports part of its spend as unknown after a killed turn, and a token count missing from Codex's report is no longer counted as zero. ([#1538](https://github.com/sortie-ai/sortie/issues/1538))
 
 ## [1.30.0] - 2026-10-23
 

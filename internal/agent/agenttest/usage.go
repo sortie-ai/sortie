@@ -181,7 +181,11 @@ func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arr
 			t.Errorf("case %q: the stream carries neither a tool result nor a second usage event, so it cannot show which arrival produced it", tc.Name)
 			return
 		}
-		if arrival == registry.UsageArrivalIncremental && turnEndShaped {
+		// An interrupted turn stops after the one request it completed, so a
+		// lone figure after its tool result is what an incremental runtime
+		// reports when its usage notice trails the tool it ran.
+		interrupted := tc.Result.ExitReason == domain.EventTurnCancelled || tc.Result.ExitReason == domain.EventTurnFailed
+		if arrival == registry.UsageArrivalIncremental && turnEndShaped && !interrupted {
 			t.Errorf("case %q: declared incremental, the turn settled one figure after its last tool result", tc.Name)
 		}
 		if arrival == registry.UsageArrivalTurnEnd && !turnEndShaped {

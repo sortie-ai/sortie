@@ -28,6 +28,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -240,6 +241,10 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		},
 		CredentialEnv: []string{"CODEX_API_KEY"},
 		Read:          fakemodel.CatFile,
+		Spend: &fakemodel.SpendSources{
+			Live:    domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive},
+			Records: domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+		},
 		SSH: &fakemodel.SSHVariant{
 			Package: "@openai/codex",
 			// app-server rejects --version; the top-level command reports it.

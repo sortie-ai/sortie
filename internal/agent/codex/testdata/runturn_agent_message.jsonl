@@ -1,5 +1,5 @@
 {"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
 {"method":"turn/started","params":{"turnId":"turn-001"}}
 {"method":"item/completed","params":{"item":{"id":"item-001","type":"agentMessage","text":"Here is my analysis of the code.","status":"completed"}}}
-{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":70,"inputTokens":50,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":70,"inputTokens":50,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":70,"inputTokens":50,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":70,"inputTokens":50,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}
 {"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}

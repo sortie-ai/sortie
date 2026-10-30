@@ -237,12 +237,12 @@ func readConfiguredServerIDs(ctx context.Context, state *sessionState, logger *s
 }
 
 // startThread sends thread/start and waits for the thread/started
-// notification. Returns the thread ID and the effective model the
-// response reported, empty when the response omitted it. An empty
-// model is never an error. logger reports a message observed while
-// waiting for that notification, scoped to the thread id this call
-// resolves.
-func startThread(ctx context.Context, state *sessionState, pt passthroughConfig, logger *slog.Logger) (threadID string, model string, err error) {
+// notification. Returns the thread ID, the effective model the response
+// reported, and the path it reported for the thread on disk; model and
+// path are empty when the response omitted them, which is never an
+// error. logger reports a message observed while waiting for that
+// notification, scoped to the thread id this call resolves.
+func startThread(ctx context.Context, state *sessionState, pt passthroughConfig, logger *slog.Logger) (threadID string, model string, path string, err error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "never"
@@ -278,19 +278,19 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	resp, callErr := state.conn.Call(callCtx, "thread/start", params)
 	cancel()
 	if callErr != nil {
-		return "", "", wrapConnectionLoss(fmt.Errorf("thread/start: %w", callErr))
+		return "", "", "", wrapConnectionLoss(fmt.Errorf("thread/start: %w", callErr))
 	}
 	if resp.Error != nil {
-		return "", "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", "", "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
 	var result threadResult
 	if unmarshalErr := json.Unmarshal(resp.Result, &result); unmarshalErr != nil {
-		return "", "", fmt.Errorf("thread/start unmarshal: %w", unmarshalErr)
+		return "", "", "", fmt.Errorf("thread/start unmarshal: %w", unmarshalErr)
 	}
 	threadID = result.Thread.ID
 	if threadID == "" {
-		return "", "", fmt.Errorf("thread/start returned empty thread ID")
+		return "", "", "", fmt.Errorf("thread/start returned empty thread ID")
 	}
 	threadLogger := logging.WithSession(logger, threadID)
 
@@ -299,25 +299,25 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	for {
 		select {
 		case <-ctx.Done():
-			return "", "", ctx.Err()
+			return "", "", "", ctx.Err()
 		case <-deadline:
 			// Accept the thread ID even without the notification.
 			// Some app-server versions may not emit it.
-			return threadID, result.Model, nil
+			return threadID, result.Model, result.path(), nil
 		case <-state.inbox.Ready():
 			msg, ok := state.inbox.Take()
 			if !ok {
-				return threadID, result.Model, nil
+				return threadID, result.Model, result.path(), nil
 			}
 			if msg.Kind == jsonrpc.KindStreamEnd {
 				threadLogger.Debug("scanner error waiting for thread/started", slog.Any("error", msg.Err))
-				return threadID, result.Model, nil
+				return threadID, result.Model, result.path(), nil
 			}
 			if msg.Kind == jsonrpc.KindMalformed {
 				continue
 			}
 			if msg.Kind == jsonrpc.KindNotification && msg.Method == "thread/started" {
-				return threadID, result.Model, nil
+				return threadID, result.Model, result.path(), nil
 			}
 			handleOutOfTurnMessage(state, msg, threadLogger)
 		}
@@ -325,27 +325,28 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 }
 
 // resumeThread sends thread/resume for an existing thread. It returns
-// the effective model the response reported. A response whose result
-// fails to unmarshal does not turn a successful resume into a
-// failure: it returns an empty model and a nil error.
-func resumeThread(ctx context.Context, state *sessionState, threadID string) (model string, err error) {
+// the effective model and the thread's on-disk path the response
+// reported. A response whose result fails to unmarshal does not turn a
+// successful resume into a failure: it returns an empty model and path
+// and a nil error.
+func resumeThread(ctx context.Context, state *sessionState, threadID string) (model, path string, err error) {
 	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 	resp, callErr := state.conn.Call(callCtx, "thread/resume", map[string]any{
 		"threadId": threadID,
 	})
 	if callErr != nil {
-		return "", wrapConnectionLoss(fmt.Errorf("thread/resume: %w", callErr))
+		return "", "", wrapConnectionLoss(fmt.Errorf("thread/resume: %w", callErr))
 	}
 	if resp.Error != nil {
-		return "", fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", "", fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
 	var result threadResult
 	if unmarshalErr := json.Unmarshal(resp.Result, &result); unmarshalErr != nil {
-		return "", nil
+		return "", "", nil
 	}
-	return result.Model, nil
+	return result.Model, result.path(), nil
 }
 
 // buildSandboxPolicy constructs the sandboxPolicy for turn/start.

@@ -238,6 +238,7 @@ func newInterruptedStatusState(t *testing.T, stdin io.Writer) *sessionState {
 		inbox:      jsonrpc.NewInbox[jsonrpc.Message](),
 		readerDone: make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
+		ledger:     adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(sig, inPr, jsonrpc.Deliver(state.inbox, identity))
 	t.Cleanup(state.conn.Close)

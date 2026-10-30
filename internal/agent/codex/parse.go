@@ -12,14 +12,24 @@ import (
 )
 
 // tokenUsageBreakdown is one token-count breakdown inside a
-// thread/tokenUsage/updated notification.
+// thread/tokenUsage/updated notification. Every count is a pointer so a member the runtime omits or sends as null
+// stays unknown instead of reading as zero.
 type tokenUsageBreakdown struct {
-	InputTokens           int64 `json:"inputTokens"`
-	CachedInputTokens     int64 `json:"cachedInputTokens"`
-	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
-	OutputTokens          int64 `json:"outputTokens"`
-	ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
-	TotalTokens           int64 `json:"totalTokens"`
+	InputTokens           *int64 `json:"inputTokens"`
+	CachedInputTokens     *int64 `json:"cachedInputTokens"`
+	CacheWriteInputTokens *int64 `json:"cacheWriteInputTokens"`
+	OutputTokens          *int64 `json:"outputTokens"`
+}
+
+// reading maps the breakdown to a reading served by model.
+func (b tokenUsageBreakdown) reading(model string) usage.SpendReading {
+	return usage.SpendReading{
+		Input:      b.InputTokens,
+		Output:     b.OutputTokens,
+		CacheRead:  b.CachedInputTokens,
+		CacheWrite: b.CacheWriteInputTokens,
+		Model:      model,
+	}
 }
 
 // threadTokenUsage holds the last and thread-cumulative total token
@@ -27,6 +37,15 @@ type tokenUsageBreakdown struct {
 type threadTokenUsage struct {
 	Last  tokenUsageBreakdown `json:"last"`
 	Total tokenUsageBreakdown `json:"total"`
+}
+
+// reading maps the thread-cumulative total to a reading, carrying the
+// request's own counts in Own.
+func (u threadTokenUsage) reading(model string) usage.SpendReading {
+	reading := u.Total.reading(model)
+	own := u.Last.reading(model)
+	reading.Own = &own
+	return reading
 }
 
 // tokenUsageUpdatedParams is the params payload of a
@@ -150,9 +169,19 @@ type mcpServerStartupStatus struct {
 // response omits it.
 type threadResult struct {
 	Thread struct {
-		ID string `json:"id"`
+		ID   string  `json:"id"`
+		Path *string `json:"path"`
 	} `json:"thread"`
 	Model string `json:"model"`
+}
+
+// path returns the thread's reported on-disk path, empty when the
+// response omitted it or reported null.
+func (r threadResult) path() string {
+	if r.Thread.Path == nil {
+		return ""
+	}
+	return *r.Thread.Path
 }
 
 // turnStartResult is the subset of turn/start response used by the
@@ -175,24 +204,6 @@ type accountResult struct {
 type accountLoginNotification struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error"`
-}
-
-// normalizeBreakdown converts a raw [tokenUsageBreakdown] into a
-// [domain.TokenUsage]. InputTokens is taken from b.InputTokens, already
-// inclusive of b.CachedInputTokens and b.CacheWriteInputTokens;
-// OutputTokens is taken from b.OutputTokens, already inclusive of
-// b.ReasoningOutputTokens; CacheReadTokens is set from b.CachedInputTokens
-// and CacheWriteTokens from b.CacheWriteInputTokens; TotalTokens is
-// computed as InputTokens plus OutputTokens rather than taken from
-// b.TotalTokens.
-func normalizeBreakdown(b tokenUsageBreakdown) domain.TokenUsage {
-	return domain.TokenUsage{
-		InputTokens:      b.InputTokens,
-		OutputTokens:     b.OutputTokens,
-		TotalTokens:      b.InputTokens + b.OutputTokens,
-		CacheReadTokens:  b.CachedInputTokens,
-		CacheWriteTokens: b.CacheWriteInputTokens,
-	}
 }
 
 // parseTokenUsageUpdated unmarshals the params payload of a

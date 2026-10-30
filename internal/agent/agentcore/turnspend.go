@@ -59,6 +59,9 @@ func (s *TurnSpend) ApplySettlement(settlement usage.Settlement) *RecoveredUsage
 	if settlement.CoversSession {
 		s.MarkSessionTotal()
 	}
+	if settlement.Estimated {
+		s.MarkEstimated()
+	}
 	if !settlement.Figure {
 		return nil
 	}

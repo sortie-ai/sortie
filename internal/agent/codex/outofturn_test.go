@@ -85,7 +85,7 @@ func TestMCPStartupFailure_LoggedDuringThreadStartedWait(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	threadID, _, err := startThread(context.Background(), state, passthroughConfig{}, logger)
+	threadID, _, _, err := startThread(context.Background(), state, passthroughConfig{}, logger)
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}

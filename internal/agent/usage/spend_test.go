@@ -11,12 +11,20 @@ import (
 
 type byModel = map[string]domain.TokenUsage
 
+type observation struct {
+	reading         usage.SpendReading
+	inTurn          bool
+	wantProvisional domain.TokenUsage
+	wantNew         bool
+}
+
 type step struct {
-	end   usage.TurnEnd
-	live  *usage.SpendReading
-	read  usage.RecordsRead
-	needs bool
-	want  usage.Settlement
+	observed []observation
+	end      usage.TurnEnd
+	live     *usage.SpendReading
+	read     usage.RecordsRead
+	needs    bool
+	want     usage.Settlement
 }
 
 var (
@@ -75,7 +83,7 @@ func withKids(read usage.RecordsRead, kids ...usage.SpendReading) usage.RecordsR
 	return read
 }
 
-func newLedger(t *testing.T, withRecords, lowerBound, perTurn bool, start usage.RecordsRead) *usage.Ledger {
+func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative bool, start usage.RecordsRead) *usage.Ledger {
 	t.Helper()
 
 	liveSource := usage.Source{
@@ -85,6 +93,9 @@ func newLedger(t *testing.T, withRecords, lowerBound, perTurn bool, start usage.
 	}
 	if perTurn {
 		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendPerTurn}
+	}
+	if cumulative {
+		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, CacheInInput: true, ReasoningInOutput: true, ServedModel: true, Replay: usage.ReplayLastFigure}
 	}
 	var recordsSource usage.Source
 	if withRecords {
@@ -110,6 +121,7 @@ func TestLedger(t *testing.T) {
 		liveOnly   bool
 		lowerBound bool
 		perTurn    bool
+		cumulative bool
 		created    bool
 		start      usage.RecordsRead
 		steps      []step
@@ -430,18 +442,90 @@ func TestLedger(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:       "session-cumulative: in-turn readings count one request each and the settled turn covers the session",
+			cumulative: true, liveOnly: true, created: true,
+			steps: []step{{
+				observed: []observation{
+					{reading: *liveWith("", 100, 10, 0), inTurn: true, wantProvisional: u(100, 10), wantNew: true},
+					{reading: *liveWith("", 150, 12, 0), inTurn: true, wantProvisional: u(150, 12), wantNew: true},
+					{reading: *liveWith("", 150, 12, 0), inTurn: true, wantProvisional: u(150, 12)},
+				},
+				end: replied, live: live(150, 12),
+				want: usage.Settlement{Run: u(150, 12), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:       "session-cumulative: an out-of-turn figure is history and counts nothing",
+			cumulative: true, liveOnly: true, start: recs(),
+			steps: []step{{
+				observed: []observation{
+					{reading: *liveWith("", 1000, 100, 0)},
+					{reading: *liveWith("", 1100, 110, 0), inTurn: true, wantProvisional: u(100, 10), wantNew: true},
+				},
+				end: replied, live: live(1100, 110),
+				want: usage.Settlement{Run: u(100, 10), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:       "session-cumulative: a history position derived from the reading less its own part is an estimate",
+			cumulative: true, liveOnly: true,
+			steps: []step{{
+				observed: []observation{{reading: usage.SpendReading{Input: new(int64(1100)), Output: new(int64(110)), CacheRead: new(int64(0)), CacheWrite: new(int64(0)), Own: live(100, 10)}, inTurn: true, wantProvisional: u(100, 10), wantNew: true}},
+				end:      replied, live: live(1100, 110),
+				want: usage.Settlement{Run: u(100, 10), Figure: true, Spent: true, Estimated: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:       "session-cumulative: readings under two models split the settlement by their increases",
+			cumulative: true, liveOnly: true, created: true,
+			steps: []step{{
+				observed: []observation{
+					{reading: *liveWith("a", 100, 10, 0), inTurn: true, wantProvisional: u(100, 10), wantNew: true},
+					{reading: *liveWith("b", 150, 18, 0), inTurn: true, wantProvisional: u(150, 18), wantNew: true},
+				},
+				end: replied, live: liveWith("b", 150, 18, 0),
+				want: usage.Settlement{Run: u(150, 18), ByModel: byModel{"a": u(100, 10), "b": u(50, 8)}, Model: "a", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name:       "session-cumulative: an unreplied turn that reached the model settles the records' amount",
+			cumulative: true, created: true,
+			steps: []step{{
+				observed: []observation{{reading: *liveWith("m1", 100, 10, 0), inTurn: true, wantProvisional: u(100, 10), wantNew: true}},
+				end:      usage.TurnEnd{ModelReached: true}, live: liveWith("m1", 100, 10, 0),
+				read: recs(rec("r1", "m1", 100, 10), rec("r2", "m1", 20, 2)), needs: true,
+				want: usage.Settlement{Run: u(120, 12), ByModel: byModel{"m1": u(120, 12)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv},
+			}},
+		},
+		{
+			name:       "session-cumulative: an unreplied turn whose records hold nothing settles the live amount as a lower bound",
+			cumulative: true, created: true,
+			steps: []step{{
+				observed: []observation{{reading: *liveWith("m1", 100, 10, 0), inTurn: true, wantProvisional: u(100, 10), wantNew: true}},
+				end:      usage.TurnEnd{ModelReached: true}, live: liveWith("m1", 100, 10, 0),
+				read: recs(), needs: true,
+				want: usage.Settlement{Run: u(100, 10), ByModel: byModel{"m1": u(100, 10)}, Model: "m1", Figure: true, Spent: true, Provenance: liveProv},
+			}},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.start)
+			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.cumulative, tt.start)
 			if tt.created {
 				l.SessionCreated()
 			}
 
 			for i, st := range tt.steps {
+				for j, o := range st.observed {
+					got, gotNew := l.ObserveCumulative(o.reading, o.inTurn)
+					if got != o.wantProvisional || gotNew != o.wantNew {
+						t.Fatalf("step %d observation %d: ObserveCumulative(inTurn=%v) = %+v, %v, want %+v, %v", i, j, o.inTurn, got, gotNew, o.wantProvisional, o.wantNew)
+					}
+				}
 				if got := l.NeedsRecords(st.end, st.live); got != st.needs {
 					t.Errorf("step %d: NeedsRecords(%+v) = %v, want %v", i, st.end, got, st.needs)
 				}
@@ -549,7 +633,7 @@ func TestLedger_ObserveRequest(t *testing.T) {
 func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	t.Parallel()
 
-	l := newLedger(t, true, false, false, recs(hist))
+	l := newLedger(t, true, false, false, false, recs(hist))
 	first := l.Settle(replied, live(30, 4), recs(hist, ra, rb))
 	if first.ByModel == nil {
 		t.Fatalf("Settle() ByModel = nil, want a split")
@@ -565,12 +649,30 @@ func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	}
 }
 
-func TestNewLedger_RefusesAdapterMapped(t *testing.T) {
+func TestNewLedger_RefusesUnsupportedDeclarations(t *testing.T) {
 	t.Parallel()
 
-	_, err := usage.NewLedger(usage.Source{Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Shape: usage.SpendAdapterMapped}}, usage.Source{})
+	cumulative := usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, Replay: usage.ReplayLastFigure}
+	replaying := usage.SpendDeclaration{Shape: usage.SpendPerRequest, Replay: usage.ReplayLastFigure}
+	tests := []struct {
+		name    string
+		live    usage.SpendDeclaration
+		records usage.Source
+	}{
+		{"adapter-mapped live", usage.SpendDeclaration{Shape: usage.SpendAdapterMapped}, usage.Source{}},
+		{"replay on a live source of another shape", usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, Replay: usage.ReplayLastFigure}, usage.Source{}},
+		{"replay on the records source", cumulative, usage.Source{Strategy: usage.StrategyRecords, Spend: replaying}},
+	}
 
-	if !errors.Is(err, usage.ErrSpendUnsupported) {
-		t.Errorf("NewLedger(adapter-mapped live) error = %v, want ErrSpendUnsupported", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := usage.NewLedger(usage.Source{Strategy: usage.StrategyLive, Spend: tt.live}, tt.records)
+
+			if !errors.Is(err, usage.ErrSpendUnsupported) {
+				t.Errorf("NewLedger(%s) error = %v, want ErrSpendUnsupported", tt.name, err)
+			}
+		})
 	}
 }
