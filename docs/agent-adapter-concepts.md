@@ -44,7 +44,7 @@ Before the working session's first turn, one shared step, `agentcore.VerifyCrede
 
 The shared step owns the rest. A first verification session that never reaches the model (the early-exit report, or `port_exit` or `response_error` at start) is followed by exactly one more session with `StartSessionParams.VerificationFullContext` set, which applies none of the adapter's context-dropping switches, so a runtime build that rejects a switch it predates is verified with its full context. The verdict, the retry treatment, and the error message are the step's own; no adapter spells them out itself.
 
-The generic `agent-client-protocol` kind has no context switch of its own, because session creation carries no context member. A runtime's switches enter through the same per-runtime seam as measurement sources: a `usagesource.VerificationAddition` claims a local launch whose command line names its runtime, declares what the request keeps, and removes any file it created when the session ends. No addition claims a remote launch, and a launch that already sets one of an addition's switches is left unclaimed.
+The generic `agent-client-protocol` kind has no context switch of its own, because session creation carries no context member. A runtime's switches enter through the same per-runtime seam as usage declarations: a `usagesource.VerificationAddition` claims a local launch whose command line names its runtime, declares what the request keeps, and removes any file it created when the session ends. No addition claims a remote launch, and a launch that already sets one of an addition's switches is left unclaimed.
 
 ## Declaring an adapter's properties to the orchestrator
 

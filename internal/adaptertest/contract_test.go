@@ -2153,19 +2153,19 @@ var contractWideIdentityRoots = []string{filepath.Join("..", "..", "cmd"), filep
 
 // contractIdentityMeasurementSeam is the one directory where both a
 // profile-declared token no kind package anchors and a token a kind package
-// anchors are legal: the transport's per-runtime measurement sources and
+// anchors are legal: the transport's per-runtime usage declarations and
 // verification additions read a runtime's own output and settings, so they are
 // vendor-specific by construction. Every other directory under the wide roots
 // stays bound by the rule.
 var contractIdentityMeasurementSeam = filepath.Join("internal", "agent", "clientprotocol", "usagesource")
 
 // contractIdentitySeamImportPath reports whether importPath is the
-// measurement seam's own package.
+// per-runtime seam's own package.
 func contractIdentitySeamImportPath(importPath string) bool {
 	return strings.HasSuffix(importPath, "/"+filepath.ToSlash(contractIdentityMeasurementSeam))
 }
 
-// contractIdentitySeamDir reports whether walkPath is the measurement
+// contractIdentitySeamDir reports whether walkPath is the per-runtime
 // seam, under whatever root the walk started from.
 func contractIdentitySeamDir(walkPath string) bool {
 	return contractPathIsDir(walkPath, contractIdentityMeasurementSeam)

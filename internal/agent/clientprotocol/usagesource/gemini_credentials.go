@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	geminiCredentialsHomeVar = "GEMINI_CLI_HOME"
-	geminiCredentialsLimit   = 64 * 1024
+	geminiHomeVar          = "GEMINI_CLI_HOME"
+	geminiCredentialsLimit = 64 * 1024
 
 	geminiForceEncryptedVar = "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"
 	geminiForceFileVar      = "GEMINI_FORCE_FILE_STORAGE"
@@ -29,11 +29,11 @@ const (
 
 var (
 	geminiCredentialsFile = agentcore.RuntimePath{
-		HomeVar:  geminiCredentialsHomeVar,
+		HomeVar:  geminiHomeVar,
 		Segments: []string{".gemini", "oauth_creds.json"},
 	}
 	geminiEncryptedFile = agentcore.RuntimePath{
-		HomeVar:  geminiCredentialsHomeVar,
+		HomeVar:  geminiHomeVar,
 		Segments: []string{".gemini", "gemini-credentials.json"},
 	}
 )

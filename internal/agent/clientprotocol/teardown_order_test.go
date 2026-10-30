@@ -77,7 +77,7 @@ func TestTeardown_AnswerOpenWrittenBeforeCloseSessionAndStdinClose(t *testing.T)
 		writer := &orderedStdinWriter{w: outPw, rec: rec, replyWriteStarted: make(chan struct{})}
 
 		state := &sessionState{
-			caps:           newCapabilityRecord(false),
+			caps:           newCapabilityRecord(),
 			usage:          agentcore.NewTurnEndUsage(),
 			stopCh:         make(chan struct{}),
 			pumpDone:       make(chan struct{}),

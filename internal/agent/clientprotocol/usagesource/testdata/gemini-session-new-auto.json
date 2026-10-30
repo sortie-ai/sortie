@@ -1,0 +1,58 @@
+{
+  "sessionId": "998c2e8f-831a-4a6f-8557-f685cbafde66",
+  "modes": {
+    "availableModes": [
+      {
+        "id": "default",
+        "name": "Default",
+        "description": "Prompts for approval"
+      },
+      {
+        "id": "autoEdit",
+        "name": "Auto Edit",
+        "description": "Auto-approves edit tools"
+      },
+      {
+        "id": "yolo",
+        "name": "YOLO",
+        "description": "Auto-approves all tools"
+      },
+      {
+        "id": "plan",
+        "name": "Plan",
+        "description": "Read-only mode"
+      }
+    ],
+    "currentModeId": "yolo"
+  },
+  "models": {
+    "availableModels": [
+      {
+        "modelId": "auto",
+        "name": "Auto",
+        "description": "Let Gemini CLI decide the best model for the task: gemini-3.1-pro-preview, gemini-3.8-flash"
+      },
+      {
+        "modelId": "gemini-3.1-pro-preview-customtools",
+        "name": "gemini-3.1-pro-preview"
+      },
+      {
+        "modelId": "gemini-3-flash-preview",
+        "name": "gemini-3-flash-preview"
+      },
+      {
+        "modelId": "gemini-2.5-pro",
+        "name": "gemini-2.5-pro"
+      },
+      {
+        "modelId": "gemini-3.8-flash",
+        "name": "gemini-3.8-flash"
+      },
+      {
+        "modelId": "gemini-3.5-flash-lite",
+        "name": "gemini-3.5-flash-lite"
+      }
+    ],
+    "currentModelId": "auto"
+  }
+}

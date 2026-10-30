@@ -39,15 +39,6 @@ const pinnedProtocolVersion = 1
 // errorCodeAuthRequired is the protocol's "Authentication required" code.
 const errorCodeAuthRequired = -32000
 
-// maxSessionStarts bounds how many times startSession may launch the runtime
-// while settling which measurement source, if any, the handshake confirms.
-const maxSessionStarts = 3
-
-const (
-	agentRelaunchedForMeasurementMessage      = "agent relaunched so its token usage can be measured: agent.command does not name the runtime it starts"
-	agentRelaunchedWithoutForeignUsageMessage = "agent relaunched without usage settings meant for another runtime"
-)
-
 // sessionState is this adapter's session state, reached through
 // domain.Session.Internal. Fields set before the pump starts are read-only
 // afterward; fields the pump owns say so. closeSessionID is the exception:
@@ -127,10 +118,6 @@ type sessionState struct {
 	// once it starts.
 	usage *agentcore.TurnEndUsage
 
-	// claimed is every source any start claimed, in claim order; teardown closes
-	// each.
-	claimed []usageReader
-
 	// verification is nil when no addition claimed the launch; teardown closes it.
 	verification usagesource.VerificationAddition
 
@@ -164,9 +151,8 @@ type pumpControl struct {
 
 	startTurn *turnStart
 
-	// usage and pulled are published by the goroutine that ran the drain or the
-	// pull, so the usage accumulator is touched only on the pump's goroutine.
-	usage   *usageObserved
+	// pulled and records are published by the goroutine that ran the pull or the
+	// read, so the ledger is touched only on the pump's goroutine.
 	pulled  *pullResult
 	records *recordsResult
 
@@ -175,16 +161,11 @@ type pumpControl struct {
 	answerOpen chan struct{}
 }
 
-// usageObserved is one turn's drain result. turn identifies the turn the drain
-// was armed for, so a result arriving after that turn ended is discarded rather
-// than applied to its successor. recovered is nil when neither source produced
-// a record, a measurement that does not exist rather than one of zero.
-// completeness grades recovered and says nothing about whether it exists.
+// usageObserved is one turn's settled spend. recovered is nil when the ledger
+// settled no figure, a measurement that does not exist rather than one of zero.
 type usageObserved struct {
-	turn         *activeTurn
-	recovered    *agentcore.RecoveredUsage
-	source       string
-	completeness usagesource.Completeness
+	turn      *activeTurn
+	recovered *agentcore.RecoveredUsage
 }
 
 // recordsResult is one turn's records read; turn lets a result arriving after
@@ -221,10 +202,6 @@ type handshakeFacts struct {
 
 	toolServersDelivered bool
 
-	// reader is the final start's confirmed measurement source, nil when none was
-	// confirmed; it is the only way the pump receives a source.
-	reader usageReader
-
 	// declaration is the effective declaration the session is measured under.
 	declaration usagesource.Declaration
 
@@ -232,8 +209,7 @@ type handshakeFacts struct {
 	// credential.
 	puller *usage.Puller
 
-	// ledger is nil when the declaration declares no spend or is unsupported, and
-	// when a confirmed measurement source settles the session instead.
+	// ledger is nil when the declaration declares no spend or is unsupported.
 	ledger *usage.Ledger
 }
 
@@ -265,12 +241,6 @@ type turnEnd struct {
 // creates or continues a session. A non-empty ResumeSessionID picks the
 // continuation route the handshake advertises; every other case, and an
 // unconfirmed continuation, creates the session with session/new.
-//
-// The runtime may start up to maxSessionStarts times: every registered usage
-// source is offered the launch first, and a start whose handshake does not
-// confirm the source it carried, or lacked the one recognizing the runtime, is
-// torn down and relaunched carrying only what the handshake supports. Only the
-// final start reaches session/new.
 func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams, usage *agentcore.TurnEndUsage) (domain.Session, error) {
 	if _, fault := typeutil.StringField(params.Settings, mcpConfigKey); fault != nil {
 		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
@@ -288,20 +258,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		return domain.Session{}, agentErr
 	}
 
-	sources := a.sources
-	if sources == nil {
-		sources = usagesource.Sources
-	}
-
 	declarations := a.declarations
 	if declarations == nil {
 		declarations = usagesource.Declarations
-	}
-
-	claims := claimUsageSources(sources, target)
-	var claimed []usageReader
-	for _, claim := range claims.claimed {
-		claimed = append(claimed, claim.source)
 	}
 
 	var verification usagesource.VerificationAddition
@@ -315,7 +274,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	configuredModel, _ := registry.ModelSetting(params.Settings)
 
 	// Every failure below returns without a session, so this is the only release
-	// of what a claim armed across the starts.
+	// of what the start acquired.
 	var state *sessionState
 	started := false
 	defer func() {
@@ -325,207 +284,157 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		tools.Close() //nolint:errcheck,gosec // best-effort; the start failure is what the caller needs
 		switch {
 		case state != nil:
-			releaseUsageSources(state)
+			closeVerification(state)
 		case verification != nil:
 			verification.Close()
 		}
 	}()
 
-	for start := 1; start <= maxSessionStarts; start++ {
-		var readerEnv []string
-		for _, claim := range claims.claimed {
-			readerEnv = append(readerEnv, claim.assignments...)
+	state = &sessionState{
+		target:                 target,
+		agentConfig:            params.AgentConfig,
+		stopCh:                 make(chan struct{}),
+		pumpDone:               make(chan struct{}),
+		logger:                 slog.Default().With(slog.String("component", "clientprotocol-adapter")),
+		origins:                &a.origins,
+		credentialVerification: params.CredentialVerification,
+		verification:           verification,
+		tools:                  tools,
+		initializeMeta:         launchChoice.InitializeMeta,
+		configuredModel:        configuredModel,
+	}
+	state.drainGrace = a.drainGrace
+	if state.drainGrace <= 0 {
+		state.drainGrace = procutil.DefaultDrainGrace
+	}
+	state.inbox = jsonrpc.NewInbox[pumpItem]()
+
+	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
+	if remote {
+		var settings []sshutil.EnvVar
+		if addition.Merge != nil {
+			current, set := target.RuntimeEnv(os.Environ(), addition.Name)
+			value, _ := addition.Merge(current, set)
+			settings = append(settings, sshutil.EnvVar{Name: addition.Name, Value: value})
 		}
-
-		state = &sessionState{
-			target:                 target,
-			agentConfig:            params.AgentConfig,
-			stopCh:                 make(chan struct{}),
-			pumpDone:               make(chan struct{}),
-			logger:                 slog.Default().With(slog.String("component", "clientprotocol-adapter")),
-			origins:                &a.origins,
-			credentialVerification: params.CredentialVerification,
-			claimed:                claimed,
-			verification:           verification,
-			tools:                  tools,
-			initializeMeta:         launchChoice.InitializeMeta,
-			configuredModel:        configuredModel,
+		opts := target.SSHOptions(settings...)
+		if addition.Merge != nil {
+			state.launchAddition = carriedIn(opts.Env, addition.Name)
 		}
-		state.drainGrace = a.drainGrace
-		if state.drainGrace <= 0 {
-			state.drainGrace = procutil.DefaultDrainGrace
+		opts.Forward = tools.Forward(nil)
+		launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, opts)
+		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
+	} else {
+		cmd = exec.CommandContext(ctx, target.Command, slices.Concat(target.Args, verificationSwitches.Args)...) //nolint:gosec // args are constructed programmatically
+	}
+	cmd.Env = slices.Concat(os.Environ(), verificationSwitches.Env)
+	if !remote && addition.Merge != nil {
+		cmd.Env = mergeAdditionInto(target, cmd.Env, addition)
+		value, set := target.RuntimeEnv(cmd.Env, addition.Name)
+		state.launchAddition = carriedValue{name: addition.Name, value: value, set: set}
+	}
+	state.launchEnv = cmd.Env
+	if !remote {
+		if bindErr := target.BindWorkspace(cmd); bindErr != nil {
+			return domain.Session{}, bindErr
 		}
-		state.inbox = jsonrpc.NewInbox[pumpItem]()
+	}
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	procutil.SetGroupCancel(cmd, grace)
 
-		var cmd *exec.Cmd
-		var launch sshutil.SSHLaunch
-		if remote {
-			var settings []sshutil.EnvVar
-			if addition.Merge != nil {
-				current, set := target.RuntimeEnv(os.Environ(), addition.Name)
-				value, _ := addition.Merge(current, set)
-				settings = append(settings, sshutil.EnvVar{Name: addition.Name, Value: value})
-			}
-			opts := target.SSHOptions(settings...)
-			if addition.Merge != nil {
-				state.launchAddition = carriedIn(opts.Env, addition.Name)
-			}
-			opts.Forward = tools.Forward(nil)
-			launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, opts)
-			cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
-		} else {
-			cmd = exec.CommandContext(ctx, target.Command, slices.Concat(target.Args, verificationSwitches.Args)...) //nolint:gosec // args are constructed programmatically
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdin pipe", Err: err}
+	}
+	prefixedStdin := launch.PrefixStdin(stdinPipe)
+
+	pipes, group, err := procutil.StartWithOwnedPipes(ctx, cmd, state.logger)
+	if err != nil {
+		if cancelled := agentcore.SessionStartCancelledError(ctx, err); cancelled != nil {
+			return domain.Session{}, cancelled
 		}
-		cmd.Env = slices.Concat(os.Environ(), readerEnv, verificationSwitches.Env)
-		if !remote && addition.Merge != nil {
-			cmd.Env = mergeAdditionInto(target, cmd.Env, addition)
-			value, set := target.RuntimeEnv(cmd.Env, addition.Name)
-			state.launchAddition = carriedValue{name: addition.Name, value: value, set: set}
+		var startErr *procutil.StartError
+		if !errors.As(err, &startErr) {
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: err}
 		}
-		state.launchEnv = cmd.Env
-		if !remote {
-			if bindErr := target.BindWorkspace(cmd); bindErr != nil {
-				return domain.Session{}, bindErr
-			}
+		// Both pipe stages fail before cmd.Start, whose cleanup would have closed
+		// the parent's stdin end.
+		switch startErr.Stage {
+		case procutil.StageStdoutPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdout pipe", Err: startErr.Err}
+		case procutil.StageStderrPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
+		default: // procutil.StageProcessStart, procutil.StageProcessResume
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
 		}
-		grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
-		procutil.SetGroupCancel(cmd, grace)
-
-		stdinPipe, err := cmd.StdinPipe()
-		if err != nil {
-			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdin pipe", Err: err}
-		}
-		prefixedStdin := launch.PrefixStdin(stdinPipe)
-
-		pipes, group, err := procutil.StartWithOwnedPipes(ctx, cmd, state.logger)
-		if err != nil {
-			if cancelled := agentcore.SessionStartCancelledError(ctx, err); cancelled != nil {
-				return domain.Session{}, cancelled
-			}
-			var startErr *procutil.StartError
-			if !errors.As(err, &startErr) {
-				return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: err}
-			}
-			// Both pipe stages fail before cmd.Start, whose cleanup would have closed
-			// the parent's stdin end.
-			switch startErr.Stage {
-			case procutil.StageStdoutPipe:
-				stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
-				return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdout pipe", Err: startErr.Err}
-			case procutil.StageStderrPipe:
-				stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
-				return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
-			default: // procutil.StageProcessStart, procutil.StageProcessResume
-				return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
-			}
-		}
-
-		state.pid = cmd.Process.Pid
-		state.group = group
-		state.stdinCloser = prefixedStdin
-		state.pipes = pipes
-		state.launch = launch
-		state.stderrCollector = procutil.NewStderrCollector(launch.WatchStderr(pipes.Stderr), state.logger)
-
-		state.conn = jsonrpc.NewConn(prefixedStdin, pipes.Stdout, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
-			jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
-
-		// The pipes are caller-owned, so exec.Cmd.Wait closes neither read end and
-		// cannot cut short a reader still consuming buffered output; teardown's
-		// close_stdout and close_pipes end that reader.
-		reaper := procutil.StartReaper(cmd, state.logger)
-		state.waitCh = reaper.Done()
-		state.reaper = reaper
-
-		// The release ends a call or turn that would wait forever on a reaped
-		// runtime whose reader did not end inside the drain bound. Stderr stays nil:
-		// drain_stderr_and_reap and close_pipes already bound it, and an earlier
-		// bound would change the pinned teardown ceiling.
-		state.release = procutil.StartOutputRelease(procutil.OutputReleaseParams{
-			Pipes:      pipes,
-			Reaped:     reaper.Done(),
-			ReaderDone: state.conn.Done(),
-			OnAbandon:  state.conn.Close,
-			Grace:      state.drainGrace,
-			Logger:     state.logger,
-		})
-
-		// The pump is state.caps' sole mutator once started; nothing here may touch
-		// it afterward.
-		state.caps = newCapabilityRecord(len(claims.claimed) > 0)
-		state.usage = usage
-
-		// The pump starts before the handshake so it is the sole mutator of protocol
-		// state; what the handshake learns reaches it as control messages.
-		go runPump(state)
-
-		teardownOnFailure := func() {
-			graceCtx, cancel := context.WithTimeout(ctx, grace)
-			defer cancel()
-			runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
-		}
-
-		initResp, agentErr := doInitialize(ctx, state)
-		if agentErr != nil {
-			teardownOnFailure()
-			procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
-			if report := state.earlyExit.Report(state.stderrCollector); report != nil {
-				return domain.Session{}, report
-			}
-			return domain.Session{}, agentErr
-		}
-
-		handshakeName := ""
-		if initResp.AgentInfo != nil {
-			handshakeName = initResp.AgentInfo.Name
-		}
-
-		verdict := settleUsageSources(claims, initResp.AgentInfo, remote)
-
-		var next usageClaims
-		if verdict.confirmed != nil {
-			next.claimed = []usageClaim{*verdict.confirmed}
-		}
-
-		relaunchArmed := false
-		if start == 1 && verdict.recognizer != nil {
-			if assignments, ok := verdict.recognizer.Claim(target, handshakeName); ok {
-				next.claimed = []usageClaim{{source: verdict.recognizer, assignments: assignments}}
-				claimed = append(claimed, verdict.recognizer)
-				relaunchArmed = true
-			}
-		}
-
-		if len(verdict.released) == 0 && !relaunchArmed {
-			session, err := finishSession(ctx, state, params, target, initResp, verdict, declarations)
-			started = err == nil
-			return session, err
-		}
-
-		relaunchGraceCtx, cancel := context.WithTimeout(ctx, grace)
-		runTeardown(state, defaultTeardownOrder(ctx, relaunchGraceCtx, grace))
-		cancel()
-		for _, source := range verdict.released {
-			source.Close()
-		}
-		if relaunchArmed {
-			state.logger.Info(agentRelaunchedForMeasurementMessage, slog.String("name", handshakeName))
-		} else {
-			state.logger.Info(agentRelaunchedWithoutForeignUsageMessage, slog.String("name", handshakeName))
-		}
-		claims = next
 	}
 
-	return domain.Session{}, &domain.AgentError{
-		Kind:    domain.ErrPortExit,
-		Message: "agent could not be started with a settled usage source",
+	state.pid = cmd.Process.Pid
+	state.group = group
+	state.stdinCloser = prefixedStdin
+	state.pipes = pipes
+	state.launch = launch
+	state.stderrCollector = procutil.NewStderrCollector(launch.WatchStderr(pipes.Stderr), state.logger)
+
+	state.conn = jsonrpc.NewConn(prefixedStdin, pipes.Stdout, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
+		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
+
+	// The pipes are caller-owned, so exec.Cmd.Wait closes neither read end and
+	// cannot cut short a reader still consuming buffered output; teardown's
+	// close_stdout and close_pipes end that reader.
+	reaper := procutil.StartReaper(cmd, state.logger)
+	state.waitCh = reaper.Done()
+	state.reaper = reaper
+
+	// The release ends a call or turn that would wait forever on a reaped
+	// runtime whose reader did not end inside the drain bound. Stderr stays nil:
+	// drain_stderr_and_reap and close_pipes already bound it, and an earlier
+	// bound would change the pinned teardown ceiling.
+	state.release = procutil.StartOutputRelease(procutil.OutputReleaseParams{
+		Pipes:      pipes,
+		Reaped:     reaper.Done(),
+		ReaderDone: state.conn.Done(),
+		OnAbandon:  state.conn.Close,
+		Grace:      state.drainGrace,
+		Logger:     state.logger,
+	})
+
+	// The pump is state.caps' sole mutator once started; nothing here may touch
+	// it afterward.
+	state.caps = newCapabilityRecord()
+	state.usage = usage
+
+	// The pump starts before the handshake so it is the sole mutator of protocol
+	// state; what the handshake learns reaches it as control messages.
+	go runPump(state)
+
+	teardownOnFailure := func() {
+		graceCtx, cancel := context.WithTimeout(ctx, grace)
+		defer cancel()
+		runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
 	}
+
+	initResp, agentErr := doInitialize(ctx, state)
+	if agentErr != nil {
+		teardownOnFailure()
+		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
+		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
+			return domain.Session{}, report
+		}
+		return domain.Session{}, agentErr
+	}
+
+	session, err := finishSession(ctx, state, params, target, initResp, declarations)
+	started = err == nil
+	return session, err
 }
 
-// finishSession completes the final start; verdict.confirmed's source, or nil,
-// is the only reader the pump receives, and a session with a reader has no
-// ledger.
-func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, verdict usageVerdict, declarations *registry.Registry[usagesource.Declaration, struct{}]) (domain.Session, error) {
+// finishSession opens the session the handshake began and hands the pump what
+// the handshake and the open result established.
+func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, declarations *registry.Registry[usagesource.Declaration, struct{}]) (domain.Session, error) {
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	teardownOnFailure := func() {
 		graceCtx, cancel := context.WithTimeout(ctx, grace)
@@ -552,7 +461,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		caps = *initResp.AgentCapabilities
 	}
 
-	sessionID, created, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wired)
+	sessionID, created, session, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wired)
 	if agentErr != nil {
 		teardownOnFailure()
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
@@ -589,11 +498,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
 	}
-	if verdict.confirmed != nil {
-		facts.reader = verdict.confirmed.source
-	} else {
-		facts.ledger = newSessionLedger(ctx, state, choice.declaration, created)
-	}
+	facts.ledger = newSessionLedger(ctx, state, choice.declaration, created, session)
 
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
 	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: sessionID}})
@@ -616,12 +521,17 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 // created has no history, so its records boundary is known without a read. The
 // records already on the host of a continued session are read here, before the
 // first prompt, so none of them is counted as this run's spend. A launch whose
-// addition is not in effect makes every turn of the session a lower bound.
-func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, created bool) *usage.Ledger {
+// addition is not in effect makes every turn of the session a lower bound, as
+// does a session the declaration's rule names from session, the raw result of
+// the call that opened it.
+func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, created bool, session json.RawMessage) *usage.Ledger {
 	if decl.Live.Spend.Shape == usage.SpendUndeclared {
 		return nil
 	}
 	if !additionInEffect(state, decl.LaunchAddition) {
+		decl.Live.Spend.LowerBound = true
+	}
+	if decl.UnrecordedRequests != nil && decl.UnrecordedRequests(session) {
 		decl.Live.Spend.LowerBound = true
 	}
 	ledger, err := usage.NewLedger(decl.Live, decl.Records)
@@ -782,21 +692,22 @@ func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse
 }
 
 // doNewSession sends session/new with the resolved cwd and filtered server
-// list.
-func doNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (*newSessionResponse, *domain.AgentError) {
+// list. It returns the decoded response and the agent's raw result, which
+// carries members the decoded struct does not.
+func doNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (*newSessionResponse, json.RawMessage, *domain.AgentError) {
 	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
 	req := newSessionRequest{Cwd: cwd, MCPServers: servers}
 	resp, err := state.conn.Call(callCtx, methodSessionNew, req)
 	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
-		return nil, agentErr
+		return nil, nil, agentErr
 	}
 	if resp.Error != nil {
 		if resp.Error.Code == errorCodeAuthRequired {
-			return nil, agentcore.CredentialRefusedError(quoteJSONRPCError(resp.Error), nil)
+			return nil, nil, agentcore.CredentialRefusedError(quoteJSONRPCError(resp.Error), nil)
 		}
-		return nil, &domain.AgentError{
+		return nil, nil, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
 			Message: fmt.Sprintf("session/new error %d: %s", resp.Error.Code, quoteJSONRPCError(resp.Error)),
 		}
@@ -804,9 +715,9 @@ func doNewSession(ctx context.Context, state *sessionState, cwd string, servers 
 
 	var newResp newSessionResponse
 	if err := json.Unmarshal(resp.Result, &newResp); err != nil {
-		return nil, &domain.AgentError{Kind: domain.ErrResponseError, Message: "session/new response did not decode", Err: err}
+		return nil, nil, &domain.AgentError{Kind: domain.ErrResponseError, Message: "session/new response did not decode", Err: err}
 	}
-	return &newResp, nil
+	return &newResp, resp.Result, nil
 }
 
 // translateCallError maps a jsonrpc.Conn.Call failure to a normalized error: a
@@ -1023,7 +934,7 @@ func stopSession(ctx context.Context, session domain.Session) error {
 	graceCtx, cancel := context.WithTimeout(ctx, grace)
 	defer cancel()
 	runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
-	releaseUsageSources(state)
+	closeVerification(state)
 	if state.tools != nil {
 		return state.tools.Close()
 	}

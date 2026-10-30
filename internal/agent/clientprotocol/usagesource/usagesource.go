@@ -1,16 +1,12 @@
 // Package usagesource holds the per-runtime parts of this transport that the
-// protocol cannot express: measurement sources read outside the wire,
-// credential-verification additions that drop a runtime's agent context, and
-// usage declarations (what a runtime's protocol messages report about provider
-// usage windows and spend, how to pull those windows when a turn ends, and how
-// to read the runtime's own per-request spend records), and which of the
-// runtime's prompt errors and turn notifications are provider usage-limit
-// refusals or transient failures.
+// protocol cannot express: credential-verification additions that drop a
+// runtime's agent context, and usage declarations (what a runtime's protocol
+// messages report about provider usage windows and spend, how to pull those
+// windows when a turn ends, and how to read the runtime's own per-request spend
+// records), and which of the runtime's prompt errors and turn notifications are
+// provider usage-limit refusals or transient failures.
 //
-// The transport names no runtime. It asks each source three questions in
-// order: does it claim this launch, does the handshake report the runtime's
-// name, and what has it read for this session. A no to either of the first two
-// leaves the session unmeasured. An addition is asked only whether it claims
+// The transport names no runtime. An addition is asked only whether it claims
 // the launch.
 package usagesource
 
@@ -29,14 +25,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
-
-// Constructor returns a fresh Reader for one session.
-type Constructor func() Reader
-
-// Sources is the registry every source adds itself to, exactly once, from an
-// init function in its own file. The key is the name of the runtime the
-// source reads, a name its Recognize accepts.
-var Sources = registry.NewRegistry[Constructor, struct{}]("usage source")
 
 // Declaration is one runtime's usage declaration on the generic protocol kind,
 // selected from the name the runtime gives in its handshake. A declaration that
@@ -90,6 +78,12 @@ type Declaration struct {
 	// LaunchAddition turns off a model request the runtime makes on its own
 	// that no source records. The zero value adds nothing.
 	LaunchAddition LaunchAddition
+
+	// UnrecordedRequests reports whether the session that a session/new,
+	// session/load or session/resume result describes makes model requests no
+	// source records, which leaves every turn of the session a lower bound. Nil
+	// when none.
+	UnrecordedRequests func(session json.RawMessage) bool
 
 	// ChildSession reads the update object of one session/update notification
 	// of session sessionID and reports what it shows of a child session: a
@@ -243,6 +237,10 @@ type PullRuntime interface {
 	// return an error.
 	ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error
 
+	// MatchHomeFiles lists the home's files matching pattern, as
+	// agentcore.LaunchTarget.MatchRuntimeFiles does.
+	MatchHomeFiles(ctx context.Context, pattern agentcore.RuntimePath) ([]agentcore.RuntimePath, error)
+
 	// RemoteHost reports whether the runtime runs on another host, reached
 	// over SSH, rather than on Sortie's own.
 	RemoteHost() bool
@@ -323,74 +321,6 @@ func isJSONObject(raw []byte) bool {
 	return ok
 }
 
-// Reader is one measurement source. The transport declares its own interface
-// with this method set and holds values of it.
-//
-// A Reader is used from two goroutines and only in this order: Claim and Close
-// on the session's own goroutine, and Recognize, Open and Drain on the message
-// pump. Drain is the one blocking method and runs on a goroutine the pump
-// starts, not the pump itself.
-type Reader interface {
-	// Claim reports whether this source can measure a session launched against
-	// target and, when it can, arms itself and returns the environment
-	// assignments ("NAME=value") the launch needs. It refuses every launch with
-	// target.RemoteCommand set. With runtime empty (the first offer), a source
-	// whose claim returns an assignment or creates a file or directory claims
-	// only a local launch whose command line (target.Command and every element
-	// of target.Args) names the runtime it reads; a claim that returns no
-	// assignment and creates nothing may be made for any local launch. With
-	// runtime non-empty (the relaunch offer, carrying the name the first
-	// start's handshake reported), it claims a local launch exactly when
-	// Recognize(runtime) is true. A refusal returns nil, false and creates
-	// nothing.
-	Claim(target agentcore.LaunchTarget, runtime string) ([]string, bool)
-
-	// Recognize reports whether name, the runtime's own name from the
-	// handshake, is the runtime this source maps. No build is refused by its
-	// version.
-	Recognize(name string) bool
-
-	// Open records the session identifier whose records this source counts and
-	// the position in its own output the session starts at, so a resumed
-	// runtime's history contributes nothing.
-	Open(sessionID string)
-
-	// Drain returns the session's run-cumulative usage as this source measured
-	// it, waiting up to its own deadline for the turn's records to become
-	// readable. lowerBound is the turn's own input-plus-output figure from the
-	// protocol's presence signal, letting the wait end early; a non-positive
-	// lowerBound means no such signal was read. found is false when the source
-	// measured nothing at all, which is not a measurement of zero.
-	Drain(ctx context.Context, lowerBound int64) (usage agentcore.RecoveredUsage, source string, found bool)
-
-	// Completeness reports how far the figure the most recent Drain returned was
-	// proven to account for that turn; a figure can be a measurement and still
-	// be short of the turn. It describes one Drain call and is reset by the
-	// next, so it is read on the goroutine that called Drain, before another
-	// begins.
-	Completeness() Completeness
-
-	// Close releases whatever Claim armed. It is safe to call on a source that
-	// never claimed.
-	Close()
-}
-
-// Completeness is how far a drained figure was proven to account for the turn
-// it was drained for. It is not a verdict on whether a measurement exists.
-type Completeness int
-
-const (
-	// CompletenessUnknown is a turn with no bound to prove a figure against,
-	// which differs from proving it short.
-	CompletenessUnknown Completeness = iota
-
-	// CompletenessPartial is a figure that did not reach the turn's own bound.
-	CompletenessPartial
-
-	// CompletenessAccounted is a figure that reached the turn's own bound.
-	CompletenessAccounted
-)
-
 // VerificationAddition is one protocol runtime's verification-context
 // switches. The transport holds values of it and names no runtime.
 //
@@ -432,7 +362,7 @@ var executableSuffixes = []string{".cmd", ".ps1", ".exe", ".js"}
 
 // namesRuntime reports whether the tokens of a local launch's command line name
 // the executable or one of the npm packages. A remote launch names nothing here:
-// measurement sources and verification additions claim local launches only.
+// verification additions claim local launches only.
 func namesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
 	return target.RemoteCommand == "" && commandNamesRuntime(target, executable, packages...)
 }

@@ -31,7 +31,15 @@ var geminiProjectVars = []string{"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_I
 
 func init() {
 	Declarations.Register(geminiAgentName, Declaration{
-		Live: usage.Source{Category: usage.SourceProtocol},
+		Live: usage.Source{
+			Category: usage.SourceProtocol,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendPerTurn, CacheInInput: true},
+		},
+		PromptSpend:        sparsePromptSpend,
+		Records:            geminiRecords,
+		ReadRecords:        geminiReadRecords,
+		UnrecordedRequests: geminiUnrecordedRequests,
 		Pull: usage.Source{
 			Strategy: usage.StrategyPull,
 			Windows:  usage.WindowDeclaration{Share: usage.ShareFraction, ShareRemaining: true},

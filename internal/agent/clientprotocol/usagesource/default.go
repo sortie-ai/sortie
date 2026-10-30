@@ -70,3 +70,43 @@ func jsonCount(raw json.RawMessage) *int64 {
 	}
 	return &n
 }
+
+type sparsePromptUsage struct {
+	InputTokens       json.RawMessage `json:"inputTokens"`
+	OutputTokens      json.RawMessage `json:"outputTokens"`
+	ThoughtTokens     json.RawMessage `json:"thoughtTokens"`
+	CachedReadTokens  json.RawMessage `json:"cachedReadTokens"`
+	CachedWriteTokens json.RawMessage `json:"cachedWriteTokens"`
+}
+
+// sparsePromptSpend reads the per-turn counts of a prompt result. The runtime
+// omits a counter that is zero, so an absent optional member reads zero while a
+// present member that is not an integer reads unknown. The input and output
+// counts are never omitted, so absent means unknown for them.
+func sparsePromptSpend(result json.RawMessage) *usage.SpendReading {
+	var decoded standardPromptResult
+	if err := json.Unmarshal(result, &decoded); err != nil || len(decoded.Usage) == 0 || string(decoded.Usage) == "null" {
+		return nil
+	}
+	var counts sparsePromptUsage
+	if err := json.Unmarshal(decoded.Usage, &counts); err != nil {
+		return nil
+	}
+	return &usage.SpendReading{
+		Input:      jsonCount(counts.InputTokens),
+		Output:     jsonCount(counts.OutputTokens),
+		Reasoning:  jsonCountOmittedAtZero(counts.ThoughtTokens),
+		CacheRead:  jsonCountOmittedAtZero(counts.CachedReadTokens),
+		CacheWrite: jsonCountOmittedAtZero(counts.CachedWriteTokens),
+	}
+}
+
+// jsonCountOmittedAtZero returns the integer of a counter the runtime leaves
+// out when it is zero, so an absent member reads zero.
+func jsonCountOmittedAtZero(raw json.RawMessage) *int64 {
+	if len(raw) == 0 {
+		var zero int64
+		return &zero
+	}
+	return jsonCount(raw)
+}

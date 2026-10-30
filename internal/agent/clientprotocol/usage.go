@@ -15,97 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// usageReader supplies token measurements read outside the wire. A confirmed
-// reader settles the session ahead of the spend ledger. A reader that fails to
-// claim the launch target, recognize the handshake's runtime name, or produce a
-// record on its first drain is dropped, leaving the session unmeasured and the
-// token ceiling inactive.
-//
-// Drain reports whether a measurement exists; Completeness grades how far the
-// figure it just returned was proven to reach.
-type usageReader interface {
-	Claim(target agentcore.LaunchTarget, runtime string) ([]string, bool)
-	Recognize(name string) bool
-	Open(sessionID string)
-	Drain(ctx context.Context, lowerBound int64) (agentcore.RecoveredUsage, string, bool)
-	Completeness() usagesource.Completeness
-	Close()
-}
-
-type usageClaim struct {
-	source      usageReader
-	assignments []string
-}
-
-// usageClaims is one offer round's outcome, in registry order.
-type usageClaims struct {
-	claimed   []usageClaim
-	unclaimed []usageReader
-}
-
-// usageVerdict is one start's handshake settlement of a usageClaims. recognizer
-// is set only when the first start confirmed no claimed source.
-type usageVerdict struct {
-	confirmed  *usageClaim
-	released   []usageReader
-	recognizer usageReader
-}
-
-// claimUsageSources offers target, with an empty runtime name, to a fresh
-// instance of every registered source and buckets each by whether it accepts.
-func claimUsageSources(sources *registry.Registry[usagesource.Constructor, struct{}], target agentcore.LaunchTarget) usageClaims {
-	var claims usageClaims
-	for _, kind := range sources.Kinds() {
-		constructor, _ := sources.Get(kind) // a listed kind always resolves
-		source := constructor()
-		if assignments, ok := source.Claim(target, ""); ok {
-			claims.claimed = append(claims.claimed, usageClaim{source: source, assignments: assignments})
-			continue
-		}
-		claims.unclaimed = append(claims.unclaimed, source)
-	}
-	return claims
-}
-
-// settleUsageSources settles claims against one start's handshake. The first
-// claimed source that recognizes the reported name is confirmed and the rest are
-// released. Only when none is confirmed, the name is non-empty, and the launch is
-// local does the first unclaimed source recognizing it become the recognizer.
-func settleUsageSources(claims usageClaims, info *implementation, remote bool) usageVerdict {
-	name := ""
-	if info != nil {
-		name = info.Name
-	}
-
-	confirmedIndex := -1
-	if name != "" {
-		for i := range claims.claimed {
-			if claims.claimed[i].source.Recognize(name) {
-				confirmedIndex = i
-				break
-			}
-		}
-	}
-
-	var verdict usageVerdict
-	for i := range claims.claimed {
-		if i == confirmedIndex {
-			verdict.confirmed = &claims.claimed[i]
-			continue
-		}
-		verdict.released = append(verdict.released, claims.claimed[i].source)
-	}
-	if verdict.confirmed == nil && name != "" && !remote {
-		for _, source := range claims.unclaimed {
-			if source.Recognize(name) {
-				verdict.recognizer = source
-				break
-			}
-		}
-	}
-	return verdict
-}
-
 // declarationChoice is the declaration a session is measured under and what
 // selected it.
 type declarationChoice struct {
@@ -218,6 +127,10 @@ func (r pullRuntime) ScanHomeFile(ctx context.Context, path agentcore.RuntimePat
 	return r.state.target.ScanRuntimeFile(ctx, r.state.launchEnv, path, limit, lineLimit, fn)
 }
 
+func (r pullRuntime) MatchHomeFiles(ctx context.Context, pattern agentcore.RuntimePath) ([]agentcore.RuntimePath, error) {
+	return r.state.target.MatchRuntimeFiles(ctx, r.state.launchEnv, pattern)
+}
+
 func (r pullRuntime) RemoteHost() bool {
 	return r.state.target.RemoteCommand != ""
 }
@@ -294,12 +207,9 @@ func readRecordsOf(ctx context.Context, state *sessionState, decl usagesource.De
 	return records, err == nil
 }
 
-// releaseUsageSources closes every claimed source and the verification addition.
-// It runs after teardown, once no drain is still reading what a source removes.
-func releaseUsageSources(state *sessionState) {
-	for _, source := range state.claimed {
-		source.Close()
-	}
+// closeVerification closes the verification addition, once teardown has ended
+// the runtime.
+func closeVerification(state *sessionState) {
 	if state.verification != nil {
 		state.verification.Close()
 	}

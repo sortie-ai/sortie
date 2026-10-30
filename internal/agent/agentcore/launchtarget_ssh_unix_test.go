@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,7 +40,23 @@ printf '%s' gemini-token > /home/sortie/.gemini/oauth_creds.json
 yes '{"k":"` + strings.Repeat("x", 1015) + `"}' | head -n 65536 > "$home/` + journalName + `"
 head -n 1024 "$home/` + journalName + `" > "$home/journal-1mib.jsonl"
 printf 'export ` + runtimeHomeVar + `=%s\nexport ` + quotedHomeVar + `="%s"\n' "$home" "$(printf '%s' "$quoted" | sed 's/"/\\"/g')" > /home/sortie/.bashrc
+` + matchTreeInstall() + `
 chown -R sortie:sortie /home/sortie`
+
+func matchTreeInstall() string {
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	var commands []string
+	for _, dir := range slices.Concat(matchTreeDirs, matchTreeDirsOfFiles()) {
+		commands = append(commands, "mkdir -p "+quote(dir))
+	}
+	for _, file := range matchTreeFiles {
+		commands = append(commands, ": > "+quote(file))
+	}
+	for _, link := range matchTreeLinks {
+		commands = append(commands, "ln -s "+quote(link[1])+" "+quote(link[0]))
+	}
+	return `(cd "$home" && ` + strings.Join(commands, " && ") + `)`
+}
 
 func startRuntimeLab(t testing.TB) (LaunchTarget, agenttest.SSHLab) {
 	t.Helper()
@@ -139,6 +156,20 @@ func TestLaunchTarget_ReadRuntimeFile_SSHLab(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLaunchTarget_MatchRuntimeFiles_SSHLab(t *testing.T) {
+	target, _ := startRuntimeLab(t)
+
+	for _, tt := range matchCases {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern := RuntimePath{HomeVar: cmp.Or(tt.homeVar, runtimeHomeVar), HomeDefault: tt.homeDefault, Segments: tt.segments}
+
+			got, err := target.MatchRuntimeFiles(waittest.Context(t), nil, pattern)
+
+			assertMatched(t, got, err, pattern, tt.want)
+		})
 	}
 }
 

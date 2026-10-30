@@ -12,38 +12,23 @@ import (
 
 func newPumpForCapabilityTests(t *testing.T) (*sessionState, *pumpState) {
 	t.Helper()
-	state := &sessionState{caps: newCapabilityRecord(false), logger: discardLogger()}
+	state := &sessionState{caps: newCapabilityRecord(), logger: discardLogger()}
 	return state, &pumpState{state: state}
 }
 
 func TestNewCapabilityRecordStageOne(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name            string
-		measured        bool
-		wantTokenCounts capabilityState
-	}{
-		{name: "unclaimed launch has a token-counts gap", measured: false, wantTokenCounts: capabilityGap},
-		{name: "measured launch supplies token counts itself", measured: true, wantTokenCounts: capabilityOurs},
+	record := newCapabilityRecord()
+
+	want := capabilityRecord{
+		toolServers:         capabilityProtocol,
+		tokenCounts:         capabilityGap,
+		sessionContinuation: capabilityProtocol,
+		agentVersion:        capabilityProtocol,
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			record := newCapabilityRecord(tt.measured)
-
-			want := capabilityRecord{
-				toolServers:         capabilityProtocol,
-				tokenCounts:         tt.wantTokenCounts,
-				sessionContinuation: capabilityProtocol,
-				agentVersion:        capabilityProtocol,
-			}
-			if *record != want {
-				t.Errorf("newCapabilityRecord(%v) = %+v, want %+v", tt.measured, *record, want)
-			}
-		})
+	if *record != want {
+		t.Errorf("newCapabilityRecord() = %+v, want %+v", *record, want)
 	}
 }
 
@@ -151,7 +136,10 @@ func TestOpeningNotice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state := &sessionState{caps: newCapabilityRecord(tt.measured), logger: discardLogger()}
+			state := &sessionState{caps: newCapabilityRecord(), logger: discardLogger()}
+			if tt.measured {
+				state.caps.tokenCounts = capabilityOurs
+			}
 			p := &pumpState{state: state}
 			var events []domain.AgentEvent
 

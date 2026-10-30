@@ -2,6 +2,7 @@ package clientprotocol
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -78,8 +79,9 @@ func sendNegativeControl(ctx context.Context, state *sessionState) (negativeCont
 // back to session/new within this same call whenever continuation is
 // not confirmed. It returns the identifier of the session the agent
 // actually holds, which is the loaded identifier only when the load
-// route was confirmed, and whether session/new created it.
-func resolveSession(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities, cwd string, servers []mcpServer) (string, bool, *domain.AgentError) {
+// route was confirmed, whether session/new created it, and the raw
+// result of the call that opened the session.
+func resolveSession(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
 	if resumeID == "" {
 		return createNewSession(ctx, state, cwd, servers)
 	}
@@ -92,7 +94,7 @@ func resolveSession(ctx context.Context, state *sessionState, resumeID string, c
 	control, agentErr := sendNegativeControl(ctx, state)
 	if agentErr != nil {
 		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, agentErr
+			return "", false, nil, agentErr
 		}
 		state.logger.Warn("continuation negative control timed out", slog.String("method", negativeControlMethod))
 		return unconfirmedFallback(ctx, state, cwd, servers)
@@ -117,7 +119,7 @@ func resolveSession(ctx context.Context, state *sessionState, resumeID string, c
 // out waiting for any response at all is treated the same as one that
 // answered with an error: the capability is not confirmed, not the
 // run.
-func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, *domain.AgentError) {
+func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, json.RawMessage, *domain.AgentError) {
 	if createdAt, known := state.origins.createdAt(cwd, resumeID); known {
 		if wait := loadDeferral(createdAt, state.origins.clock()); wait > 0 {
 			state.logger.Debug("session load deferred past the session's creation minute",
@@ -127,7 +129,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				return "", false, &domain.AgentError{Kind: domain.ErrPortExit, Message: "context ended before the deferred session load reached the agent connection", Err: ctx.Err()}
+				return "", false, nil, &domain.AgentError{Kind: domain.ErrPortExit, Message: "context ended before the deferred session load reached the agent connection", Err: ctx.Err()}
 			}
 		}
 	}
@@ -141,7 +143,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 	})
 	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, agentErr
+			return "", false, nil, agentErr
 		}
 		state.logger.Warn("continuation call timed out", slog.String("method", methodSessionLoad))
 		return unconfirmedFallback(ctx, state, cwd, servers)
@@ -159,7 +161,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 	select {
 	case confirmed := <-reply:
 		if confirmed {
-			return resumeID, false, nil
+			return resumeID, false, resp.Result, nil
 		}
 		return createNewSession(ctx, state, cwd, servers)
 	case <-timer.C:
@@ -171,7 +173,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 // expected: a successful response alone confirms it. A response
 // carrying an error, or a timeout waiting for any response at all,
 // lowers sessionContinuation and falls back.
-func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, *domain.AgentError) {
+func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, json.RawMessage, *domain.AgentError) {
 	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
@@ -184,7 +186,7 @@ func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd strin
 	})
 	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, agentErr
+			return "", false, nil, agentErr
 		}
 		state.logger.Warn("continuation call timed out", slog.String("method", methodSessionResume))
 		return unconfirmedFallback(ctx, state, cwd, servers)
@@ -193,7 +195,7 @@ func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd strin
 		logContinuationFailure(state, methodSessionResume, resp.Error.Code, control)
 		return unconfirmedFallback(ctx, state, cwd, servers)
 	}
-	return resumeID, false, nil
+	return resumeID, false, resp.Result, nil
 }
 
 // unconfirmedFallback lowers sessionContinuation through the pump's
@@ -202,7 +204,7 @@ func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd strin
 // negative control that precedes it, does not confirm the entry: an
 // explicit error response or a timeout waiting for one. The fallback
 // itself never fails the run on its own account.
-func unconfirmedFallback(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, *domain.AgentError) {
+func unconfirmedFallback(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
 	state.inbox.Put(pumpItem{control: &pumpControl{query: &replayQuery{}}})
 	return createNewSession(ctx, state, cwd, servers)
 }
@@ -212,16 +214,16 @@ func unconfirmedFallback(ctx context.Context, state *sessionState, cwd string, s
 // one attempted is not confirmed. A failure here is reported exactly
 // as it would have been had continuation never been attempted; the
 // fallback itself never fails the run on its own account.
-func createNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, *domain.AgentError) {
-	resp, agentErr := doNewSession(ctx, state, cwd, servers)
+func createNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
+	resp, raw, agentErr := doNewSession(ctx, state, cwd, servers)
 	if agentErr != nil {
-		return "", false, agentErr
+		return "", false, nil, agentErr
 	}
 	// A verification session is never resumed.
 	if !state.credentialVerification {
 		state.origins.record(cwd, string(resp.SessionID))
 	}
-	return string(resp.SessionID), true, nil
+	return string(resp.SessionID), true, raw, nil
 }
 
 // logContinuationFailure records that a continuation call did not

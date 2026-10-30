@@ -1,0 +1,14 @@
+{"sessionId":"8c51c199-7b79-4669-9a1d-e3f1f396ff1e","projectHash":"168d6336d300043ab967ccdd2ae64fad46319c90d5f54055a2b911e724c56fa9","startTime":"2026-10-30T15:08:46.774Z","lastUpdated":"2026-10-30T15:08:46.774Z","kind":"main"}
+{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-10-30T15:08:46.774Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:08:46.774Z"}}
+{"id":"6e1f3842-342f-46a7-9acc-12c9c3d97623","timestamp":"2026-10-30T15:08:46.782Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:08:46.782Z"}}
+{"id":"927c18c1-5e02-42b7-894d-c2bb6963fb1b","timestamp":"2026-10-30T15:08:48.712Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11566,"output":1,"cached":0,"thoughts":517,"tool":0,"total":12084},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:08:48.712Z"}}
+{"$set":{"sessionId":"8c51c199-7b79-4669-9a1d-e3f1f396ff1e"}}
+{"$patch":{"updates":"redacted"}}
+{"$set":{"lastUpdated":"2026-10-30T15:09:55.392Z"}}
+{"id":"f7c1d21a-31e1-428f-a69a-b48355fe6bfa","timestamp":"2026-10-30T15:09:55.400Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:09:55.401Z"}}
+{"id":"8907b0fa-7b13-4510-ade0-e397d17db64d","timestamp":"2026-10-30T15:09:57.371Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11576,"output":1,"cached":0,"thoughts":346,"tool":0,"total":11923},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:09:57.371Z"}}

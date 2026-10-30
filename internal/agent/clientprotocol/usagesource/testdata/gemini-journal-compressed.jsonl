@@ -1,0 +1,16 @@
+{"sessionId":"a4d27195-6a52-42bf-ace6-bbdaa513b721","projectHash":"eed6f33accc79b97f730f93a69a9b02aae724b0b2dd60bcfb470839d41c0239e","startTime":"2026-10-30T15:49:18.671Z","lastUpdated":"2026-10-30T15:49:18.671Z","kind":"main"}
+{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-10-30T15:49:18.672Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:49:18.672Z"}}
+{"id":"4668aaf3-09ab-4fcd-b3a9-62b795d83f63","timestamp":"2026-10-30T15:49:18.679Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:49:18.679Z"}}
+{"id":"1a61daca-1b08-489a-8109-143f623b3115","timestamp":"2026-10-30T15:49:20.108Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11378,"output":0,"cached":0,"thoughts":29,"tool":0,"total":11407},"model":"gemini-2.5-flash"}
+{"$set":{"lastUpdated":"2026-10-30T15:49:20.108Z"}}
+{"$set":{"sessionId":"a4d27195-6a52-42bf-ace6-bbdaa513b721"}}
+{"id":"32e9407d-baa1-420d-8ff6-9bf2a9bafcf3","timestamp":"2026-10-30T15:49:30.155Z","type":"user","content":"redacted"}
+{"id":"38e87e44-2826-4909-bbdd-6c26cf82d575","timestamp":"2026-10-30T15:49:30.155Z","type":"gemini","content":"redacted"}
+{"$patch":{"removeIds":["4668aaf3-09ab-4fcd-b3a9-62b795d83f63","1a61daca-1b08-489a-8109-143f623b3115"]}}
+{"$set":{"lastUpdated":"2026-10-30T15:49:30.155Z"}}
+{"id":"11716afb-ccb9-4a9e-9750-8d3be288fae2","timestamp":"2026-10-30T15:49:30.156Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:49:30.156Z"}}
+{"id":"cf728d83-c129-4b20-9678-c6eecc70fd1e","timestamp":"2026-10-30T15:49:30.827Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11857,"output":1,"cached":3949,"thoughts":0,"tool":0,"total":11858},"model":"gemini-2.5-flash"}
+{"$set":{"lastUpdated":"2026-10-30T15:49:30.827Z"}}

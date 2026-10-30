@@ -27,6 +27,9 @@ const geminiTestToken = "ya29.a0-test-access-token"
 type geminiRuntime struct {
 	env       map[string]string
 	sessionID string
+	matches   []agentcore.RuntimePath
+	matchErr  error
+	matched   *agentcore.RuntimePath
 }
 
 func (r geminiRuntime) SessionID() string { return r.sessionID }
@@ -46,6 +49,13 @@ func (r geminiRuntime) ReadHomeFile(ctx context.Context, path agentcore.RuntimeP
 
 func (r geminiRuntime) ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error {
 	return agentcore.LaunchTarget{}.ScanRuntimeFile(ctx, []string{path.HomeVar + "=" + r.env[path.HomeVar]}, path, limit, lineLimit, fn)
+}
+
+func (r geminiRuntime) MatchHomeFiles(_ context.Context, pattern agentcore.RuntimePath) ([]agentcore.RuntimePath, error) {
+	if r.matched != nil {
+		*r.matched = pattern
+	}
+	return r.matches, r.matchErr
 }
 
 func (geminiRuntime) RemoteHost() bool { return false }

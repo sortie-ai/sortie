@@ -102,11 +102,15 @@ jobs:
             install: npm install -g @google/gemini-cli
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
-            clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
-            clientprotocol_asking_command: "gemini --acp"
+            clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo -m gemini-2.5-flash"
+            clientprotocol_ssh_command: "gemini --acp --skip-trust --approval-mode yolo -m gemini-2.5-flash"
+            clientprotocol_ssh_install: npm install -g @google/gemini-cli
+            clientprotocol_http_tools: "1"
+            clientprotocol_asking_command: "gemini --acp -m gemini-2.5-flash"
             clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
             clientprotocol_usage_limit_answer: testdata/usage_limit/gemini_daily_quota_answer.json
+            clientprotocol_spend_declaration: gemini-cli
 
           - name: GitHub Copilot CLI - ACP
             adapter: acp-copilot
@@ -548,7 +552,7 @@ jobs:
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: GEMINI_API_KEY
             run_filter: Integration
-            skip_filter: ^(TestIntegration_ScriptedModel|TestIntegration_ToolForcingTurn)$
+            skip_filter: ^TestIntegration_ScriptedModel$
             tier: live
             test_path: ./internal/agent/clientprotocol/...
             timeout: 900s

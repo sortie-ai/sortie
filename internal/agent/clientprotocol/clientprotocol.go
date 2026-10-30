@@ -52,15 +52,10 @@ type ClientProtocolAdapter struct {
 	// at its zero value.
 	drainGrace time.Duration
 
-	// sources is the registry StartSession offers a launch to. Nil means
-	// usagesource.Sources. Set by a test before StartSession, as drainGrace is;
-	// every production caller reaches only NewClientProtocolAdapter, which
-	// leaves it at its zero value.
-	sources *registry.Registry[usagesource.Constructor, struct{}]
-
 	// declarations is the registry finishSession selects a usage declaration
 	// from. Nil means usagesource.Declarations. Set by a test before
-	// StartSession, as sources is.
+	// StartSession, as drainGrace is; every production caller reaches only
+	// NewClientProtocolAdapter, which leaves it at its zero value.
 	declarations *registry.Registry[usagesource.Declaration, struct{}]
 }
 

@@ -172,7 +172,7 @@ func TestRunTurnPreTurnWaits(t *testing.T) {
 			state := &sessionState{
 				agentConfig: domain.AgentConfig{ReadTimeoutMS: 50},
 				inbox:       jsonrpc.NewInbox[pumpItem](),
-				caps:        newCapabilityRecord(false),
+				caps:        newCapabilityRecord(),
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
@@ -225,7 +225,7 @@ func TestDelayedTurnVerdictCannotBlockPump(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		inbox:       jsonrpc.NewInbox[pumpItem](),
 		logger:      discardLogger(),
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 	}
 
 	outcome := waittest.Receive(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
@@ -259,7 +259,7 @@ func TestAbandonedTurnIsNotStarted(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		inbox:       jsonrpc.NewInbox[pumpItem](),
 		logger:      discardLogger(),
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 	}
 
 	outcome := waittest.Receive(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
@@ -308,42 +308,15 @@ func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 func TestAssertUsageReporting(t *testing.T) {
 	t.Parallel()
 
-	measuredEvents, measuredOutcome := measuredSessionTurn(t)
 	remoteEvents, remoteOutcome := remoteLedgerSessionTurn(t)
 
 	agenttest.AssertUsageReporting(t, "agent-client-protocol", []agenttest.UsageReportingCase{
-		{
-			Name:   "a local session whose source proved out settles one figure per turn",
-			Events: measuredEvents,
-			Result: measuredOutcome.result,
-		},
 		{
 			Name:   "a remote session settles one figure per turn from the prompt result",
 			Events: remoteEvents,
 			Result: remoteOutcome.result,
 		},
 	})
-}
-
-func measuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
-	t.Helper()
-
-	reader := &fakeUsageReader{
-		recognizes: true,
-		drains: []fakeDrain{{
-			found: true,
-			usage: agentcore.RecoveredUsage{
-				Run:   domain.TokenUsage{InputTokens: 1200, OutputTokens: 80, TotalTokens: 1280, CacheReadTokens: 900},
-				Model: "model-of-record",
-			},
-		}},
-	}
-	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes, discardLogger())
-	out := newOutboundReader(outPr)
-	publishHandshake(state, reader)
-	markSessionKnown(state)
-
-	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
 }
 
 func remoteLedgerSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {

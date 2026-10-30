@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -86,6 +87,21 @@ func validateSegments(field string, segments []string) error {
 	return nil
 }
 
+// validatePattern validates p as a pattern for [LaunchTarget.MatchRuntimeFiles]:
+// a valid path whose segments also avoid the characters a remote matcher reads
+// as wildcards other than "*".
+func (p RuntimePath) validatePattern() error {
+	if err := p.validate(); err != nil {
+		return err
+	}
+	for i, segment := range p.Segments {
+		if strings.ContainsAny(segment, `?[]\`) {
+			return fmt.Errorf("%w: Segments[%d] holds a wildcard character other than *", ErrInvalidRuntimePath, i)
+		}
+	}
+	return nil
+}
+
 // label names the file in errors by its segments under the home.
 func (p RuntimePath) label() string {
 	return strings.Join(p.Segments, "/")
@@ -155,6 +171,151 @@ func (t LaunchTarget) ScanRuntimeFile(ctx context.Context, env []string, path Ru
 		return fmt.Errorf("runtime file %q exceeds %d bytes", path.label(), limit)
 	}
 	return scanLines(ctx, f, path.label(), limit, lineLimit, fn)
+}
+
+// MatchRuntimeFiles lists the regular files under the runtime's home on the
+// session's host whose path matches pattern, "*" matching within one segment.
+// No match or a missing home returns an empty slice; an invalid pattern wraps
+// [ErrInvalidRuntimePath].
+//
+// It never puts a path in a log or an error, and the caller must not either.
+func (t LaunchTarget) MatchRuntimeFiles(ctx context.Context, env []string, pattern RuntimePath) ([]RuntimePath, error) {
+	if err := pattern.validatePattern(); err != nil {
+		return nil, err
+	}
+	if t.RemoteCommand != "" {
+		return t.matchRemote(ctx, pattern)
+	}
+	return t.matchLocal(ctx, env, pattern)
+}
+
+func (t LaunchTarget) matchLocal(ctx context.Context, env []string, pattern RuntimePath) ([]RuntimePath, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	home, err := t.localHome(env, pattern)
+	if err != nil {
+		return emptyWhenMissing(err)
+	}
+	root, err := workspacekit.OpenDir(home)
+	if err != nil {
+		return emptyWhenMissing(cmp.Or(errors.Unwrap(err), err))
+	}
+	defer func() { _ = root.Close() }()
+
+	prefix := pattern.Segments[:literalPrefix(pattern)]
+	dir := root
+	if len(prefix) > 0 {
+		dir, err = root.OpenRoot(path.Join(prefix...))
+		if err != nil {
+			return emptyWhenMissing(err)
+		}
+		defer func() { _ = dir.Close() }()
+	}
+	found, err := walkMatches(ctx, dir.FS(), pattern.Segments[len(prefix):])
+	if err != nil {
+		return nil, err
+	}
+	for i, segments := range found {
+		found[i] = slices.Concat(prefix, segments)
+	}
+	return matchedPaths(pattern, found), nil
+}
+
+// emptyWhenMissing turns a missing home into an empty match and strips the
+// file names os errors carry from every other failure.
+func emptyWhenMissing(err error) ([]RuntimePath, error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return []RuntimePath{}, nil
+	}
+	return nil, withoutPath("match runtime files", err)
+}
+
+// withoutPath wraps err with op and drops the file name of every [fs.PathError]
+// in it, so the message names no path.
+func withoutPath(op string, err error) error {
+	for {
+		var pathErr *fs.PathError
+		if !errors.As(err, &pathErr) {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+		err = pathErr.Err
+	}
+}
+
+// literalPrefix counts the leading segments without "*", short of the last.
+// Both sides resolve that prefix as a read resolves its path, symlinks
+// included, and follow no symlink below it.
+func literalPrefix(pattern RuntimePath) int {
+	literal := 0
+	for literal < len(pattern.Segments)-1 && !strings.Contains(pattern.Segments[literal], "*") {
+		literal++
+	}
+	return literal
+}
+
+// walkMatches returns the regular files under fsys whose path matches pattern.
+// Unlike fs.Glob it reports an unreadable directory, which would otherwise read
+// as fewer records, and it never follows a symlink.
+func walkMatches(ctx context.Context, fsys fs.FS, pattern []string) ([][]string, error) {
+	var found [][]string
+	err := fs.WalkDir(fsys, ".", func(name string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return withoutPath("read runtime directory", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if name == "." {
+			return nil
+		}
+		segments := strings.Split(name, "/")
+		depth := len(segments)
+		if matched, _ := path.Match(pattern[depth-1], segments[depth-1]); !matched || depth == len(pattern) {
+			if matched && entry.Type().IsRegular() {
+				found = append(found, segments)
+			}
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return found, err
+}
+
+func segmentMatches(pattern, name string) bool {
+	matched, _ := path.Match(pattern, name)
+	return matched
+}
+
+// pathMatches reports whether segments is a path the pattern admits: one
+// matching segment per pattern segment, each a valid path segment. A remote
+// matcher may accept more than that, such as a "*" spanning a "/".
+func pathMatches(pattern RuntimePath, segments []string) bool {
+	if len(segments) != len(pattern.Segments) {
+		return false
+	}
+	for i, segment := range segments {
+		if !ValidPathSegment(segment) || !segmentMatches(pattern.Segments[i], segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchedPaths(pattern RuntimePath, found [][]string) []RuntimePath {
+	paths := make([]RuntimePath, 0, len(found))
+	for _, segments := range found {
+		if pathMatches(pattern, segments) {
+			paths = append(paths, RuntimePath{HomeVar: pattern.HomeVar, HomeDefault: pattern.HomeDefault, Segments: segments})
+		}
+	}
+	slices.SortFunc(paths, func(a, b RuntimePath) int { return strings.Compare(a.label(), b.label()) })
+	return paths
 }
 
 // HostCommand describes one command [LaunchTarget.RunHostCommand] runs. The
@@ -346,14 +507,15 @@ func (t LaunchTarget) readLocalFile(ctx context.Context, env []string, path Runt
 	return readWithin(f, limit, path.label())
 }
 
-// openLocalFile opens the file through a root at the home, so a symlink under
-// the home cannot lead the read outside it.
-func (t LaunchTarget) openLocalFile(env []string, path RuntimePath) (*os.File, error) {
+// localHome returns the runtime's home directory on this host with its
+// symlinks resolved: the value of path.HomeVar in env, else the user's home
+// joined with path.HomeDefault.
+func (t LaunchTarget) localHome(env []string, path RuntimePath) (string, error) {
 	home, _ := t.RuntimeEnv(env, path.HomeVar)
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve home directory: %w", err)
+			return "", fmt.Errorf("resolve home directory: %w", err)
 		}
 		home = filepath.Join(append([]string{userHome}, path.HomeDefault...)...)
 	}
@@ -361,7 +523,17 @@ func (t LaunchTarget) openLocalFile(env []string, path RuntimePath) (*os.File, e
 	// choice; containment applies below it, not to the home itself.
 	resolved, err := filepath.EvalSymlinks(home)
 	if err != nil {
-		return nil, fmt.Errorf("open runtime home: %w", err)
+		return "", fmt.Errorf("open runtime home: %w", err)
+	}
+	return resolved, nil
+}
+
+// openLocalFile opens the file through a root at the home, so a symlink under
+// the home cannot lead the read outside it.
+func (t LaunchTarget) openLocalFile(env []string, path RuntimePath) (*os.File, error) {
+	resolved, err := t.localHome(env, path)
+	if err != nil {
+		return nil, err
 	}
 	root, err := workspacekit.OpenDir(resolved)
 	if err != nil {
@@ -483,6 +655,45 @@ func (t LaunchTarget) captureRemote(ctx context.Context, command string, args []
 func remoteReadCommand(path RuntimePath, limit int64) string {
 	return fmt.Sprintf(`f="${%s:-}"; [ -n "$f" ] || f="$HOME"%s; f="$f"%s; [ -e "$f" ] || exit %d; head -c %d -- "$f"`,
 		path.HomeVar, quotedSuffix(path.HomeDefault), quotedSuffix(path.Segments), remoteFileMissingExit, limit+1)
+}
+
+// matchRemote runs the match as one command over the session's SSH launch.
+func (t LaunchTarget) matchRemote(ctx context.Context, pattern RuntimePath) ([]RuntimePath, error) {
+	stdout, result, err := t.captureRemote(ctx, remoteMatchCommand(pattern), nil, hostCommandLimit+1, nil)
+	if err != nil {
+		return nil, err
+	}
+	if result.WaitErr != nil {
+		if sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
+			return nil, fmt.Errorf("remote command: %w", sshutil.ErrConnectionFailed)
+		}
+		return nil, fmt.Errorf("remote match: %w", ErrHostCommandFailed)
+	}
+	if !result.OutputComplete {
+		return nil, errors.New("remote match: output was not fully collected")
+	}
+	if stdout.Len() > hostCommandLimit {
+		return nil, fmt.Errorf("remote match printed more than %d bytes", hostCommandLimit)
+	}
+
+	var found [][]string
+	for line := range bytes.SplitSeq(stdout.Bytes(), []byte{0}) {
+		if rel, ok := bytes.CutPrefix(line, []byte("./")); ok {
+			found = append(found, strings.Split(string(rel), "/"))
+		}
+	}
+	return matchedPaths(pattern, found), nil
+}
+
+// remoteMatchCommand renders the read-only command a remote match runs. Every
+// literal is single-quoted so only find reads "*", and the depth is fixed
+// because find's -path lets "*" match "/".
+func remoteMatchCommand(pattern RuntimePath) string {
+	literal := literalPrefix(pattern)
+	depth := len(pattern.Segments) - literal
+	start := "'.'" + quotedSuffix(pattern.Segments[:literal])
+	return fmt.Sprintf(`h="${%s:-}"; [ -n "$h" ] || h="$HOME"%s; [ -d "$h" ] || exit 0; cd -- "$h" || exit 1; [ -d %s ] || exit 0; LC_ALL=C find -H %s -mindepth %d -maxdepth %d -type f -path %s -print0`,
+		pattern.HomeVar, quotedSuffix(pattern.HomeDefault), start, start, depth, depth, "'.'"+quotedSuffix(pattern.Segments))
 }
 
 // quotedSuffix renders segments as "/'a'/'b'", each quoted for the remote shell.
