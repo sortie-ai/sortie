@@ -1,0 +1,10 @@
+{"sessionId":"5c975694-d1f6-4d26-84cd-f9f1c0b23b3d","projectHash":"c1c34be36e03a9ac7345b50927ad8574352c2ad0b753c3db4b54861e6c9ed18c","startTime":"2026-10-30T15:12:43.146Z","lastUpdated":"2026-10-30T15:12:43.146Z","kind":"main"}
+{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-10-30T15:12:43.146Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:12:43.146Z"}}
+{"id":"b31685d7-a045-4de5-bd24-0a71992b2ceb","timestamp":"2026-10-30T15:12:43.153Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:12:43.153Z"}}
+{"id":"fd4e6760-72b3-4045-adf7-827975ec6568","timestamp":"2026-10-30T15:12:45.028Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11603,"output":18,"cached":0,"thoughts":429,"tool":0,"total":12050},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:12:45.029Z"}}
+{"id":"fd4e6760-72b3-4045-adf7-827975ec6568","timestamp":"2026-10-30T15:12:45.028Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11603,"output":18,"cached":0,"thoughts":429,"tool":0,"total":12050},"model":"gemini-3.5-flash-lite","toolCalls":"redacted"}
+{"id":"10827f9b-0856-45c8-94d2-5a82769d0759","timestamp":"2026-10-30T15:12:45.036Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:12:45.036Z"}}

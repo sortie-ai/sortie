@@ -54,7 +54,7 @@ func init() {
 		},
 		Pull:           usagelimits.Source,
 		PullWindows:    opencodePullWindows,
-		PromptSpend:    opencodePromptSpend,
+		PromptSpend:    sparsePromptSpend,
 		ChildSession:   opencodeChildSession,
 		Records:        sessionexport.Records,
 		ReadRecords:    opencodeReadRecords,
@@ -80,36 +80,6 @@ func opencodePromptError(e jsonrpc.Error) PromptVerdict {
 		return PromptVerdict{}
 	}
 	return PromptVerdict{Refusal: &Refusal{Name: name, Limit: limit, WindowReset: usagelimits.ConsoleMetered(name)}}
-}
-
-type opencodePromptUsage struct {
-	InputTokens       json.RawMessage `json:"inputTokens"`
-	OutputTokens      json.RawMessage `json:"outputTokens"`
-	ThoughtTokens     json.RawMessage `json:"thoughtTokens"`
-	CachedReadTokens  json.RawMessage `json:"cachedReadTokens"`
-	CachedWriteTokens json.RawMessage `json:"cachedWriteTokens"`
-}
-
-// opencodePromptSpend reads the per-turn counts of a prompt result. The runtime
-// omits a counter that is zero, so an absent optional member reads zero while a
-// present member that is not an integer reads unknown. The input and output
-// counts are never omitted, so absent means unknown for them.
-func opencodePromptSpend(result json.RawMessage) *usage.SpendReading {
-	var decoded standardPromptResult
-	if err := json.Unmarshal(result, &decoded); err != nil || len(decoded.Usage) == 0 || string(decoded.Usage) == "null" {
-		return nil
-	}
-	var counts opencodePromptUsage
-	if err := json.Unmarshal(decoded.Usage, &counts); err != nil {
-		return nil
-	}
-	return &usage.SpendReading{
-		Input:      jsonCount(counts.InputTokens),
-		Output:     jsonCount(counts.OutputTokens),
-		Reasoning:  sessionexport.CountOmittedAtZero(counts.ThoughtTokens),
-		CacheRead:  sessionexport.CountOmittedAtZero(counts.CachedReadTokens),
-		CacheWrite: sessionexport.CountOmittedAtZero(counts.CachedWriteTokens),
-	}
 }
 
 // opencodeReadRecords returns the records of the session's export, in message

@@ -73,14 +73,14 @@ func TestHandshake_ErrorQuotesData(t *testing.T) {
 		{
 			method: methodSessionNew,
 			call: func(s *sessionState) *domain.AgentError {
-				_, err := doNewSession(context.Background(), s, "/ws", nil)
+				_, _, err := doNewSession(context.Background(), s, "/ws", nil)
 				return err
 			},
 			code:        "-32603",
 			wantMessage: "session/new error -32603: internal error: the invalid bearer token",
 		},
 		{method: methodSessionNew, call: func(s *sessionState) *domain.AgentError {
-			_, err := doNewSession(context.Background(), s, "/ws", nil)
+			_, _, err := doNewSession(context.Background(), s, "/ws", nil)
 			return err
 		}, code: "-32000", wantMessage: "the agent runtime refused its credential: internal error: the invalid bearer token"},
 	}

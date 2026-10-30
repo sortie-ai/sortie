@@ -347,7 +347,7 @@ func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 		inPr, _ := io.Pipe()
 		var buf bytes.Buffer
 		state := &sessionState{
-			caps:   newCapabilityRecord(false),
+			caps:   newCapabilityRecord(),
 			stopCh: make(chan struct{}),
 			logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		}
@@ -1286,7 +1286,7 @@ func newTestSessionWithRelease(t *testing.T, grace time.Duration, reaped <-chan 
 	inPr, inPw := io.Pipe()
 
 	state := &sessionState{
-		caps:     newCapabilityRecord(false),
+		caps:     newCapabilityRecord(),
 		usage:    agentcore.NewTurnEndUsage(),
 		stopCh:   make(chan struct{}),
 		pumpDone: make(chan struct{}),
@@ -1412,7 +1412,7 @@ func TestHandleStartTurnRefusedOnceReleaseAbandonedBeforePumpHandlesIt(t *testin
 
 	p := &pumpState{
 		state: &sessionState{
-			caps:    newCapabilityRecord(false),
+			caps:    newCapabilityRecord(),
 			logger:  discardLogger(),
 			usage:   agentcore.NewTurnEndUsage(),
 			release: buildAbandonedRelease(t),

@@ -148,25 +148,6 @@ type protocolAgentParams struct {
 	EnvCaptureNames []string
 	EnvCapturePath  string
 
-	// AgentInfoNames, when Handshake is set and this list is
-	// non-empty, selects the agentInfo.name the initialize response
-	// reports: element [min(startIndex, len-1)] of this list, where
-	// startIndex is this process's 0-based position among every start
-	// sharing SequencePath. A single-element list reports the same
-	// name on every start. An empty list reports no agentInfo at all.
-	AgentInfoNames []string
-
-	// AgentInfoTitle, when non-empty, is the title the initialize
-	// response reports alongside AgentInfoNames' selected name, on
-	// every start.
-	AgentInfoTitle string
-
-	// SequencePath, when set, is a file this process appends one byte
-	// to before consulting AgentInfoNames, so a fixture relaunched by
-	// startSession learns its own 0-based start index. Required
-	// whenever AgentInfoNames has more than one element.
-	SequencePath string
-
 	// RespondPrompts makes the process answer every session/prompt
 	// with an end_turn stop reason once session/new has been
 	// answered, instead of idling right after the handshake.
@@ -182,15 +163,6 @@ type protocolAgentParams struct {
 // which keeps the fixture portable to platforms where that binary is
 // absent.
 func runProtocolAgent(_ []string, params protocolAgentParams) int {
-	startIndex := 0
-	if params.SequencePath != "" {
-		idx, err := nextStartIndex(params.SequencePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "protocol agent: sequence: %v\n", err)
-			return 2
-		}
-		startIndex = idx
-	}
 	if len(params.EnvCaptureNames) > 0 && params.EnvCapturePath != "" {
 		if err := appendEnvCapture(params.EnvCapturePath, params.EnvCaptureNames); err != nil {
 			fmt.Fprintf(os.Stderr, "protocol agent: env capture: %v\n", err)
@@ -226,45 +198,13 @@ func runProtocolAgent(_ []string, params protocolAgentParams) int {
 	}
 
 	if params.Handshake {
-		if code, exit := runHandshakeLoop(params, startIndex); exit {
+		if code, exit := runHandshakeLoop(params); exit {
 			return code
 		}
 	}
 
 	agenttest.Hang()
 	return 0
-}
-
-// nextStartIndex appends one byte to path, creating it if necessary, and
-// returns the 0-based count of bytes appended so far: 0 on the first call
-// against a given path, 1 on the second, and so on.
-func nextStartIndex(path string) (int, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close() //nolint:errcheck // best-effort
-
-	if _, err := f.Write([]byte{'.'}); err != nil {
-		return 0, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	return int(info.Size()) - 1, nil
-}
-
-// indexedOrLast returns list[min(idx, len(list)-1)], or "" when list is
-// empty.
-func indexedOrLast(list []string, idx int) string {
-	if len(list) == 0 {
-		return ""
-	}
-	if idx >= len(list) {
-		idx = len(list) - 1
-	}
-	return list[idx]
 }
 
 // appendEnvCapture appends one JSON object to path, mapping each of names
@@ -283,13 +223,12 @@ func appendEnvCapture(path string, names []string) error {
 
 // runHandshakeLoop reads JSON-RPC lines from standard input and answers
 // initialize and session/new exactly as startSession expects, applying
-// params' capture and early-exit behavior; startIndex selects this
-// process's element of params.AgentInfoNames. It returns exit=true when
+// params' capture and early-exit behavior. It returns exit=true when
 // the process must stop right away with code; exit=false once the
 // handshake (and, with params.RespondPrompts, every prompt) has been
 // answered, or standard input has closed, and the caller should fall
 // through to idling.
-func runHandshakeLoop(params protocolAgentParams, startIndex int) (code int, exit bool) {
+func runHandshakeLoop(params protocolAgentParams) (code int, exit bool) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
 
@@ -304,8 +243,7 @@ func runHandshakeLoop(params protocolAgentParams, startIndex int) (code int, exi
 
 		switch header.Method {
 		case methodInitialize:
-			name := indexedOrLast(params.AgentInfoNames, startIndex)
-			if err := respondInitialize(params.IncludeMCPCapabilities, name, params.AgentInfoTitle); err != nil {
+			if err := respondInitialize(params.IncludeMCPCapabilities); err != nil {
 				fmt.Fprintf(os.Stderr, "protocol agent: respond initialize: %v\n", err)
 				return 2, true
 			}
@@ -406,18 +344,11 @@ func spawnChild(path, pidPath string, detached bool) int {
 
 // respondInitialize writes the initialize response startSession
 // expects, using the pinned schema's own generated types.
-func respondInitialize(includeMCPCapabilities bool, agentInfoName, agentInfoTitle string) error {
+func respondInitialize(includeMCPCapabilities bool) error {
 	resp := initializeResponse{ProtocolVersion: 1}
 	if includeMCPCapabilities {
 		httpSupported := true
 		resp.AgentCapabilities = &agentCapabilities{MCPCapabilities: &mcpCapabilities{HTTP: &httpSupported}}
-	}
-	if agentInfoName != "" {
-		info := &implementation{Name: agentInfoName}
-		if agentInfoTitle != "" {
-			info.Title = &agentInfoTitle
-		}
-		resp.AgentInfo = info
 	}
 	return writeJSONLine(os.Stdout, outboundResponse{JSONRPC: "2.0", ID: 1, Result: resp})
 }

@@ -191,66 +191,6 @@ func TestDeclarationLaunchesFollowTheConfiguredCommand(t *testing.T) {
 	}
 }
 
-func TestSourcesConformToTheRegistryContract(t *testing.T) {
-	kinds := Sources.Kinds()
-	if len(kinds) == 0 {
-		t.Fatal("Sources.Kinds() = empty, want at least one registered source")
-	}
-
-	for _, kind := range kinds {
-		root := t.TempDir()
-		setTempRoot(t, root)
-
-		constructor, err := Sources.Get(kind)
-		if err != nil {
-			t.Fatalf("Sources.Get(%q) error = %v", kind, err)
-		}
-
-		if fresh := constructor(); !fresh.Recognize(kind) {
-			t.Errorf("Recognize(%q) = false, want true: a source's own kind is a name it recognizes", kind)
-		}
-
-		remote := agentcore.LaunchTarget{Command: "ssh", RemoteCommand: "agent", SSHHost: "worker"}
-		for _, offeredRuntime := range []string{"", kind} {
-			refused := constructor()
-			if assignments, claimed := refused.Claim(remote, offeredRuntime); claimed {
-				t.Errorf("Claim(remote, %q) = %v, true, want a refusal: this source reads a local filesystem", offeredRuntime, assignments)
-			}
-			assertTempRootEmpty(t, root)
-			refused.Close()
-			assertTempRootEmpty(t, root)
-		}
-
-		neutral := agentcore.LaunchTarget{
-			Command:       "/opt/sortie-neutral/sortie-neutral-launch",
-			Args:          []string{"--acp"},
-			WorkspacePath: t.TempDir(),
-		}
-
-		firstOffer := constructor()
-		if assignments, claimed := firstOffer.Claim(neutral, ""); claimed && len(assignments) != 0 {
-			t.Errorf("Claim(neutral, \"\") claimed with assignments %v, want no assignment: this source cannot identify the neutral launch",
-				assignments)
-		}
-		assertTempRootEmpty(t, root)
-		firstOffer.Close()
-		assertTempRootEmpty(t, root)
-
-		relaunch := constructor()
-		if _, claimed := relaunch.Claim(neutral, kind); !claimed {
-			t.Fatalf("Claim(neutral, %q) = false, want true: the relaunch offer claims exactly when Recognize accepts", kind)
-		}
-		relaunch.Close()
-		assertTempRootEmpty(t, root)
-		relaunch.Close()
-		assertTempRootEmpty(t, root)
-
-		untouched := constructor()
-		untouched.Close()
-		assertTempRootEmpty(t, root)
-	}
-}
-
 var verificationExecutables = map[string]string{
 	geminiAgentName:   geminiExecutableName,
 	copilotAgentName:  copilotExecutableName,

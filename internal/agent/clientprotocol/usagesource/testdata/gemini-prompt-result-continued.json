@@ -1,0 +1,26 @@
+{
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 11576,
+    "outputTokens": 1,
+    "thoughtTokens": 346,
+    "totalTokens": 11577
+  },
+  "_meta": {
+    "quota": {
+      "token_count": {
+        "input_tokens": 11576,
+        "output_tokens": 1
+      },
+      "model_usage": [
+        {
+          "model": "gemini-3.5-flash-lite",
+          "token_count": {
+            "input_tokens": 11576,
+            "output_tokens": 1
+          }
+        }
+      ]
+    }
+  }
+}

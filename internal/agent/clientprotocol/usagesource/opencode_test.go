@@ -75,7 +75,7 @@ func counts(input, output, reasoning, cacheRead, cacheWrite int64) *usage.SpendR
 	return &usage.SpendReading{Input: &input, Output: &output, Reasoning: &reasoning, CacheRead: &cacheRead, CacheWrite: &cacheWrite}
 }
 
-func TestOpenCodePromptSpend(t *testing.T) {
+func TestSparsePromptSpend(t *testing.T) {
 	t.Parallel()
 
 	missingInput, nullReasoning := counts(0, 2, 0, 0, 0), counts(1, 2, 0, 0, 0)
@@ -96,10 +96,10 @@ func TestOpenCodePromptSpend(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := opencodePromptSpend([]byte(tt.result))
+			got := sparsePromptSpend([]byte(tt.result))
 
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("opencodePromptSpend(%.60s) = %s, want %s", tt.result, spendJSON(t, got), spendJSON(t, tt.want))
+				t.Errorf("sparsePromptSpend(%.60s) = %s, want %s", tt.result, spendJSON(t, got), spendJSON(t, tt.want))
 			}
 		})
 	}

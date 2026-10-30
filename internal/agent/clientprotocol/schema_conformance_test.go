@@ -933,7 +933,7 @@ func TestSchemaConformance(t *testing.T) {
 		newSessDone := make(chan struct{})
 		go func() {
 			defer close(newSessDone)
-			_, _ = doNewSession(context.Background(), state, t.TempDir(), servers)
+			_, _, _ = doNewSession(context.Background(), state, t.TempDir(), servers)
 		}()
 		newSessRaw, newSessID := nextRequestLine(t, out, methodSessionNew)
 		respondLine(t, inPw, newSessID, newSessionResponse{SessionID: sessionId("sess-conformance")})
@@ -961,7 +961,7 @@ func TestSchemaConformance(t *testing.T) {
 		t.Cleanup(cancelLoad)
 		loadOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, _, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
+			sessionID, _, _, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
 			loadOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		loadProbeID := loadOut.awaitMethod(t, negativeControlMethod)
@@ -977,7 +977,7 @@ func TestSchemaConformance(t *testing.T) {
 		t.Cleanup(cancelResume)
 		resumeOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, _, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
+			sessionID, _, _, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
 			resumeOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		resumeProbeID := resumeOut.awaitMethod(t, negativeControlMethod)

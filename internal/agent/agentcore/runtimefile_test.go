@@ -1,13 +1,129 @@
 package agentcore
 
 import (
+	"cmp"
 	"errors"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 )
+
+type matchCase struct {
+	name        string
+	homeVar     string
+	homeDefault []string
+	segments    []string
+	want        []string
+}
+
+var matchTreeFiles = []string{
+	"tmp/a/chats/session-B-abcd.jsonl",
+	"tmp/a/chats/session-a-abcd.jsonl",
+	"tmp/a/chats/session-c-zzzz.jsonl",
+	"tmp/a/deep/chats/session-d-abcd.jsonl",
+	"tmp/a-b/chats/session-e-abcd.jsonl",
+	"tmp/proj b/chats/session-f-abcd.jsonl",
+	"tmp/it's $HOME/chats/session-g-abcd.jsonl",
+}
+
+var matchTreeDirs = []string{"tmp/a/chats/session-h-abcd.jsonl"}
+
+var matchTreeLinks = [][2]string{
+	{"tmp/a/chats/session-i-abcd.jsonl", "session-a-abcd.jsonl"},
+	{"tmp/linked", "a"},
+}
+
+var matchCases = []matchCase{
+	{
+		name:     "regular files only, bytewise by joined path, none deeper than a star segment",
+		segments: []string{"tmp", "*", "chats", "session-*-abcd.jsonl"},
+		want: []string{
+			"tmp/a-b/chats/session-e-abcd.jsonl",
+			"tmp/a/chats/session-B-abcd.jsonl",
+			"tmp/a/chats/session-a-abcd.jsonl",
+			"tmp/it's $HOME/chats/session-g-abcd.jsonl",
+			"tmp/proj b/chats/session-f-abcd.jsonl",
+		},
+	},
+	{
+		name:     "missing start directory",
+		segments: []string{".absent", "*", "session-*.jsonl"},
+	},
+	{
+		name:        "missing home",
+		homeVar:     "SORTIE_TEST_UNSET_HOME",
+		homeDefault: []string{".sortie-no-such-runtime-home"},
+		segments:    []string{"tmp", "*", "chats", "session-*-abcd.jsonl"},
+	},
+}
+
+func writeMatchTree(t *testing.T, root string) {
+	t.Helper()
+
+	at := func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+	for _, dir := range slices.Concat(matchTreeDirs, matchTreeDirsOfFiles()) {
+		if err := os.MkdirAll(at(dir), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%q) = %v, want nil", dir, err)
+		}
+	}
+	for _, file := range matchTreeFiles {
+		if err := os.WriteFile(at(file), []byte("x"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) = %v, want nil", file, err)
+		}
+	}
+	for _, link := range matchTreeLinks {
+		if err := os.Symlink(link[1], at(link[0])); err != nil {
+			t.Logf("os.Symlink(%q) = %v, the tree keeps no link there", link[0], err)
+		}
+	}
+}
+
+func matchTreeDirsOfFiles() []string {
+	dirs := make([]string, len(matchTreeFiles))
+	for i, file := range matchTreeFiles {
+		dirs[i] = path.Dir(file)
+	}
+	return dirs
+}
+
+func assertMatched(t *testing.T, got []RuntimePath, err error, pattern RuntimePath, want []string) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("MatchRuntimeFiles(%q) error = %v, want nil", pattern.Segments, err)
+	}
+	labels := make([]string, 0, len(got))
+	for _, path := range got {
+		if path.HomeVar != pattern.HomeVar || !slices.Equal(path.HomeDefault, pattern.HomeDefault) {
+			t.Errorf("MatchRuntimeFiles(%q) returned home %q %q, want %q %q", pattern.Segments, path.HomeVar, path.HomeDefault, pattern.HomeVar, pattern.HomeDefault)
+		}
+		labels = append(labels, strings.Join(path.Segments, "/"))
+	}
+	if !slices.Equal(labels, want) {
+		t.Errorf("MatchRuntimeFiles(%q) = %q, want %q", pattern.Segments, labels, want)
+	}
+}
+
+func outsideQuotes(command string) string {
+	quotedSpan := regexp.MustCompile(`'[^']*'`)
+	return quotedSpan.ReplaceAllString(strings.ReplaceAll(command, `'\''`, ""), "")
+}
+
+func invalidPathTargets(t *testing.T) map[string]LaunchTarget {
+	t.Helper()
+
+	return map[string]LaunchTarget{
+		"local":  {},
+		"remote": {Command: filepath.Join(t.TempDir(), "absent-ssh"), SSHHost: "lab", WorkspacePath: t.TempDir(), RemoteCommand: "true"},
+	}
+}
 
 func TestScanRuntimeFileRejects(t *testing.T) {
 	t.Parallel()
@@ -148,10 +264,7 @@ func TestRuntimePathRefusal(t *testing.T) {
 	t.Parallel()
 
 	const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e"
-	targets := map[string]LaunchTarget{
-		"local":  {},
-		"remote": {Command: filepath.Join(t.TempDir(), "absent-ssh"), SSHHost: "lab", WorkspacePath: t.TempDir(), RemoteCommand: "true"},
-	}
+	targets := invalidPathTargets(t)
 	segments := func(elements ...string) RuntimePath {
 		return RuntimePath{HomeVar: "AGENT_HOME", Segments: elements}
 	}
@@ -189,6 +302,94 @@ func TestRuntimePathRefusal(t *testing.T) {
 					if got := errors.Is(err, ErrInvalidRuntimePath); got != tt.invalid {
 						t.Errorf("%s %s(%+v) error = %v, errors.Is(ErrInvalidRuntimePath) = %t, want %t", host, op, tt.path, err, got, tt.invalid)
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestLaunchTarget_MatchRuntimeFiles(t *testing.T) {
+	t.Parallel()
+
+	const homeVar = "SORTIE_TEST_RUNTIME_HOME"
+	home := t.TempDir()
+	writeMatchTree(t, home)
+	env := []string{homeVar + "=" + home}
+
+	for _, tt := range matchCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pattern := RuntimePath{HomeVar: cmp.Or(tt.homeVar, homeVar), HomeDefault: tt.homeDefault, Segments: tt.segments}
+
+			got, err := LaunchTarget{}.MatchRuntimeFiles(t.Context(), env, pattern)
+
+			assertMatched(t, got, err, pattern, tt.want)
+		})
+	}
+}
+
+func TestLaunchTarget_MatchRuntimeFiles_RefusesPattern(t *testing.T) {
+	t.Parallel()
+
+	targets := invalidPathTargets(t)
+	tests := []struct {
+		name     string
+		segments []string
+		invalid  bool
+	}{
+		{name: "question mark", segments: []string{"tmp", "session-?.jsonl"}, invalid: true},
+		{name: "opening bracket", segments: []string{"tmp", "session-[a-z].jsonl"}, invalid: true},
+		{name: "closing bracket", segments: []string{"tmp", "session-].jsonl"}, invalid: true},
+		{name: "backslash", segments: []string{"tmp", `session-\*.jsonl`}, invalid: true},
+		{name: "parent directory segment", segments: []string{"tmp", "..", "*"}, invalid: true},
+		{name: "star wildcard", segments: []string{"tmp", "*", "session-*.jsonl"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pattern := RuntimePath{HomeVar: "AGENT_HOME", Segments: tt.segments}
+			env := []string{pattern.HomeVar + "=" + t.TempDir()}
+
+			for host, target := range targets {
+				_, err := target.MatchRuntimeFiles(t.Context(), env, pattern)
+
+				if got := errors.Is(err, ErrInvalidRuntimePath); got != tt.invalid {
+					t.Errorf("%s MatchRuntimeFiles(%q) error = %v, errors.Is(ErrInvalidRuntimePath) = %t, want %t", host, tt.segments, err, got, tt.invalid)
+				}
+			}
+		})
+	}
+}
+
+func TestRemoteMatchCommandQuotesEverySegment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pattern RuntimePath
+	}{
+		{name: "substitution and backtick", pattern: RuntimePath{HomeVar: "AGENT_HOME", Segments: []string{"$(canary)", "*", "`canary`.json"}}},
+		{name: "separator and glob", pattern: RuntimePath{HomeVar: "AGENT_HOME", Segments: []string{"a;canary;b", "session-*.jsonl"}}},
+		{name: "single quote and space", pattern: RuntimePath{HomeVar: "AGENT_HOME", Segments: []string{"it's canary", "*"}}},
+		{name: "literal directory ahead of the wildcard", pattern: RuntimePath{HomeVar: "AGENT_HOME", Segments: []string{"canary", "chats", "*"}}},
+		{name: "home default", pattern: RuntimePath{HomeVar: "AGENT_HOME", HomeDefault: []string{"$(canary)"}, Segments: []string{"canary", "*"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			command := remoteMatchCommand(tt.pattern)
+
+			if strings.Contains(outsideQuotes(command), "canary") {
+				t.Errorf("remoteMatchCommand(%q) = %q, want every segment inside single quotes", tt.pattern.Segments, command)
+			}
+			for _, segment := range slices.Concat(tt.pattern.HomeDefault, tt.pattern.Segments) {
+				if want := sshutil.QuoteArgv([]string{segment}); !strings.Contains(command, want) {
+					t.Errorf("remoteMatchCommand(%q) = %q, want it to hold %s", tt.pattern.Segments, command, want)
 				}
 			}
 		})

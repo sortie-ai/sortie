@@ -21,6 +21,7 @@ import (
 type resolveSessionOutcome struct {
 	sessionID string
 	created   bool
+	raw       json.RawMessage
 	err       *domain.AgentError
 }
 
@@ -32,8 +33,8 @@ type resolveSessionOutcome struct {
 func runResolveSessionAsync(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities) <-chan resolveSessionOutcome {
 	ch := make(chan resolveSessionOutcome, 1)
 	go func() {
-		sessionID, created, err := resolveSession(ctx, state, resumeID, caps, "", nil)
-		ch <- resolveSessionOutcome{sessionID: sessionID, created: created, err: err}
+		sessionID, created, raw, err := resolveSession(ctx, state, resumeID, caps, "", nil)
+		ch <- resolveSessionOutcome{sessionID: sessionID, created: created, raw: raw, err: err}
 	}()
 	return ch
 }
@@ -405,6 +406,75 @@ func TestResolveSessionResumeFailureLowersAndFallsBack(t *testing.T) {
 	}
 
 	assertSessionContinuationEntry(t, state, out, inPw, true)
+}
+
+func TestResolveSessionReturnsTheOpeningCallsResultVerbatim(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		resumeID string
+		caps     agentCapabilities
+		script   func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage)
+	}{
+		{
+			name: "session/new",
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
+			},
+		},
+		{
+			name:     "a confirmed session/load",
+			resumeID: "prior-session",
+			caps:     capsAdvertisingLoad(),
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+				loadID := out.awaitMethod(t, methodSessionLoad)
+				sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
+				respondLine(t, inPw, loadID, result)
+			},
+		},
+		{
+			name:     "session/resume",
+			resumeID: "prior-session",
+			caps:     capsAdvertisingResume(),
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionResume), result)
+			},
+		},
+		{
+			name:     "the session/new a failed session/load falls back to",
+			resumeID: "prior-session",
+			caps:     capsAdvertisingLoad(),
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+				respondErrorLine(t, inPw, out.awaitMethod(t, methodSessionLoad), -32000, "session store unavailable")
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+			out := newOutboundReader(outPr)
+			result := json.RawMessage(`{"sessionId":"opened","models":{"currentModelId":"scripted-model","availableModels":[]}}`)
+
+			outcomeCh := runResolveSessionAsync(context.Background(), state, tt.resumeID, tt.caps)
+			tt.script(t, out, inPw, result)
+
+			outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
+			if outcome.err != nil {
+				t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
+			}
+			if !bytes.Equal(outcome.raw, result) {
+				t.Errorf("resolveSession() raw result = %s, want %s: the opening call's own bytes, including members the decoded struct lacks", outcome.raw, result)
+			}
+		})
+	}
 }
 
 // TestResolveSessionNegativeControlStreamEndFails confirms that a
@@ -818,7 +888,7 @@ func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	outcomeCh := make(chan resolveSessionOutcome, 1)
 	go func() {
-		sessionID, created, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
+		sessionID, created, _, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
 		outcomeCh <- resolveSessionOutcome{sessionID: sessionID, created: created, err: err}
 	}()
 

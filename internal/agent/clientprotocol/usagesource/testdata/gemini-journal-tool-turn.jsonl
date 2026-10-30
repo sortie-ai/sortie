@@ -1,0 +1,16 @@
+{"sessionId":"df64f30d-3446-4c7c-924e-9b58c79cdbc7","projectHash":"2d42d150a5bf8ac9ea80e3b4a0f44b919484ec7fef8546bffd609329a626d7ec","startTime":"2026-10-30T15:11:43.744Z","lastUpdated":"2026-10-30T15:11:43.744Z","kind":"main"}
+{"id":"d04923d38bb0f6017037e74183378ef4","timestamp":"2026-10-30T15:11:43.744Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:43.745Z"}}
+{"id":"effdeadc-3f36-4917-9a4a-cdb1fc20ea78","timestamp":"2026-10-30T15:11:43.753Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:43.753Z"}}
+{"id":"1e12452c-2909-414c-90eb-bca689001a2b","timestamp":"2026-10-30T15:11:45.702Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11598,"output":18,"cached":0,"thoughts":362,"tool":0,"total":11978},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:45.702Z"}}
+{"id":"1e12452c-2909-414c-90eb-bca689001a2b","timestamp":"2026-10-30T15:11:45.702Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":11598,"output":18,"cached":0,"thoughts":362,"tool":0,"total":11978},"model":"gemini-3.5-flash-lite","toolCalls":"redacted"}
+{"id":"9ea2f9b7-1b40-41c7-97a2-66b7773ac5f9","timestamp":"2026-10-30T15:11:45.710Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:45.710Z"}}
+{"id":"3ac6b4e8-120a-4a9b-bab4-43e827d50b13","timestamp":"2026-10-30T15:11:47.003Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":12083,"output":1,"cached":8123,"thoughts":64,"tool":0,"total":12148},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:47.004Z"}}
+{"id":"7783c790-9412-4a5f-81c5-c5a3d837dc82","timestamp":"2026-10-30T15:11:47.006Z","type":"user","content":"redacted"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:47.006Z"}}
+{"id":"79399540-374c-4946-af3e-500538482b34","timestamp":"2026-10-30T15:11:48.459Z","type":"gemini","content":"redacted","thoughts":"redacted","tokens":{"input":12093,"output":1,"cached":8118,"thoughts":36,"tool":0,"total":12130},"model":"gemini-3.5-flash-lite"}
+{"$set":{"lastUpdated":"2026-10-30T15:11:48.459Z"}}

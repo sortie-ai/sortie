@@ -67,8 +67,9 @@ type activeTurn struct {
 	// that occurred unmeasured.
 	spend agentcore.TurnSpend
 
-	// draining separates a turn waiting on a drain from one whose bounded wait
-	// belongs to an end attempt; drainEvidence is the disposition held meanwhile.
+	// draining separates a turn waiting on its records read from one whose
+	// bounded wait belongs to an end attempt; drainEvidence is the disposition
+	// held meanwhile.
 	drainEvidence agentcore.TurnEvidence
 	draining      bool
 
@@ -177,7 +178,7 @@ func (t *activeTurn) spendTurnEnd(replied, cancelled bool) usage.TurnEnd {
 	}
 }
 
-// heldEnd is the disposition and drained figure a turn ends on once its pull
+// heldEnd is the disposition and settled figure a turn ends on once its pull
 // has returned.
 type heldEnd struct {
 	evidence agentcore.TurnEvidence
@@ -208,21 +209,12 @@ type pumpState struct {
 
 	tracker *agentcore.ToolTracker
 
-	// reader is the session's measurement source until it proves inapplicable;
-	// dropReader then clears it.
-	reader usageReader
-
-	// drainProven latches once a drain has produced a record; until then a drain
-	// that produces nothing drops the source.
-	drainProven bool
-
 	declaration usagesource.Declaration
 
 	loopDone <-chan struct{}
 
 	// ledger is the session's spend accounting, set at the handshake and never
-	// dropped; a session with one has no reader. figureSeen latches once a turn
-	// produced a figure.
+	// dropped. figureSeen latches once a turn produced a figure.
 	ledger     *usage.Ledger
 	figureSeen bool
 
@@ -377,8 +369,8 @@ func runPump(state *sessionState) {
 }
 
 // settleForStop reports whether the pump may return. A turn awaiting a records
-// read, drain, or pull is left to that result or its deadline: a stop never cuts
-// a measurement short.
+// read or pull is left to that result or its deadline: a stop never cuts a
+// measurement short.
 func (p *pumpState) settleForStop() bool {
 	turn := p.activeTurn
 	if turn == nil {
@@ -410,7 +402,6 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		p.agentInfoPresent = ctrl.handshake.agentInfoPresent
 		p.caps = ctrl.handshake.caps
 		p.toolServersDelivered = ctrl.handshake.toolServersDelivered
-		p.reader = ctrl.handshake.reader
 		p.declaration = ctrl.handshake.declaration
 		p.puller = ctrl.handshake.puller
 		p.ledger = ctrl.handshake.ledger
@@ -422,9 +413,6 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 	case ctrl.sessionID != "":
 		p.sessionID = ctrl.sessionID
 		p.sessionIDKnown = true
-		if p.reader != nil {
-			p.reader.Open(p.sessionID)
-		}
 		// Logged here rather than on the handshake message: the handshake is
 		// published first, so only now are both the implementation record and the
 		// session identifier known.
@@ -446,9 +434,6 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 
 	case ctrl.startTurn != nil:
 		p.handleStartTurn(ctrl.startTurn)
-
-	case ctrl.usage != nil:
-		p.handleUsageObserved(ctrl.usage)
 
 	case ctrl.pulled != nil:
 		p.handlePullResult(ctrl.pulled)
@@ -537,13 +522,6 @@ func (p *pumpState) applyHandshakeCapabilityLowering(facts *handshakeFacts) {
 	if !advertisesSessionContinuation(facts.caps) {
 		p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
 	}
-}
-
-// dropReader gives up on the measurement source and lowers the token-counts
-// entry.
-func (p *pumpState) dropReader() {
-	p.reader = nil
-	p.lowerCapability(&p.state.caps.tokenCounts, capabilityLabelTokenCounts)
 }
 
 // lowerCapability lowers entry, logging at warn when the once-per-session
@@ -771,13 +749,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		return
 	}
 
-	// A forced outcome already has a disposition and, when cancelled, no figure
-	// to wait for.
-	if p.reader == nil || bound <= 0 || turn.pendingEnd != turnEndNone {
-		p.settleTurn(evidence, nil)
-		return
-	}
-	p.armDrain(turn, evidence, bound)
+	p.settleTurn(evidence, nil)
 }
 
 // promptErrorEvidence maps a session/prompt error. The declaration's verdict
@@ -834,34 +806,6 @@ func refusalMessage(r usagesource.Refusal) string {
 		return "usage-limit refusal"
 	}
 	return fmt.Sprintf("usage-limit refusal: %q", redact.Truncate(r.Message, messageTruncateLimit))
-}
-
-// armDrain runs one turn's measurement wait on its own goroutine: the source is
-// batched behind a tick this transport cannot shorten, and a blocked pump would
-// stop answering the runtime meanwhile. The result returns through the inbox, so
-// the usage accumulator stays on the pump goroutine.
-func (p *pumpState) armDrain(turn *activeTurn, evidence agentcore.TurnEvidence, bound int64) {
-	turn.drainEvidence = evidence
-	turn.draining = true
-	if turn.deadlineC == nil {
-		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
-	}
-
-	reader := p.reader
-	inbox := p.state.inbox
-	stop := p.state.stopCh
-
-	go func() {
-		ctx, cancel := contextUntilStop(stop)
-		defer cancel()
-
-		recovered, source, found := reader.Drain(ctx, bound)
-		observed := &usageObserved{turn: turn, source: source, completeness: reader.Completeness()}
-		if found {
-			observed.recovered = &recovered
-		}
-		inbox.Put(pumpItem{control: &pumpControl{usage: observed}})
-	}()
 }
 
 // contextUntilStop returns a context that ends when stop closes or cancel is
@@ -945,8 +889,7 @@ func applyRecordedReset(turn *activeTurn, recorded usagesource.RecordedRefusal) 
 }
 
 // settleSpend runs the ledger over turn and applies the settlement to the turn's
-// spend evidence. Completeness stays unknown: the settlement already says
-// whether the turn is settled.
+// spend evidence.
 func (p *pumpState) settleSpend(turn *activeTurn, end usage.TurnEnd, live *usage.SpendReading, read usage.RecordsRead) *usageObserved {
 	settlement := p.ledger.Settle(end, live, read)
 	turn.recordsPending = false
@@ -1005,8 +948,8 @@ func pullEnding(end turnEndKind) usage.TurnEnding {
 }
 
 // armPull marks a turn whose ending the usage component pulls after as owing a
-// pull, and holds its wait open for the puller's bound, which a drain's shorter
-// wait would cut. launchPull starts the pull.
+// pull, and holds its wait open for the puller's bound, which the shorter
+// records-read wait would cut. launchPull starts the pull.
 func (p *pumpState) armPull(turn *activeTurn) {
 	ending := pullEnding(turn.pendingEnd)
 	if !p.puller.PullsAfter(ending) || p.pullInFlight {
@@ -1092,27 +1035,6 @@ func (p *pumpState) settleTurn(ev agentcore.TurnEvidence, observed *usageObserve
 		observed = turn.held.observed
 	}
 	turn.held = &heldEnd{evidence: ev, observed: observed}
-}
-
-// handleUsageObserved applies a turn's drain result, discarding one for a turn
-// that already ended.
-func (p *pumpState) handleUsageObserved(observed *usageObserved) {
-	turn := p.activeTurn
-	if turn == nil || turn != observed.turn {
-		return
-	}
-
-	if observed.recovered == nil {
-		if !p.drainProven {
-			p.dropReader()
-		}
-		p.settleTurn(turn.drainEvidence, observed)
-		return
-	}
-
-	p.drainProven = true
-	p.state.logger.Debug("usage recovered for a turn", slog.String("source", observed.source))
-	p.settleTurn(turn.drainEvidence, observed)
 }
 
 // isForeignSession reports whether id names a conversation this adapter did not
@@ -1399,9 +1321,9 @@ func (p *pumpState) finalizeTurn(ev agentcore.TurnEvidence) {
 	p.finalizeTurnWithUsage(ev, nil)
 }
 
-// finalizeTurnWithUsage ends the active turn, settling the drained figure into
+// finalizeTurnWithUsage ends the active turn, settling the recovered figure into
 // the run-cumulative snapshot. A nil observed, or one with no record, leaves the
-// snapshot and the measurement verdict as they stood.
+// snapshot as it stood.
 func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *usageObserved) {
 	turn := p.activeTurn
 	if turn == nil {
@@ -1418,14 +1340,7 @@ func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *u
 	}
 
 	emit := p.publish(turn)
-	// The measurement verdict asserts a measurement exists, not that accounting
-	// is complete, so unmeasured spend and a partial figure stay out of it.
-	spend := turn.spend
-	if accountsForWholeTurn(observed) {
-		spend.MarkSettled()
-		spend.MarkSessionTotal()
-	}
-	result, agentErr := p.state.usage.Finalize(emit, p.state.logger, ev, p.sessionID, 0, recovered, spend)
+	result, agentErr := p.state.usage.Finalize(emit, p.state.logger, ev, p.sessionID, 0, recovered, turn.spend)
 
 	select {
 	case turn.resultCh <- turnEnd{result: result, err: agentErr}:
@@ -1452,14 +1367,9 @@ func (p *pumpState) resetFromPulledWindows(turn *activeTurn, ev agentcore.TurnEv
 	ev.UsageLimit.ResetsAt = usage.RefusalReset(windows, time.Now().UTC())
 }
 
-func accountsForWholeTurn(observed *usageObserved) bool {
-	return observed != nil && observed.recovered != nil &&
-		observed.completeness == usagesource.CompletenessAccounted
-}
-
-// recoverThenFinalize ends the active turn on ev after one bounded drain: a turn
-// that ends without a wire result still spent what its completed requests cost.
-// ev is the disposition either way, and a turn already draining keeps its drain.
+// recoverThenFinalize ends the active turn on ev: a turn that ends without a
+// wire result still spent what its completed requests cost, which the ledger
+// settles. ev is the disposition either way.
 func (p *pumpState) recoverThenFinalize(ev agentcore.TurnEvidence) {
 	turn := p.activeTurn
 	if turn == nil {
@@ -1469,12 +1379,7 @@ func (p *pumpState) recoverThenFinalize(ev agentcore.TurnEvidence) {
 		p.endUnreplied(ev)
 		return
 	}
-	if p.reader == nil || !turn.spend.ModelReached() || turn.draining {
-		p.settleTurn(ev, nil)
-		return
-	}
-	turn.endSettled = true
-	p.armDrain(turn, ev, 0)
+	p.settleTurn(ev, nil)
 }
 
 // beginEndAttempt marks the active turn as winding down toward kind, sends

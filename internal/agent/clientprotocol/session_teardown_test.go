@@ -107,7 +107,7 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 		pumpDone:    make(chan struct{}),
 		logger:      discardLogger(),
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 60000},
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 		usage:       agentcore.NewTurnEndUsage(),
 	}
 	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
@@ -437,7 +437,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      logger,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 		usage:       agentcore.NewTurnEndUsage(),
 	}
 	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)

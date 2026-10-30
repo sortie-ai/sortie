@@ -21,13 +21,13 @@ func (w alwaysFailWriter) Write(p []byte) (int, error) { return 0, w.err }
 // newFailWriteSession is newTestSession with its connection's writer replaced
 // by one that fails every write, so a turn's prompt send fails asynchronously
 // after handleStartTurn's SendRequest has enqueued and returned.
-func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr error, opts ...func(*sessionState)) (*sessionState, *io.PipeWriter) {
+func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr error) (*sessionState, *io.PipeWriter) {
 	t.Helper()
 
 	inPr, inPw := io.Pipe()
 	state := &sessionState{
 		agentConfig: agentConfig,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 		usage:       agentcore.NewTurnEndUsage(),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
@@ -37,10 +37,6 @@ func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr 
 	state.inbox = jsonrpc.NewInbox[pumpItem]()
 	state.conn = jsonrpc.NewConn(alwaysFailWriter{err: writeErr}, inPr, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
-
-	for _, opt := range opts {
-		opt(state)
-	}
 
 	go runPump(state)
 	t.Cleanup(func() {

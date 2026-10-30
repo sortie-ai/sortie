@@ -45,7 +45,7 @@ func runCredentialAgent(_ []string, params credentialAgentParams) int {
 
 		switch header.Method {
 		case methodInitialize:
-			if err := respondInitialize(false, "", ""); err != nil {
+			if err := respondInitialize(false); err != nil {
 				fmt.Fprintf(os.Stderr, "credential agent: respond initialize: %v\n", err)
 				return 2
 			}

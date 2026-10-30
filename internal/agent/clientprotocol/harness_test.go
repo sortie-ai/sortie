@@ -26,19 +26,6 @@ func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes i
 	return newTestSessionWithLogger(t, agentConfig, maxLineBytes, discardLogger())
 }
 
-// withUsageReader must be applied before the pump starts. It queues a
-// handshake control message carrying reader alone, so a test that never
-// calls publishHandshake still delivers reader to the pump through the
-// same path production does. A test that also calls publishHandshake must
-// pass reader there too: a later handshake control message overwrites
-// every field the first one set, reader included.
-func withUsageReader(reader usageReader) func(*sessionState) {
-	return func(state *sessionState) {
-		state.inbox.Put(pumpItem{control: &pumpControl{handshake: &handshakeFacts{reader: reader}}})
-		state.caps = newCapabilityRecord(true)
-	}
-}
-
 func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int, logger *slog.Logger) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
 
@@ -54,7 +41,7 @@ func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxL
 	state := &sessionState{
 		tools:       tools,
 		agentConfig: agentConfig,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(),
 		usage:       agentcore.NewTurnEndUsage(),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
@@ -136,7 +123,6 @@ type outboundReader struct {
 	err error
 }
 
-// newOutboundReader starts scanning r in the background.
 func newOutboundReader(r io.Reader) *outboundReader {
 	rec := &outboundReader{ch: make(chan []byte, 64)}
 	go func() {
