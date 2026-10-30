@@ -1292,12 +1292,11 @@ func TestValidateDispatchConfig_UsageReportingWarnings(t *testing.T) {
 		noKindInMessage bool
 	}{
 		{
-			name:      "agent.max_tokens set against a records-only token source warns for an SSH worker",
+			name:      "agent.max_tokens set against a records-only token source draws no warning for an SSH worker",
 			maxTokens: 50000,
 			sshHosts:  true,
 			meta:      journalMeta,
 			check:     "agent.kind.no_usage_reporting",
-			wantWarn:  true,
 		},
 		{
 			name:      "agent.max_tokens set against a records-only token source draws no warning for a local worker",

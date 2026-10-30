@@ -584,7 +584,7 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 	cancelled, stopped, gone := conformanceCancelledRun(), conformanceStoppedRun(), conformanceGoneRun()
 	continuation := conformanceContinuationRun()
 	got := map[string][]string{
-		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges, nil, false),
+		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges, nil),
 		"interrupted turn, cancellation": interruptedTurnViolations(cancelled.run, cancelled.in),
 		"interrupted turn, stop":         interruptedTurnViolations(stopped.run, stopped.in),
 		"runtime gone":                   runtimeGoneViolations(gone.run, gone.probe, gone.td),
@@ -689,7 +689,7 @@ func TestConformancePropertyContinuation(t *testing.T) {
 	conformanceRunCases(t, "continuation", cases,
 		conformanceContinuationRun,
 		func(s conformanceContinuationState) []string {
-			return continuationViolations(s.turns, s.resumed, s.exchanges, nil, false)
+			return continuationViolations(s.turns, s.resumed, s.exchanges, nil)
 		},
 	)
 }
@@ -1474,15 +1474,10 @@ func TestAssertExactUsageReadsTheKindsSources(t *testing.T) {
 			wantReporting: true,
 		},
 		{
-			name:    "remote launch of a records-only kind reports no figure and flags its spend",
-			binding: Binding{Kind: conformancePlainKind},
-			mutate:  chain(remote, unmeasured(domain.EventTurnCompleted)),
-		},
-		{
-			name:       "remote launch of a records-only kind leaves its spend unflagged",
-			binding:    Binding{Kind: conformancePlainKind},
-			mutate:     chain(remote, unmeasured(domain.EventTurnCompleted), func(run *Run) { run.Result.SpendUnaccounted = false }),
-			wantFailed: true,
+			name:          "remote launch of a kind with a records source carries a figure",
+			binding:       Binding{Kind: conformancePlainKind},
+			mutate:        remote,
+			wantReporting: true,
 		},
 		{
 			name:    "lower-bound live source without Spend accepts a turn with no figure",

@@ -23,6 +23,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest"
 	"github.com/sortie-ai/sortie/internal/agent/toolrelay"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -155,9 +156,15 @@ type SpendSources struct {
 
 	// RecordsAtTurnEnd declares that the records source writes a request's
 	// record only when the turn ends, not when the request completes. Records
-	// written then cannot settle a killed turn: the binding expects that turn's
-	// amount to be unknown, never zero, with the spend flagged unaccounted.
+	// written then cannot settle a killed turn, nor one cancelled after output
+	// when CancelEndsProcess is set: the binding expects that turn's amount to
+	// be unknown, never zero, with the spend flagged unaccounted.
 	RecordsAtTurnEnd bool
+
+	// CancelEndsProcess declares that the kind cancels a turn by ending its
+	// runtime process, so a cancel after output leaves the records as a kill
+	// does.
+	CancelEndsProcess bool
 }
 
 // SSHVariant is a binding's fixture for the SSH variant of the tool-server
@@ -959,7 +966,7 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	})
 	if b.Spend != nil && (scenario == ScenarioCancellationAfterOutput || scenario == ScenarioKill) {
 		t.Run("exact usage", func(t *testing.T) {
-			if scenario == ScenarioKill && b.Spend.RecordsAtTurnEnd && !run.Result.UsageMeasured {
+			if b.Spend.RecordsAtTurnEnd && !run.Result.UsageMeasured && (scenario == ScenarioKill || b.Spend.CancelEndsProcess) {
 				reportViolations(t, killedBeforeRecordsViolations(run.Result))
 				return
 			}
@@ -1071,11 +1078,11 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 		t.Fatalf("construct %q adapter error = %v", b.Kind, err)
 	}
 
-	_, originEvents := c.drive(t, roleOrigin, "", nil, turns[:controlEntry])
+	_, originEvents := c.drive(t, roleOrigin, "", turns[:controlEntry])
 	originID := turns[continuedEntry].result.SessionID
-	_, controlEvents := c.drive(t, roleControl, "", nil, turns[controlEntry:resumedEntry])
+	_, controlEvents := c.drive(t, roleControl, "", turns[controlEntry:resumedEntry])
 	resumedFrom := len(c.server.Exchanges())
-	resumed, resumedEvents := c.drive(t, roleResumed, originID, turns[continuedEntry].result.ResumeUsage, turns[resumedEntry:])
+	resumed, resumedEvents := c.drive(t, roleResumed, originID, turns[resumedEntry:])
 
 	run := Run{
 		Environment: Environment{Remote: remote != nil},
@@ -1089,7 +1096,7 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 		reportViolations(t, turnOutcomeViolations(run, len(script)))
 	})
 	t.Run("continuation", func(t *testing.T) {
-		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges, b.Spend, remote != nil))
+		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges, b.Spend))
 	})
 	if b.Spend != nil {
 		for entry, turn := range turns {
@@ -1118,14 +1125,11 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 		if want := served(run.Exchanges[resumedFrom:], turnAndAuxiliary, b); resumedResult.Usage != want {
 			t.Errorf("resumed turn Result.Usage = %+v, want %+v, the sum of every answer served to the resumed session", resumedResult.Usage, want)
 		}
-		if turns[continuedEntry].result.ResumeUsage != nil && resumedResult.SpendUnaccounted {
-			t.Errorf("resumed turn Result.SpendUnaccounted = true, want false when the resume usage was handed over")
-		}
 	})
 }
 
 // drive records each turn's result, events and served exchanges in turns.
-func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, resumeUsage *domain.TokenUsage, turns []continuedTurn) (domain.Session, []domain.AgentEvent) {
+func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, turns []continuedTurn) (domain.Session, []domain.AgentEvent) {
 	t.Helper()
 
 	events := &eventCollector{}
@@ -1162,7 +1166,6 @@ func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, re
 		AgentConfig:     launch.Config,
 		Settings:        c.binding.Passthrough,
 		ResumeSessionID: resumeID,
-		ResumeUsage:     resumeUsage,
 		SSHHost:         sshHost,
 		SSHEnvNames:     sshEnvNames,
 	})
@@ -1998,18 +2001,6 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 	t.Helper()
 
 	meta, _ := registry.Agents.Meta(b.Kind)
-	remote := run.Environment.Remote
-	if !meta.UsageSources.CarriesTokenFigure(remote) {
-		agenttest.AssertMeasurementAbsent(t, run.Events, run.Result)
-		if reachedModel(run.Exchanges) && !run.Result.SpendUnaccounted {
-			t.Errorf("Result.SpendUnaccounted = false, want true for a turn that reached the model on a kind that carries no token figure")
-		}
-		if b.Spend != nil && run.Result.UsageProvenance != (domain.UsageProvenance{}) {
-			t.Errorf("Result.UsageProvenance = %+v, want none for a kind that carries no token figure", run.Result.UsageProvenance)
-		}
-		return
-	}
-
 	arrival, attribution := meta.UsageDisposition()
 	settling := usageSettling{
 		recordsUnread:  b.Spend != nil && b.Spend.Records == (domain.UsageProvenance{}),
@@ -2024,14 +2015,9 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 	}
 	reporting(t, b.Kind, agenttest.UsageReportingCase{
 		Name:   name,
-		Remote: remote,
 		Events: run.Events,
 		Result: run.Result,
 	})
-}
-
-func reachedModel(exchanges []Exchange) bool {
-	return slices.ContainsFunc(exchanges, func(ex Exchange) bool { return slices.Contains(turnAndAuxiliary, ex.Kind) })
 }
 
 // usageSettling is what a run's registered sources leave unsettled.
@@ -2176,25 +2162,26 @@ func spendProvenanceViolations(v *findings, result domain.TurnResult, spend Spen
 }
 
 // killedBeforeRecordsViolations returns the violations of the honest outcome for
-// a turn killed while its runtime still held every record of the turn's spend:
-// spend occurred, its amount is unknown. A measured zero claims an amount, so
-// it fails like any measured figure.
+// a turn the interrupt ended while its runtime still held every record of the
+// turn's spend, a killed turn or, for a kind whose cancel ends the runtime's
+// process, one cancelled after output: spend occurred, its amount is unknown. A
+// measured zero claims an amount, so it fails like any measured figure.
 //
-// Over SSH the kill can land after the runtime wrote the turn's records, and
-// the read then settles the exact figure. Nothing the harness observes tells
-// the two apart before the Result does, so a measured Result is held to the
-// exact usage of an interrupted turn instead, and only an unmeasured one
+// Where the interrupt can land after the runtime wrote the turn's records, as
+// over SSH, the read then settles the exact figure. Nothing the harness observes
+// tells the two apart before the Result does, so a measured Result is held to
+// the exact usage of an interrupted turn instead, and only an unmeasured one
 // reaches this check.
 func killedBeforeRecordsViolations(result domain.TurnResult) []string {
 	v := &findings{property: "exact usage"}
 	if result.UsageMeasured {
-		v.add("Result.UsageMeasured is true with Usage %+v, want false for a turn killed before its records were written", result.Usage)
+		v.add("Result.UsageMeasured is true with Usage %+v, want false for a turn interrupted before its records were written", result.Usage)
 	}
 	if !result.SpendUnaccounted {
-		v.add("Result.SpendUnaccounted is false, want true for a turn killed before its records were written")
+		v.add("Result.SpendUnaccounted is false, want true for a turn interrupted before its records were written")
 	}
 	if result.UsageProvenance != (domain.UsageProvenance{}) {
-		v.add("Result.UsageProvenance = %+v, want none for a turn killed before its records were written", result.UsageProvenance)
+		v.add("Result.UsageProvenance = %+v, want none for a turn interrupted before its records were written", result.UsageProvenance)
 	}
 	return v.items
 }
@@ -2211,7 +2198,7 @@ func effectiveSplit(event domain.AgentEvent, runModel string) (split map[string]
 	if len(split) == 0 {
 		return map[string]domain.TokenUsage{model: event.Usage}, false
 	}
-	stated := agentcore.SumUsage(split)
+	stated := usage.Sum(split)
 	exceedsTotals = event.Usage.InputTokens < stated.InputTokens || event.Usage.OutputTokens < stated.OutputTokens ||
 		event.Usage.CacheReadTokens < stated.CacheReadTokens || event.Usage.CacheWriteTokens < stated.CacheWriteTokens
 	if rest := agentcore.SubtractUsage(event.Usage, stated); rest != (domain.TokenUsage{}) {
@@ -2512,10 +2499,8 @@ func reportedProcessIDs(run Run) []string {
 // script entry i, in run order: origin, origin, control, resumed.
 //
 // A non-nil spend leaves every turn's completeness to the provenance property,
-// which compares it with the completeness the binding expects. A remote run
-// launches unmeasured, so the resumed turn's measurement is required only of a
-// local run.
-func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources, remote bool) []string {
+// which compares it with the completeness the binding expects.
+func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources) []string {
 	v := &findings{property: "continuation"}
 
 	checkContinuationIdentifiers(v, turns, resumed)
@@ -2541,7 +2526,7 @@ func continuationViolations(turns []continuedTurn, resumed domain.Session, excha
 	if first := turns[0].result; spend == nil && first.UsageMeasured && first.SpendUnaccounted {
 		v.add("%s turn 1: Result.SpendUnaccounted is true, want false for a completed turn with a measured figure", roleOrigin)
 	}
-	if !remote && !turns[resumedEntry].result.UsageMeasured {
+	if !turns[resumedEntry].result.UsageMeasured {
 		v.add("%s turn: Result.UsageMeasured is false, want a measured figure", roleResumed)
 	}
 	return v.items

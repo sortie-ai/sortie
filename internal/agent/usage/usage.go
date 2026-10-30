@@ -59,9 +59,11 @@ type Source struct {
 	// unread.
 	Spend SpendDeclaration
 
-	// WrittenAtTurnEnd declares that the runtime writes a request's record only
-	// when the turn ends, not when the request completes. Such records cannot
-	// settle a killed turn: that turn's amount is unknown, never zero.
+	// WrittenAtTurnEnd declares that the runtime may not have written a
+	// request's record when a turn is killed or cancelled by ending its
+	// process, because it writes records late rather than as each request
+	// completes. Such an ending can then leave the turn's amount unknown, never
+	// zero.
 	WrittenAtTurnEnd bool
 }
 

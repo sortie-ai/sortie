@@ -16,7 +16,7 @@ const (
 	scriptedModelAssertFuncName = "AssertConformance"
 )
 
-var scriptedModelSpendPending = []string{"copilot-cli", "opencode"}
+var scriptedModelSpendPending = []string{"opencode"}
 
 func TestEveryCommandKindHasScriptedModelCoverage(t *testing.T) {
 	t.Parallel()

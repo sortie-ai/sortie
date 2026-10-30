@@ -134,13 +134,8 @@ func (s Sources) Disposition() (Arrival, Attribution) {
 }
 
 // CarriesTokenFigure reports whether a session with these sources can carry
-// a token figure on a local launch (remote false) or a remote launch.
-//
-// On a remote launch only the live source counts.
-func (s Sources) CarriesTokenFigure(remote bool) bool {
-	if remote {
-		s.Records = Source{}
-	}
+// a token figure, the same on every launch.
+func (s Sources) CarriesTokenFigure() bool {
 	arrival, _ := s.Disposition()
 	return arrival.ReportsAnyFigure()
 }

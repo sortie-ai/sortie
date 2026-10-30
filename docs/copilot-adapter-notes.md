@@ -26,7 +26,7 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
-The adapter opens the runtime's session-state tree only by a known ID, and it validates that ID against a path-segment character set before joining it into a path. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.
+The adapter opens the runtime's session-state tree only by a known ID, and the shared read validates that ID against a path-segment character set before any file opens or process starts. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.
 
 ## Preflight, and the fake-binary trap
 
@@ -34,19 +34,23 @@ The adapter opens the runtime's session-state tree only by a known ID, and it va
 
 This is the thing that ruins an afternoon when writing tests. A stand-in binary that does not answer `--version` with a zero exit never reaches a turn, because the version canary rejects it first, and the failure surfaces as the shared early-exit report at session start, which looks nothing like a parse problem. In SSH mode the canary is skipped, so a broken remote binary instead fails later, at the credential-verification step or the first turn, with a different error kind. Know which mode your test is in.
 
-## Token accounting lives off the event stream
+## Token accounting: checkpoints on the stream, records in the journal
 
-The adapter reads no token figure from the event stream. The session-state journal is its only source, an on-disk record the adapter reads after the subprocess exits.
+The kind declares two sources and the shared usage component does the arithmetic. The adapter parses lines and states what each source means; it subtracts no baseline, hands no figure over to the next run, and decides no completeness.
 
-That journal is session-cumulative across every process that resumes the session, not per-invocation. A second turn's record includes the first turn's spend. Recovering one run's own contribution means subtracting a baseline held in an `agentcore.ResumeBaseline`. `StartSession` seeds it with zero for a session the run creates and with the resume usage handed over for a resumed one. With no hand-over, a local launch whose id passes the path-segment check reads the journal's newest record once: a journal without a record, or a missing file, seeds zero, and any other failure leaves the baseline unknown. No outcome fails `StartSession`. The read at the end of every started turn (cancelled ones included) compares the newest record with the baseline's latest reading. Equal totals mean the turn wrote no record, so it reports no figure and emits no `token_usage` event; otherwise the baseline turns the record into the run figure. An unknown baseline takes the record as its starting point, so that turn reports no figure and `SpendUnaccounted`. A skipped or failed read reports no figure and nothing is abandoned: the next turn reads again. Journal reads are also skipped in SSH mode, on an ID that fails the path-segment check, and on a file that breaches the size or line caps. A turn that reports no figure after the CLI served output also reports `SpendUnaccounted`, so every SSH-mode turn that streamed output does.
+The live source is the `session.usage_checkpoint` line on stdout. The members read are `inputTokens`, `outputTokens`, `cacheReadTokens`, and `cacheWriteTokens` under `data.accountingSnapshot.modelMetrics.<model>.usage`. They are cumulative over the session, across every process that resumes it, so a turn's spend is the difference between its last checkpoint and the one before. One checkpoint follows each prompt or autopilot continuation, not each model request, so a turn with three requests can emit two. The last checkpoint before `result` is the turn's figure. Cache reads and writes sit inside the input count, and reasoning sits inside the output count (`reasoningTokens` is not read). Each `modelMetrics` key names a model that served requests: a model switch on resume adds a key, and a sub-agent's requests count under the sub-agent's own served model. The figure reaches the orchestrator once, at the end of the turn, with `turn_end` arrival and `per_model` attribution; the model comes from those keys and never from the operator-configured `copilot-cli.model` value, which is the model requested rather than the model that served.
 
-The practical rule: a usage figure from this adapter is run-cumulative and never decreases, a failed journal read never lowers a figure already reported, and the "measured" flag distinguishes an unknown spend from a genuine zero. Assertions that ignore that distinction pass for the wrong reason.
+The `result` line's `usage.premiumRequests` is a vendor unit, cumulative over the session. It is logged in the `copilot turn completed` record and never added to a token figure.
 
-The registered kind attaches the `result` event's `usage.premiumRequests` as its live source, a vendor unit that enters no token figure and is logged in the `copilot turn completed` record, and the session-state journal as its records source. It derives `turn_end` arrival and `per_model` attribution: the figure and the model both come from the shutdown record, reported through the shared turn-end report in `agentcore`. The journal is read only on a local launch, so a run on an SSH worker reports no token usage: `agent.max_tokens` and the money ceilings cannot bound it, preflight warns, and window spend reads as a lower bound.
+The records source is the journal's `session.usage_record` lines: one per model request, with the counts, the serving model, and an identity under `data.usage`. The runtime does not write the journal at once, so a kill can leave a completed request's record unwritten, even the whole file absent. The adapter reads them through the same parser and scan the `agent-client-protocol` kind uses (`internal/agent/copilot/sessionstate`), in two places: at the start of a resumed session, where their total is the session's starting point, and at the end of a turn the checkpoints left unsettled. A turn is unsettled when it ends without a `result` with exit code 0, when the runtime wrote `abort`, when it has no checkpoint, or when the session's starting point is unknown. The read runs locally or through the shared remote read on the session's SSH launch, so an SSH-worker run is measured like a local one. A read that fails (missing file, unsafe session ID, file above the size cap, line above the line cap, SSH failure, timeout) is logged at debug level and leaves the starting point or the turn's records unknown, never zero; a later turn reads again. Under a custom model provider (`isByok: true`) the runtime writes no `session.usage_checkpoint`, so the records settle every turn.
 
-Besides the shutdown record, the journal carries one `session.usage_record` line per model request. The runtime writes it before the reply, with the request's token counts, the model that served it, and an opaque request identity under `data.usage`. The `agent-client-protocol` kind reads these lines, and this kind does not. The checkpoint and shutdown totals cover the same tokens as those lines, so a reader takes one or the other for a span of tokens, never both.
+A resumed process's counter starts from the total of every usage record the journal holds, not from the last checkpoint, so the records a killed process did write count even though no checkpoint reported them. That total is what the usage component takes as the starting point of a resumed session. When the read at the start fails, the first checkpoint cannot be separated from history: that turn settles no figure, later turns settle their own deltas, and none of them claims to cover the whole session.
 
-The model name is the shutdown record's `modelMetrics` key whose token count grew the most since the previous record, breaking a tie by whichever trimmed name sorts first. A record naming no model, or one where no key grew, leaves the field blank rather than falling back to the operator-configured `copilot-cli.model` passthrough value, which is the model requested rather than the model the runtime reported using. The usage event also carries the newest shutdown record's `modelMetrics` per model, under the shared resume baseline seeded from the source of the combined seed.
+Counts decode only as JSON integers. An absent, null, or non-integer count makes the reading unknown instead of zero. The journal writes `cost`, `requests.cost`, and `totalNanoAiu` as floats such as `1.0`, so no wire type declares a field for them: an integer field would reject the whole line.
+
+Sortie cancels a turn with SIGTERM to the process group, then SIGKILL after the grace period. The runtime does not always use the grace period to write its journal: under a custom model provider (`isByok: true`) it writes the journal in one piece when the turn ends and exits within milliseconds of SIGTERM, so a turn cancelled while a request is in flight leaves no journal at all. When the runtime does write `abort`, a final checkpoint that omits the request in flight, and a `result` with exit code 0, the adapter reads `abort` as a cancelled turn, so the records settle it in place of the final checkpoint. After SIGKILL the journal can lack the records of completed requests too. A turn that ends either way without its records can end with no figure, its amount unknown and its spend unaccounted. A request in flight at a kill or a cancel leaves no record either. The `agent-client-protocol` route cancels in the protocol and keeps the process alive, so its cancelled turn is measured.
+
+The practical rule: a usage figure from this adapter never decreases, a failed read never lowers a figure already reported, and the "measured" flag distinguishes an unknown spend from a genuine zero. Assertions that ignore that distinction pass for the wrong reason.
 
 ## Quota windows are pulled, not streamed
 
@@ -156,11 +160,11 @@ A stored login authenticates a run. Every grade on this page was measured under 
 
 ## Load-bearing capability observations
 
-No row blocks transport parity. Turn disposition and retry classification are not observed on either surface, because the refusal cases never occurred, and that is what holds both verdicts at unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
+No row blocks transport parity. Turn disposition and retry classification are not observed on either surface, because the refusal cases never occurred, and that is what holds both verdicts at unmeasured. Token accounting is a gap on the protocol surface only, and the native stream carries the figure, so the routes differ on that row.
 
 No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's own records, the session-state journal that the native kind reads too. The effective adapter returned a measured figure from that source, and the ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at ... token(s), the issue entered the token budget hold") and dispatched nothing in the quiet window after it. The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
-The native stream carries no token figure either. Its terminal event reports premium requests, a vendor unit, and no token counts. That row is a known gap with an owner, not a finding about this runtime.
+The native stream's `session.usage_checkpoint` line carries the token figure the recognizer reads, per served model. Its terminal event reports premium requests, a vendor unit, and no token counts.
 
 Other gaps on the protocol route, each with an owner:
 
@@ -182,8 +186,8 @@ An endpoint failure is a declared outcome on the protocol surface and not induci
 - protocol permission_handling: Observed: usable
 - native_stream_json turn_disposition: Not observed: not_observed
 - native_stream_json retry_classification: Not observed: not_observed
-- native_stream_json token_ceiling: Observed: gap
-- native_stream_json session_continuation: Observed: usable
+- native_stream_json token_ceiling: Observed: usable
+- native_stream_json session_continuation: Observed: gap
 
 A case that was induced and that the surface reported no outcome for keeps its obligation. It counts against that surface; it is not forgiven.
 
@@ -218,13 +222,13 @@ The notice depends on the model id. `claude-sonnet-4.5` is known to the installe
 
 ## Native headless observations
 
-`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn ran in the same session as the seed.
+`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn ran in the same session as the seed. It answered with the seed's reply instead of the stored phrase, so recall is not shown on this surface and the row grades as a gap.
 
 The CLI offers no single-document JSON output, so the profile declares the plain-JSON surface absent. The run corroborated the declaration.
 
 A refused model or an endpoint failure ends a `-p` launch with exit status 1 and an error on stderr, and no result event. The stream is silent on failure, so that case is not inducible on this surface. The result event is written at exit, so cancellation is not inducible either.
 
-Token accounting is covered above: the stream holds no token figure, and the terminal reports premium requests.
+Token accounting is covered above: the stream's `session.usage_checkpoint` line carries the token figure, and the terminal reports premium requests.
 
 ## Workspace trust and process boundary
 

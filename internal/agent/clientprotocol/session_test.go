@@ -319,7 +319,6 @@ func TestAssertUsageReporting(t *testing.T) {
 		},
 		{
 			Name:   "a remote session settles one figure per turn from the prompt result",
-			Remote: true,
 			Events: remoteEvents,
 			Result: remoteOutcome.result,
 		},

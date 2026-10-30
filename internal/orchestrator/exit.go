@@ -500,7 +500,6 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		AgentBlocked:    blockedSoftStop,
 		DeclaredOutcome: declaredToken,
 		AgentText:       declaredStatement,
-		ResumeUsage:     persistedResumeUsage(workerResult.ResumeUsage, workerResult.ResumeUsageByModel),
 	}
 	// A row recording no measurement must carry zero in all five token
 	// columns. The reconciliation above can populate them from a worker
@@ -1697,26 +1696,6 @@ func classifyWorkerError(err error) domain.RetryClassification {
 	}
 
 	return domain.RetryClassification{Retryable: true, Backoff: domain.BackoffExponential}
-}
-
-// persistedResumeUsage drops TotalTokens, which domainResumeUsage derives
-// again. A zero usage with no split stores an empty one, which a later run
-// reads as a known per-model baseline of nothing.
-func persistedResumeUsage(usage *domain.TokenUsage, byModel map[string]domain.TokenUsage) *persistence.ResumeUsage {
-	if usage == nil {
-		return nil
-	}
-	stored := &persistence.ResumeUsage{
-		InputTokens:      usage.InputTokens,
-		OutputTokens:     usage.OutputTokens,
-		CacheReadTokens:  usage.CacheReadTokens,
-		CacheWriteTokens: usage.CacheWriteTokens,
-	}
-	stored.ByModel = runModelUsage(byModel)
-	if stored.ByModel == nil && !hasTokenClasses(*usage) {
-		stored.ByModel = map[string]persistence.ModelTokens{}
-	}
-	return stored
 }
 
 // runModelUsage maps per-model usage to stored parts, dropping models zero

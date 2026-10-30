@@ -82,16 +82,13 @@ func TestResolveAttemptSettings_UsagePair(t *testing.T) {
 	tests := []struct {
 		name        string
 		kind        string
-		sshHost     string
 		wantArrival registry.UsageArrival
 		wantAttrib  registry.UsageAttribution
 		wantCarries bool
 		wantShape   string
 	}{
 		{name: "token live source on a local launch", kind: "kind-a", wantArrival: registry.UsageArrivalIncremental, wantAttrib: registry.UsageAttributionPerModel, wantCarries: true, wantShape: "incremental"},
-		{name: "token live source on a remote launch", kind: "kind-a", sshHost: "host-1", wantArrival: registry.UsageArrivalIncremental, wantAttrib: registry.UsageAttributionPerModel, wantCarries: true, wantShape: "incremental"},
 		{name: "vendor-only live source with records on a local launch", kind: "kind-v", wantArrival: registry.UsageArrivalTurnEnd, wantAttrib: registry.UsageAttributionPerModel, wantCarries: true, wantShape: "turn_end"},
-		{name: "vendor-only live source with records on a remote launch keeps the pair and carries no figure", kind: "kind-v", sshHost: "host-1", wantArrival: registry.UsageArrivalTurnEnd, wantAttrib: registry.UsageAttributionPerModel, wantShape: "none"},
 		{name: "unregistered kind resolves the undeclared pair", kind: "ghost", wantArrival: registry.UsageArrivalUndeclared, wantAttrib: registry.UsageAttributionUndeclared},
 	}
 
@@ -105,13 +102,13 @@ func TestResolveAttemptSettings_UsagePair(t *testing.T) {
 				"kind-v": {UsageSources: vendorOnlyJournalSources},
 			})
 
-			got := o.resolveAttemptSettings(cfg, DispatchResolution{AgentKind: tt.kind}, tt.sshHost)
+			got := o.resolveAttemptSettings(cfg, DispatchResolution{AgentKind: tt.kind})
 
 			if got.UsageArrival != tt.wantArrival || got.UsageAttribution != tt.wantAttrib || got.CarriesTokenFigure != tt.wantCarries {
-				t.Errorf("resolveAttemptSettings(%q, host %q) = (%q, %q, carries %t), want (%q, %q, carries %t)", tt.kind, tt.sshHost, got.UsageArrival, got.UsageAttribution, got.CarriesTokenFigure, tt.wantArrival, tt.wantAttrib, tt.wantCarries)
+				t.Errorf("resolveAttemptSettings(%q) = (%q, %q, carries %t), want (%q, %q, carries %t)", tt.kind, got.UsageArrival, got.UsageAttribution, got.CarriesTokenFigure, tt.wantArrival, tt.wantAttrib, tt.wantCarries)
 			}
-			if shape := o.usageArrival(tt.kind, tt.sshHost != ""); tt.wantShape != "" && shape != tt.wantShape {
-				t.Errorf("usageArrival(%q, remote %t) = %q, want %q", tt.kind, tt.sshHost != "", shape, tt.wantShape)
+			if shape := o.usageArrival(tt.kind); tt.wantShape != "" && shape != tt.wantShape {
+				t.Errorf("usageArrival(%q) = %q, want %q", tt.kind, shape, tt.wantShape)
 			}
 		})
 	}
@@ -152,7 +149,7 @@ func TestResolveAttemptSettings_Refusals(t *testing.T) {
 			cfg := settingsConfig(tt.topLevel, rules...)
 			o := attemptSettingsOrchestrator(cfg, map[string]registry.AgentMeta{"kind-a": settingsMeta()})
 
-			got := o.resolveAttemptSettings(cfg, selection, "")
+			got := o.resolveAttemptSettings(cfg, selection)
 
 			var checks []string
 			for _, refusal := range got.Refusals {
@@ -171,8 +168,8 @@ func TestSettingsDiagnostics_SplitsSeveritiesAndSkipsUnregisteredKinds(t *testin
 	cfg := settingsConfig(map[string]any{"permission_mode": "default", "noisy": true})
 	settings := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: "kind-a"}, "")
 
-	errs, warns := settingsDiagnostics(cfg, settingsMeta(), true, settings, false)
-	skippedErrs, skippedWarns := settingsDiagnostics(cfg, settingsMeta(), false, settings, false)
+	errs, warns := settingsDiagnostics(cfg, settingsMeta(), true, settings)
+	skippedErrs, skippedWarns := settingsDiagnostics(cfg, settingsMeta(), false, settings)
 
 	if len(errs) != 1 || errs[0].Check != "kind-a.permission_mode.interactive" || len(warns) != 1 || warns[0].Check != "kind-a.noisy" {
 		t.Errorf("settingsDiagnostics errors, warnings = %+v, %+v, want the permission_mode check and the noisy check", errs, warns)

@@ -70,16 +70,6 @@ func (u *RunUsage) raise(snapshot domain.TokenUsage) domain.TokenUsage {
 	return u.high
 }
 
-// ResumeBaseline is the resume baseline of the usage component, which owns
-// its rules.
-type ResumeBaseline = usage.ResumeBaseline
-
-// NewResumeBaseline returns a baseline starting from resume and, when
-// resumeByModel sums to it, per model; see [usage.NewResumeBaseline].
-func NewResumeBaseline(resume *domain.TokenUsage, resumeByModel map[string]domain.TokenUsage) *ResumeBaseline {
-	return usage.NewResumeBaseline(resume, resumeByModel)
-}
-
 // NormalizeUsageByModel returns a new map of m with names trimmed and
 // merged, counts floored at zero, and empty names and zero entries
 // dropped; nil when no entry remains.
@@ -91,11 +81,6 @@ func NormalizeUsageByModel(m map[string]domain.TokenUsage) map[string]domain.Tok
 // when both are nil.
 func AddUsageByModel(a, b map[string]domain.TokenUsage) map[string]domain.TokenUsage {
 	return usage.AddByModel(a, b)
-}
-
-// SumUsage returns the sum of every entry of parts.
-func SumUsage(parts map[string]domain.TokenUsage) domain.TokenUsage {
-	return usage.Sum(parts)
 }
 
 // SubtractUsage returns the componentwise difference a minus b, floored

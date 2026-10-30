@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -481,10 +480,9 @@ func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (dom
 func TestRunTurn_HappyPath(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	// Isolate the session-state journal root: without this, recoverUsage
-	// resolves the real user home directory, and a session id collision
-	// with an unrelated on-disk journal would leak a real model name into
-	// this test's AssertModelReported("") expectation.
+	// A journal read resolves the real user home otherwise, and a session id
+	// collision with an unrelated on-disk journal would leak a real model name
+	// into the AssertModelReported("") expectation below.
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -553,8 +551,6 @@ func TestRunTurn_HappyPath(t *testing.T) {
 		Work:         agentcore.WorkPresent,
 	}, result, err)
 
-	// No session-state journal exists under COPILOT_HOME, so recoverUsage
-	// finds nothing to recover and the turn reports no measurement.
 	agenttest.AssertMeasurementAbsent(t, events, result)
 }
 
@@ -800,8 +796,6 @@ func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
 	if !hasEventType(events, domain.EventTurnCompleted) {
 		t.Error("EventTurnCompleted not delivered for partial-output exit 0")
 	}
-	// No result event means no session id, so recoverUsage never attempts
-	// a journal read: the turn reports no figure.
 	agenttest.AssertMeasurementAbsent(t, events, result)
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
@@ -1396,103 +1390,19 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	}
 }
 
-// journalPath returns the events.jsonl path readSessionUsage resolves
-// for sessionID when COPILOT_HOME is set to copilotHome.
-func journalPath(copilotHome, sessionID string) string {
-	return filepath.Join(copilotHome, "session-state", sessionID, "events.jsonl")
-}
+const streamCheckpointLine = `{"type":"session.usage_checkpoint","data":{"accountingSnapshot":{"modelMetrics":{"claude-sonnet-5":{"usage":{"inputTokens":193011,"outputTokens":596,"cacheReadTokens":154053,"cacheWriteTokens":38948,"reasoningTokens":149}}}}}}`
 
-// writeJournal writes content to path, creating parent directories as
-// needed.
-func writeJournal(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile(%q): %v", path, err)
-	}
-}
-
-// TestAssertUsageReporting proves copilot-cli's registered
-// usage-reporting declaration (turn_end, per_model) and its
-// remote session rule (none, none) against real event streams: a
-// local turn whose journal read supplies the only figure, and a
-// remote turn whose read is skipped entirely. Both cases run in one
-// call to AssertUsageReporting so the assertion's own rule-coverage
-// check confirms the declared pair and the remote rule are each
-// reached exactly once.
 func TestAssertUsageReporting(t *testing.T) {
 	// No t.Parallel(): t.Setenv is incompatible with it.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	t.Setenv("COPILOT_HOME", t.TempDir())
 
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	fixture := loadTestFixture(t, "session_shutdown.jsonl")
-	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
-	if len(lines) < 1 {
-		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 1", len(lines))
-	}
-
-	runTurn := func(remote bool) (events []domain.AgentEvent, result domain.TurnResult) {
-		copilotHome := t.TempDir()
-		t.Setenv("COPILOT_HOME", copilotHome)
-		writeJournal(t, journalPath(copilotHome, sessionID), lines[0]+"\n")
-
-		adapter, session := newTestSession(t, t.TempDir())
-		state := session.Internal.(*sessionState)
-		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), 0)
-		if remote {
-			// Simulate SSH mode without spawning a real ssh subprocess:
-			// recoverUsage's remote gate reads only RemoteCommand, and
-			// the command stays the fake local binary above.
-			state.target.RemoteCommand = "copilot"
-		}
-
-		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-			Prompt:  "read main.go",
-			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
-		})
-		if err != nil {
-			t.Fatalf("RunTurn() error = %v", err)
-		}
-		return events, result
-	}
-
-	localEvents, localResult := runTurn(false)
-	remoteEvents, remoteResult := runTurn(true)
-
-	agenttest.AssertUsageReporting(t, "copilot-cli", []agenttest.UsageReportingCase{
-		{Name: "local, journal supplies the only figure", Events: localEvents, Result: localResult},
-		{Name: "remote, journal read skipped", Remote: true, Events: remoteEvents, Result: remoteResult},
-	})
-}
-
-// TestRunTurn_SessionStateRecovery_FirstRecord drives RunTurn with a
-// temporary session-state root containing one session.shutdown record
-// captured from Copilot CLI 1.0.78, whose modelMetrics reports
-// inputTokens 193011, outputTokens 596, cacheReadTokens 154053 for
-// claude-sonnet-5. It asserts the turn emits exactly one token_usage
-// event, positioned after the last tool_result and before
-// turn_completed, carrying the recovered totals, the model, and no
-// APIDurationMS, while the terminal event alone carries the turn's
-// APIDurationMS.
-func TestRunTurn_SessionStateRecovery_FirstRecord(t *testing.T) {
-	// No t.Parallel(): t.Setenv is incompatible with it.
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	copilotHome := t.TempDir()
-	t.Setenv("COPILOT_HOME", copilotHome)
-
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	fixture := loadTestFixture(t, "session_shutdown.jsonl")
-	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 2", len(lines))
-	}
-	writeJournal(t, journalPath(copilotHome, sessionID), lines[0]+"\n")
+	lines := strings.Split(strings.TrimRight(loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), "\n"), "\n")
+	resultAt := len(lines) - 1
+	stdout := strings.Join(slices.Concat(lines[:resultAt], []string{streamCheckpointLine}, lines[resultAt:]), "\n") + "\n"
 
 	adapter, session := newTestSession(t, t.TempDir())
-	state := session.Internal.(*sessionState)
-	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), 0)
+	session.Internal.(*sessionState).target.Command = fakeCopilotBinaryWithOutput(t, stdout, 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -1502,469 +1412,30 @@ func TestRunTurn_SessionStateRecovery_FirstRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
-	if result.SessionID != sessionID {
-		t.Fatalf("result.SessionID = %q, want %q", result.SessionID, sessionID)
-	}
 
-	wantUsage := domain.TokenUsage{InputTokens: 193011, OutputTokens: 596, TotalTokens: 193607, CacheReadTokens: 154053, CacheWriteTokens: 38948}
-	if result.Usage != wantUsage {
-		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantUsage)
-	}
-	if !result.UsageMeasured {
-		t.Error("TurnResult.UsageMeasured = false, want true")
-	}
-
-	assertSingleUsageReportBeforeTerminal(t, events, wantUsage, "claude-sonnet-5", 4200)
-	agenttest.AssertUsageContract(t, events)
+	agenttest.AssertUsageReporting(t, "copilot-cli", []agenttest.UsageReportingCase{
+		{Name: "checkpoint supplies the figure", Events: events, Result: result},
+	})
 }
 
-func TestRunTurn_SessionStateRecovery_ResumeHandOver(t *testing.T) {
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	const sonnet = "claude-sonnet-5"
-	lines := func(fixture string) []string {
-		return strings.Split(strings.TrimRight(loadTestFixture(t, fixture), "\n"), "\n")
-	}
-	single, multi := lines("session_shutdown.jsonl"), lines("session_shutdown_two_models.jsonl")
-	journal := func(records []string, n int) string { return strings.Join(records[:n], "\n") + "\n" }
-	stream := loadTestFixture(t, "tool_use_no_output_tokens.jsonl")
-
-	record1 := domain.TokenUsage{InputTokens: 193011, OutputTokens: 596, TotalTokens: 193607, CacheReadTokens: 154053, CacheWriteTokens: 38948}
-	record2 := domain.TokenUsage{InputTokens: 271924, OutputTokens: 696, TotalTokens: 272620, CacheReadTokens: 232332, CacheWriteTokens: 39578}
-	record2LessRecord1 := domain.TokenUsage{InputTokens: 78913, OutputTokens: 100, TotalTokens: 79013, CacheReadTokens: 78279, CacheWriteTokens: 630}
-	sonnet1 := map[string]domain.TokenUsage{sonnet: record1}
-	sonnet2 := map[string]domain.TokenUsage{sonnet: record2}
-	sonnetRun := map[string]domain.TokenUsage{sonnet: record2LessRecord1}
-
-	multi1 := map[string]domain.TokenUsage{
-		sonnet:           {InputTokens: 1000, OutputTokens: 100, TotalTokens: 1100, CacheReadTokens: 600, CacheWriteTokens: 200},
-		"claude-haiku-4": {InputTokens: 400, OutputTokens: 40, TotalTokens: 440, CacheReadTokens: 100},
-	}
-	multi2 := map[string]domain.TokenUsage{
-		sonnet:           {InputTokens: 1600, OutputTokens: 150, TotalTokens: 1750, CacheReadTokens: 900, CacheWriteTokens: 300},
-		"claude-haiku-4": {InputTokens: 700, OutputTokens: 90, TotalTokens: 790, CacheReadTokens: 200},
-		"claude-opus-4":  {InputTokens: 50, OutputTokens: 10, TotalTokens: 60},
-	}
-	multi1Total := domain.TokenUsage{InputTokens: 1400, OutputTokens: 140, TotalTokens: 1540, CacheReadTokens: 700, CacheWriteTokens: 200}
-	multi2Total := domain.TokenUsage{InputTokens: 2350, OutputTokens: 250, TotalTokens: 2600, CacheReadTokens: 1100, CacheWriteTokens: 300}
-	multi2LessMulti1 := domain.TokenUsage{InputTokens: 950, OutputTokens: 110, TotalTokens: 1060, CacheReadTokens: 400, CacheWriteTokens: 100}
-	multi2LessMulti1ByModel := map[string]domain.TokenUsage{
-		sonnet:           {InputTokens: 600, OutputTokens: 50, TotalTokens: 650, CacheReadTokens: 300, CacheWriteTokens: 100},
-		"claude-haiku-4": {InputTokens: 300, OutputTokens: 50, TotalTokens: 350, CacheReadTokens: 100},
-		"claude-opus-4":  {InputTokens: 50, OutputTokens: 10, TotalTokens: 60},
-	}
-
-	tests := []struct {
-		name                          string
-		records                       []string
-		resume                        *domain.TokenUsage
-		resumeByModel                 map[string]domain.TokenUsage
-		recordsAtStart, recordsAtTurn int
-		wantUsage                     domain.TokenUsage
-		wantByModel                   map[string]domain.TokenUsage
-		wantResume                    domain.TokenUsage
-		wantResumeByModel             map[string]domain.TokenUsage
-		wantMeasured                  bool
-	}{
-		{"resume usage r1 and r2 appended reports r2 less r1", single, &record1, sonnet1, 1, 2, record2LessRecord1, sonnetRun, record2, sonnet2, true},
-		{"resume usage r2 and nothing appended reports no figure", single, &record2, sonnet2, 2, 2, domain.TokenUsage{}, nil, record2, sonnet2, false},
-		{"no resume usage reads r1 at start and reports r2 less r1", single, nil, nil, 1, 2, record2LessRecord1, sonnetRun, record2, sonnet2, true},
-		{"models split by name and a new model counts whole", multi, &multi1Total, multi1, 1, 2, multi2LessMulti1, multi2LessMulti1ByModel, multi2Total, multi2, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			copilotHome := t.TempDir()
-			t.Setenv("COPILOT_HOME", copilotHome)
-			path := journalPath(copilotHome, sessionID)
-			writeJournal(t, path, journal(tt.records, tt.recordsAtStart))
-
-			adapter, err := NewCopilotAdapter()
-			if err != nil {
-				t.Fatalf("NewCopilotAdapter: %v", err)
-			}
-			session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-				WorkspacePath:      t.TempDir(),
-				AgentConfig:        domain.AgentConfig{Command: fakeCopilotBinaryWithOutput(t, stream, 0)},
-				ResumeSessionID:    sessionID,
-				ResumeUsage:        tt.resume,
-				ResumeUsageByModel: tt.resumeByModel,
-			})
-			if err != nil {
-				t.Fatalf("StartSession: %v", err)
-			}
-			writeJournal(t, path, journal(tt.records, tt.recordsAtTurn))
-
-			var events []domain.AgentEvent
-			result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-				Prompt:  "read main.go",
-				OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
-			})
-			if err != nil {
-				t.Fatalf("RunTurn() error = %v", err)
-			}
-
-			if result.Usage != tt.wantUsage || result.UsageMeasured != tt.wantMeasured {
-				t.Errorf("RunTurn() = usage %+v, measured %v, want %+v, %v", result.Usage, result.UsageMeasured, tt.wantUsage, tt.wantMeasured)
-			}
-			wantUnaccounted := !tt.wantMeasured
-			if result.ResumeUsage == nil || *result.ResumeUsage != tt.wantResume || result.SpendUnaccounted != wantUnaccounted {
-				t.Errorf("RunTurn() = resume usage %+v, spend unaccounted %v, want %+v, %v", result.ResumeUsage, result.SpendUnaccounted, tt.wantResume, wantUnaccounted)
-			}
-			if !maps.Equal(result.ResumeUsageByModel, tt.wantResumeByModel) {
-				t.Errorf("RunTurn() resume usage by model = %+v, want %+v", result.ResumeUsageByModel, tt.wantResumeByModel)
-			}
-			if tt.wantMeasured {
-				assertSingleUsageReportBeforeTerminal(t, events, tt.wantUsage, sonnet, 4200)
-				for _, e := range events {
-					if e.Type == domain.EventTokenUsage && !maps.Equal(e.UsageByModel, tt.wantByModel) {
-						t.Errorf("token_usage event UsageByModel = %+v, want %+v", e.UsageByModel, tt.wantByModel)
-					}
-				}
-			}
-		})
-	}
-}
-
-// assertSingleUsageReportBeforeTerminal fails t unless events carries
-// exactly one token_usage event, positioned after the last tool_result
-// and immediately before the turn_completed event, carrying wantUsage,
-// wantModel, and no APIDurationMS; and unless turn_completed itself
-// carries wantUsage and wantAPIDurationMS.
-func assertSingleUsageReportBeforeTerminal(t *testing.T, events []domain.AgentEvent, wantUsage domain.TokenUsage, wantModel string, wantAPIDurationMS int64) {
-	t.Helper()
-
-	lastToolResult, usageIdx, completedIdx := -1, -1, -1
-	usageCount := 0
-	for i, e := range events {
-		switch e.Type {
-		case domain.EventToolResult:
-			lastToolResult = i
-		case domain.EventTokenUsage:
-			usageIdx = i
-			usageCount++
-		case domain.EventTurnCompleted:
-			completedIdx = i
-		}
-	}
-	if usageCount != 1 {
-		t.Fatalf("token_usage event count = %d, want 1", usageCount)
-	}
-	if completedIdx < 0 {
-		t.Fatal("no turn_completed event delivered")
-	}
-	if usageIdx <= lastToolResult {
-		t.Errorf("token_usage event at index %d, want after the last tool_result at index %d", usageIdx, lastToolResult)
-	}
-	if usageIdx != completedIdx-1 {
-		t.Errorf("token_usage event at index %d, want immediately before turn_completed at index %d", usageIdx, completedIdx)
-	}
-
-	usageEvent := events[usageIdx]
-	if usageEvent.Usage != wantUsage {
-		t.Errorf("token_usage event Usage = %+v, want %+v", usageEvent.Usage, wantUsage)
-	}
-	if usageEvent.Model != wantModel {
-		t.Errorf("token_usage event Model = %q, want %q", usageEvent.Model, wantModel)
-	}
-	if usageEvent.APIDurationMS != 0 {
-		t.Errorf("token_usage event APIDurationMS = %d, want 0", usageEvent.APIDurationMS)
-	}
-
-	completed := events[completedIdx]
-	if completed.Usage != wantUsage {
-		t.Errorf("turn_completed event Usage = %+v, want %+v", completed.Usage, wantUsage)
-	}
-	if completed.APIDurationMS != wantAPIDurationMS {
-		t.Errorf("turn_completed event APIDurationMS = %d, want %d", completed.APIDurationMS, wantAPIDurationMS)
-	}
-}
-
-// TestRunTurn_SessionStateRecovery_JournalGoneNextTurn drives two
-// turns on the same session: the first recovers a figure from the
-// journal's first captured record, and the journal file is removed
-// before the second turn's own OnFinalize runs. It asserts the second
-// turn emits no token_usage event and returns UsageMeasured true with
-// Usage equal to the first turn's, per the accepted repeat-without-a-
-// new-record behavior this run cannot distinguish from a truly idle
-// turn.
-func TestRunTurn_SessionStateRecovery_JournalGoneNextTurn(t *testing.T) {
+func TestRunTurn_UnnormalizableCheckpointSupersedesEarlierOne(t *testing.T) {
 	// No t.Parallel(): t.Setenv is incompatible with it.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	copilotHome := t.TempDir()
-	t.Setenv("COPILOT_HOME", copilotHome)
+	t.Setenv("COPILOT_HOME", t.TempDir())
 
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	fixture := loadTestFixture(t, "session_shutdown.jsonl")
-	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
-	if len(lines) < 1 {
-		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 1", len(lines))
-	}
-	journal := journalPath(copilotHome, sessionID)
-	writeJournal(t, journal, lines[0]+"\n")
-
+	unnormalizable := strings.Replace(streamCheckpointLine, `"inputTokens":193011`, `"inputTokens":null`, 1)
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, streamCheckpointLine+"\n"+unnormalizable+"\n"+`{"type":"result","sessionId":"s","exitCode":1}`+"\n", 0)
 
-	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt:  "read main.go",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn(first) error = %v", err)
+	_, _ = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{Prompt: "p", OnEvent: func(domain.AgentEvent) {}})
+
+	if state.turnReading == nil || len(state.turnReading.ByModel) != 1 || state.turnReading.ByModel[0].Input != nil {
+		t.Errorf("turnReading = %+v, want the later checkpoint with input unknown", state.turnReading)
 	}
-	wantUsage := domain.TokenUsage{InputTokens: 193011, OutputTokens: 596, TotalTokens: 193607, CacheReadTokens: 154053, CacheWriteTokens: 38948}
-	if result1.Usage != wantUsage {
-		t.Fatalf("RunTurn(first).Usage = %+v, want %+v", result1.Usage, wantUsage)
+	if state.turnReplied {
+		t.Error("turnReplied = true after a result with exit code 1, want false")
 	}
-	if !result1.UsageMeasured {
-		t.Fatal("RunTurn(first).UsageMeasured = false, want true")
-	}
-
-	if err := os.Remove(journal); err != nil {
-		t.Fatalf("os.Remove(journal): %v", err)
-	}
-
-	var events2 []domain.AgentEvent
-	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt:  "read main.go",
-		OnEvent: func(e domain.AgentEvent) { events2 = append(events2, e) },
-	})
-	if err != nil {
-		t.Fatalf("RunTurn(second) error = %v", err)
-	}
-	if result2.Usage != wantUsage {
-		t.Errorf("RunTurn(second).Usage = %+v, want %+v (equal to the first turn's)", result2.Usage, wantUsage)
-	}
-	if !result2.UsageMeasured {
-		t.Error("RunTurn(second).UsageMeasured = false, want true")
-	}
-	for _, e := range events2 {
-		if e.Type == domain.EventTokenUsage {
-			t.Errorf("RunTurn(second) emitted a token_usage event %+v, want none (journal file gone)", e)
-		}
-	}
-}
-
-// TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn drives two turns on
-// one local session whose COPILOT_HOME holds a captured session.shutdown
-// record: the first turn recovers a usage figure from the journal and
-// measures the run, and the second turn is cancelled via context before it
-// completes. It asserts the second turn's UsageMeasured stays true, its
-// Usage equals the first turn's, and no token_usage event fires on the
-// cancelled turn.
-func TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn(t *testing.T) {
-	// No t.Parallel(): t.Setenv is incompatible with it.
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	copilotHome := t.TempDir()
-	t.Setenv("COPILOT_HOME", copilotHome)
-
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	fixture := loadTestFixture(t, "session_shutdown.jsonl")
-	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
-	if len(lines) < 1 {
-		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 1", len(lines))
-	}
-	writeJournal(t, journalPath(copilotHome, sessionID), lines[0]+"\n")
-
-	adapter, session := newTestSession(t, t.TempDir())
-	state := session.Internal.(*sessionState)
-	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), 0)
-
-	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt:  "read main.go",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn(first) error = %v", err)
-	}
-	if !result1.UsageMeasured {
-		t.Fatal("RunTurn(first).UsageMeasured = false, want true")
-	}
-	if result1.Usage == (domain.TokenUsage{}) {
-		t.Fatal("RunTurn(first).Usage is zero, want non-zero")
-	}
-
-	state.target.Command = agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{Hang: true})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	var events2 []domain.AgentEvent
-	var result2 domain.TurnResult
-	var runErr error
-	done := make(chan struct{})
-	go func() {
-		result2, runErr = adapter.RunTurn(ctx, session, domain.RunTurnParams{
-			Prompt: "read main.go",
-			OnEvent: func(e domain.AgentEvent) {
-				events2 = append(events2, e)
-				if e.Type == domain.EventSessionStarted {
-					cancel()
-				}
-			},
-		})
-		close(done)
-	}()
-
-	waittest.Receive(t, done, "RunTurn(second) return")
-
-	requireAgentError(t, runErr, domain.ErrTurnCancelled)
-	if !result2.UsageMeasured {
-		t.Error("RunTurn(second).UsageMeasured = false, want true (measured on the first turn)")
-	}
-	if result2.Usage != result1.Usage {
-		t.Errorf("RunTurn(second).Usage = %+v, want %+v (equal to the first turn's)", result2.Usage, result1.Usage)
-	}
-	for _, e := range events2 {
-		if e.Type == domain.EventTokenUsage {
-			t.Errorf("RunTurn(second) emitted a token_usage event %+v, want none", e)
-		}
-	}
-}
-
-func TestRunTurn_CancelledTurnReportsJournalUsage(t *testing.T) {
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	copilotHome := t.TempDir()
-	t.Setenv("COPILOT_HOME", copilotHome)
-
-	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
-	records := strings.Split(strings.TrimRight(loadTestFixture(t, "session_shutdown.jsonl"), "\n"), "\n")
-	path := journalPath(copilotHome, sessionID)
-	writeJournal(t, path, records[0]+"\n")
-	adapter, _ := NewCopilotAdapter()
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   t.TempDir(),
-		AgentConfig:     domain.AgentConfig{Command: fakeCopilotBinary(t)},
-		ResumeSessionID: sessionID,
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	session.Internal.(*sessionState).target.Command = agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{Hang: true})
-	writeJournal(t, path, strings.Join(records[:2], "\n")+"\n")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		OnEvent: func(e domain.AgentEvent) {
-			events = append(events, e)
-			cancel()
-		},
-	})
-
-	requireAgentError(t, err, domain.ErrTurnCancelled)
-	want := domain.TokenUsage{InputTokens: 78913, OutputTokens: 100, TotalTokens: 79013, CacheReadTokens: 78279, CacheWriteTokens: 630}
-	if result.Usage != want || !result.UsageMeasured {
-		t.Errorf("RunTurn(cancelled) = usage %+v, measured %v, want %+v, true", result.Usage, result.UsageMeasured, want)
-	}
-	if reported, ok := findEventByType(events, domain.EventTokenUsage); !ok || reported.Usage != want {
-		t.Errorf("token_usage event = %+v (delivered %v), want usage %+v", reported, ok, want)
-	}
-}
-
-// TestRunTurn_SessionStateRecovery_Degradation drives
-// sessionState.recoverUsage directly (bypassing the subprocess) to
-// exercise the three read-skipping conditions: an absent events file,
-// a session id that fails the path-segment check, and SSH mode. In
-// every case recoverUsage returns nil, and only the path-segment
-// rejection logs a Warn.
-func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
-	t.Run("events file absent", func(t *testing.T) {
-		t.Setenv("COPILOT_HOME", t.TempDir())
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		state := &sessionState{
-			target:           agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
-			copilotSessionID: "no-file-session",
-		}
-
-		got, _, _, _ := state.recoverUsage(logger)
-		if got != nil {
-			t.Errorf("recoverUsage() = %+v, want nil (events file absent)", got)
-		}
-		if strings.Contains(buf.String(), "level=WARN") {
-			t.Errorf("unexpected WARN log for a merely-absent events file: %s", buf.String())
-		}
-	})
-
-	t.Run("session id contains a path separator", func(t *testing.T) {
-		t.Setenv("COPILOT_HOME", t.TempDir())
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		state := &sessionState{
-			target:           agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
-			copilotSessionID: "abc/../def",
-		}
-
-		got, _, _, _ := state.recoverUsage(logger)
-		if got != nil {
-			t.Errorf("recoverUsage() = %+v, want nil (invalid session id)", got)
-		}
-		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
-			t.Errorf("WARN log count = %d, want 1 (path-separator rejection)", warnCount)
-		}
-
-		state.recoverUsage(logger)
-		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
-			t.Errorf("WARN log count after second call = %d, want 1 (not repeated)", warnCount)
-		}
-	})
-
-	t.Run("SSH mode skips the read", func(t *testing.T) {
-		t.Setenv("COPILOT_HOME", t.TempDir())
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		state := &sessionState{
-			target: agentcore.LaunchTarget{
-				WorkspacePath: t.TempDir(),
-				RemoteCommand: "copilot",
-				SSHHost:       "dev-host.example.com",
-			},
-			copilotSessionID: "valid-session-id",
-		}
-
-		got, _, _, _ := state.recoverUsage(logger)
-		if got != nil {
-			t.Errorf("recoverUsage() = %+v, want nil (remote launch)", got)
-		}
-		if buf.Len() != 0 {
-			t.Errorf("unexpected log output in SSH mode: %s", buf.String())
-		}
-	})
-}
-
-func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
-	t.Run("zero baseline counts the first record whole after a missed read", func(t *testing.T) {
-		root := t.TempDir()
-		t.Setenv("COPILOT_HOME", root)
-		logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-		state := &sessionState{
-			target:           agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
-			copilotSessionID: "created-session",
-			resume:           *agentcore.NewResumeBaseline(&domain.TokenUsage{}, nil),
-		}
-
-		if first, _, _, _ := state.recoverUsage(logger); first != nil {
-			t.Fatalf("first recoverUsage() = %+v, want nil (no journal yet)", first)
-		}
-
-		writeJournal(t, journalPath(root, "created-session"), loadTestFixture(t, "session_shutdown.jsonl"))
-		second, _, _, _ := state.recoverUsage(logger)
-		if second == nil {
-			t.Fatal("second recoverUsage() = nil, want a recovered figure")
-		}
-		if second.Run.InputTokens != 271924 {
-			t.Errorf("second recoverUsage().Run.InputTokens = %d, want 271924 (zero baseline)", second.Run.InputTokens)
-		}
-		if second.Model != "claude-sonnet-5" {
-			t.Errorf("second recoverUsage().Model = %q, want %q", second.Model, "claude-sonnet-5")
-		}
-	})
 }
 
 // TestRunTurn_SuccessfulResultZeroOutputTokens pins that a successful

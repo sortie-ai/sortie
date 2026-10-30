@@ -157,9 +157,9 @@ type HandleRetryTimerParams struct {
 	WorkflowFile string
 
 	// ResolveAttemptSettings resolves the retry attempt's settings from the
-	// configuration in force now; sshHost is empty for a local launch.
-	// Required. An attempt whose settings carry refusals is rescheduled.
-	ResolveAttemptSettings func(selection DispatchResolution, sshHost string) AttemptSettings
+	// configuration in force now. Required. An attempt whose settings carry
+	// refusals is rescheduled.
+	ResolveAttemptSettings func(selection DispatchResolution) AttemptSettings
 }
 
 // putBackSchedule returns the Attempt and delay in milliseconds for putting
@@ -875,7 +875,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	attemptSettings := params.ResolveAttemptSettings(DispatchResolution{AgentKind: agentKind, TemplateID: templateID, RuleName: ruleName}, host)
+	attemptSettings := params.ResolveAttemptSettings(DispatchResolution{AgentKind: agentKind, TemplateID: templateID, RuleName: ruleName})
 	if len(attemptSettings.Refusals) > 0 {
 		nextAttempt, delayMS := putBackSchedule(popped, popped.Attempt+1, params.MaxRetryBackoffMS)
 

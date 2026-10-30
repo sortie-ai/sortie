@@ -170,7 +170,6 @@ func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, par
 	defer mu.Unlock()
 	agenttest.AssertLiveUsageCase(t, kind, agenttest.UsageReportingCase{
 		Name:   "working credential",
-		Remote: params.SSHHost != "",
 		Events: events,
 		Result: result,
 	})

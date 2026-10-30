@@ -112,6 +112,57 @@
       "model_request_path": [],
       "session_id_path": [
         "sessionId"
+      ],
+      "token_locator": {
+        "mode": "discriminated",
+        "discriminator_key": "type",
+        "discriminator_value": "session.usage_checkpoint"
+      },
+      "token_paths": [
+        {
+          "path": [
+            "data",
+            "accountingSnapshot",
+            "modelMetrics",
+            "*",
+            "usage",
+            "inputTokens"
+          ],
+          "kind": "spend"
+        },
+        {
+          "path": [
+            "data",
+            "accountingSnapshot",
+            "modelMetrics",
+            "*",
+            "usage",
+            "outputTokens"
+          ],
+          "kind": "spend"
+        },
+        {
+          "path": [
+            "data",
+            "accountingSnapshot",
+            "modelMetrics",
+            "*",
+            "usage",
+            "cacheReadTokens"
+          ],
+          "kind": "spend"
+        },
+        {
+          "path": [
+            "data",
+            "accountingSnapshot",
+            "modelMetrics",
+            "*",
+            "usage",
+            "cacheWriteTokens"
+          ],
+          "kind": "spend"
+        }
       ]
     }
   },

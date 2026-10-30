@@ -2,10 +2,13 @@ package sessionstate
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
@@ -134,5 +137,75 @@ func TestUsageRecord(t *testing.T) {
 				t.Errorf("UsageRecord(%q) = %+v, want %+v", line, got, tt.want)
 			}
 		})
+	}
+}
+
+func checkpointWith(models string) string {
+	return `{"type":"session.usage_checkpoint","data":{"totalNanoAiu":1.5,"accountingSnapshot":{"modelMetrics":{` + models + `}}}}`
+}
+
+func TestUsageCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		line   string
+		want   usage.SpendReading
+		wantOK bool
+	}{
+		{"not a checkpoint", `{"type":"session.usage_record"}`, usage.SpendReading{}, false},
+		{"not JSON", `session.usage_checkpoint`, usage.SpendReading{}, false},
+		{"two models sorted by key, float members ignored",
+			checkpointWith(`"b":{"totalNanoAiu":6.5,"usage":{"inputTokens":7,"cacheWriteTokens":0}},"a":{"requests":{"cost":1.0},"usage":{"inputTokens":4,"outputTokens":3,"cacheReadTokens":2,"cacheWriteTokens":1}}`),
+			usage.SpendReading{ByModel: []usage.SpendReading{
+				{Input: new(int64(4)), Output: new(int64(3)), CacheRead: new(int64(2)), CacheWrite: new(int64(1)), Model: "a"},
+				{Input: new(int64(7)), CacheWrite: new(int64(0)), Model: "b"},
+			}}, true},
+		{"null and float counts are nil", checkpointWith(`"m":{"usage":{"outputTokens":null,"cacheReadTokens":1.0,"cacheWriteTokens":3}}`),
+			usage.SpendReading{ByModel: []usage.SpendReading{{CacheWrite: new(int64(3)), Model: "m"}}}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := UsageCheckpoint([]byte(tt.line))
+
+			if ok != tt.wantOK || !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("UsageCheckpoint(%q) = %+v, %v, want %+v, %v", tt.line, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestScanRecords(t *testing.T) {
+	t.Parallel()
+
+	errScan := errors.New("scan failed")
+	lines := []string{
+		`{"type":"session.usage_record","data":{"usage":{"model":"b","inputTokens":2,"accounting":{"usageId":"u2"}}}}`,
+		`{"type":"session.usage_checkpoint"}`,
+		`{"type":"session.usage_record","data":{"usage":{"model":"a","inputTokens":1,"accounting":{"usageId":"u1"}}}}`,
+	}
+	var gotPath agentcore.RuntimePath
+	var gotLimit, gotLineLimit int64
+	scan := func(_ context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error {
+		gotPath, gotLimit, gotLineLimit = path, limit, lineLimit
+		for _, line := range lines {
+			if err := fn([]byte(line)); err != nil {
+				return err
+			}
+		}
+		return errScan
+	}
+
+	got, err := ScanRecords(t.Context(), "sess-1", scan)
+
+	if !reflect.DeepEqual(gotPath, JournalPath("sess-1")) || gotLimit != MaxFileBytes || gotLineLimit != usage.MaxRecordLineBytes {
+		t.Errorf("ScanRecords scanned (%+v, %d, %d), want (%+v, %d, %d)", gotPath, gotLimit, gotLineLimit, JournalPath("sess-1"), int64(MaxFileBytes), int64(usage.MaxRecordLineBytes))
+	}
+	want := []usage.SpendReading{{Input: new(int64(2)), Model: "b", Identity: "u2"}, {Input: new(int64(1)), Model: "a", Identity: "u1"}}
+	if !errors.Is(err, errScan) || !reflect.DeepEqual(got, want) {
+		t.Errorf("ScanRecords = %+v, %v, want %+v, %v", got, err, want, errScan)
 	}
 }

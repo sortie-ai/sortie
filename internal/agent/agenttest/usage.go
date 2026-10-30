@@ -111,18 +111,16 @@ func assertUsageContract(t contractReporter, events []domain.AgentEvent) {
 	}
 }
 
-// UsageReportingCase is one turn of one kind, captured under the launch mode
-// the fixture was built with.
+// UsageReportingCase is one turn of one kind.
 type UsageReportingCase struct {
 	Name   string
-	Remote bool
 	Events []domain.AgentEvent
 	Result domain.TurnResult
 }
 
 // AssertUsageReporting fails t unless every case agrees with the pair
 // kind derives from its registered usage sources, and with whether those
-// sources can carry a token figure on the case's launch. It resolves
+// sources can carry a token figure. It resolves
 // kind's registered [registry.AgentMeta] through [registry.Agents.Meta]
 // itself, so a caller cannot hand it a pair the kind did not register.
 func AssertUsageReporting(t *testing.T, kind string, cases []UsageReportingCase) {
@@ -144,13 +142,13 @@ func assertUsageReporting(t contractReporter, kind string, cases []UsageReportin
 
 	arrival, attribution := meta.UsageDisposition()
 	for _, tc := range cases {
-		assertResolvedUsageReporting(t, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure(tc.Remote))
+		assertResolvedUsageReporting(t, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure())
 	}
 }
 
 // assertResolvedUsageReporting checks one case's events and result
 // against the pair meta.UsageDisposition derived and whether the kind can
-// carry a token figure on the case's launch, per the two admissible shapes
+// carry a token figure, per the two admissible shapes
 // UsageArrivalIncremental and UsageArrivalTurnEnd are exact complements of
 // on a stream that can tell them apart.
 func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution, carriesTokenFigure bool) {
@@ -274,7 +272,7 @@ func assertUsageReportingCase(t contractReporter, kind string, tc UsageReporting
 		return
 	}
 	arrival, attribution := meta.UsageDisposition()
-	assertResolvedUsageReporting(kindReporter{contractReporter: t, kind: kind}, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure(tc.Remote))
+	assertResolvedUsageReporting(kindReporter{contractReporter: t, kind: kind}, tc, arrival, attribution, meta.UsageSources.CarriesTokenFigure())
 }
 
 // AssertLiveUsageCase fails t unless tc, any single text turn such as
@@ -301,7 +299,7 @@ func assertLiveUsageCase(t contractReporter, kind string, tc UsageReportingCase)
 		return
 	}
 	t = kindReporter{contractReporter: t, kind: kind}
-	if !meta.UsageSources.CarriesTokenFigure(tc.Remote) {
+	if !meta.UsageSources.CarriesTokenFigure() {
 		assertMeasurementAbsent(t, tc.Events, tc.Result)
 		return
 	}

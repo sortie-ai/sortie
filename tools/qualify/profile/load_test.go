@@ -271,6 +271,18 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			},
 		},
 		{
+			name: "a token_locator with a mode outside the closed set is rejected",
+			mutate: func(doc map[string]any) {
+				doc["recognizers"].(map[string]any)["native_stream_json"].(map[string]any)["token_locator"] = map[string]any{"mode": "last_value"}
+			},
+		},
+		{
+			name: "a discriminated token_locator missing its discriminator value is rejected",
+			mutate: func(doc map[string]any) {
+				doc["recognizers"].(map[string]any)["native_stream_json"].(map[string]any)["token_locator"] = map[string]any{"mode": "discriminated", "discriminator_key": "type"}
+			},
+		},
+		{
 			name: "status_cases naming a case outside evidence.Cases is rejected",
 			mutate: func(doc map[string]any) {
 				statusCases := doc["recognizers"].(map[string]any)["native_stream_json"].(map[string]any)["status_cases"].(map[string]any)
@@ -1214,6 +1226,7 @@ func validProfileDocWithTokenPaths() map[string]any {
 	recognizer["token_paths"] = []any{
 		map[string]any{"path": []string{"usage", "total_tokens"}, "kind": tokenPathKindSpend},
 	}
+	recognizer["token_locator"] = map[string]any{"mode": "discriminated", "discriminator_key": "type", "discriminator_value": "checkpoint"}
 	return doc
 }
 

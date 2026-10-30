@@ -335,8 +335,10 @@ func RecognizeContinuationRecall(p profile.RuntimeProfile, surface evidence.Surf
 }
 
 // recognizerMachineryMembers names the members recognizer resolves for
-// something other than the turn's text, matched at any nesting depth.
-func recognizerMachineryMembers(recognizer profile.Recognizer) map[string]bool {
+// something other than the turn's text, matched at any nesting depth. The
+// token paths' heads count only when tokenLine is true or the recognizer
+// scopes its token paths to no line at all.
+func recognizerMachineryMembers(recognizer profile.Recognizer, tokenLine bool) map[string]bool {
 	members := map[string]bool{}
 	for _, name := range append([]string{recognizer.Locator.DiscriminatorKey, recognizer.StatusMember}, recognizer.ErrorMembers...) {
 		if name != "" {
@@ -344,8 +346,10 @@ func recognizerMachineryMembers(recognizer profile.Recognizer) map[string]bool {
 		}
 	}
 	heads := [][]string{recognizer.SessionIDPath, recognizer.ModelRequestPath}
-	for _, path := range recognizer.TokenPaths {
-		heads = append(heads, path.Path)
+	if tokenLine || recognizer.TokenLocator.Mode == "" {
+		for _, path := range recognizer.TokenPaths {
+			heads = append(heads, path.Path)
+		}
 	}
 	for _, path := range heads {
 		if len(path) > 0 {
@@ -368,8 +372,13 @@ const (
 // answer wrong.
 func nativeAnswerChannels(recognizer profile.Recognizer, output string, prompts ...string) []string {
 	channels := map[string]*strings.Builder{}
-	machinery := recognizerMachineryMembers(recognizer)
-	for _, record := range decodeLaunchRecords(output) {
+	otherLines := recognizerMachineryMembers(recognizer, false)
+	tokenLines := recognizerMachineryMembers(recognizer, true)
+	for index, record := range decodeLaunchRecords(output) {
+		machinery := otherLines
+		if recognizer.TokenLocator.Mode != "" && recognizer.TokenLocator.Matches(index, record) {
+			machinery = tokenLines
+		}
 		accumulateAnswerText(record, "", machinery, prompts, channels)
 	}
 	texts := make([]string, 0, len(channels))
@@ -469,10 +478,11 @@ const tokenWildcard = "*"
 // unsupported path is an unknown, not a zero, so reporting the surface as
 // source-free would turn an unread value into a proven absence.
 type tokenSurfaceReading struct {
-	observations int
-	sessionID    string
-	sources      []evidence.TokenObservation
-	unsupported  []string
+	observations     int
+	withoutTokenLine int
+	sessionID        string
+	sources          []evidence.TokenObservation
+	unsupported      []string
 }
 
 // gradeTokenReading turns one surface's reading into the inventory
@@ -492,6 +502,8 @@ func gradeTokenReading(reading tokenSurfaceReading, inductionFailed evidence.Out
 		return unknown("no observation was recognized, so this surface's token sources stay unread")
 	case len(reading.unsupported) > 0:
 		return unknown("read " + countedObservations(reading.observations) + " and reached a shape this inventory cannot consume at " + strings.Join(reading.unsupported, ", "))
+	case len(reading.sources) == 0 && reading.withoutTokenLine > 0:
+		return unknown("read " + countedObservations(reading.observations) + " and found no line the token locator selects in " + strconv.Itoa(reading.withoutTokenLine) + " of them")
 	case len(reading.sources) > 0 && reading.sessionID == "":
 		return unknown("read " + countedObservations(reading.observations) + " carrying a token-bearing path that no observation attributed to a session")
 	case len(reading.sources) == 0:
@@ -538,8 +550,7 @@ func readNativeTokens(recognizer profile.Recognizer, streams []evidence.StreamCa
 		if _, found := recognizer.Terminal(output); !found {
 			continue
 		}
-		terminal, found := recognizer.RawTerminal(output)
-		if !found {
+		if _, found := recognizer.RawTerminal(output); !found {
 			continue
 		}
 		reading.observations++
@@ -548,8 +559,13 @@ func readNativeTokens(recognizer profile.Recognizer, streams []evidence.StreamCa
 				reading.sessionID = sid
 			}
 		}
+		tokenLine, found := recognizer.TokenTerminal(output)
+		if !found {
+			reading.withoutTokenLine++
+			continue
+		}
 		for _, declared := range recognizer.TokenPaths {
-			resolved, unsupported := resolveTokenSources(terminal, declared)
+			resolved, unsupported := resolveTokenSources(tokenLine, declared)
 			for _, name := range unsupported {
 				if !slices.Contains(reading.unsupported, name) {
 					reading.unsupported = append(reading.unsupported, name)

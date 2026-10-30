@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "profile_digest": "224fe9f628e5a35b019f6efca024de32ccea77a265b312918190a4de5fd7274e",
-  "measured_at": "2026-10-29",
+  "profile_digest": "4cd570809d5b0e9e3a4de7734fdfeeb0bf4fb377daa1a27fdd4e975dfb52aee4",
+  "measured_at": "2026-10-30",
   "expectation": {
     "Verdict": "unmeasured",
     "Conformance": "unmeasured",
@@ -57,13 +57,13 @@
       {
         "Surface": "native_stream_json",
         "Capability": "token_ceiling",
-        "Grade": "gap",
+        "Grade": "usable",
         "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
         "Capability": "session_continuation",
-        "Grade": "usable",
+        "Grade": "gap",
         "Label": "Observed:"
       }
     ],
@@ -84,8 +84,8 @@
       "protocol turn_disposition runtime_refusal: fixture_induction_failed"
     ]
   },
-  "requested_model": "claude-haiku-5.5",
+  "requested_model": "mai-code-1.1-flash",
   "observed_model": null,
-  "provenance_digest": "76165b2bcf3ce9b632c9da8210b1b4376cbc67e99d424a978b6007bd0fa7d7dd",
+  "provenance_digest": "6b73d4746e284baaec4c48243121bb2b94126d58cc13112db74da4996f752b5c",
   "evaluator_version": 2
 }

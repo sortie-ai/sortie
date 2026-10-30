@@ -1492,9 +1492,6 @@ on_retry_timer(issue_id, state, release_held=false):
   resume_session_id = retry_entry.session_id
   if selection.agent_kind != frozen.agent_kind or selection.template_id != frozen.template_id:
     resume_session_id = null
-  resume_usage = null
-  if resume_session_id is not null:
-    resume_usage = store.latest_resume_usage(issue_id, resume_session_id)   // newest run_history row for the pair; null when none or its columns are NULL; a lookup error is logged and leaves null
 
   if agent_adapter(selection.agent_kind) is unavailable:
     return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
@@ -1515,7 +1512,7 @@ on_retry_timer(issue_id, state, release_held=false):
     log_info("rule settings no longer present, attempt runs on the kind's top-level settings")
 
   return dispatch_issue(issue, state, attempt=retry_entry.attempt,
-    resume_session_id=resume_session_id, resume_usage=resume_usage, selection=selection,
+    resume_session_id=resume_session_id, selection=selection,
     attempt_settings=attempt_settings, stage_lineage=lineage)
 ```
 

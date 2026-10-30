@@ -22,9 +22,9 @@ const CredentialExchangeBound = 60 * time.Second
 // CredentialVerification carries the inputs of [VerifyCredential].
 type CredentialVerification struct {
 	// Session is the working session's parameters; VerifyCredential
-	// overrides CredentialVerification, ResumeSessionID, ResumeUsage,
-	// ResumeUsageByModel and MCPConfigPath. Its VerificationFullContext
-	// is set only by the retry inside VerifyCredential.
+	// overrides CredentialVerification, ResumeSessionID and MCPConfigPath.
+	// Its VerificationFullContext is set only by the retry inside
+	// VerifyCredential.
 	Session domain.StartSessionParams
 
 	Issue domain.Issue
@@ -102,8 +102,6 @@ func verifyOnce(ctx context.Context, adapter domain.AgentAdapter, v CredentialVe
 	sessionParams := v.Session
 	sessionParams.CredentialVerification = true
 	sessionParams.ResumeSessionID = ""
-	sessionParams.ResumeUsage = nil
-	sessionParams.ResumeUsageByModel = nil
 	sessionParams.MCPConfigPath = ""
 
 	session, startErr := adapter.StartSession(turnCtx, sessionParams)

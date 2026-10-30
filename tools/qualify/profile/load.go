@@ -212,6 +212,12 @@ type Recognizer struct {
 	// TokenPaths names the nested key sequences the token-inventory reading
 	// resolves out of the terminal object, each paired with its contract kind.
 	TokenPaths []TokenPath `json:"token_paths,omitempty"`
+
+	// TokenLocator selects the stream value TokenPaths resolve against, for a
+	// runtime that reports its token figure on a line other than the terminal
+	// one. The zero value, which the encoded form omits so it never moves a
+	// profile's digest, resolves them against the terminal object.
+	TokenLocator TerminalLocator `json:"token_locator,omitzero"`
 }
 
 // TokenPath is one nested key sequence the token-inventory reading resolves out
@@ -376,7 +382,7 @@ var recognizerFieldOrder = []string{
 
 // recognizerOptionalFields carries the recognizer members a discovery pass may
 // omit.
-var recognizerOptionalFields = []string{"session_id_path", "token_paths"}
+var recognizerOptionalFields = []string{"session_id_path", "token_paths", "token_locator"}
 
 var recognizerFields = func() map[string]bool {
 	fields := make(map[string]bool, len(recognizerFieldOrder)+len(recognizerOptionalFields))
@@ -1003,23 +1009,17 @@ func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error
 	}
 
 	var recognizer Recognizer
-	locatorFields := map[string]json.RawMessage{}
-	if err := json.Unmarshal(fields["locator"], &locatorFields); err != nil {
-		return Recognizer{}, fmt.Errorf("locator: %w", err)
+	locator, err := decodeTerminalLocator("locator", fields["locator"])
+	if err != nil {
+		return Recognizer{}, err
 	}
-	for name := range locatorFields {
-		if !terminalLocatorFields[name] {
-			return Recognizer{}, fmt.Errorf("locator: unknown field %q", name)
+	recognizer.Locator = locator
+	if raw, has := fields["token_locator"]; has {
+		tokenLocator, tokenErr := decodeTerminalLocator("token_locator", raw)
+		if tokenErr != nil {
+			return Recognizer{}, tokenErr
 		}
-	}
-	if err := json.Unmarshal(fields["locator"], &recognizer.Locator); err != nil {
-		return Recognizer{}, fmt.Errorf("locator: %w", err)
-	}
-	if recognizer.Locator.Mode != "first_value" && recognizer.Locator.Mode != "discriminated" {
-		return Recognizer{}, fmt.Errorf("locator.mode = %q, want first_value or discriminated", recognizer.Locator.Mode)
-	}
-	if recognizer.Locator.Mode == "discriminated" && (recognizer.Locator.DiscriminatorKey == "" || recognizer.Locator.DiscriminatorValue == "") {
-		return Recognizer{}, errors.New("locator.discriminator_key and locator.discriminator_value are required in discriminated mode")
+		recognizer.TokenLocator = tokenLocator
 	}
 
 	if err := json.Unmarshal(fields["error_members"], &recognizer.ErrorMembers); err != nil {
@@ -1098,6 +1098,31 @@ func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error
 	}
 
 	return recognizer, nil
+}
+
+// decodeTerminalLocator decodes and validates one locator object, naming the
+// member it came from in every error.
+func decodeTerminalLocator(name string, raw json.RawMessage) (TerminalLocator, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return TerminalLocator{}, fmt.Errorf("%s: %w", name, err)
+	}
+	for field := range fields {
+		if !terminalLocatorFields[field] {
+			return TerminalLocator{}, fmt.Errorf("%s: unknown field %q", name, field)
+		}
+	}
+	var locator TerminalLocator
+	if err := json.Unmarshal(raw, &locator); err != nil {
+		return TerminalLocator{}, fmt.Errorf("%s: %w", name, err)
+	}
+	if locator.Mode != "first_value" && locator.Mode != "discriminated" {
+		return TerminalLocator{}, fmt.Errorf("%s.mode = %q, want first_value or discriminated", name, locator.Mode)
+	}
+	if locator.Mode == "discriminated" && (locator.DiscriminatorKey == "" || locator.DiscriminatorValue == "") {
+		return TerminalLocator{}, fmt.Errorf("%s.discriminator_key and %s.discriminator_value are required in discriminated mode", name, name)
+	}
+	return locator, nil
 }
 
 // validateKeyPath rejects a nested key sequence carrying an empty key. An empty
@@ -1495,25 +1520,35 @@ func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
 // locateEnvelope selects the top-level value the locator's mode picks,
 // before any envelope descent.
 func (r Recognizer) locateEnvelope(values []any) (map[string]any, bool) {
-	switch r.Locator.Mode {
+	matched := r.Locator.matching(values)
+	if len(matched) == 0 {
+		return nil, false
+	}
+	return matched[0], true
+}
+
+// Matches reports whether record, the index-th top-level object of a stream,
+// is a value the locator selects.
+func (l TerminalLocator) Matches(index int, record map[string]any) bool {
+	switch l.Mode {
 	case "first_value":
-		if len(values) == 0 {
-			return nil, false
-		}
-		object, ok := values[0].(map[string]any)
-		return object, ok
+		return index == 0
 	case "discriminated":
-		for _, value := range values {
-			object, ok := value.(map[string]any)
-			if !ok {
-				continue
-			}
-			if fmt.Sprint(object[r.Locator.DiscriminatorKey]) == r.Locator.DiscriminatorValue {
-				return object, true
-			}
+		return fmt.Sprint(record[l.DiscriminatorKey]) == l.DiscriminatorValue
+	}
+	return false
+}
+
+// matching returns the top-level objects the locator selects, in stream order.
+func (l TerminalLocator) matching(values []any) []map[string]any {
+	var matched []map[string]any
+	for index, value := range values {
+		object, ok := value.(map[string]any)
+		if ok && l.Matches(index, object) {
+			matched = append(matched, object)
 		}
 	}
-	return nil, false
+	return matched
 }
 
 type keyResolver func(object map[string]any, segment string) (string, bool)
@@ -1685,6 +1720,20 @@ func (r Recognizer) Terminal(output string) (Terminal, bool) {
 // [Recognizer.Terminal] discards once recognition fails.
 func (r Recognizer) RawTerminal(output string) (map[string]any, bool) {
 	return r.locateTerminal(decodeTopLevelJSONValues(output))
+}
+
+// TokenTerminal resolves the object TokenPaths resolve against: the last
+// stream value TokenLocator selects, or the terminal object when TokenLocator
+// is unset.
+func (r Recognizer) TokenTerminal(output string) (map[string]any, bool) {
+	if r.TokenLocator.Mode == "" {
+		return r.RawTerminal(output)
+	}
+	matched := r.TokenLocator.matching(decodeTopLevelJSONValues(output))
+	if len(matched) == 0 {
+		return nil, false
+	}
+	return descend(matched[len(matched)-1], r.TokenLocator.EnvelopePath)
 }
 
 // ModelRequestReading is the three-way state one structured native
