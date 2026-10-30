@@ -1,6 +1,8 @@
 package eval
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
@@ -246,6 +248,67 @@ If you need to verify session continuity or test my behavior, I'm happy to help 
 
 			if got := answerDeclinesRecall(tt.answer); got != tt.want {
 				t.Errorf("answerDeclinesRecall(%q) = %t, want %t", tt.answer, got, tt.want)
+			}
+		})
+	}
+}
+
+func tokenLocatorRecognizer(withLocator bool) profile.Recognizer {
+	recognizer := profile.Recognizer{
+		Locator:       profile.TerminalLocator{Mode: "discriminated", DiscriminatorKey: "type", DiscriminatorValue: "result"},
+		SuccessMember: "exitCode",
+		SessionIDPath: []string{"sessionId"},
+		TokenPaths:    []profile.TokenPath{{Path: []string{"data", "m", "*", "n"}, Kind: "spend"}},
+	}
+	if withLocator {
+		recognizer.TokenLocator = profile.TerminalLocator{Mode: "discriminated", DiscriminatorKey: "type", DiscriminatorValue: "checkpoint"}
+	}
+	return recognizer
+}
+
+func TestTokenLocatorReading(t *testing.T) {
+	t.Parallel()
+
+	const result = "\n" + `{"type":"result","exitCode":0,"sessionId":"s1"}`
+	tests := []struct {
+		name   string
+		stream string
+		want   string
+	}{
+		{"the last matching line supplies the figure", `{"type":"checkpoint","data":{"m":{"early":{"n":1}}}}` + "\n" + `{"type":"checkpoint","data":{"m":{"late":{"n":2}}}}` + result, "/data/m/late/n"},
+		{"a stream with no matching line adds no sources", `{"type":"other","data":{"m":{"x":{"n":1}}}}` + result, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := recognizerShapedProfile(tokenLocatorRecognizer(true))
+			_, paths, _ := RecognizeInventory(p, evidence.SurfaceNativeJSON, []evidence.StreamCapture{{Stdout: tt.stream}})
+
+			got := ""
+			for _, path := range paths {
+				got += path.EvidencePath
+			}
+			if got != tt.want {
+				t.Errorf("RecognizeInventory() paths = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeAnswerChannelsTokenLocator(t *testing.T) {
+	t.Parallel()
+
+	const stream = `{"type":"assistant.message","data":{"content":"NONCE"}}` + "\n" + `{"type":"checkpoint","data":{"note":"CHECKPOINT"}}`
+	for _, withLocator := range []bool{true, false} {
+		t.Run(fmt.Sprintf("locator=%t", withLocator), func(t *testing.T) {
+			t.Parallel()
+
+			joined := strings.Join(nativeAnswerChannels(tokenLocatorRecognizer(withLocator), stream), "|")
+
+			if got := strings.Contains(joined, "NONCE"); got != withLocator || strings.Contains(joined, "CHECKPOINT") {
+				t.Errorf("nativeAnswerChannels() = %q, want NONCE read = %t and CHECKPOINT omitted", joined, withLocator)
 			}
 		})
 	}
