@@ -66,7 +66,6 @@ type sessionUpdateEvent struct {
 	chunk          contentChunk
 	toolCallBegin  toolCall
 	toolCallUpdate toolCallUpdate
-	usage          usageUpdate
 }
 
 // parseSessionUpdate decodes the discriminator of raw, the undecoded
@@ -131,7 +130,8 @@ func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bo
 		event.kind = updateSessionInfo
 	case sessionUpdateUsageUpdate:
 		event.kind = updateUsage
-		if err := json.Unmarshal(raw, &event.usage); err != nil {
+		var update usageUpdate
+		if err := json.Unmarshal(raw, &update); err != nil {
 			return event, false
 		}
 	default:

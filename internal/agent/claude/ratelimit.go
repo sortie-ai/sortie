@@ -1,17 +1,13 @@
-// Package ratelimit maps the subscription allowance report of Claude Code to
-// usage windows. Both routes that carry the report, the CLI stream and the
-// Agent Client Protocol bridge, read the one table here, so neither adapter
-// package imports the other.
-package ratelimit
+package claude
 
 import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// Info is one rate-limit report. ResetsAt is Unix seconds; Utilization is
+// rawRateLimitInfo is one rate-limit report. ResetsAt is Unix seconds; Utilization is
 // the used share as a fraction, nil when the report carries none.
-type Info struct {
+type rawRateLimitInfo struct {
 	Status        string   `json:"status"`
 	ResetsAt      int64    `json:"resetsAt"`
 	RateLimitType string   `json:"rateLimitType"`
@@ -19,8 +15,8 @@ type Info struct {
 	Utilization   *float64 `json:"utilization"`
 }
 
-// Readings returns the report as window readings; nil for a nil receiver.
-func (i *Info) Readings() []usage.WindowReading {
+// windowReadings returns the report as window readings; nil for a nil receiver.
+func (i *rawRateLimitInfo) windowReadings() []usage.WindowReading {
 	if i == nil {
 		return nil
 	}
@@ -46,9 +42,9 @@ var windowTable = map[string]struct {
 	"overage":                    {span: usage.Span{Scope: "extra usage"}},
 }
 
-// Windows declares the share unit, status vocabulary, and windows of every
+// rateLimitWindows declares the share unit, status vocabulary, and windows of every
 // report. The report names windows without stating their length.
-var Windows = usage.WindowDeclaration{
+var rateLimitWindows = usage.WindowDeclaration{
 	Share: usage.ShareFraction,
 	Statuses: map[string]domain.UsageWindowStatus{
 		"allowed":         domain.UsageWindowAllowed,
@@ -58,8 +54,8 @@ var Windows = usage.WindowDeclaration{
 	Spans: windowSpans(),
 }
 
-// ModelOnly reports whether the window covers a single model's usage.
-func ModelOnly(window string) bool {
+// modelOnlyWindow reports whether the window covers a single model's usage.
+func modelOnlyWindow(window string) bool {
 	return windowTable[window].modelOnly
 }
 

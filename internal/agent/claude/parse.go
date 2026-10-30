@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/claude/ratelimit"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
@@ -44,7 +43,7 @@ type rawEvent struct {
 	APIErrorStatus int `json:"api_error_status,omitempty"`
 
 	// RateLimitInfo is present on rate_limit_event lines.
-	RateLimitInfo *ratelimit.Info `json:"rate_limit_info,omitempty"`
+	RateLimitInfo *rawRateLimitInfo `json:"rate_limit_info,omitempty"`
 
 	// ModelUsageSinceLastResult is the per-model spend of the requests the
 	// process made since its previous result event.

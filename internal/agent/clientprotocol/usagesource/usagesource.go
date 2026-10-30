@@ -1,10 +1,10 @@
 // Package usagesource holds the per-runtime parts of this transport that the
 // protocol cannot express: credential-verification additions that drop a
 // runtime's agent context, and usage declarations (what a runtime's protocol
-// messages report about provider usage windows and spend, how to pull those
-// windows when a turn ends, and how to read the runtime's own per-request spend
-// records), and which of the runtime's prompt errors and turn notifications are
-// provider usage-limit refusals or transient failures.
+// messages report about spend, how to pull its provider usage windows when a
+// turn ends, and how to read the runtime's own per-request spend records), and
+// which of the runtime's prompt errors and turn notifications are provider
+// usage-limit refusals or transient failures.
 //
 // The transport names no runtime. An addition is asked only whether it claims
 // the launch.
@@ -36,11 +36,6 @@ type Declaration struct {
 	// mean. Its Category is usage.SourceProtocol. A zero Spend means the
 	// declaration maps no spend of its own and reads it under Default.
 	Live usage.Source
-
-	// UsageUpdateWindows reads the usage windows one usage_update session
-	// update reports in its _meta object. Nil when the runtime reports none
-	// there. A _meta without the runtime's member returns nil, nil.
-	UsageUpdateWindows func(meta json.RawMessage) ([]usage.WindowReading, error)
 
 	// Pull is the runtime's pull source; its Strategy is usage.StrategyPull
 	// whenever PullWindows is non-nil.

@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/claude/ratelimit"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -47,7 +46,7 @@ var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Windows:  ratelimit.Windows,
+		Windows:  rateLimitWindows,
 		Spend: usage.SpendDeclaration{
 			Shape:             usage.SpendPerTurn,
 			ReasoningInOutput: true,
@@ -170,7 +169,7 @@ type sessionState struct {
 	// rateLimit is the latest rate_limit_event of the turn, observed in
 	// ParseLine and read in OnFinalize to tell a subscription refusal from
 	// an API-key 429.
-	rateLimit *ratelimit.Info
+	rateLimit *rawRateLimitInfo
 
 	// effortReported records that the session has already logged the
 	// runtime's report of an unrecognized effort value. Touched only from
@@ -442,7 +441,7 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 					state.rateLimit = event.RateLimitInfo
 				}
 				at := time.Now().UTC()
-				agentcore.EmitUsageWindows(emit, at, usage.Windows(usageSources.Live, event.RateLimitInfo.Readings(), at))
+				agentcore.EmitUsageWindows(emit, at, usage.Windows(usageSources.Live, event.RateLimitInfo.windowReadings(), at))
 
 			case "stream_event":
 				agentcore.EmitNotification(emit, "")
@@ -587,7 +586,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 // result is not a subscription allowance refusal. An API-key 429 carries no
 // rejected rate_limit_event, and an overage that is not itself rejected means
 // the account can still spend, so neither counts.
-func usageLimitOf(result *rawEvent, info *ratelimit.Info) *domain.UsageLimit {
+func usageLimitOf(result *rawEvent, info *rawRateLimitInfo) *domain.UsageLimit {
 	if !result.IsError || result.APIErrorStatus != http.StatusTooManyRequests {
 		return nil
 	}
@@ -598,7 +597,7 @@ func usageLimitOf(result *rawEvent, info *ratelimit.Info) *domain.UsageLimit {
 		return nil
 	}
 	limit := &domain.UsageLimit{
-		ModelOnly: ratelimit.ModelOnly(info.RateLimitType),
+		ModelOnly: modelOnlyWindow(info.RateLimitType),
 	}
 	if info.ResetsAt > 0 {
 		limit.ResetsAt = time.Unix(info.ResetsAt, 0).UTC()
