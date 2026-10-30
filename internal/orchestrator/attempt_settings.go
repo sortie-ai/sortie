@@ -17,7 +17,7 @@ type AttemptSettings struct {
 	UsageAttribution registry.UsageAttribution
 
 	// CarriesTokenFigure reports whether the kind's sources can carry a
-	// token figure on this attempt's launch.
+	// token figure.
 	CarriesTokenFigure bool
 
 	// Refusals are the error-severity checks the block fails; an attempt
@@ -26,16 +26,16 @@ type AttemptSettings struct {
 }
 
 // resolveAttemptSettings resolves the settings an attempt of selection
-// runs with from cfg; sshHost is empty for a local launch. Call it once
+// runs with from cfg. Call it once
 // per attempt on the event loop, so a reload reaches a claim already held.
-func (o *Orchestrator) resolveAttemptSettings(cfg config.ServiceConfig, selection DispatchResolution, sshHost string) AttemptSettings {
+func (o *Orchestrator) resolveAttemptSettings(cfg config.ServiceConfig, selection DispatchResolution) AttemptSettings {
 	settings := config.ResolveAgentSettings(cfg,
 		config.SettingsSelection{Kind: selection.AgentKind, RuleName: selection.RuleName},
 		filepath.Dir(o.workflowManager.WorkflowAbsPath()))
 	meta, registered := o.preflightParams.AgentRegistry.Meta(selection.AgentKind)
 
-	arrival, attribution, carriesTokenFigure := usageDisposition(meta, registered, sshHost != "")
-	refusals, _ := settingsDiagnostics(cfg, meta, registered, settings, sshHost != "")
+	arrival, attribution, carriesTokenFigure := usageDisposition(meta, registered)
+	refusals, _ := settingsDiagnostics(cfg, meta, registered, settings)
 
 	return AttemptSettings{
 		Settings:           settings,
@@ -47,20 +47,20 @@ func (o *Orchestrator) resolveAttemptSettings(cfg config.ServiceConfig, selectio
 }
 
 // usageDisposition returns the usage arrival and attribution derived from
-// meta's sources and whether a session on the given launch can carry a token
-// figure, the undeclared pair and false for a kind the registry does not hold.
-func usageDisposition(meta registry.AgentMeta, registered bool, remote bool) (registry.UsageArrival, registry.UsageAttribution, bool) {
+// meta's sources and whether a session can carry a token figure, the
+// undeclared pair and false for a kind the registry does not hold.
+func usageDisposition(meta registry.AgentMeta, registered bool) (registry.UsageArrival, registry.UsageAttribution, bool) {
 	if !registered {
 		return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared, false
 	}
 	arrival, attribution := meta.UsageDisposition()
-	return arrival, attribution, meta.UsageSources.CarriesTokenFigure(remote)
+	return arrival, attribution, meta.UsageSources.CarriesTokenFigure()
 }
 
 // settingsDiagnostics runs every check that reads a resolved settings
 // block. Preflight and every attempt share it, so they cannot disagree
 // about a block. An unregistered kind draws nothing.
-func settingsDiagnostics(cfg config.ServiceConfig, meta registry.AgentMeta, registered bool, settings config.AgentSettings, remote bool) ([]PreflightError, []PreflightWarning) {
+func settingsDiagnostics(cfg config.ServiceConfig, meta registry.AgentMeta, registered bool, settings config.AgentSettings) ([]PreflightError, []PreflightWarning) {
 	if !registered {
 		return nil, nil
 	}
@@ -76,7 +76,7 @@ func settingsDiagnostics(cfg config.ServiceConfig, meta registry.AgentMeta, regi
 		})
 	}
 
-	if !meta.UsageSources.CarriesTokenFigure(remote) {
+	if !meta.UsageSources.CarriesTokenFigure() {
 		if cfg.Agent.MaxTokens != 0 {
 			warns = append(warns, PreflightWarning{
 				Check: "agent.kind.no_usage_reporting",

@@ -31,6 +31,8 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -145,6 +147,13 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		CredentialEnv:    []string{"COPILOT_PROVIDER_API_KEY"},
 		UserInstructions: filepath.Join(".copilot", "copilot-instructions.md"),
 		Read:             fakemodel.ReadFile,
+		Spend: &fakemodel.SpendSources{
+			// A custom provider gets no usage checkpoint, so the journal settles each turn.
+			Live:              domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			RecordsAtTurnEnd:  sessionstate.Records.WrittenAtTurnEnd,
+			CancelEndsProcess: true,
+		},
 		SSH: &fakemodel.SSHVariant{
 			Package:       "@github/copilot",
 			HostCommand:   integrationCommand(),
@@ -223,17 +232,14 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	}
 
 	t.Run("working credential verifies and leaves no session state", func(t *testing.T) {
-		t.Setenv("COPILOT_HOME", t.TempDir())
+		home := t.TempDir()
+		t.Setenv("COPILOT_HOME", home)
 
 		result := credentialtest.VerifyLiveUsage(t, "copilot-cli", adapter, params(t), passthrough)
 		if result.SessionID == "" {
 			t.Fatal("VerifyCredential() TurnResult.SessionID is empty, want the minted verification session id")
 		}
-		root, rootErr := sessionStateRoot(os.Getenv, os.UserHomeDir)
-		if rootErr != nil {
-			t.Fatalf("sessionStateRoot: %v", rootErr)
-		}
-		if _, statErr := os.Stat(filepath.Join(root, result.SessionID)); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(filepath.Join(home, "session-state", result.SessionID)); !os.IsNotExist(statErr) {
 			t.Errorf("session-state directory for verification session %q still present after the step, want deleted (stat error = %v)", result.SessionID, statErr)
 		}
 	})

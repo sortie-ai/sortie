@@ -242,27 +242,6 @@ func TestAssertModelReported_Violating(t *testing.T) {
 	}
 }
 
-func TestAssertUsageReporting_EachCaseFollowsItsLaunch(t *testing.T) {
-	t.Parallel()
-
-	AssertUsageReporting(t, usageTestKindRecordsOnly, []UsageReportingCase{
-		{
-			Name: "local launch reads the records source",
-			Events: []domain.AgentEvent{
-				{Type: domain.EventToolResult},
-				{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
-				{Type: domain.EventTurnCompleted},
-			},
-			Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
-		},
-		{
-			Name:   "remote launch reads no records source",
-			Remote: true,
-			Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
-		},
-	})
-}
-
 func TestAssertUsageReporting_UnregisteredKind(t *testing.T) {
 	t.Parallel()
 
@@ -542,26 +521,9 @@ func TestAssertLiveUsageCase(t *testing.T) {
 			},
 		},
 		{
-			name: "remote launch with only a records source follows the measurement-absent branch",
-			kind: usageTestKindRecordsOnly,
-			tc: UsageReportingCase{
-				Remote: true,
-				Events: []domain.AgentEvent{{Type: domain.EventTurnCompleted}},
-			},
-		},
-		{
 			name:         "derived none with a measurement",
 			kind:         usageTestKindNone,
 			tc:           UsageReportingCase{Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)}},
-			wantFailures: []string{kindPrefix + "result.UsageMeasured = true"},
-		},
-		{
-			name: "remote launch with only a records source reports a measurement",
-			kind: usageTestKindRecordsOnly,
-			tc: UsageReportingCase{
-				Remote: true,
-				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
-			},
 			wantFailures: []string{kindPrefix + "result.UsageMeasured = true"},
 		},
 		{
@@ -739,14 +701,6 @@ func TestAssertUsageReportingCase(t *testing.T) {
 					{Type: domain.EventTurnCompleted},
 				},
 				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(5, 1)},
-			},
-		},
-		{
-			name: "remote launch with only a records source follows the measurement-absent branch",
-			kind: usageTestKindRecordsOnly,
-			tc: UsageReportingCase{
-				Remote: true,
-				Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
 			},
 		},
 		{

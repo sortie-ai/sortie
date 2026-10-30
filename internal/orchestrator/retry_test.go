@@ -279,7 +279,7 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 			return func(_ context.Context, _ domain.Issue, _ *int) {}
 		},
 		AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		ResolveAttemptSettings: func(_ DispatchResolution, _ string) AttemptSettings {
+		ResolveAttemptSettings: func(_ DispatchResolution) AttemptSettings {
 			return AttemptSettings{}
 		},
 		OnRetryFire: noopRetryFire,
@@ -2151,7 +2151,7 @@ func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
 
 	params := defaultRetryParams(t, store, tracker)
 	var resolveCalls int
-	params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings {
+	params.ResolveAttemptSettings = func(DispatchResolution) AttemptSettings {
 		resolveCalls++
 		return AttemptSettings{UsageArrival: registry.UsageArrivalNone, UsageAttribution: registry.UsageAttributionNone}
 	}
@@ -4439,7 +4439,7 @@ func TestHandleRetryTimer_RefusedSettingsRescheduleAndKeepTheClaim(t *testing.T)
 	params := capturingRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}, &dispatched)
 	params.Logger = jsonLogger(logs)
 	params.HostPool = NewHostPool([]string{"host-a"}, 1)
-	params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings {
+	params.ResolveAttemptSettings = func(DispatchResolution) AttemptSettings {
 		return AttemptSettings{Refusals: []PreflightError{{Check: "kind-a.permission_mode.interactive", Message: "permission mode asks"}}}
 	}
 
@@ -4502,7 +4502,7 @@ func TestHandleRetryTimer_RecordsTheResolvedSettingsAndLogsAVanishedRuleBlockOnc
 			logs := &lockedBuf{}
 			params := defaultRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")})
 			params.Logger = jsonLogger(logs)
-			params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings { return tt.resolved }
+			params.ResolveAttemptSettings = func(DispatchResolution) AttemptSettings { return tt.resolved }
 			if tt.selection != nil {
 				params.ResolveSelection = func(DispatchResolution, domain.Issue) DispatchResolution { return *tt.selection }
 			}

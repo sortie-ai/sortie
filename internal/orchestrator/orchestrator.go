@@ -56,7 +56,6 @@ type OrchestratorStore interface {
 	QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error)
 	UsageCompletedBetween(ctx context.Context, since, until time.Time) (persistence.IssueTokenUsage, error)
 	LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]persistence.RunHistory, error)
-	LatestResumeUsage(ctx context.Context, issueID, sessionID string) (*persistence.ResumeUsage, error)
 	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
@@ -815,8 +814,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				}
 				return selection
 			}
-			resolveAttemptSettings := func(selection DispatchResolution, sshHost string) AttemptSettings {
-				return o.resolveAttemptSettings(cfg, selection, sshHost)
+			resolveAttemptSettings := func(selection DispatchResolution) AttemptSettings {
+				return o.resolveAttemptSettings(cfg, selection)
 			}
 			var retryIdentifier string
 			if entry, ok := o.state.RetryAttempts[issueID]; ok {
@@ -1314,7 +1313,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			o.once.deferAll(input[i:], deferSlot)
 			break
 		}
-		attemptSettings := o.resolveAttemptSettings(cfg, resolution, host)
+		attemptSettings := o.resolveAttemptSettings(cfg, resolution)
 		if len(attemptSettings.Refusals) > 0 {
 			o.hostPool.ReleaseHost(issue.ID)
 			o.logger.Error("agent settings refused",
@@ -1536,17 +1535,6 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 
-		var resumeUsage *domain.TokenUsage
-		var resumeUsageByModel map[string]domain.TokenUsage
-		if resumeSessionID != "" {
-			stored, err := o.store.LatestResumeUsage(ctx, issue.ID, resumeSessionID)
-			if err != nil {
-				logger.Warn("resume usage lookup failed", slog.Any("error", err))
-			}
-			resumeUsage = domainResumeUsage(stored)
-			resumeUsageByModel = domainResumeUsageByModel(stored)
-		}
-
 		deps := WorkerDeps{
 			TrackerAdapter:         o.trackerAdapter,
 			Router:                 o.router,
@@ -1615,8 +1603,6 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 				}
 			},
 			ResumeSessionID:         resumeSessionID,
-			ResumeUsage:             resumeUsage,
-			ResumeUsageByModel:      resumeUsageByModel,
 			DispatchID:              dispatchIDFromContext(ctx),
 			Logger:                  logger,
 			ToolRegistry:            o.toolRegistry,
@@ -1644,38 +1630,6 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
 	}
-}
-
-func domainResumeUsage(stored *persistence.ResumeUsage) *domain.TokenUsage {
-	if stored == nil {
-		return nil
-	}
-	return &domain.TokenUsage{
-		InputTokens:      stored.InputTokens,
-		OutputTokens:     stored.OutputTokens,
-		TotalTokens:      stored.InputTokens + stored.OutputTokens,
-		CacheReadTokens:  stored.CacheReadTokens,
-		CacheWriteTokens: stored.CacheWriteTokens,
-	}
-}
-
-// domainResumeUsageByModel returns the stored per-model split of the resume
-// figure, nil when stored holds none.
-func domainResumeUsageByModel(stored *persistence.ResumeUsage) map[string]domain.TokenUsage {
-	if stored == nil || stored.ByModel == nil {
-		return nil
-	}
-	byModel := make(map[string]domain.TokenUsage, len(stored.ByModel))
-	for model, tokens := range stored.ByModel {
-		byModel[model] = domain.TokenUsage{
-			InputTokens:      tokens.InputTokens,
-			OutputTokens:     tokens.OutputTokens,
-			TotalTokens:      tokens.InputTokens + tokens.OutputTokens,
-			CacheReadTokens:  tokens.CacheReadTokens,
-			CacheWriteTokens: tokens.CacheWriteTokens,
-		}
-	}
-	return byModel
 }
 
 // convertedCredentialEnv returns the credential variable names carried by
@@ -2389,7 +2343,7 @@ func (o *Orchestrator) ruleAgentOf(cfg config.ServiceConfig, rule config.Dispatc
 // configuredModelOf returns the model a dispatch of resolution is configured
 // with under cfg.
 func (o *Orchestrator) configuredModelOf(cfg config.ServiceConfig, resolution DispatchResolution) string {
-	return o.resolveAttemptSettings(cfg, resolution, "").Settings.Model
+	return o.resolveAttemptSettings(cfg, resolution).Settings.Model
 }
 
 // ruleAgents maps each named rule of cfg that carries a stage label, the rules

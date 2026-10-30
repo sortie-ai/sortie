@@ -979,7 +979,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 			AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) {
 				return &mockAgentAdapter{}, nil
 			},
-			ResolveAttemptSettings: func(_ DispatchResolution, _ string) AttemptSettings {
+			ResolveAttemptSettings: func(_ DispatchResolution) AttemptSettings {
 				return AttemptSettings{}
 			},
 			OnRetryFire: noopRetryFire,

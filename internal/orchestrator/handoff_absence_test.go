@@ -1097,7 +1097,7 @@ func TestParkRetryLaneBackfillAndRelease(t *testing.T) {
 			return func(context.Context, domain.Issue, *int) {}
 		},
 		AgentAdapterByKind: func(string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		ResolveAttemptSettings: func(_ DispatchResolution, _ string) AttemptSettings {
+		ResolveAttemptSettings: func(_ DispatchResolution) AttemptSettings {
 			return AttemptSettings{}
 		},
 		OnRetryFire: noopRetryFire,

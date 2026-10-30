@@ -3,8 +3,6 @@ package persistence
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,8 +24,7 @@ const (
 	HandoffVerdictUndetermined = "evidence not determinable"
 )
 
-// ModelTokens is one model's token counts; the JSON names are the stored
-// form of the per-model resume figure.
+// ModelTokens is one model's token counts.
 type ModelTokens struct {
 	// InputTokens includes cache reads and writes, as run_history.input_tokens does.
 	InputTokens      int64 `json:"input_tokens"`
@@ -61,19 +58,6 @@ type RunModelPart struct {
 	// is nil when it is NULL or empty.
 	UnratedClasses  []string
 	UnratedRecorded bool
-}
-
-// ResumeUsage is the usage figure an agent runtime kept for a session, which
-// a later run resuming the session starts from.
-type ResumeUsage struct {
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-
-	// ByModel is the per-model split of the figure; nil when none was handed
-	// over. It makes the struct incomparable with ==.
-	ByModel map[string]ModelTokens
 }
 
 // RunHistory is a single completed run attempt in the run_history table.
@@ -189,11 +173,6 @@ type RunHistory struct {
 	// is empty when the run ended on no declaration or predates the columns.
 	DeclaredOutcome string
 	AgentText       string
-
-	// ResumeUsage is the figure the run's session held at the run's last
-	// reporting turn; nil writes four NULLs. Only the appends write it; the
-	// run-history reads do not select it. [Store.LatestResumeUsage] reads it.
-	ResumeUsage *ResumeUsage
 
 	// ModelUsage is the run's per-model token counts. Only
 	// [Store.AppendRunHistoryWithEvents] writes it; the run-history reads
@@ -350,26 +329,10 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 		dispatchIDVal = sql.NullString{String: *run.DispatchID, Valid: true}
 	}
 
-	var resumeInput, resumeOutput, resumeCacheRead, resumeCacheWrite sql.NullInt64
-	var resumeModelUsage sql.NullString
-	if run.ResumeUsage != nil {
-		resumeInput = sql.NullInt64{Int64: run.ResumeUsage.InputTokens, Valid: true}
-		resumeOutput = sql.NullInt64{Int64: run.ResumeUsage.OutputTokens, Valid: true}
-		resumeCacheRead = sql.NullInt64{Int64: run.ResumeUsage.CacheReadTokens, Valid: true}
-		resumeCacheWrite = sql.NullInt64{Int64: run.ResumeUsage.CacheWriteTokens, Valid: true}
-		if run.ResumeUsage.ByModel != nil {
-			encoded, err := json.Marshal(run.ResumeUsage.ByModel)
-			if err != nil {
-				return RunHistory{}, fmt.Errorf("encode resume model usage for %q: %w", run.IssueID, err)
-			}
-			resumeModelUsage = sql.NullString{String: string(encoded), Valid: true}
-		}
-	}
-
 	res, err := ex.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, resume_input_tokens, resume_output_tokens, resume_cache_read_tokens, resume_cache_write_tokens, resume_model_usage, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
@@ -379,7 +342,6 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 		run.IssueTitle, run.IssueURL, run.DispatchedAt,
 		triggerVal, run.ReactionKind, run.SessionID, run.SSHHost, run.FirstAfterHop,
 		dispatchIDVal, run.AgentBlocked,
-		resumeInput, resumeOutput, resumeCacheRead, resumeCacheWrite, resumeModelUsage,
 		nullFloat(run.EstimatedCostUSD), nullIfEmpty(run.CostStatus),
 		run.DeclaredOutcome, run.AgentText, skillsVal,
 	)
@@ -1142,43 +1104,6 @@ func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[str
 		return nil, fmt.Errorf("query latest agent runs: %w", err)
 	}
 	return runs, nil
-}
-
-// LatestResumeUsage returns the resume usage of the run_history row with the
-// greatest id that matches both issueID and sessionID. It returns nil with a
-// nil error when no row matches or the row recorded none. ByModel stays nil
-// when the stored split is absent or does not decode.
-func (s *Store) LatestResumeUsage(ctx context.Context, issueID, sessionID string) (*ResumeUsage, error) {
-	var input, output, cacheRead, cacheWrite sql.NullInt64
-	var byModel sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT resume_input_tokens, resume_output_tokens, resume_cache_read_tokens, resume_cache_write_tokens, resume_model_usage
-		FROM run_history
-		WHERE issue_id = ? AND session_id = ?
-		ORDER BY id DESC
-		LIMIT 1`, issueID, sessionID).Scan(&input, &output, &cacheRead, &cacheWrite, &byModel)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query latest resume usage for %q session %q: %w", issueID, sessionID, err)
-	}
-	if !input.Valid || !output.Valid || !cacheRead.Valid || !cacheWrite.Valid {
-		return nil, nil
-	}
-	usage := &ResumeUsage{
-		InputTokens:      input.Int64,
-		OutputTokens:     output.Int64,
-		CacheReadTokens:  cacheRead.Int64,
-		CacheWriteTokens: cacheWrite.Int64,
-	}
-	if byModel.Valid {
-		var decoded map[string]ModelTokens
-		if json.Unmarshal([]byte(byModel.String), &decoded) == nil {
-			usage.ByModel = decoded
-		}
-	}
-	return usage, nil
 }
 
 // spentPredicate matches a run_history row that spent any tokens.

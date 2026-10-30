@@ -80,15 +80,14 @@ func TestSources_Disposition(t *testing.T) {
 		sources         usage.Sources
 		wantArrival     usage.Arrival
 		wantAttribution usage.Attribution
-		wantLocal       bool
-		wantRemote      bool
+		wantCarries     bool
 	}{
-		{name: "live counts during the turn and names the model", sources: usage.Sources{Live: duringTurn}, wantArrival: usage.ArrivalIncremental, wantAttribution: usage.AttributionPerModel, wantLocal: true, wantRemote: true},
-		{name: "live counts at turn end without a model", sources: usage.Sources{Live: mappedLive}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantLocal: true, wantRemote: true},
-		{name: "records split gives a model-naming live source", sources: usage.Sources{Live: mappedLive, Records: split}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionPerModel, wantLocal: true, wantRemote: true},
-		{name: "records without a split leave the live attribution", sources: usage.Sources{Live: mappedLive, Records: journal}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantLocal: true, wantRemote: true},
-		{name: "vendor-only live source with split records carries a token figure locally only", sources: usage.Sources{Live: vendorLive, Records: split}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionPerModel, wantLocal: true},
-		{name: "vendor-only live source with unsplit records", sources: usage.Sources{Live: vendorLive, Records: journal}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantLocal: true},
+		{name: "live counts during the turn and names the model", sources: usage.Sources{Live: duringTurn}, wantArrival: usage.ArrivalIncremental, wantAttribution: usage.AttributionPerModel, wantCarries: true},
+		{name: "live counts at turn end without a model", sources: usage.Sources{Live: mappedLive}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantCarries: true},
+		{name: "records split gives a model-naming live source", sources: usage.Sources{Live: mappedLive, Records: split}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionPerModel, wantCarries: true},
+		{name: "records without a split leave the live attribution", sources: usage.Sources{Live: mappedLive, Records: journal}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantCarries: true},
+		{name: "vendor-only live source with split records carries a token figure from its records", sources: usage.Sources{Live: vendorLive, Records: split}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionPerModel, wantCarries: true},
+		{name: "vendor-only live source with unsplit records", sources: usage.Sources{Live: vendorLive, Records: journal}, wantArrival: usage.ArrivalTurnEnd, wantAttribution: usage.AttributionSessionTotal, wantCarries: true},
 		{name: "vendor-only live source alone", sources: usage.Sources{Live: vendorLive}, wantArrival: usage.ArrivalNone, wantAttribution: usage.AttributionNone},
 	}
 
@@ -101,11 +100,8 @@ func TestSources_Disposition(t *testing.T) {
 			if arrival != tt.wantArrival || attribution != tt.wantAttribution {
 				t.Errorf("Disposition() = %q, %q, want %q, %q", arrival, attribution, tt.wantArrival, tt.wantAttribution)
 			}
-			if got := tt.sources.CarriesTokenFigure(false); got != tt.wantLocal {
-				t.Errorf("CarriesTokenFigure(false) = %v, want %v", got, tt.wantLocal)
-			}
-			if got := tt.sources.CarriesTokenFigure(true); got != tt.wantRemote {
-				t.Errorf("CarriesTokenFigure(true) = %v, want %v", got, tt.wantRemote)
+			if got := tt.sources.CarriesTokenFigure(); got != tt.wantCarries {
+				t.Errorf("CarriesTokenFigure() = %v, want %v", got, tt.wantCarries)
 			}
 		})
 	}

@@ -318,12 +318,6 @@ func TestVerifyLiveUsage(t *testing.T) {
 			adapter:    measuredUsageAdapter(""),
 			wantFailed: true,
 		},
-		{
-			name:       "ssh session carries no figure from a records-only source",
-			adapter:    measuredUsageAdapter("gpt-6-astra"),
-			params:     domain.StartSessionParams{SSHHost: "user@stand-in-host"},
-			wantFailed: true,
-		},
 	}
 
 	for _, tt := range tests {

@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -179,33 +178,6 @@ func (t LaunchTarget) CommandWords() []string {
 		return strings.Fields(t.RemoteCommand)
 	}
 	return append([]string{t.Command}, t.Args...)
-}
-
-// AppendCommandArgs returns command, which names an executable,
-// followed by args, in the form that launches exactly that argv. A list
-// stays a list in both launch modes. A string launched locally stays a
-// string only when every argument is non-empty and holds no space rune,
-// since the local launch splits it on whitespace; otherwise it becomes
-// the list of its whitespace-separated words followed by args. A string
-// launched remotely stays a string with args quoted for the remote
-// shell and placed where the launch places its own arguments.
-func AppendCommandArgs(command domain.AgentCommand, remote bool, args ...string) domain.AgentCommand {
-	switch {
-	case len(command.Argv) > 0:
-		return domain.AgentCommand{Argv: append(slices.Clone(command.Argv), args...)}
-	case remote:
-		return domain.AgentCommand{Line: sshutil.AppendArgs(command.Line, args...)}
-	case slices.ContainsFunc(args, breaksWhitespaceSplit):
-		return domain.AgentCommand{Argv: append(strings.Fields(command.Line), args...)}
-	}
-	words := append([]string{strings.TrimRightFunc(command.Line, unicode.IsSpace)}, args...)
-	return domain.AgentCommand{Line: strings.Join(words, " ")}
-}
-
-// breaksWhitespaceSplit reports whether a whitespace split would not
-// yield arg as one word: it is empty or holds a space rune.
-func breaksWhitespaceSplit(arg string) bool {
-	return arg == "" || strings.ContainsFunc(arg, unicode.IsSpace)
 }
 
 // SSHOptions resolves t's SSH transport options for one remote

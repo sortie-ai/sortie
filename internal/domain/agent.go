@@ -328,14 +328,6 @@ type StartSessionParams struct {
 	// without session continuity ignore it.
 	ResumeSessionID string
 
-	// ResumeUsage is the figure the newest run on ResumeSessionID ended
-	// with; nil when ResumeSessionID is empty or that run recorded none.
-	// Adapters whose runtime keeps no such figure ignore it.
-	ResumeUsage *TokenUsage
-
-	// ResumeUsageByModel is the per-model split of ResumeUsage; nil when none.
-	ResumeUsageByModel map[string]TokenUsage
-
 	// SSHHost, when non-empty, launches the agent on that host via SSH
 	// instead of as a local subprocess.
 	SSHHost string
@@ -429,17 +421,6 @@ type TurnResult struct {
 	// running session total, holding what every earlier completed turn of
 	// the session spent, read or not.
 	CoversSession bool
-
-	// ResumeUsage is the usage the agent runtime itself holds for the
-	// session at this turn's end, earlier runs on the session included,
-	// which a later run resuming the session receives as
-	// StartSessionParams.ResumeUsage. Nil when the runtime keeps no such
-	// figure or the adapter cannot state it exactly.
-	ResumeUsage *TokenUsage
-
-	// ResumeUsageByModel is the per-model split of ResumeUsage, handed to a
-	// later run as StartSessionParams.ResumeUsageByModel; nil when none.
-	ResumeUsageByModel map[string]TokenUsage
 
 	// UsageProvenance names the source and strategy whose figure settled this
 	// turn; its Source is empty when the turn settled no figure or its adapter

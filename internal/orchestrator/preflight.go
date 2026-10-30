@@ -219,8 +219,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	}
 
 	// worker.ssh_hosts is the one configuration key that can produce a
-	// remote session, so its presence decides whether a kind can carry a
-	// token figure for every session this configuration can produce.
+	// remote session, which launches the remote command line of a kind.
 	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker")).SSHHosts) > 0
 
 	// Adapter-specific agent config validation, for every distinct kind
@@ -280,7 +279,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		if blockOnly {
 			continue
 		}
-		settingsErrs, settingsWarns := settingsDiagnostics(cfg, agentMeta, registered, settings, remote)
+		settingsErrs, settingsWarns := settingsDiagnostics(cfg, agentMeta, registered, settings)
 		errs = append(errs, settingsErrs...)
 		warns = append(warns, settingsWarns...)
 	}
@@ -293,7 +292,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		settings := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: rule.SettingsKind, RuleName: rule.Name}, "")
 		prefix := ruleSettingsPrefix(i, rule)
 
-		ruleErrs, ruleWarns := settingsDiagnostics(cfg, agentMeta, registered, settings, remote)
+		ruleErrs, ruleWarns := settingsDiagnostics(cfg, agentMeta, registered, settings)
 		for _, e := range ruleErrs {
 			errs = append(errs, PreflightError{Check: e.Check, Message: prefix + e.Message})
 		}

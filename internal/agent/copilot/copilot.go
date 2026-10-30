@@ -11,17 +11,15 @@ package copilot
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
+	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -60,19 +58,23 @@ const copilotToolDeniedCode = "denied"
 
 const defaultCommand = "copilot"
 
-// usageSources: the result event reports premium requests, a vendor unit, and
-// the session-state journal holds the token counts per model.
+// usageSources: the usage checkpoint on the event stream is the running total
+// per served model, the journal's per-request lines settle a turn the
+// checkpoints left unsettled, and the result event's premium requests are a
+// vendor unit.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{VendorUnit: "premium requests"},
+		Spend: usage.SpendDeclaration{
+			Shape:             usage.SpendSessionCumulative,
+			CacheInInput:      true,
+			ReasoningInOutput: true,
+			ServedModel:       true,
+			VendorUnit:        "premium requests",
+		},
 	},
-	Records: usage.Source{
-		Category: usage.SourceJournal,
-		Strategy: usage.StrategyRecords,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true},
-	},
+	Records: sessionstate.Records,
 }
 
 func init() {
@@ -119,13 +121,9 @@ type sessionState struct {
 	// usage is built once in StartSession and never reset between turns.
 	usage *agentcore.TurnEndUsage
 
-	// resume separates this run's spend from the usage the session held
-	// when the run started. Never reset between turns.
-	resume agentcore.ResumeBaseline
-
-	// sessionIDRejectionLogged suppresses repeating the invalid-session-id
-	// Warn on every turn of a run whose session id never becomes valid.
-	sessionIDRejectionLogged bool
+	// ledger converts the checkpoints' session totals into the run's spend and
+	// decides when it is complete. Never reset between turns.
+	ledger *usage.Ledger
 
 	// Per-turn scan state, owned by the ParseLine and OnFinalize hooks and
 	// reset at the top of each RunTurn.
@@ -154,10 +152,16 @@ type sessionState struct {
 
 	turnResultSeen bool
 
-	// turnResume and turnResumeByModel are the session's own usage handed
-	// over to a later run; nil when the journal read produced none.
-	turnResume        *domain.TokenUsage
-	turnResumeByModel map[string]domain.TokenUsage
+	// turnReading is the turn's last usage checkpoint; nil when it saw none.
+	turnReading *usage.SpendReading
+
+	// turnReplied is true when the result event reported exit code 0.
+	turnReplied bool
+
+	// turnAborted is true when the runtime reported the turn aborted. The
+	// final checkpoint and result that follow an abort omit the request in
+	// flight, so they never settle the turn complete.
+	turnAborted bool
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -165,110 +169,6 @@ func (s *sessionState) logger() *slog.Logger {
 		return s.baseLogger
 	}
 	return logging.WithSession(s.baseLogger, s.copilotSessionID)
-}
-
-// recoverUsage reads the runtime's session-state journal after the
-// subprocess has exited and returns this run's usage with the model the
-// journal's newest record names, whether that figure is an estimate, and the
-// session's own usage for hand-over to a later run.
-//
-// A skipped or failed read returns no figure, false, and no hand-over
-// figure. A journal without a record, or one whose newest record equals the
-// last reading, means the turn wrote none: no figure, and the session's
-// usage is unchanged. A reading the baseline cannot place exactly returns no
-// figure and true.
-func (s *sessionState) recoverUsage(logger *slog.Logger) (recovered *agentcore.RecoveredUsage, estimated bool, resume *domain.TokenUsage, resumeByModel map[string]domain.TokenUsage) {
-	remote := s.target.RemoteCommand != ""
-	sessionID := s.copilotSessionID
-	validID := sessionID != "" && agentcore.ValidPathSegment(sessionID)
-
-	// The journal is opened with local file access, so a remote launch has
-	// none to read.
-	if remote || !validID {
-		if sessionID != "" && !validID && !s.sessionIDRejectionLogged {
-			logger.Warn("copilot session id rejected for session-state read",
-				slog.String("reason", "invalid_session_id"))
-			s.sessionIDRejectionLogged = true
-		}
-		return nil, false, nil, nil
-	}
-
-	root, err := sessionStateRoot(os.Getenv, os.UserHomeDir)
-	if err != nil {
-		logger.Debug("copilot session-state root resolution failed",
-			slog.String("session_id", sessionID), slog.String("reason", "root_unresolved"))
-		return nil, false, nil, nil
-	}
-	eventsPath := filepath.Join(root, sessionID, "events.jsonl")
-
-	current, currentByModel, model, found, err := readSessionUsage(eventsPath)
-	if err != nil {
-		if errors.Is(err, errSessionStateCapExceeded) {
-			logger.Warn("copilot session-state read abandoned",
-				slog.String("session_id", sessionID), slog.String("reason", "cap_exceeded"))
-		} else {
-			logger.Debug("copilot session-state read failed",
-				slog.String("session_id", sessionID), slog.String("reason", "unreadable"))
-		}
-		return nil, false, nil, nil
-	}
-
-	if !found {
-		logger.Debug("copilot session-state has no session.shutdown record yet",
-			slog.String("session_id", sessionID), slog.String("reason", "no_record"))
-		last, lastByModel := s.resume.Resume()
-		return nil, false, last, lastByModel
-	}
-
-	if last, lastByModel := s.resume.Resume(); last != nil && *last == current {
-		return nil, false, last, lastByModel
-	}
-
-	run, runByModel, estimated := s.resume.Observe(current, currentByModel, nil)
-	latest, latestByModel := s.resume.Resume()
-	if estimated {
-		return nil, true, latest, latestByModel
-	}
-	return &agentcore.RecoveredUsage{Run: run, Model: model, ByModel: runByModel}, false, latest, latestByModel
-}
-
-// seedResumeBaseline returns the baseline a session starts from: zero for a
-// session the run creates, the figure handed over for a resumed one, and
-// otherwise the newest record of the resumed session's local journal. A
-// remote launch, an invalid session id, or an unreadable journal leaves the
-// baseline unknown; none fails the session start. A remote launch is skipped
-// because the journal is opened with local file access.
-func seedResumeBaseline(params domain.StartSessionParams, target agentcore.LaunchTarget, sessionID string, logger *slog.Logger) agentcore.ResumeBaseline {
-	switch {
-	case params.ResumeSessionID == "":
-		return *agentcore.NewResumeBaseline(&domain.TokenUsage{}, nil)
-	case params.ResumeUsage != nil:
-		return *agentcore.NewResumeBaseline(params.ResumeUsage, params.ResumeUsageByModel)
-	case target.RemoteCommand != "" || !agentcore.ValidPathSegment(sessionID):
-		return agentcore.ResumeBaseline{}
-	}
-	return *agentcore.NewResumeBaseline(journalResumeUsage(sessionID, logger))
-}
-
-// journalResumeUsage returns the totals of the newest session.shutdown record
-// in the session's journal with its per-model split, zero and nil when the
-// journal is missing or holds no record, and nil and nil when unreadable.
-func journalResumeUsage(sessionID string, logger *slog.Logger) (*domain.TokenUsage, map[string]domain.TokenUsage) {
-	root, err := sessionStateRoot(os.Getenv, os.UserHomeDir)
-	if err != nil {
-		logger.Debug("copilot session-state root resolution failed", slog.String("reason", "root_unresolved"))
-		return nil, nil
-	}
-
-	current, currentByModel, _, found, err := readSessionUsage(filepath.Join(root, sessionID, "events.jsonl"))
-	if errors.Is(err, fs.ErrNotExist) || (err == nil && !found) {
-		return &domain.TokenUsage{}, nil
-	}
-	if err != nil {
-		logger.Debug("copilot session-state baseline read failed", slog.String("reason", "unreadable"))
-		return nil, nil
-	}
-	return &current, currentByModel
 }
 
 // NewCopilotAdapter creates a [CopilotAdapter]. Settings and command
@@ -315,6 +215,15 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
 
+	ledger, err := usage.NewLedger(usageSources.Live, usageSources.Records)
+	if err != nil {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrResponseError,
+			Message: "usage ledger refused the kind's sources",
+			Err:     err,
+		}
+	}
+
 	tools, toolsErr := agentcore.ResolveToolDelivery(ctx, params, target, registry.MCPDialectMCPServersJSON, baseLogger)
 	if toolsErr != nil {
 		return domain.Session{}, toolsErr
@@ -322,7 +231,6 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 	mcpConfigPath := ""
 	if target.RemoteCommand == "" && tools.Configured() && !params.CredentialVerification {
-		var err error
 		mcpConfigPath, err = writeDerivedConfig(target.WorkspacePath, tools)
 		if err != nil {
 			_ = tools.Close()
@@ -344,9 +252,17 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		isContinuation:         params.ResumeSessionID != "",
 		credentialVerification: params.CredentialVerification,
 		usage:                  agentcore.NewTurnEndUsage(),
-		resume:                 seedResumeBaseline(params, target, copilotSessionID, logging.WithSession(baseLogger, copilotSessionID)),
+		ledger:                 ledger,
 
 		reducedVerificationContext: params.ReducedVerificationContext(),
+	}
+
+	if params.ResumeSessionID == "" {
+		ledger.SessionCreated()
+	} else {
+		readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(params.AgentConfig))
+		ledger.Boundary(state.readJournal(readCtx))
+		cancel()
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -495,11 +411,20 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				}
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
+			case "session.usage_checkpoint":
+				if reading, ok := sessionstate.UsageCheckpoint(line); ok {
+					state.turnReading = &reading
+				}
+
+			case "abort":
+				state.turnAborted = true
+
 			case "result":
 				if event.SessionID != "" {
 					state.copilotSessionID = event.SessionID
 				}
 				state.turnResultSeen = true
+				state.turnReplied = event.ExitCode != nil && *event.ExitCode == 0
 				return new(event), nil
 
 			default:
@@ -513,17 +438,11 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			return state.usage.Snapshot(), state.usage.ByModel(), state.usage.Measured()
 		},
 		GetSessionID: func() string { return state.copilotSessionID },
-		SettleUsage: func(_ context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
-			recovered, estimated, resume, resumeByModel := state.recoverUsage(state.logger())
+		SettleUsage: func(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
+			end := usage.TurnEnd{Replied: state.turnReplied, Cancelled: state.turnAborted, ModelReached: spend.ModelReached()}
+			recovered := agentcore.SettleSpend(ctx, state.ledger, end, state.turnReading,
+				state.readJournal, agentcore.ReadTimeout(state.agentConfig), spend)
 			state.usage.Settle(emit, recovered)
-			state.turnResume, state.turnResumeByModel = resume, resumeByModel
-			if state.turnResultSeen && recovered != nil {
-				spend.MarkSettled()
-				spend.MarkSessionTotal()
-			}
-			if estimated {
-				spend.MarkEstimated()
-			}
 		},
 		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, waitErr error, stderrLines []string, earlyExit *domain.AgentError, spend *agentcore.TurnSpend) (domain.TurnResult, *domain.AgentError) {
 			lastResult, _ := lastParsed.(*rawEvent)
@@ -571,10 +490,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				ev.Terminal = agentcore.TerminalSuccess
 			}
 
-			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.copilotSessionID, apiDurationMS, nil, *spend)
-			result.ResumeUsage = state.turnResume
-			result.ResumeUsageByModel = state.turnResumeByModel
-			return result, agentErr
+			return state.usage.Finalize(emit, state.logger(), ev, state.copilotSessionID, apiDurationMS, nil, *spend)
 		},
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
@@ -615,8 +531,9 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	state.turnRefusal = nil
 	state.turnContinuations = 0
 	state.turnResultSeen = false
-	state.turnResume = nil
-	state.turnResumeByModel = nil
+	state.turnReading = nil
+	state.turnReplied = false
+	state.turnAborted = false
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }

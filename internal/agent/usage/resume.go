@@ -117,6 +117,28 @@ func (b *ResumeBaseline) Run() (domain.TokenUsage, map[string]domain.TokenUsage)
 	return run, NormalizeByModel(AddByModel(b.modelBeforeReset, since))
 }
 
+// anchor fixes the baseline at the latest reading so that Run returns run, and
+// runByModel per model when every model it names is in the latest per-model
+// reading at or above its amount; otherwise the per-model baseline is unknown.
+func (b *ResumeBaseline) anchor(run domain.TokenUsage, runByModel map[string]domain.TokenUsage) {
+	b.beforeReset, b.baseline, b.known = run, b.latest, true
+	b.modelBeforeReset = map[string]domain.TokenUsage{}
+
+	if !b.modelKnown {
+		return
+	}
+	baseline := maps.Clone(b.modelLatest)
+	for name, amount := range runByModel {
+		latest, present := b.modelLatest[name]
+		if !present || FellBelow(latest, amount) {
+			b.modelBaseline, b.modelKnown = nil, false
+			return
+		}
+		baseline[name] = Subtract(latest, amount)
+	}
+	b.modelBaseline = baseline
+}
+
 // Resume returns a copy of the latest reading, which a later run
 // resuming the session starts from, or nil while the baseline is
 // unknown. The per-model split is returned only when it sums to that

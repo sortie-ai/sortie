@@ -38,6 +38,8 @@ var (
 	rb   = rec("b", "m2", 10, 1)
 	rc   = rec("c", "m1", 5, 1)
 
+	unnormalizable = usage.SpendReading{Output: new(int64(5)), CacheRead: new(int64(0)), CacheWrite: new(int64(0)), Model: "m", Identity: "h"}
+
 	liveProv = domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive}
 	recProv  = domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
 )
@@ -83,7 +85,7 @@ func withKids(read usage.RecordsRead, kids ...usage.SpendReading) usage.RecordsR
 	return read
 }
 
-func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative bool, start usage.RecordsRead) *usage.Ledger {
+func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative, resumeFromRecords bool, start usage.RecordsRead) *usage.Ledger {
 	t.Helper()
 
 	liveSource := usage.Source{
@@ -96,6 +98,9 @@ func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative bool, 
 	}
 	if cumulative {
 		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, CacheInInput: true, ReasoningInOutput: true, ServedModel: true, Replay: usage.ReplayLastFigure}
+		if resumeFromRecords {
+			liveSource.Spend.Replay = usage.ReplayNone
+		}
 	}
 	var recordsSource usage.Source
 	if withRecords {
@@ -122,6 +127,7 @@ func TestLedger(t *testing.T) {
 		lowerBound bool
 		perTurn    bool
 		cumulative bool
+		replayNone bool
 		created    bool
 		start      usage.RecordsRead
 		steps      []step
@@ -508,13 +514,39 @@ func TestLedger(t *testing.T) {
 				want: usage.Settlement{Run: u(100, 10), ByModel: byModel{"m1": u(100, 10)}, Model: "m1", Figure: true, Spent: true, Provenance: liveProv},
 			}},
 		},
+		{
+			name: "replay none: an unread boundary settles no figure, the next turn counts its increase without covering the session", cumulative: true, replayNone: true,
+			steps: []step{
+				{end: replied, live: liveWith("m", 1000, 10, 0), needs: true},
+				{end: replied, live: liveWith("m", 1100, 12, 0), needs: true, want: usage.Settlement{Run: u(100, 2), ByModel: byModel{"m": u(100, 2)}, Model: "m", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+			},
+		},
+		{
+			name: "replay none: a resumed session starts from the total of the records its boundary read holds", cumulative: true, replayNone: true, start: recs(hist),
+			steps: []step{{end: replied, live: liveWith("m0", 90, 8, 0), read: recs(hist), want: usage.Settlement{Run: u(40, 3), ByModel: byModel{"m0": u(40, 3)}, Model: "m0", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv}}},
+		},
+		{
+			name: "replay none: records re-derive an unknown history and the next turn stays exact", cumulative: true, replayNone: true, start: recs(unnormalizable),
+			steps: []step{
+				{end: replied, live: liveWith("m", 1000, 10, 0), read: recs(unnormalizable, rec("r1", "m", 100, 2)), needs: true, want: usage.Settlement{Run: u(100, 2), ByModel: byModel{"m": u(100, 2)}, Model: "m", Figure: true, Spent: true, Complete: true, Provenance: recProv}},
+				{end: replied, live: liveWith("m", 1150, 13, 0), read: recs(unnormalizable, rec("r1", "m", 100, 2)), want: usage.Settlement{Run: u(250, 5), ByModel: byModel{"m": u(250, 5)}, Model: "m", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+			},
+		},
+		{
+			name: "replay none: a turn without a result settles from records, and later turns settle exactly without covering the session", cumulative: true, replayNone: true, start: recs(unnormalizable),
+			steps: []step{
+				{end: usage.TurnEnd{ModelReached: true}, live: liveWith("m", 950, 9, 0), read: recs(unnormalizable, rec("r1", "m", 50, 1), rec("r2", "m", 50, 1)), needs: true, want: usage.Settlement{Run: u(100, 2), ByModel: byModel{"m": u(100, 2)}, Model: "m", Figure: true, Spent: true, Provenance: recProv}},
+				{end: replied, live: liveWith("m", 1150, 13, 0), read: recs(unnormalizable, rec("r1", "m", 50, 1), rec("r2", "m", 50, 1), rec("r3", "m", 150, 3)), needs: true, want: usage.Settlement{Run: u(250, 5), ByModel: byModel{"m": u(250, 5)}, Model: "m", Figure: true, Spent: true, Complete: true, Provenance: recProv}},
+				{end: replied, live: liveWith("m", 1200, 14, 0), read: recs(unnormalizable, rec("r1", "m", 50, 1), rec("r2", "m", 50, 1), rec("r3", "m", 150, 3)), want: usage.Settlement{Run: u(300, 6), ByModel: byModel{"m": u(300, 6)}, Model: "m", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.cumulative, tt.start)
+			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.cumulative, tt.replayNone, tt.start)
 			if tt.created {
 				l.SessionCreated()
 			}
@@ -633,7 +665,7 @@ func TestLedger_ObserveRequest(t *testing.T) {
 func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	t.Parallel()
 
-	l := newLedger(t, true, false, false, false, recs(hist))
+	l := newLedger(t, true, false, false, false, false, recs(hist))
 	first := l.Settle(replied, live(30, 4), recs(hist, ra, rb))
 	if first.ByModel == nil {
 		t.Fatalf("Settle() ByModel = nil, want a split")

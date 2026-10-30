@@ -39,17 +39,7 @@ func init() {
 		Pull:        quota.Source,
 		PullWindows: copilotPullWindows,
 		PromptSpend: standardPromptSpend,
-		Records: usage.Source{
-			Category: usage.SourceJournal,
-			Strategy: usage.StrategyRecords,
-			Spend: usage.SpendDeclaration{
-				Shape:             usage.SpendPerRequest,
-				CacheInInput:      true,
-				ReasoningInOutput: true,
-				ServedModel:       true,
-			},
-			WrittenAtTurnEnd: true,
-		},
+		Records:     sessionstate.Records,
 		ReadRecords: copilotReadRecords,
 		Launches: func(target agentcore.LaunchTarget) bool {
 			return commandNamesRuntime(target, copilotExecutableName, copilotPackageName)
@@ -128,13 +118,7 @@ func (r copilotQuotaRuntime) Exchange(ctx context.Context, args []string, limit 
 // file order. The runtime's host resolves the journal's home, so a local and
 // a remote launch read it the same way.
 func copilotReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
-	var readings []usage.SpendReading
-	err := rt.ScanHomeFile(ctx, sessionstate.JournalPath(rt.SessionID()), sessionstate.MaxFileBytes, usage.MaxRecordLineBytes, func(line []byte) error {
-		if reading, ok := sessionstate.UsageRecord(line); ok {
-			readings = append(readings, reading)
-		}
-		return nil
-	})
+	readings, err := sessionstate.ScanRecords(ctx, rt.SessionID(), rt.ScanHomeFile)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return Records{}, nil

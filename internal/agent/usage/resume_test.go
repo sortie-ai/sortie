@@ -108,3 +108,35 @@ func TestResumeBaseline_Observe_PerModelSeed(t *testing.T) {
 		})
 	}
 }
+
+func TestResumeBaseline_Anchor_PerModel(t *testing.T) {
+	t.Parallel()
+
+	tok := func(n int64) domain.TokenUsage { return domain.TokenUsage{InputTokens: n, TotalTokens: n} }
+	latest := map[string]domain.TokenUsage{"a": tok(600), "b": tok(400)}
+
+	tests := []struct {
+		name string
+		run  map[string]domain.TokenUsage
+		want map[string]domain.TokenUsage
+	}{
+		{name: "models within the latest reading", run: map[string]domain.TokenUsage{"a": tok(100)}, want: map[string]domain.TokenUsage{"a": tok(130)}},
+		{name: "a model the latest reading lacks", run: map[string]domain.TokenUsage{"c": tok(100)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := NewResumeBaseline(new(tok(1000)), latest)
+			b.Observe(tok(1000), latest, nil)
+
+			b.anchor(tok(100), tt.run)
+			_, got, _ := b.Observe(tok(1030), map[string]domain.TokenUsage{"a": tok(630), "b": tok(400)}, nil)
+
+			if !maps.Equal(got, tt.want) {
+				t.Errorf("Observe(next) by model after anchor(%+v) = %+v, want %+v", tt.run, got, tt.want)
+			}
+		})
+	}
+}

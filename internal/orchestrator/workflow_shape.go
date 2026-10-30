@@ -181,7 +181,7 @@ type ShapeLabelCommands struct {
 // reload.
 func (o *Orchestrator) WorkflowShape() WorkflowShape {
 	cfg := o.workflowManager.Config()
-	worker, remote := o.shapeWorker(cfg)
+	worker := o.shapeWorker(cfg)
 
 	return WorkflowShape{
 		Tracker: ShapeTracker{
@@ -196,7 +196,7 @@ func (o *Orchestrator) WorkflowShape() WorkflowShape {
 		Polling: ShapePolling{IntervalMS: cfg.Polling.IntervalMS},
 		Agent: ShapeAgent{
 			Kind:                       cfg.Agent.Kind,
-			UsageArrival:               o.usageArrival(cfg.Agent.Kind, remote),
+			UsageArrival:               o.usageArrival(cfg.Agent.Kind),
 			MaxTurns:                   cfg.Agent.TurnLimit(),
 			StallTimeoutMS:             positiveOrNil(cfg.Agent.StallTimeoutMS),
 			MaxRetryBackoffMS:          cfg.Agent.MaxRetryBackoffMS,
@@ -207,13 +207,13 @@ func (o *Orchestrator) WorkflowShape() WorkflowShape {
 			MaxConcurrentAgentsByState: copyCaps(cfg.Agent.MaxConcurrentByState),
 		},
 		Worker:    worker,
-		Dispatch:  o.shapeDispatch(cfg, remote),
+		Dispatch:  o.shapeDispatch(cfg),
 		Reactions: o.shapeReactions(cfg),
 	}
 }
 
-// shapeWorker reports the worker members and whether launches are remote.
-func (o *Orchestrator) shapeWorker(cfg config.ServiceConfig) (ShapeWorker, bool) {
+// shapeWorker reports the worker members.
+func (o *Orchestrator) shapeWorker(cfg config.ServiceConfig) ShapeWorker {
 	parsed := ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
 
 	hosts := make([]string, 0, len(parsed.SSHHosts))
@@ -227,22 +227,22 @@ func (o *Orchestrator) shapeWorker(cfg config.ServiceConfig) (ShapeWorker, bool)
 	if len(hosts) > 0 {
 		worker.MaxConcurrentAgentsPerHost = positiveOrNil(parsed.MaxPerHost)
 	}
-	return worker, len(hosts) > 0
+	return worker
 }
 
-// usageArrival resolves the arrival a session of kind starts with on the given
-// launch, through the code an attempt uses. A session that can carry no token
-// figure on that launch shows none, as preflight warns.
-func (o *Orchestrator) usageArrival(kind string, remote bool) string {
+// usageArrival resolves the arrival a session of kind starts with, through the
+// code an attempt uses. A session that can carry no token figure shows none, as
+// preflight warns.
+func (o *Orchestrator) usageArrival(kind string) string {
 	meta, registered := o.preflightParams.AgentRegistry.Meta(kind)
-	arrival, _, carriesTokenFigure := usageDisposition(meta, registered, remote)
+	arrival, _, carriesTokenFigure := usageDisposition(meta, registered)
 	if !carriesTokenFigure {
 		return string(registry.UsageArrivalNone)
 	}
 	return string(arrival)
 }
 
-func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig, remote bool) ShapeDispatch {
+func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig) ShapeDispatch {
 	dispatch := cfg.Dispatch
 
 	rules := make([]ShapeRule, 0, len(dispatch.Rules))
@@ -252,7 +252,7 @@ func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig, remote bool) Shap
 			Name:         rule.Name,
 			Next:         rule.Next,
 			AgentKind:    kind,
-			UsageArrival: o.usageArrival(kind, remote),
+			UsageArrival: o.usageArrival(kind),
 		}
 		switch {
 		case rule.Stage != "":
@@ -271,7 +271,7 @@ func (o *Orchestrator) shapeDispatch(cfg config.ServiceConfig, remote bool) Shap
 	if resolution, ok := defaultSelection(dispatch, cfg.Agent.Kind, ""); ok {
 		fallback = &ShapeSelection{
 			AgentKind:    resolution.AgentKind,
-			UsageArrival: o.usageArrival(resolution.AgentKind, remote),
+			UsageArrival: o.usageArrival(resolution.AgentKind),
 		}
 	}
 
