@@ -465,7 +465,7 @@ func runScenario(t *testing.T, b Binding, scenario Scenario) {
 
 	if scenario == ScenarioExhaustion {
 		failures := recorded.snapshot()
-		reportViolations(t, exhaustionViolations(run, b, nonce, timedOut, failures))
+		reportViolations(t, exhaustionViolations(run, b, usageSettlingOf(b), nonce, timedOut, failures))
 		if exhausted := exchangesOfKind(run.Exchanges, ExchangeExhausted); len(exhausted) > 0 && oneFailurePerRequest(failures, exhausted) {
 			recorded.discard()
 		}
@@ -607,15 +607,16 @@ type remoteLaunch struct {
 	refused bool
 }
 
-// startLab seeds the lab from home, so it must run after the binding's Launch
-// prepared that home.
+// startLab seeds the lab from workspace and home, so it must run after the
+// binding's Launch prepared that home. The workspace is seeded rather than
+// created empty so a read of the scripted file succeeds before the runtime
+// validates its arguments.
 func (r remoteLaunch) startLab(t *testing.T, workspace, home string) agenttest.SSHLab {
 	t.Helper()
 
 	return agenttest.StartSSHLab(t, agenttest.SSHLabParams{
 		Install: labInstall(t, r.variant),
-		Dirs:    []string{workspace},
-		Seed:    []string{home},
+		Seed:    []string{workspace, home},
 	})
 }
 
@@ -1096,7 +1097,7 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 		reportViolations(t, turnOutcomeViolations(run, len(script)))
 	})
 	t.Run("continuation", func(t *testing.T) {
-		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges, b.Spend))
+		reportViolations(t, continuationViolations(turns, resumed, run.Exchanges, b.Spend, usageSettlingOf(b)))
 	})
 	if b.Spend != nil {
 		for entry, turn := range turns {
@@ -2001,12 +2002,8 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 	t.Helper()
 
 	meta, _ := registry.Agents.Meta(b.Kind)
-	arrival, attribution := meta.UsageDisposition()
-	settling := usageSettling{
-		recordsUnread:  b.Spend != nil && b.Spend.Records == (domain.UsageProvenance{}),
-		liveLowerBound: b.Spend == nil && meta.UsageSources.Live.Spend.LowerBound,
-		splitExpected:  attribution == registry.UsageAttributionPerModel,
-	}
+	arrival, _ := meta.UsageDisposition()
+	settling := usageSettlingOf(b)
 	reportViolations(t, exactUsage(run, arrival,
 		served(run.Exchanges, turnAndAuxiliary, b), servedByModel(run.Exchanges, turnAndAuxiliary, b), b.Spend, settling))
 	agenttest.AssertUsageContract(t, run.Events)
@@ -2018,6 +2015,18 @@ func assertExactUsage(t *testing.T, b Binding, run Run, name string, reporting f
 		Events: run.Events,
 		Result: run.Result,
 	})
+}
+
+// usageSettlingOf derives from the kind's registered sources what a run of b
+// leaves unsettled.
+func usageSettlingOf(b Binding) usageSettling {
+	meta, _ := registry.Agents.Meta(b.Kind)
+	_, attribution := meta.UsageDisposition()
+	return usageSettling{
+		recordsUnread:  b.Spend != nil && b.Spend.Records == (domain.UsageProvenance{}),
+		liveLowerBound: b.Spend == nil && meta.UsageSources.Live.Spend.LowerBound,
+		splitExpected:  attribution == registry.UsageAttributionPerModel,
+	}
 }
 
 // usageSettling is what a run's registered sources leave unsettled.
@@ -2281,7 +2290,11 @@ func containmentViolations(run Run, streams []streamFile) []string {
 	return v.items
 }
 
-func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failures []string) []string {
+// exhaustionViolations checks a run whose script ran out after one tool call.
+// Under a lower-bound settling a turn with no figure, or with its spend
+// unaccounted, is held to the lower-bound rule against what the endpoint served
+// instead of to an exact figure.
+func exhaustionViolations(run Run, b Binding, settling usageSettling, nonce string, timedOut bool, failures []string) []string {
 	v := &findings{property: "script exhaustion"}
 
 	if timedOut {
@@ -2310,10 +2323,15 @@ func exhaustionViolations(run Run, b Binding, nonce string, timedOut bool, failu
 		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures, b.RuntimeFailureFolded)
 	}
 
+	want := served(run.Exchanges, turnAndAuxiliary, b)
+	if settling.liveLowerBound && (!run.Result.UsageMeasured || run.Result.SpendUnaccounted) {
+		lowerBoundViolations(v, run.Result, want)
+		return v.items
+	}
 	if !run.Result.UsageMeasured {
 		v.add("Result.UsageMeasured is false, want a measured figure")
 	}
-	if want := served(run.Exchanges, turnAndAuxiliary, b); run.Result.Usage != want {
+	if run.Result.Usage != want {
 		v.add("Result.Usage = %+v, want %+v, the sum of every answer the endpoint served", run.Result.Usage, want)
 	}
 	return v.items
@@ -2500,7 +2518,10 @@ func reportedProcessIDs(run Run) []string {
 //
 // A non-nil spend leaves every turn's completeness to the provenance property,
 // which compares it with the completeness the binding expects.
-func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources) []string {
+//
+// Under a lower-bound settling the resumed turn may carry no figure, provided
+// it flags its spend unaccounted; otherwise it must be measured.
+func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources, settling usageSettling) []string {
 	v := &findings{property: "continuation"}
 
 	checkContinuationIdentifiers(v, turns, resumed)
@@ -2526,8 +2547,13 @@ func continuationViolations(turns []continuedTurn, resumed domain.Session, excha
 	if first := turns[0].result; spend == nil && first.UsageMeasured && first.SpendUnaccounted {
 		v.add("%s turn 1: Result.SpendUnaccounted is true, want false for a completed turn with a measured figure", roleOrigin)
 	}
-	if !turns[resumedEntry].result.UsageMeasured {
-		v.add("%s turn: Result.UsageMeasured is false, want a measured figure", roleResumed)
+	if last := turns[resumedEntry].result; !last.UsageMeasured {
+		switch {
+		case !settling.liveLowerBound:
+			v.add("%s turn: Result.UsageMeasured is false, want a measured figure", roleResumed)
+		case !last.SpendUnaccounted:
+			v.add("%s turn: Result.SpendUnaccounted is false, want true for a turn with no figure", roleResumed)
+		}
 	}
 	return v.items
 }

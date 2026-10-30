@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,14 @@ import (
 
 func singleRequired(property, typ string) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{%q:{"type":%s}},"required":[%q]}`, property, typ, property))
+}
+
+func batchReadSchema(modes, itemRequired string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{"operations":{"type":"array","items":{"type":"object","properties":{"mode":{"type":"string","enum":[%s]},"path":{"type":"string"}},"required":[%s]}}},"required":["operations"]}`, modes, itemRequired))
+}
+
+func commandWrite(commands string) []fakemodel.Tool {
+	return []fakemodel.Tool{{Name: "edit", Parameters: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{"command":{"type":"string","enum":[%s]},"path":{"type":"string"},"content":{"type":"string"}},"required":["command","path"]}`, commands))}}
 }
 
 func decodeArguments(t testing.TB, call fakemodel.FunctionCall) map[string]string {
@@ -65,6 +74,14 @@ func TestReadFile(t *testing.T) {
 			},
 			"read", "filePath",
 		},
+		{
+			"single string path wins over an earlier batch read",
+			[]fakemodel.Tool{
+				{Name: "read", Parameters: batchReadSchema(`"Line","Directory","Image"`, `"mode"`)},
+				{Name: "view", Parameters: singleRequired("path", `"string"`)},
+			},
+			"view", "path",
+		},
 	}
 
 	for _, tt := range tests {
@@ -87,10 +104,27 @@ func TestReadFile(t *testing.T) {
 	}
 }
 
+func TestReadFileBatch(t *testing.T) {
+	t.Parallel()
+
+	const path = "/workspace/nonce.txt"
+	declared := []fakemodel.Tool{{Name: "read", Parameters: batchReadSchema(`"Line","Directory","Image"`, `"mode"`)}}
+	want := decodeObject(t, []byte(`{"operations":[{"mode":"Line","path":"`+path+`"}]}`))
+
+	call, err := fakemodel.ReadFile(path)(declared)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v, want nil", path, err)
+	}
+
+	if got := decodeObject(t, call.Arguments); call.Name != "read" || !reflect.DeepEqual(got, want) {
+		t.Errorf("ReadFile(%q) = (%q, %s), want (%q, %v)", path, call.Name, call.Arguments, "read", want)
+	}
+}
+
 func TestReadFileRejectsIneligibleTools(t *testing.T) {
 	t.Parallel()
 
-	const wantMessage = "no declared tool requires exactly one string property named file_path, filePath, path or absolute_path"
+	const wantMessage = "no declared tool requires exactly one string property named file_path, filePath, path or absolute_path, or one array property whose items require only a string mode offering Line and declare one such path property"
 
 	tests := []struct {
 		name     string
@@ -110,6 +144,8 @@ func TestReadFileRejectsIneligibleTools(t *testing.T) {
 		},
 		{"other property name", []fakemodel.Tool{{Name: "search", Parameters: singleRequired("query", `"string"`)}}},
 		{"a command property", []fakemodel.Tool{{Name: "run", Parameters: singleRequired("cmd", `"string"`)}}},
+		{"batch read without the Line mode", []fakemodel.Tool{{Name: "read", Parameters: batchReadSchema(`"Directory","Image"`, `"mode"`)}}},
+		{"batch read items require a second property", []fakemodel.Tool{{Name: "read", Parameters: batchReadSchema(`"Line","Directory"`, `"mode","path"`)}}},
 	}
 
 	for _, tt := range tests {
@@ -132,8 +168,9 @@ func TestWriteFile(t *testing.T) {
 	t.Parallel()
 
 	const (
-		path    = "/workspace/nonce.txt"
-		content = "hello from sortie"
+		path        = "/workspace/nonce.txt"
+		content     = "hello from sortie"
+		wantMessage = "no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content or file_text, or such a path property and a command offering create beside one content or file_text property"
 	)
 	write := func(first, second, secondType string) []fakemodel.Tool {
 		schema := fmt.Sprintf(`{"type":"object","properties":{%q:{"type":"string"},%q:{"type":%s}},"required":[%q,%q]}`, first, second, secondType, first, second)
@@ -149,6 +186,9 @@ func TestWriteFile(t *testing.T) {
 		{"file_text content", []fakemodel.Tool{{Name: "create", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"file_text":{"type":"string"}},"required":["path","file_text"]}`)}}, map[string]string{"path": path, "file_text": content}},
 		{"path alone", []fakemodel.Tool{{Name: "read", Parameters: singleRequired("path", `"string"`)}}, nil},
 		{"content is not a string", write("path", "content", `"array"`), nil},
+		{"command write", commandWrite(`"create","str_replace"`), map[string]string{"command": "create", "path": path, "content": content}},
+		{"path and content wins over an earlier command write", slices.Concat(commandWrite(`"create"`), write("path", "content", `"string"`)), map[string]string{"path": path, "content": content}},
+		{"command offers no create", commandWrite(`"str_replace","insert"`), nil},
 	}
 
 	for _, tt := range tests {
@@ -159,7 +199,10 @@ func TestWriteFile(t *testing.T) {
 
 			if tt.want == nil {
 				if err == nil {
-					t.Errorf("WriteFile(%q, %q)(%s) = %+v, want an error", path, content, tt.name, call)
+					t.Fatalf("WriteFile(%q, %q)(%s) = %+v, want an error", path, content, tt.name, call)
+				}
+				if err.Error() != wantMessage {
+					t.Errorf("WriteFile(%q, %q)(%s) error = %q, want %q", path, content, tt.name, err.Error(), wantMessage)
 				}
 				return
 			}

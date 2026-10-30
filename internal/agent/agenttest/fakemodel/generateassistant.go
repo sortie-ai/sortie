@@ -11,6 +11,7 @@ import (
 
 const (
 	assistantTargetPrefix  = "AmazonCodeWhisperer"
+	controlPlanePrefix     = "KiroControlPlaneBearerService."
 	operationGenerate      = "GenerateAssistantResponse"
 	operationListModels    = "ListAvailableModels"
 	scriptedModelID        = "scripted-model"
@@ -25,7 +26,9 @@ const (
 
 // generateAssistantCodec serves the generate-assistant-response wire: every
 // operation is a POST to the root path with the operation named in the
-// x-amz-target header, so the header, not the path, routes it.
+// x-amz-target header, so the header, not the path, routes it. A runtime
+// addresses the operation to either the assistant service or the control-plane
+// service, and both are served alike.
 //
 // GenerateAssistantResponse is answered as an event stream. A request that
 // declares no tool is auxiliary and answered outside the script. The
@@ -45,7 +48,7 @@ func (generateAssistantCodec) route(method, path string, header http.Header) (ro
 		return route{}, false
 	}
 	target := header.Get("X-Amz-Target")
-	if !strings.HasPrefix(target, assistantTargetPrefix) {
+	if !strings.HasPrefix(target, assistantTargetPrefix) && !strings.HasPrefix(target, controlPlanePrefix) {
 		return route{}, false
 	}
 	_, operation, _ := strings.Cut(target, ".")
@@ -209,8 +212,12 @@ func lengthAs[T byte | uint16 | uint32](n int) T {
 	return T(n) //nolint:gosec // G115: the lengths are of short scripted values
 }
 
+// errorBody names the failure a ValidationException for every status: a runtime
+// shows a nameless body as a generic service error and drops the message. A
+// scripted refusal that needs another error type carries its own body.
 func (generateAssistantCodec) errorBody(_ int, message string) []byte {
 	return encodeJSON(struct {
+		Type    string `json:"__type"`
 		Message string `json:"message"`
-	}{Message: message})
+	}{Type: "ValidationException", Message: message})
 }

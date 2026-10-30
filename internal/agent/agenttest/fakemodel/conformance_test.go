@@ -93,6 +93,7 @@ type conformanceExhaustionState struct {
 	failures []string
 	nonce    string
 	folded   bool
+	settling usageSettling
 }
 
 type conformanceSpyTB struct {
@@ -354,6 +355,7 @@ type conformanceContinuationState struct {
 	turns     []continuedTurn
 	resumed   domain.Session
 	exchanges []Exchange
+	settling  usageSettling
 }
 
 func conformanceContinuationRun() conformanceContinuationState {
@@ -584,7 +586,7 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 	cancelled, stopped, gone := conformanceCancelledRun(), conformanceStoppedRun(), conformanceGoneRun()
 	continuation := conformanceContinuationRun()
 	got := map[string][]string{
-		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges, nil),
+		"continuation":                   continuationViolations(continuation.turns, continuation.resumed, continuation.exchanges, nil, usageSettling{}),
 		"interrupted turn, cancellation": interruptedTurnViolations(cancelled.run, cancelled.in),
 		"interrupted turn, stop":         interruptedTurnViolations(stopped.run, stopped.in),
 		"runtime gone":                   runtimeGoneViolations(gone.run, gone.probe, gone.td),
@@ -593,7 +595,7 @@ func TestConformancePropertyCleanRuns(t *testing.T) {
 		"tool server":                    toolServerViolations(toolServer, conformanceServerTurn),
 		"exact usage":                    exactUsage(run, registry.UsageArrivalTurnEnd, served(run.Exchanges, turnAndAuxiliary, Binding{}), nil, nil, usageSettling{}),
 		"credential containment":         containmentViolations(run, streams),
-		"script exhaustion":              exhaustionViolations(exhaustion.run, Binding{}, conformanceNonce, false, exhaustion.failures),
+		"script exhaustion":              exhaustionViolations(exhaustion.run, Binding{}, usageSettling{}, conformanceNonce, false, exhaustion.failures),
 		"refused call":                   refusedCallViolations(conformanceRefusedRun(), conformanceNonce, conformanceNotice),
 	}
 
@@ -684,12 +686,28 @@ func TestConformancePropertyContinuation(t *testing.T) {
 			},
 			want: []string{"resumed turn: Result.UsageMeasured is false"},
 		},
+		{
+			name: "lower-bound resumed result unmeasured with spend unaccounted",
+			mutate: func(s *conformanceContinuationState) {
+				s.settling = usageSettling{liveLowerBound: true}
+				s.turns[conformanceResumedAt].result.UsageMeasured = false
+				s.turns[conformanceResumedAt].result.SpendUnaccounted = true
+			},
+		},
+		{
+			name: "lower-bound resumed result unmeasured without spend unaccounted",
+			mutate: func(s *conformanceContinuationState) {
+				s.settling = usageSettling{liveLowerBound: true}
+				s.turns[conformanceResumedAt].result.UsageMeasured = false
+			},
+			want: []string{"resumed turn: Result.SpendUnaccounted is false, want true for a turn with no figure"},
+		},
 	}
 
 	conformanceRunCases(t, "continuation", cases,
 		conformanceContinuationRun,
 		func(s conformanceContinuationState) []string {
-			return continuationViolations(s.turns, s.resumed, s.exchanges, nil)
+			return continuationViolations(s.turns, s.resumed, s.exchanges, nil, s.settling)
 		},
 	)
 }
@@ -1730,6 +1748,41 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 			want:   []string{"UsageMeasured is false"},
 		},
 		{
+			name: "unmeasured with spend unaccounted outside a lower-bound settling",
+			mutate: func(s *conformanceExhaustionState) {
+				s.run.Result.UsageMeasured = false
+				s.run.Result.SpendUnaccounted = true
+			},
+			want: []string{"UsageMeasured is false"},
+		},
+		{
+			name: "lower-bound unmeasured with spend unaccounted",
+			mutate: func(s *conformanceExhaustionState) {
+				s.settling = usageSettling{liveLowerBound: true}
+				s.run.Result.Usage = domain.TokenUsage{}
+				s.run.Result.UsageMeasured = false
+				s.run.Result.SpendUnaccounted = true
+			},
+		},
+		{
+			name: "lower-bound unmeasured without spend unaccounted",
+			mutate: func(s *conformanceExhaustionState) {
+				s.settling = usageSettling{liveLowerBound: true}
+				s.run.Result.Usage = domain.TokenUsage{}
+				s.run.Result.UsageMeasured = false
+			},
+			want: []string{"Result.SpendUnaccounted is false, want true for a turn with no figure"},
+		},
+		{
+			name: "lower-bound figure above what the endpoint served",
+			mutate: func(s *conformanceExhaustionState) {
+				s.settling = usageSettling{liveLowerBound: true}
+				s.run.Result.SpendUnaccounted = true
+				s.run.Result.Usage.InputTokens++
+			},
+			want: []string{"a lower bound, exceeds"},
+		},
+		{
 			name:   "usage differs from what the endpoint served",
 			mutate: func(s *conformanceExhaustionState) { s.run.Result.Usage.InputTokens++ },
 			want:   []string{"Result.Usage ="},
@@ -1786,7 +1839,7 @@ func TestConformancePropertyExhaustion(t *testing.T) {
 	conformanceRunCases(t, "script exhaustion", cases,
 		conformanceNewExhaustion,
 		func(s conformanceExhaustionState) []string {
-			return exhaustionViolations(s.run, Binding{RuntimeFailureFolded: s.folded}, s.nonce, s.timedOut, s.failures)
+			return exhaustionViolations(s.run, Binding{RuntimeFailureFolded: s.folded}, s.settling, s.nonce, s.timedOut, s.failures)
 		},
 	)
 }
