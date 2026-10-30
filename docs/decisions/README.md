@@ -45,3 +45,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0037](0037-supply-a-built-in-prompt-for-every-reaction-run.md) | Supply a Built-In Prompt for Every Reaction Run | Accepted |
 | [0038](0038-price-runs-from-a-layered-rate-table-and-record-the-price-at-write.md) | Price Runs from a Layered Rate Table and Record the Price When the Run Is Written | Accepted |
 | [0039](0039-account-for-agent-spend-in-one-usage-component.md) | Account for Agent Spend in One Usage Component Fed by Each Runtime's Own Reports | Accepted |
+| [0040](0040-keep-the-codex-and-claude-code-kinds-as-the-routes-to-their-clis.md) | Keep the Codex and Claude Code Kinds as the Routes to Their CLIs | Accepted |
