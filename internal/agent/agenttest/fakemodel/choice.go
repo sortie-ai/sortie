@@ -18,6 +18,11 @@ var contentPropertyNames = []string{"content", "filetext"}
 
 var commandPropertyNames = []string{"cmd", "command"}
 
+const (
+	lineMode      = "Line"
+	createCommand = "create"
+)
+
 // catDescription satisfies a shell tool's required description property.
 const catDescription = "Print the file"
 
@@ -25,13 +30,24 @@ const catDescription = "Print the file"
 // tool requiring exactly one string property named file_path, filePath, path
 // or absolute_path, in declaration order. The arguments carry path under that
 // property's own name.
+//
+// When no declared tool does, ReadFile falls back to the first tool requiring
+// exactly one array property whose items require only a string mode offering
+// Line and declare one such path property. The arguments then carry one item
+// reading path in Line mode.
 func ReadFile(path string) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
-		tool, property, ok := findSingleStringTool(declared, pathPropertyNames...)
-		if !ok {
-			return FunctionCall{}, errors.New("no declared tool requires exactly one string property named file_path, filePath, path or absolute_path")
+		if tool, property, ok := findSingleStringTool(declared, pathPropertyNames...); ok {
+			return newCall(tool, property, path), nil
 		}
-		return newCall(tool, property, path), nil
+		for _, tool := range declared {
+			arrayProperty, modeProperty, pathProperty, ok := batchReadProperties(tool.Parameters)
+			if ok {
+				operations := []map[string]string{{modeProperty: lineMode, pathProperty: path}}
+				return FunctionCall{Name: tool.Name, Arguments: encodeJSON(map[string][]map[string]string{arrayProperty: operations})}, nil
+			}
+		}
+		return FunctionCall{}, errors.New("no declared tool requires exactly one string property named file_path, filePath, path or absolute_path, or one array property whose items require only a string mode offering Line and declare one such path property")
 	}
 }
 
@@ -40,6 +56,11 @@ func ReadFile(path string) ToolChoice {
 // file_path, filePath, path or absolute_path and one named content or
 // file_text, in declaration order. The arguments carry path and content under
 // those properties' own names.
+//
+// When no declared tool does, WriteFile falls back to the first tool requiring
+// such a path property and a command offering create, and declaring one content
+// or file_text property beside them. The arguments then carry the create
+// command, path and content.
 func WriteFile(path, content string) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
 		for _, tool := range declared {
@@ -48,7 +69,13 @@ func WriteFile(path, content string) ToolChoice {
 				return FunctionCall{Name: tool.Name, Arguments: encodeJSON(map[string]string{pathProperty: path, contentProperty: content})}, nil
 			}
 		}
-		return FunctionCall{}, errors.New("no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content or file_text")
+		for _, tool := range declared {
+			pathProperty, commandProperty, contentProperty, ok := commandWriteProperties(tool.Parameters)
+			if ok {
+				return FunctionCall{Name: tool.Name, Arguments: encodeJSON(map[string]string{commandProperty: createCommand, pathProperty: path, contentProperty: content})}, nil
+			}
+		}
+		return FunctionCall{}, errors.New("no declared tool requires exactly two string properties, one named file_path, filePath, path or absolute_path and one named content or file_text, or such a path property and a command offering create beside one content or file_text property")
 	}
 }
 
@@ -108,14 +135,38 @@ func findSingleStringTool(declared []Tool, names ...string) (Tool, string, bool)
 }
 
 type requiredProperties struct {
-	Required   []string `json:"required"`
-	Properties map[string]struct {
-		Type string `json:"type"`
-	} `json:"properties"`
+	Required   []string                  `json:"required"`
+	Properties map[string]propertySchema `json:"properties"`
+}
+
+type propertySchema struct {
+	Type  string              `json:"type"`
+	Enum  []string            `json:"enum"`
+	Items *requiredProperties `json:"items"`
 }
 
 func (p requiredProperties) isString(property string) bool {
 	return strings.EqualFold(p.Properties[property].Type, "string")
+}
+
+// soleStringNamed returns the one declared string property whose normalized
+// name is one of names, whether or not it is required, and false when none or
+// several are.
+func (p requiredProperties) soleStringNamed(names []string) (string, bool) {
+	var found string
+	for property := range p.Properties {
+		if p.isString(property) && slices.Contains(names, normalizePropertyName(property)) {
+			if found != "" {
+				return "", false
+			}
+			found = property
+		}
+	}
+	return found, found != ""
+}
+
+func (p requiredProperties) offers(property, value string) bool {
+	return slices.Contains(p.Properties[property].Enum, value)
 }
 
 func singleRequiredString(parameters json.RawMessage) (string, bool) {
@@ -147,6 +198,54 @@ func pathAndContentProperties(parameters json.RawMessage) (pathProperty, content
 		}
 	}
 	return pathProperty, contentProperty, pathProperty != "" && contentProperty != ""
+}
+
+// batchReadProperties returns the names of the array property, the item mode
+// property and the item path property of a schema requiring exactly that array,
+// whose items require only a string mode offering Line.
+func batchReadProperties(parameters json.RawMessage) (arrayProperty, modeProperty, pathProperty string, ok bool) {
+	var schema requiredProperties
+	if json.Unmarshal(parameters, &schema) != nil || len(schema.Required) != 1 {
+		return "", "", "", false
+	}
+	arrayProperty = schema.Required[0]
+	array := schema.Properties[arrayProperty]
+	if !strings.EqualFold(array.Type, "array") || array.Items == nil || len(array.Items.Required) != 1 {
+		return "", "", "", false
+	}
+	item := *array.Items
+	modeProperty = item.Required[0]
+	if normalizePropertyName(modeProperty) != "mode" || !item.isString(modeProperty) || !item.offers(modeProperty, lineMode) {
+		return "", "", "", false
+	}
+	pathProperty, ok = item.soleStringNamed(pathPropertyNames)
+	return arrayProperty, modeProperty, pathProperty, ok
+}
+
+// commandWriteProperties returns the names of the path, command and content
+// properties of a schema requiring exactly a string path property and a string
+// command offering create, and declaring one string content property.
+func commandWriteProperties(parameters json.RawMessage) (pathProperty, commandProperty, contentProperty string, ok bool) {
+	var schema requiredProperties
+	if json.Unmarshal(parameters, &schema) != nil || len(schema.Required) != 2 {
+		return "", "", "", false
+	}
+	for _, property := range schema.Required {
+		if !schema.isString(property) {
+			return "", "", "", false
+		}
+		switch name := normalizePropertyName(property); {
+		case name == "command" && schema.offers(property, createCommand):
+			commandProperty = property
+		case slices.Contains(pathPropertyNames, name):
+			pathProperty = property
+		}
+	}
+	if pathProperty == "" || commandProperty == "" {
+		return "", "", "", false
+	}
+	contentProperty, ok = schema.soleStringNamed(contentPropertyNames)
+	return pathProperty, commandProperty, contentProperty, ok
 }
 
 // commandProperties returns the command property and, when the schema requires

@@ -49,7 +49,10 @@
 //	                                  the model document is written, for a
 //	                                  runtime that reads its endpoint from a
 //	                                  fixed location; it replaces the model
-//	                                  base address variable
+//	                                  base address variable. A remote launch
+//	                                  also carries HOME set to the scenario
+//	                                  home, because the runtime reads the file
+//	                                  from there on the lab host
 //	SORTIE_CLIENTPROTOCOL_HTTP_TOOLS  1 when the runtime advertises
 //	                                  mcpCapabilities.http: the local tool-server
 //	                                  case must then reach the relay over
@@ -751,6 +754,9 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 				launchEnv[baseURLEnv] = env.URL
 			}
 			if env.Remote {
+				if documentPath != "" {
+					launchEnv["HOME"] = env.Home
+				}
 				return fakemodel.Launch{
 					Config: domain.AgentConfig{TurnTimeoutMS: 300000, ReadTimeoutMS: 30000},
 					Env:    launchEnv,

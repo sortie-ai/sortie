@@ -183,6 +183,7 @@ func startInvalid(script []fakemodel.Response) *failureLedger {
 type testWire struct {
 	wire          fakemodel.Wire
 	path          string
+	headers       map[string]string
 	turnBody      string
 	auxBody       string
 	hostedBody    string
@@ -244,11 +245,21 @@ var testWires = []testWire{
 	},
 }
 
+var assistantWire = testWire{
+	wire:     fakemodel.WireGenerateAssistantResponse,
+	path:     "/",
+	headers:  map[string]string{"X-Amz-Target": "AmazonCodeWhispererService.GenerateAssistantResponse"},
+	turnBody: `{"conversationState":{"currentMessage":{"userInputMessage":{"modelId":"` + testModel + `","userInputMessageContext":{"tools":[{"toolSpecification":{"name":"read_file","inputSchema":{"json":` + readSchema + `}}}]}}}}}`,
+	envelope: func(_ int, message string) map[string]any {
+		return map[string]any{"__type": "ValidationException", "message": message}
+	},
+}
+
 func (w testWire) name() string { return string(w.wire) }
 
 func (w testWire) post(t testing.TB, srv *fakemodel.Server, body string) httpReply {
 	t.Helper()
-	return send(t, srv.URL(), http.MethodPost, w.path, nil, []byte(body))
+	return send(t, srv.URL(), http.MethodPost, w.path, w.headers, []byte(body))
 }
 
 func requestLabel(seq int, method, target string) string {
@@ -361,7 +372,7 @@ func TestServerRecordsExchange(t *testing.T) {
 func TestServerExhaustedScript(t *testing.T) {
 	t.Parallel()
 
-	for _, w := range testWires {
+	for _, w := range append(slices.Clone(testWires), assistantWire) {
 		for _, entries := range []int{0, 1} {
 			t.Run(fmt.Sprintf("%s/%d entries", w.name(), entries), func(t *testing.T) {
 				t.Parallel()
@@ -456,15 +467,17 @@ func TestServerUnrouted(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		method string
-		target string
+		name      string
+		method    string
+		target    string
+		amzTarget string
 	}{
-		{"wrong method", http.MethodGet, "/v1/messages"},
-		{"unknown path", http.MethodPost, "/v1/unknown"},
-		{"unknown model method", http.MethodPost, "/v1beta/models/" + testModel + ":embedContent"},
-		{"put on a routed path", http.MethodPut, "/v1/responses"},
-		{"path below a routed one", http.MethodPost, "/v1/messages/count_tokens"},
+		{"wrong method", http.MethodGet, "/v1/messages", ""},
+		{"unknown path", http.MethodPost, "/v1/unknown", ""},
+		{"unknown model method", http.MethodPost, "/v1beta/models/" + testModel + ":embedContent", ""},
+		{"put on a routed path", http.MethodPut, "/v1/responses", ""},
+		{"path below a routed one", http.MethodPost, "/v1/messages/count_tokens", ""},
+		{"another service on the root path", http.MethodPost, "/", "OtherService.ListAvailableModels"},
 	}
 
 	for _, tt := range tests {
@@ -472,7 +485,7 @@ func TestServerUnrouted(t *testing.T) {
 			t.Parallel()
 
 			srv, ledger := startLedgered(t, nil)
-			headers := map[string]string{"x-goog-api-key": "goog-key", "x-api-key": "api-key", "Authorization": "Bearer bearer-token"}
+			headers := map[string]string{"x-goog-api-key": "goog-key", "x-api-key": "api-key", "Authorization": "Bearer bearer-token", "X-Amz-Target": tt.amzTarget}
 
 			reply := send(t, srv.URL(), tt.method, tt.target, headers, []byte(`{}`))
 
@@ -487,6 +500,24 @@ func TestServerUnrouted(t *testing.T) {
 				t.Errorf("Exchange.Credentials = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestServerListsTheScriptedModelOnTheControlPlane(t *testing.T) {
+	t.Parallel()
+
+	srv := fakemodel.Start(t, nil)
+
+	reply := send(t, srv.URL(), http.MethodPost, "/", map[string]string{"X-Amz-Target": "KiroControlPlaneBearerService.ListAvailableModels"}, []byte(`{}`))
+
+	var listing struct {
+		Models []struct {
+			ModelID string `json:"modelId"`
+		} `json:"models"`
+	}
+	unmarshal(t, reply.body, &listing)
+	if reply.status != http.StatusOK || len(listing.Models) != 1 || listing.Models[0].ModelID != testModel {
+		t.Errorf("POST / (control plane ListAvailableModels) = (%d, %s), want 200 listing %q", reply.status, reply.body, testModel)
 	}
 }
 
