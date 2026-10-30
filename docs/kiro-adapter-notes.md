@@ -145,4 +145,8 @@ Windows live qualification is unobserved.
 
 ## Verifying a change
 
-The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. The live qualification profile is gated separately and spends real credits.
+The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. Its scripted contract (`TestIntegration_ScriptedModel`) runs with the settings of the nightly "Kiro CLI - ACP (scripted)" row: the command, the credential variable, the model document path, and the model document.
+
+The contract's SSH variants add `SORTIE_CLIENTPROTOCOL_SSH_COMMAND`, `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and an `SORTIE_CLIENTPROTOCOL_SSH_INSTALL` that puts `kiro-cli` and `kiro-cli-chat` of the host's release on the lab user's PATH. Name that release by version in the download URL (`https://prod.download.cli.kiro.dev/stable/<version>/kirocli-x86_64-linux.tar.gz`), because the lab caches its image per install script and an unpinned script keeps the first release it fetched.
+
+The live qualification profile is gated separately and spends real credits.
