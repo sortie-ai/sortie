@@ -46,3 +46,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0038](0038-price-runs-from-a-layered-rate-table-and-record-the-price-at-write.md) | Price Runs from a Layered Rate Table and Record the Price When the Run Is Written | Accepted |
 | [0039](0039-account-for-agent-spend-in-one-usage-component.md) | Account for Agent Spend in One Usage Component Fed by Each Runtime's Own Reports | Accepted |
 | [0040](0040-keep-the-codex-and-claude-code-kinds-as-the-routes-to-their-clis.md) | Keep the Codex and Claude Code Kinds as the Routes to Their CLIs | Accepted |
+| [0041](0041-reset-a-usage-limit-refusal-at-the-latest-reset-of-its-gating-windows.md) | Reset a Usage-Limit Refusal at the Latest Reset of Its Gating Windows | Accepted |

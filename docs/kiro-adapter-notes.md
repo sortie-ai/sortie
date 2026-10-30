@@ -109,7 +109,7 @@ The two engines report a refusal differently, and the same declaration reads bot
 
 Some refusals stay `response_error`. A default-engine overage limit arrives as a bare `-32603` with nothing structured. A default-engine monthly limit the service answers at HTTP 429 is retried like a throttle and so reads as one, and sources disagree on which status the service uses. A usage limit that follows a retried throttle in the same turn reads as a throttle too, because the retry announcement holds for the rest of the turn.
 
-The reset comes from the earliest exhausted credit window of the pull, which resets on the billing-cycle date at 00:00 UTC. A daily or hourly limit on an account with overage enabled is the unobserved case: if the pull reports credits above the limit for such an account, the window reads exhausted and the refusal waits for the billing-cycle reset, which the orchestrator caps. When the pull fails or no window is exhausted, the refusal carries no reset and retries on the exponential backoff.
+The reset comes from the latest reset among the exhausted credit windows of the pull, which reset on the billing-cycle date at 00:00 UTC. A daily or hourly limit on an account with overage enabled is the unobserved case: if the pull reports credits above the limit for such an account, the window reads exhausted and the refusal waits for the billing-cycle reset, which the orchestrator caps. When the pull fails or no window is exhausted, the refusal carries no reset and retries on the exponential backoff.
 
 ## Native headless observations
 
