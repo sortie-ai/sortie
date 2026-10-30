@@ -204,15 +204,15 @@ func (t LaunchTarget) matchLocal(ctx context.Context, env []string, pattern Runt
 	defer func() { _ = root.Close() }()
 
 	prefix := pattern.Segments[:literalPrefix(pattern)]
+	dir := root
 	if len(prefix) > 0 {
-		sub, err := root.OpenRoot(path.Join(prefix...))
+		dir, err = root.OpenRoot(path.Join(prefix...))
 		if err != nil {
 			return emptyWhenMissing(err)
 		}
-		defer func() { _ = sub.Close() }()
-		root = sub
+		defer func() { _ = dir.Close() }()
 	}
-	found, err := walkMatches(ctx, root.FS(), pattern.Segments[len(prefix):])
+	found, err := walkMatches(ctx, dir.FS(), pattern.Segments[len(prefix):])
 	if err != nil {
 		return nil, err
 	}
