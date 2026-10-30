@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - An agent that identifies itself as a different runtime than its configured command is measured as the runtime it identifies as, and Sortie logs a warning. ([#1534](https://github.com/sortie-ai/sortie/issues/1534))
 - The JSON API reports `usage_attribution` `session_total` for ACP sessions, and a running Copilot CLI session on an SSH worker reports its `usage_arrival` instead of `none`. ([#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1539](https://github.com/sortie-ai/sortie/issues/1539))
 - Sortie no longer reuses an SSH connection kept open by `ControlMaster`.
-- Sortie no longer turns on Gemini CLI's telemetry: Gemini CLI's token usage comes from its replies and its chat history, on local and SSH worker hosts. A Gemini CLI run that leaves the model choice to Gemini CLI reports its usage as a lower bound, because the request that picks the model is recorded nowhere. Requests Gemini CLI makes outside the conversation itself, such as web search, web fetch, subagents, and history compression, are not counted, and neither is the routing request for a model you define yourself with automatic routing under a name that does not start with `auto`. ([#1541](https://github.com/sortie-ai/sortie/issues/1541))
+- Sortie no longer turns on Gemini CLI's telemetry. A Gemini CLI run that leaves the model choice to Gemini CLI now reports its token usage as a lower bound, and requests Gemini CLI makes outside the conversation, such as web search, subagents, and history compression, are no longer counted. ([#1541](https://github.com/sortie-ai/sortie/issues/1541))
 
 ### Fixed
 
