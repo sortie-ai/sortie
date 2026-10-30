@@ -37,6 +37,8 @@ var (
 	ra   = rec("a", "m1", 20, 3)
 	rb   = rec("b", "m2", 10, 1)
 	rc   = rec("c", "m1", 5, 1)
+	rd   = rec("d", "m2", 4, 1)
+	re   = rec("e", "m2", 7, 2)
 
 	unnormalizable = usage.SpendReading{Output: new(int64(5)), CacheRead: new(int64(0)), CacheWrite: new(int64(0)), Model: "m", Identity: "h"}
 
@@ -85,7 +87,7 @@ func withKids(read usage.RecordsRead, kids ...usage.SpendReading) usage.RecordsR
 	return read
 }
 
-func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative, resumeFromRecords bool, start usage.RecordsRead) *usage.Ledger {
+func newLedger(t *testing.T, withRecords, lowerBound, perTurn, perRequest, cumulative, resumeFromRecords bool, start usage.RecordsRead) *usage.Ledger {
 	t.Helper()
 
 	liveSource := usage.Source{
@@ -95,6 +97,9 @@ func newLedger(t *testing.T, withRecords, lowerBound, perTurn, cumulative, resum
 	}
 	if perTurn {
 		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendPerTurn}
+	}
+	if perRequest {
+		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendPerRequest, CacheInInput: true, ReasoningInOutput: true}
 	}
 	if cumulative {
 		liveSource.Spend = usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, CacheInInput: true, ReasoningInOutput: true, ServedModel: true, Replay: usage.ReplayLastFigure}
@@ -126,6 +131,7 @@ func TestLedger(t *testing.T) {
 		liveOnly   bool
 		lowerBound bool
 		perTurn    bool
+		perRequest bool
 		cumulative bool
 		replayNone bool
 		created    bool
@@ -182,7 +188,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, read: recs(hist, ra, ra, rb), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 				},
 				{
 					end: replied, live: live(45, 6), read: recs(hist, ra, rb, rec("d", "m1", 15, 2)), needs: true,
@@ -212,7 +218,7 @@ func TestLedger(t *testing.T) {
 				},
 				{
 					end: replied, read: recs(hist, ra, rb, rec("e", "m2", 10, 2), rec("f", "m2", 5, 1), rec("g", "m2", 7, 1)), needs: true,
-					want: usage.Settlement{Run: u(67, 10), ByModel: byModel{"m1": u(20, 3), "m2": u(17, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+					want: usage.Settlement{Run: u(67, 10), ByModel: byModel{"m1": u(20, 3), "m2": u(17, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 				},
 			},
 		},
@@ -235,7 +241,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{{
 				end:  replied,
 				live: &usage.SpendReading{Input: new(int64(30)), Output: new(int64(4)), CacheRead: new(int64(0))}, read: recs(hist, ra, rb), needs: true,
-				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 			}},
 		},
 		{
@@ -289,7 +295,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: replied, read: recs(hist, rec("big", "m1", 30, 4)), needs: true,
-					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(30, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 				},
 				{
 					end: replied, live: live(40, 3), read: unread, needs: true,
@@ -377,7 +383,7 @@ func TestLedger(t *testing.T) {
 			steps: []step{{
 				end: replied, needs: true, read: recs(hist, ra, rb),
 				live: entries(entry("m1", 10, 2), usage.SpendReading{Model: "m2", Input: new(int64(5))}),
-				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 			}},
 		},
 		{
@@ -412,7 +418,7 @@ func TestLedger(t *testing.T) {
 			created: true,
 			steps: []step{{
 				end: replied, read: recs(ra, rb), needs: true,
-				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: recProv},
+				want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv},
 			}},
 		},
 		{
@@ -446,6 +452,95 @@ func TestLedger(t *testing.T) {
 					end: withChild, live: live(30, 3), read: withKids(recs(hist), rec("c3", "m3", 7, 2), rec("z", "m3", 0, 0)), needs: true,
 					want: usage.Settlement{Run: u(51, 9), ByModel: byModel{"m3": u(21, 6)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
 				},
+			},
+		},
+		{
+			name: "per-request: the records replace the held readings, and unusable records leave a lower bound the next records settlement counts from", perRequest: true, start: recs(hist),
+			steps: []step{
+				{observed: []observation{{reading: ra, wantProvisional: u(20, 3), wantNew: true}, {reading: rb, wantProvisional: u(30, 4), wantNew: true}}, end: replied, read: unread, needs: true,
+					want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Provenance: liveProv}},
+				{observed: []observation{{reading: rc, wantProvisional: u(5, 1), wantNew: true}}, end: replied, read: recs(hist, ra, rb, rc), needs: true,
+					want: usage.Settlement{Run: u(35, 5), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-request: the report that ended a replied turn settles it complete without covering the session, and an unknown held or settling reading blocks that for its turn only", perRequest: true, start: recs(hist),
+			steps: []step{
+				{observed: []observation{{reading: ra, wantProvisional: u(20, 3), wantNew: true}}, end: replied, live: &rb, read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+				{observed: []observation{{reading: rec("", "m1", 9, 1)}, {reading: rc, wantProvisional: u(5, 1), wantNew: true}}, end: replied, live: &rd, read: recs(hist, ra, rb, rc, rd), needs: true,
+					want: usage.Settlement{Run: u(39, 6), ByModel: byModel{"m1": u(25, 4), "m2": u(14, 2)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv}},
+				{end: replied, live: &re, read: recs(hist, ra, rb, rc, rd, re), needs: true,
+					want: usage.Settlement{Run: u(46, 8), ByModel: byModel{"m1": u(25, 4), "m2": u(21, 4)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+				{observed: []observation{{reading: rec("f", "m1", 3, 1), wantProvisional: u(3, 1), wantNew: true}}, end: replied, live: &unnormalizable, read: recs(hist, ra, rb, rc, rd, re, rec("f", "m1", 3, 1)), needs: true,
+					want: usage.Settlement{Run: u(49, 9), ByModel: byModel{"m1": u(28, 5), "m2": u(21, 4)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-request: a settling report on an unreplied or cancelled turn yields to the records", perRequest: true, start: recs(hist),
+			steps: []step{
+				{observed: []observation{{reading: ra, wantProvisional: u(20, 3), wantNew: true}}, end: usage.TurnEnd{ModelReached: true}, live: &rb, read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv}},
+				{end: cancelled, live: &rc, read: recs(hist, ra, rb, rc), needs: true,
+					want: usage.Settlement{Run: u(35, 5), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-request: a cancelled turn whose records read failed is counted from the records a later live-settled turn finds them in", perRequest: true, start: recs(hist),
+			steps: []step{
+				{end: cancelled, read: unread, needs: true},
+				{end: replied, live: &rd, read: recs(hist, ra, rd), needs: true,
+					want: usage.Settlement{Run: u(24, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(4, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-turn: a cancelled turn whose records read failed is counted from the records a later live-settled turn finds them in", perTurn: true, start: recs(hist),
+			steps: []step{
+				{end: cancelled, read: unread, needs: true},
+				{end: replied, live: turnWith(4, 1, 0, 0), read: recs(hist, ra, rd), needs: true,
+					want: usage.Settlement{Run: u(24, 4), ByModel: byModel{"m1": u(20, 3), "m2": u(4, 1)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-request: a cancelled turn the records never held leaves the later live-settled turn counted once", perRequest: true, start: recs(hist),
+			steps: []step{
+				{end: cancelled, read: unread, needs: true},
+				{end: replied, live: &rd, read: recs(hist, rd), needs: true,
+					want: usage.Settlement{Run: u(4, 1), ByModel: byModel{"m2": u(4, 1)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+			},
+		},
+		{
+			name: "per-request: a boundary fixed after the turn settled leaves it a lower bound, and no later settlement covers the session", perRequest: true,
+			steps: []step{
+				{observed: []observation{{reading: ra, wantProvisional: u(20, 3), wantNew: true}}, end: replied, read: recs(hist, ra), needs: true,
+					want: usage.Settlement{Run: u(20, 3), Figure: true, Spent: true, Provenance: liveProv}},
+				{observed: []observation{{reading: rb, wantProvisional: u(10, 1), wantNew: true}}, end: replied, read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(30, 4), ByModel: byModel{"m2": u(10, 1)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "per-turn: a boundary that a live settlement fixes late leaves a complete records turn from covering the session", perTurn: true,
+			steps: []step{
+				{end: replied, live: turnWith(10, 2, 0, 0), read: recs(hist, ra), needs: true,
+					want: usage.Settlement{Run: u(10, 2), Figure: true, Spent: true, Complete: true, Provenance: liveProv}},
+				{end: replied, read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(20, 3), ByModel: byModel{"m2": u(10, 1)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: recProv}},
+			},
+		},
+		{
+			name: "a late boundary fix leaves a cumulative live source able to cover the session",
+			steps: []step{{
+				end: replied, live: live(30, 4), read: recs(hist, ra, rb), needs: true,
+				want: usage.Settlement{Run: u(30, 4), Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+			}},
+		},
+		{
+			name: "a turn short of child records leaves the session uncoverable, a complete records settlement included", start: recs(hist),
+			steps: []step{
+				{end: usage.TurnEnd{Replied: true, ModelReached: true, Children: true}, read: withKids(recs(hist, ra), rec("c1", "m3", 7, 2)), needs: true,
+					want: usage.Settlement{Run: u(27, 5), ByModel: byModel{"m1": u(20, 3), "m3": u(7, 2)}, Model: "m1", Figure: true, Spent: true, Provenance: recProv}},
+				{end: replied, read: recs(hist, ra, rb), needs: true,
+					want: usage.Settlement{Run: u(37, 6), ByModel: byModel{"m1": u(20, 3), "m2": u(10, 1), "m3": u(7, 2)}, Model: "m2", Figure: true, Spent: true, Complete: true, Provenance: recProv}},
 			},
 		},
 		{
@@ -546,7 +641,7 @@ func TestLedger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.cumulative, tt.replayNone, tt.start)
+			l := newLedger(t, !tt.liveOnly, tt.lowerBound, tt.perTurn, tt.perRequest, tt.cumulative, tt.replayNone, tt.start)
 			if tt.created {
 				l.SessionCreated()
 			}
@@ -554,6 +649,9 @@ func TestLedger(t *testing.T) {
 			for i, st := range tt.steps {
 				for j, o := range st.observed {
 					got, gotNew := l.ObserveCumulative(o.reading, o.inTurn)
+					if tt.perRequest {
+						got, gotNew = l.ObserveRequest(o.reading)
+					}
 					if got != o.wantProvisional || gotNew != o.wantNew {
 						t.Fatalf("step %d observation %d: ObserveCumulative(inTurn=%v) = %+v, %v, want %+v, %v", i, j, o.inTurn, got, gotNew, o.wantProvisional, o.wantNew)
 					}
@@ -665,7 +763,7 @@ func TestLedger_ObserveRequest(t *testing.T) {
 func TestLedger_SettlementByModelIsACopy(t *testing.T) {
 	t.Parallel()
 
-	l := newLedger(t, true, false, false, false, false, recs(hist))
+	l := newLedger(t, true, false, false, false, false, false, recs(hist))
 	first := l.Settle(replied, live(30, 4), recs(hist, ra, rb))
 	if first.ByModel == nil {
 		t.Fatalf("Settle() ByModel = nil, want a split")
@@ -691,7 +789,6 @@ func TestNewLedger_RefusesUnsupportedDeclarations(t *testing.T) {
 		live    usage.SpendDeclaration
 		records usage.Source
 	}{
-		{"adapter-mapped live", usage.SpendDeclaration{Shape: usage.SpendAdapterMapped}, usage.Source{}},
 		{"replay on a live source of another shape", usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, Replay: usage.ReplayLastFigure}, usage.Source{}},
 		{"replay on the records source", cumulative, usage.Source{Strategy: usage.StrategyRecords, Spend: replaying}},
 	}

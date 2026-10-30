@@ -19,6 +19,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/opencode"
+	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -128,6 +130,12 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		CredentialEnv:       []string{"GOOGLE_GENERATIVE_AI_API_KEY"},
 		Read:                fakemodel.ReadFile,
 		ReportedModelPrefix: "scripted/",
+		Spend: &fakemodel.SpendSources{
+			Live:              domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			RecordsAtTurnEnd:  sessionexport.Records.WrittenAtTurnEnd,
+			CancelEndsProcess: true,
+		},
 		SSH: &fakemodel.SSHVariant{
 			Package:       "@opencode/cli",
 			HostCommand:   integrationCommand(),
@@ -162,7 +170,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	fakemodel.AssertConformance(t, binding)
 
-	t.Run("export failure leaves the step reports as a lower bound", func(t *testing.T) {
+	t.Run("export failure leaves the tool step counts as a lower bound", func(t *testing.T) {
 		runtime := agenttest.WriteScript(t, t.TempDir(), "export-failing-opencode",
 			"if [ \"$1\" = session ] && [ \"$2\" = export ]; then exit 1; fi\nexec "+integrationCommand()+" \"$@\"\n")
 		failing := binding
@@ -176,9 +184,10 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			t.Fatalf("WriteFile(%q): %v", file, err)
 		}
 
+		toolCall := fakemodel.Usage{Prompt: 211, Candidates: 13, Thoughts: 5, CachedContent: 53}
 		run := fakemodel.RunCustomTurn(t, failing, fakemodel.CustomTurn{
 			Script: []fakemodel.Response{
-				{Call: binding.Read(file), Usage: fakemodel.Usage{Prompt: 211, Candidates: 13, Thoughts: 5, CachedContent: 53}},
+				{Call: binding.Read(file), Usage: toolCall},
 				{Text: "ok", Usage: fakemodel.Usage{Prompt: 307, Candidates: 17, Thoughts: 7, CachedContent: 61}},
 			},
 			Prompt: "Read the file, then reply with the word ok.",
@@ -187,22 +196,21 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		if run.Err != nil {
 			t.Fatalf("RunTurn() error = %v", run.Err)
 		}
-		var served domain.TokenUsage
-		for _, ex := range run.Exchanges {
-			if ex.Kind != fakemodel.ExchangeTurn {
-				continue
-			}
-			u := ex.Answer.Usage
-			served = agentcore.AddUsage(served, domain.TokenUsage{
-				InputTokens:     u.Prompt,
-				OutputTokens:    u.Candidates + u.Thoughts,
-				CacheReadTokens: u.CachedContent,
-			})
+		want := domain.TokenUsage{
+			InputTokens:     toolCall.Prompt,
+			OutputTokens:    toolCall.Candidates + toolCall.Thoughts,
+			TotalTokens:     toolCall.Prompt + toolCall.Candidates + toolCall.Thoughts,
+			CacheReadTokens: toolCall.CachedContent,
 		}
-		// OpenCode reports no step tokens for the final text step, so the step sum falls short of what was served.
-		got := run.Result.Usage
-		if got.InputTokens == 0 || got.InputTokens > served.InputTokens || got.OutputTokens > served.OutputTokens || got.CacheReadTokens > served.CacheReadTokens {
-			t.Errorf("RunTurn().Usage = %+v, want a nonzero figure within the served %+v", got, served)
+		if !run.Result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true")
+		}
+		if got := run.Result.Usage; got != want {
+			t.Errorf("RunTurn().Usage = %+v, want %+v, the tool-call request alone", got, want)
+		}
+		wantProvenance := domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive}
+		if got := run.Result.UsageProvenance; got != wantProvenance {
+			t.Errorf("RunTurn().UsageProvenance = %+v, want %+v", got, wantProvenance)
 		}
 		if !run.Result.SpendUnaccounted {
 			t.Error("RunTurn().SpendUnaccounted = false, want true: the failed export leaves the figure a lower bound")

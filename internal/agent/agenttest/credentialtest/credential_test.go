@@ -31,7 +31,7 @@ func init() {
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 		}},
 	})
 	registry.Agents.RegisterWithMeta(credentialTestKindWithoutCommand, credentialTestConstructor, registry.AgentMeta{
@@ -39,7 +39,7 @@ func init() {
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 		}},
 	})
 	registry.Agents.RegisterWithMeta(credentialTestKindUsage, credentialTestConstructor, registry.AgentMeta{

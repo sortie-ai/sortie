@@ -453,7 +453,7 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 
 			return nil, nil
 		},
-		SettleUsage: func(ctx context.Context, _ func(domain.AgentEvent), spend *agentcore.TurnSpend) {
+		SettleUsage: func(ctx context.Context, _ func(domain.AgentEvent), spend *agentcore.TurnSpend, _ bool) {
 			end := usage.TurnEnd{Replied: state.turnReplied, ModelReached: spend.ModelReached()}
 			recovered := agentcore.SettleSpend(ctx, state.ledger, end, liveReading(state.turnMembers),
 				state.readJournal, agentcore.ReadTimeout(state.agentConfig), spend)

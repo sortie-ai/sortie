@@ -7,15 +7,20 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
 const ddMissingMessage = "sortie: dd is required on the remote host to receive environment variables"
@@ -299,4 +304,72 @@ func TestForkPerTurnSession_SSH_UnallocatedForwardStillRunsAgentWithoutBearer(t 
 			}
 		})
 	}
+}
+
+func newBarrierStandIn(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	for _, tool := range []string{"sh", "flock", "setsid", "sleep", "rm"} {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not found on PATH: %v", tool, err)
+		}
+		if err := os.Symlink(path, filepath.Join(binDir, tool)); err != nil {
+			t.Fatalf("Symlink(%s): %v", tool, err)
+		}
+	}
+	return agenttest.NewSSHStandIn(t, t.TempDir(), agenttest.SSHStandIn{PATH: binDir})
+}
+
+func TestForkPerTurnSession_SSH_StoppedTurnSettlesOnlyAfterTheRemoteTreeExited(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ready, exited, gate := filepath.Join(dir, "ready"), filepath.Join(dir, "exited"), filepath.Join(dir, "gate")
+	if err := syscall.Mkfifo(gate, 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	gateHolder, err := os.OpenFile(gate, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open gate: %v", err)
+	}
+	release := sync.OnceFunc(func() { _ = gateHolder.Close() })
+	t.Cleanup(release)
+
+	agentScript := agenttest.WriteScript(t, t.TempDir(), "agent.sh",
+		"setsid sh -c 'exec 5<\"$3\"; : >\"$1\"; read _ <&5; : >\"$2\"' sh '"+ready+"' '"+exited+"' '"+gate+"' >/dev/null 2>&1 &\nwait\n")
+	target := &LaunchTarget{
+		Command:       newBarrierStandIn(t),
+		SSHHost:       "user@stand-in-host",
+		WorkspacePath: t.TempDir(),
+		RemoteCommand: agentScript,
+		StopGrace:     30 * time.Second,
+	}
+	settled := make(chan bool, 1)
+	hooks := noopHooks()
+	hooks.SettleUsage = func(_ context.Context, _ func(domain.AgentEvent), _ *TurnSpend, _ bool) {
+		_, err := os.Stat(exited)
+		settled <- err == nil
+	}
+	sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
+
+	emit, _ := sinkEvents()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // the stop's ordering is under test, not the turn's outcome
+	}()
+	waittest.File(t, ready)
+
+	if err := sess.Stop(waittest.Context(t)); err != nil {
+		t.Fatalf("Stop() = %v, want nil", err)
+	}
+	waittest.Never(t, settled, 300*time.Millisecond, "SettleUsage while the remote agent tree is alive")
+	release()
+
+	if remoteTreeExited := waittest.Receive(t, settled, "SettleUsage"); !remoteTreeExited {
+		t.Errorf("SettleUsage saw the remote agent tree exited = %v, want true", remoteTreeExited)
+	}
+	waittest.Receive(t, done, "RunTurn return")
 }

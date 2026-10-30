@@ -138,11 +138,15 @@ type ForkPerTurnHooks struct {
 
 	// SettleUsage runs once per started turn, on RunTurn's goroutine after
 	// the process is reaped and its stderr drained, on every ending but an
-	// [EndTurn] one. ctx is detached from the turn's cancellation, so the
+	// [EndTurn] one. On a remote launch Sortie stopped, it also runs after
+	// the remote agent tree has exited or the supervisor's own bound for
+	// ending it has passed, so a host command it starts never overlaps the
+	// runtime's shutdown. ctx is detached from the turn's cancellation, so the
 	// adapter bounds its own work. Events it emits reach the turn's
 	// consumer ahead of the terminal event, and GetUsage reflects what it
-	// settled. Nil disables it.
-	SettleUsage func(ctx context.Context, emit func(domain.AgentEvent), spend *TurnSpend)
+	// settled. exitedClean is true only when the process exited with
+	// status zero and no stop Sortie began reached it. Nil disables it.
+	SettleUsage func(ctx context.Context, emit func(domain.AgentEvent), spend *TurnSpend, exitedClean bool)
 
 	// PullWindows runs once per started turn, on RunTurn's goroutine, after
 	// SettleUsage and before the terminal event, with the ending RunTurn
@@ -390,8 +394,11 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	var cmd *exec.Cmd
 	var launch sshutil.SSHLaunch
+	var exitBarrier string
 	if s.target.RemoteCommand != "" {
 		opts := s.target.SSHOptions(sshEnv...)
+		exitBarrier = sshutil.NewExitBarrier()
+		opts.ExitBarrier = exitBarrier
 		if s.hooks.Tools != nil {
 			opts.Forward = s.hooks.Tools.Forward(s.hooks.ToolPlacement)
 		}
@@ -656,6 +663,12 @@ loop:
 
 	stderrLines := stderrCollector.FinishAndCollect(s.drainGrace)
 
+	// A stopped ssh client says nothing about the remote tree, which ends
+	// on the supervisor's own schedule after the connection is gone.
+	if exitBarrier != "" && reaper.Stopped() {
+		s.target.awaitRemoteExit(context.WithoutCancel(ctx), logger, exitBarrier)
+	}
+
 	cancelled := reaper.Stopped()
 	if trigger != triggerNone {
 		cancelled = stoppedBeforeTrigger
@@ -663,7 +676,7 @@ loop:
 
 	endedByHook := !cancelled && trigger == triggerEndTurn
 	if s.hooks.SettleUsage != nil && !endedByHook {
-		s.hooks.SettleUsage(context.WithoutCancel(ctx), emit, &spend)
+		s.hooks.SettleUsage(context.WithoutCancel(ctx), emit, &spend, waitErr == nil && !cancelled)
 	}
 
 	var pulledWindows []domain.UsageWindow

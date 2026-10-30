@@ -438,7 +438,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			return state.usage.Snapshot(), state.usage.ByModel(), state.usage.Measured()
 		},
 		GetSessionID: func() string { return state.copilotSessionID },
-		SettleUsage: func(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
+		SettleUsage: func(ctx context.Context, emit func(domain.AgentEvent), spend *agentcore.TurnSpend, _ bool) {
 			end := usage.TurnEnd{Replied: state.turnReplied, Cancelled: state.turnAborted, ModelReached: spend.ModelReached()}
 			recovered := agentcore.SettleSpend(ctx, state.ledger, end, state.turnReading,
 				state.readJournal, agentcore.ReadTimeout(state.agentConfig), spend)

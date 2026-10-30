@@ -1004,7 +1004,7 @@ func withoutSupervisor(t *testing.T, final string) string {
 
 	head, rest, _ := strings.Cut(final, "{\n"+supervisor+"sortie_agent() {\n")
 	agent, _, _ := strings.Cut(rest, "\n}\nsortie_start_agent")
-	if head+supervisedAgent(agent, 0) != final {
+	if head+supervisedAgent(agent, 0, "") != final {
 		t.Fatalf("final element = %q, want the agent command inside the supervisor", final)
 	}
 	return head + agent

@@ -36,7 +36,7 @@ func init() {
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true},
 		}},
 	})
 

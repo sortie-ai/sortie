@@ -214,10 +214,9 @@ func buildTurnEnv(state *sessionState) []string {
 	return env
 }
 
-// auxiliaryCommand builds a one-shot opencode subcommand through the
-// session's launch target, carrying the same environment and managed
-// variables every working turn carries, so a delete and an export query
-// never diverge in what they run with.
+// auxiliaryCommand builds the one-shot subcommand that deletes a credential
+// verification session, through the session's launch target and with the
+// environment and managed variables every working turn carries.
 func auxiliaryCommand(ctx context.Context, state *sessionState, args []string) (*exec.Cmd, error) {
 	cmd, agentErr := state.target.AuxiliaryCommand(ctx, args, nil, buildRunEnv(os.Environ()), sortedEnvVars(buildManagedEnv())...)
 	if agentErr != nil {

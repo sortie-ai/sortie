@@ -1,0 +1,85 @@
+{
+  "info": {
+    "id": "ses_e73690e50ffeABdQuMZ3SnsW9S",
+    "parentID": "ses_e7369186fffe8pzmnZuOBLmEyH",
+    "projectID": "6cc41184d682dd7a4d2c84410ac1b661e54d7e38",
+    "agent": "general",
+    "model": {
+      "id": "gemini-2.5-flash",
+      "providerID": "google",
+      "variant": "default"
+    },
+    "cost": 0.004875399999999999,
+    "tokens": {
+      "input": 16243,
+      "output": 1,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793360064954,
+      "updated": 1793360065633,
+      "busy": 1793360064959,
+      "idle": 1793360065635
+    },
+    "title": "[redacted:session-title:ses_e73690e50ffeABdQuMZ3SnsW9S]",
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e73690e50ffeABdQuMZ3SnsW9S]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18c96f1bc001YC6rb8MhG8oHd8",
+      "time": {
+        "created": 1793360064968
+      },
+      "text": "[redacted:text:msg_18c96f1bc001YC6rb8MhG8oHd8]",
+      "type": "user"
+    },
+    {
+      "id": "msg_18c96f1cc001cTxKlC3cxdes22",
+      "time": {
+        "created": 1793360064975,
+        "streamed": 1793360065632,
+        "completed": 1793360065633
+      },
+      "type": "assistant",
+      "agent": "general",
+      "model": {
+        "id": "gemini-2.5-flash",
+        "providerID": "google",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "[redacted:text:msg_18c96f1cc001cTxKlC3cxdes22]"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "STOP",
+      "cost": 0.004875399999999999,
+      "tokens": {
+        "input": 16243,
+        "output": 1,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_18c96f463001STGLNdcVi5tpIG",
+      "time": {
+        "created": 1793360065635
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

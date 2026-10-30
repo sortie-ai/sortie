@@ -1,17 +1,11 @@
 package opencode
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
-	"github.com/sortie-ai/sortie/internal/agent/procutil"
-	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -103,50 +97,55 @@ type rawToolState struct {
 	Status   string          `json:"status"`
 	Input    json.RawMessage `json:"input,omitempty"`
 	Output   any             `json:"output,omitempty"`
-	Metadata any             `json:"metadata,omitempty"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 	Error    string          `json:"error,omitempty"`
 	Title    string          `json:"title,omitempty"`
 	Time     rawPartTime     `json:"time,omitempty"`
 }
 
 type rawStepFinishPart struct {
-	ID        string         `json:"id"`
-	MessageID string         `json:"messageID"`
-	SessionID string         `json:"sessionID"`
-	Type      string         `json:"type"`
-	Reason    string         `json:"reason"`
-	Tokens    *rawStepTokens `json:"tokens,omitempty"`
+	ID        string          `json:"id"`
+	MessageID string          `json:"messageID"`
+	SessionID string          `json:"sessionID"`
+	Type      string          `json:"type"`
+	Reason    string          `json:"reason"`
+	Tokens    json.RawMessage `json:"tokens,omitempty"`
 }
 
-// rawStepTokens keeps each count raw so that an absent, null, or non-integer
-// member stays distinguishable from a zero.
-type rawStepTokens struct {
-	Input     json.RawMessage `json:"input,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	Reasoning json.RawMessage `json:"reasoning,omitempty"`
-	Cache     rawCacheUsage   `json:"cache,omitempty"`
+// childSession is one subagent call a turn's stream showed.
+type childSession struct {
+	// call is the tool part's id.
+	call string
+
+	// session is the child session's id; empty when the stream named none.
+	session string
+
+	// completed is true when the part's state.status is "completed".
+	completed bool
 }
 
-type rawCacheUsage struct {
-	Read  json.RawMessage `json:"read,omitempty"`
-	Write json.RawMessage `json:"write,omitempty"`
-}
-
-type exportUsage struct {
-	Usage domain.TokenUsage
-	Model string
-
-	// ByModel splits the totals by each kept message's `providerID/modelID`;
-	// a message missing either part adds to no entry.
-	ByModel map[string]domain.TokenUsage
-
-	// Recovered reports whether the export produced a figure at all,
-	// which is not the same question as whether that figure is non-zero.
-	// The runtime's assistant message carries `tokens` as a required
-	// object rather than one present only when something was spent, so a
-	// turn that genuinely cost zero exports the same shape as any other
-	// and must not read back as "nothing was recovered".
-	Recovered bool
+// subagentCall reports whether part is a subagent call and, when it is, the
+// child session it started. The members read are the ones the protocol route
+// reads from the same tool output: input.agent names the call, and the tool's
+// output object, carried as the state's metadata, holds the child's id.
+func subagentCall(part rawToolPart, ownSessionID string) (childSession, bool) {
+	var input struct {
+		Agent string `json:"agent"`
+	}
+	if json.Unmarshal(part.State.Input, &input) != nil || input.Agent == "" {
+		return childSession{}, false
+	}
+	var output struct {
+		Metadata struct {
+			SessionID string `json:"sessionID"`
+		} `json:"metadata"`
+	}
+	_ = json.Unmarshal(part.State.Metadata, &output)
+	child := childSession{call: part.ID, completed: part.State.Status == "completed"}
+	if id := output.Metadata.SessionID; id != ownSessionID {
+		child.session = id
+	}
+	return child, true
 }
 
 func parseRunEvent(line []byte) (rawRunEvent, error) {
@@ -197,19 +196,6 @@ func parseStepFinishPart(raw json.RawMessage) (rawStepFinishPart, error) {
 	return part, nil
 }
 
-// stepSpendReading builds the reading of one step report. The runtime sends
-// reasoning and cache counts only above zero, so those read zero when absent;
-// input and output are always sent, so a missing one is unknown.
-func stepSpendReading(t *rawStepTokens) usage.SpendReading {
-	return usage.SpendReading{
-		Input:      sessionexport.Count(t.Input),
-		Output:     sessionexport.Count(t.Output),
-		Reasoning:  sessionexport.CountOmittedAtZero(t.Reasoning),
-		CacheRead:  sessionexport.CountOmittedAtZero(t.Cache.Read),
-		CacheWrite: sessionexport.CountOmittedAtZero(t.Cache.Write),
-	}
-}
-
 // freeTierRefusalClause returns a clause naming the free-tier-required
 // tools state's policy denies, or "" when runErr does not match the
 // free-tier refusal envelope, or the policy denies neither tool.
@@ -253,82 +239,4 @@ func isFreeTierRefusal(runErr *rawRunError) bool {
 		return false
 	}
 	return strings.Contains(runErr.Message, freeTierMessageMarker)
-}
-
-// parseSessionExport extracts run-cumulative token usage from the
-// `session export --standalone --sanitize` document, summing over every
-// finished assistant message. When sinceUnixMS is non-zero, only messages
-// created at or after it are counted. A message without a tokens object
-// is skipped. The reported model comes from the last kept message that names
-// one. Returns the zero exportUsage unless the document decodes, its info.id
-// equals sessionID, and every kept message carries all its counts.
-func parseSessionExport(data []byte, sessionID string, sinceUnixMS int64) exportUsage {
-	records, err := sessionexport.Parse(data, sessionID)
-	if err != nil {
-		return exportUsage{}
-	}
-
-	var sum exportUsage
-	kept := false
-	for _, record := range records {
-		if sinceUnixMS != 0 && record.CreatedMS < sinceUnixMS {
-			continue
-		}
-		messageUsage, ok := usage.Normalize(record.Spend, usageSources.Records.Spend)
-		if !ok {
-			return exportUsage{}
-		}
-		sum.Usage = agentcore.AddUsage(sum.Usage, messageUsage)
-		kept = true
-
-		if record.Spend.Model != "" {
-			sum.Model = record.Spend.Model
-			if sum.ByModel == nil {
-				sum.ByModel = map[string]domain.TokenUsage{}
-			}
-			sum.ByModel[sum.Model] = agentcore.AddUsage(sum.ByModel[sum.Model], messageUsage)
-		}
-	}
-	if !kept {
-		return exportUsage{}
-	}
-
-	sum.Recovered = true
-	return sum
-}
-
-func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int64) exportUsage {
-	sessionID := state.currentSessionID()
-	if sessionID == "" {
-		return exportUsage{}
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
-	defer cancel()
-
-	cmd, err := auxiliaryCommand(queryCtx, state, sessionexport.Args(sessionID))
-	if err != nil {
-		state.logger().Warn("failed to build opencode export environment", slog.Any("error", err))
-		return exportUsage{}
-	}
-
-	var stdout bytes.Buffer
-	result, startErr := procutil.RunCapture(queryCtx, cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
-		Stdout: &stdout,
-		Logger: state.logger(),
-	})
-	if startErr != nil || result.WaitErr != nil {
-		err := startErr
-		if err == nil {
-			err = result.WaitErr
-		}
-		state.logger().Warn("failed to export opencode usage", slog.Any("error", err))
-		return exportUsage{}
-	}
-
-	exported := parseSessionExport(stdout.Bytes(), sessionID, sinceUnixMS)
-	if !exported.Recovered {
-		state.logger().Warn("no assistant token usage found in opencode export")
-	}
-	return exported
 }

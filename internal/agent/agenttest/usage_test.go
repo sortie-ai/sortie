@@ -27,14 +27,14 @@ func init() {
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true, ServedModel: true},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true, ServedModel: true},
 		}},
 	})
 	registry.Agents.RegisterWithMeta(usageTestKindTurnEnd, usageTestConstructor, registry.AgentMeta{
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+			Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 		}},
 	})
 	registry.Agents.RegisterWithMeta(usageTestKindNone, usageTestConstructor, registry.AgentMeta{

@@ -1,7 +1,6 @@
 package agentcore
 
 import (
-	"maps"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -191,100 +190,4 @@ func TestTurnEndUsage_FinalizeNilEmitPanics(t *testing.T) {
 
 	u := NewTurnEndUsage()
 	_, _ = u.Finalize(nil, nil, TurnEvidence{Terminal: TerminalSuccess}, "s", 0, nil, TurnSpend{})
-}
-
-func TestTurnEndUsage_ReportLive(t *testing.T) {
-	t.Parallel()
-
-	tokens := func(in, out int64) domain.TokenUsage {
-		return domain.TokenUsage{InputTokens: in, OutputTokens: out, TotalTokens: in + out}
-	}
-	split := map[string]domain.TokenUsage{"m1": tokens(30, 4)}
-
-	type step struct {
-		settle *RecoveredUsage
-		live   domain.TokenUsage
-		want   *domain.TokenUsage
-	}
-
-	tests := []struct {
-		name         string
-		steps        []step
-		wantMeasured bool
-		wantByModel  map[string]domain.TokenUsage
-	}{
-		{
-			name:  "counts with no input and no output emit nothing and leave the turn unmeasured",
-			steps: []step{{live: domain.TokenUsage{CacheReadTokens: 7}}},
-		},
-		{
-			name: "a later settled figure replaces the live counts instead of adding them",
-			steps: []step{
-				{live: tokens(10, 2), want: new(tokens(10, 2))},
-				{settle: &RecoveredUsage{Run: tokens(30, 4), ByModel: split}, want: new(tokens(30, 4))},
-			},
-			wantMeasured: true,
-			wantByModel:  split,
-		},
-		{
-			name: "the snapshot never falls when the settled figure is below the live counts",
-			steps: []step{
-				{live: tokens(50, 10), want: new(tokens(50, 10))},
-				{settle: &RecoveredUsage{Run: tokens(30, 4)}, want: new(tokens(50, 10))},
-			},
-			wantMeasured: true,
-		},
-		{
-			name: "live counts after a settled figure add to it and keep its per-model split",
-			steps: []step{
-				{settle: &RecoveredUsage{Run: tokens(30, 4), ByModel: split}, want: new(tokens(30, 4))},
-				{live: tokens(5, 1), want: new(tokens(35, 5))},
-			},
-			wantMeasured: true,
-			wantByModel:  split,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			var events []domain.AgentEvent
-			emit := func(e domain.AgentEvent) { events = append(events, e) }
-			u := NewTurnEndUsage()
-
-			for i, st := range tt.steps {
-				before := len(events)
-				if st.settle != nil {
-					u.Settle(emit, st.settle)
-				} else {
-					u.ReportLive(emit, st.live)
-				}
-
-				emitted := events[before:]
-				if st.want == nil {
-					if len(emitted) != 0 {
-						t.Fatalf("step %d: emitted %d events, want none", i, len(emitted))
-					}
-					continue
-				}
-				if len(emitted) != 1 || emitted[0].Type != domain.EventTokenUsage {
-					t.Fatalf("step %d: emitted %+v, want one %q event", i, emitted, domain.EventTokenUsage)
-				}
-				if st.settle == nil && emitted[0].Model != "" {
-					t.Errorf("step %d: ReportLive event Model = %q, want empty", i, emitted[0].Model)
-				}
-				if emitted[0].Usage != *st.want {
-					t.Errorf("step %d: event Usage = %+v, want %+v", i, emitted[0].Usage, *st.want)
-				}
-			}
-
-			if got := u.Measured(); got != tt.wantMeasured {
-				t.Errorf("Measured() = %v, want %v", got, tt.wantMeasured)
-			}
-			if len(events) > 0 && !maps.Equal(events[len(events)-1].UsageByModel, tt.wantByModel) {
-				t.Errorf("last event UsageByModel = %+v, want %+v", events[len(events)-1].UsageByModel, tt.wantByModel)
-			}
-		})
-	}
 }

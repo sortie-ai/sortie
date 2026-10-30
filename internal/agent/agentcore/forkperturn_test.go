@@ -1536,7 +1536,7 @@ func TestForkPerTurnSession_EndTurn(t *testing.T) {
 				}
 				return nil, fmt.Errorf("parse: %w", EndTurn(domain.ErrResponseError, "session id mismatch"))
 			}
-			hooks.SettleUsage = func(context.Context, func(domain.AgentEvent), *TurnSpend) { settled++ }
+			hooks.SettleUsage = func(context.Context, func(domain.AgentEvent), *TurnSpend, bool) { settled++ }
 			target := fakeTarget(t, false, agenttest.OutputScenario, agenttest.Output{Stdout: "one\ntwo\nthree\n", Hang: true})
 			sess = NewForkPerTurnSession(target, hooks, slog.Default(), 100)
 
@@ -1603,15 +1603,19 @@ func TestForkPerTurnSession_SettleUsage(t *testing.T) {
 		params   any
 		remote   bool
 		cancel   bool
+		stop     bool
 		deadline time.Duration
 		wantKind domain.AgentErrorKind
+		want     bool
 	}{
-		{name: "exit", scenario: agenttest.OutputScenario, params: agenttest.Output{}},
+		{name: "exit", scenario: agenttest.OutputScenario, params: agenttest.Output{}, want: true},
 		{name: "cancel", scenario: agenttest.OutputScenario, params: agenttest.Output{Hang: true}, cancel: true, wantKind: domain.ErrTurnCancelled},
 		{name: "read failure", scenario: "overflow", params: overflowParams{Size: 11000001}, wantKind: domain.ErrPortExit},
 		{name: "first-event deadline", scenario: agenttest.OutputScenario, params: agenttest.Output{Hang: true}, deadline: 100 * time.Millisecond, wantKind: domain.ErrResponseTimeout},
 		{name: "ssh connection failure", scenario: agenttest.OutputScenario, params: agenttest.Output{ExitCode: 255}, remote: true, wantKind: domain.ErrPortExit},
 		{name: "exit code 127", scenario: agenttest.OutputScenario, params: agenttest.Output{Stdout: "line\n", ExitCode: 127}, wantKind: domain.ErrAgentNotFound},
+		{name: "non-zero exit", scenario: agenttest.OutputScenario, params: agenttest.Output{ExitCode: 3}},
+		{name: "stopped then exit zero", scenario: "trap", params: trapParams{ExitOnSignal: true}, stop: true, wantKind: domain.ErrTurnCancelled},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1622,12 +1626,22 @@ func TestForkPerTurnSession_SettleUsage(t *testing.T) {
 			settled := domain.TokenUsage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}
 			var usage domain.TokenUsage
 			var settleCtxErr error
+			var exitedClean bool
+			var sess *ForkPerTurnSession
 			calls := 0
+			params := tt.params
+			var ready string
+			if p, ok := params.(trapParams); ok {
+				ready = filepath.Join(t.TempDir(), "ready")
+				p.Marker = ready
+				params = p
+			}
 			hooks := noopHooks()
 			hooks.FirstEventTimeout = tt.deadline
 			hooks.GetUsage = func() (domain.TokenUsage, map[string]domain.TokenUsage, bool) { return usage, nil, true }
-			hooks.SettleUsage = func(ctx context.Context, emit func(domain.AgentEvent), _ *TurnSpend) {
+			hooks.SettleUsage = func(ctx context.Context, emit func(domain.AgentEvent), _ *TurnSpend, clean bool) {
 				calls++
+				exitedClean = clean
 				settleCtxErr = ctx.Err()
 				usage = settled
 				emit(domain.AgentEvent{Type: domain.EventNotification})
@@ -1639,7 +1653,17 @@ func TestForkPerTurnSession_SettleUsage(t *testing.T) {
 			if tt.cancel {
 				hooks.EmitSessionStartID = func() string { cancel(); return "" }
 			}
-			sess := NewForkPerTurnSession(fakeTarget(t, tt.remote, tt.scenario, tt.params), hooks, slog.Default(), 0)
+			stopped := make(chan error, 1)
+			if tt.stop {
+				hooks.EmitSessionStartID = func() string {
+					go func() {
+						waittest.File(t, ready)
+						stopped <- sess.Stop(ctx)
+					}()
+					return ""
+				}
+			}
+			sess = NewForkPerTurnSession(fakeTarget(t, tt.remote, tt.scenario, params), hooks, slog.Default(), 0)
 
 			emit, events := sinkEvents()
 			result, err := sess.RunTurn(ctx, turnPrompt, emit)
@@ -1651,6 +1675,14 @@ func TestForkPerTurnSession_SettleUsage(t *testing.T) {
 			}
 			if calls != 1 || settleCtxErr != nil || result.Usage != settled {
 				t.Errorf("SettleUsage calls = %d, ctx.Err() = %v, RunTurn() Usage = %+v, want 1, nil and %+v", calls, settleCtxErr, result.Usage, settled)
+			}
+			if tt.stop {
+				if stopErr := waittest.Receive(t, stopped, "Stop return"); stopErr != nil {
+					t.Errorf("Stop() = %v, want nil", stopErr)
+				}
+			}
+			if exitedClean != tt.want {
+				t.Errorf("SettleUsage exitedClean = %t, want %t", exitedClean, tt.want)
 			}
 			var pids []string
 			for _, e := range *events {

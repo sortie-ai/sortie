@@ -11,7 +11,7 @@ var (
 	mappedLive = usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative},
 	}
 	vendorLive = usage.Source{
 		Category: usage.SourceOutput,
@@ -21,7 +21,7 @@ var (
 	journal = usage.Source{
 		Category: usage.SourceJournal,
 		Strategy: usage.StrategyRecords,
-		Spend:    usage.SpendDeclaration{Shape: usage.SpendAdapterMapped},
+		Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest},
 	}
 )
 
@@ -72,8 +72,8 @@ func TestSources_Check(t *testing.T) {
 func TestSources_Disposition(t *testing.T) {
 	t.Parallel()
 
-	duringTurn := withSpend(mappedLive, usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, DuringTurn: true, ServedModel: true})
-	split := withSpend(journal, usage.SpendDeclaration{Shape: usage.SpendAdapterMapped, ServedModel: true})
+	duringTurn := withSpend(mappedLive, usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, DuringTurn: true, ServedModel: true})
+	split := withSpend(journal, usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true})
 
 	tests := []struct {
 		name            string

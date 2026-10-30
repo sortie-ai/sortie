@@ -1,0 +1,95 @@
+{
+  "info": {
+    "id": "ses_e72f791e5ffegZ49g2xWBZFVRH",
+    "projectID": "global",
+    "model": {
+      "id": "scripted-model",
+      "providerID": "scripted",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 158,
+      "output": 13,
+      "reasoning": 5,
+      "cache": {
+        "read": 53,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1793367502435,
+      "updated": 1793367502669,
+      "busy": 1793367502584
+    },
+    "location": {
+      "directory": "/[redacted:session-directory:ses_e72f791e5ffegZ49g2xWBZFVRH]"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_18d086e69001MPrglN4Kv8NnKc",
+      "time": {
+        "created": 1793367502593
+      },
+      "text": "[redacted:text:msg_18d086e69001MPrglN4Kv8NnKc]",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_18d086f070016id4slPEE0FtIH",
+      "time": {
+        "created": 1793367502603,
+        "streamed": 1793367502657,
+        "completed": 1793367502669
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "scripted-model",
+        "providerID": "scripted",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "tool_8b0e8c11b5424631809c62c86efc4997",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "redacted": "tool-input:msg_18d086f070016id4slPEE0FtIH"
+            },
+            "error": {
+              "type": "tool.execution",
+              "message": "File not found: /tmp/work/scripted-nonce-a9725c2fb341b5d3.txt"
+            }
+          },
+          "time": {
+            "created": 1793367502651,
+            "ran": 1793367502654,
+            "completed": 1793367502661
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "files": []
+      },
+      "finish": "tool-calls",
+      "rawFinish": "STOP",
+      "cost": 0,
+      "tokens": {
+        "input": 158,
+        "output": 13,
+        "reasoning": 5,
+        "cache": {
+          "read": 53,
+          "write": 0
+        }
+      }
+    }
+  ]
+}
