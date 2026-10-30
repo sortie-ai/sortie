@@ -164,6 +164,7 @@ func TestRollout_Location(t *testing.T) {
 				home := t.TempDir()
 				t.Setenv("CODEX_HOME", "")
 				t.Setenv("HOME", home)
+				t.Setenv("USERPROFILE", home)
 				rolloutInstall(t, filepath.Join(home, ".codex"), state, rolloutCapture(t, tt.rollout))
 			}
 
