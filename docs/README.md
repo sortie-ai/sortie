@@ -97,6 +97,8 @@ These pages are for working on Sortie itself. To install, configure, and run Sor
     - [Supply a built-in prompt for every reaction run](decisions/0037-supply-a-built-in-prompt-for-every-reaction-run.md)
     - [Price runs from a layered rate table and record the price when the run is written](decisions/0038-price-runs-from-a-layered-rate-table-and-record-the-price-at-write.md)
     - [Account for agent spend in one usage component fed by each runtime's own reports](decisions/0039-account-for-agent-spend-in-one-usage-component.md)
+    - [Keep the Codex and Claude Code kinds as the routes to their CLIs](decisions/0040-keep-the-codex-and-claude-code-kinds-as-the-routes-to-their-clis.md)
+    - [Reset a usage-limit refusal at the latest reset of its gating windows](decisions/0041-reset-a-usage-limit-refusal-at-the-latest-reset-of-its-gating-windows.md)
 - **Process**
   - [Contributing](../CONTRIBUTING.md) - setup, making a change, code and testing conventions, commits and PRs
   - [Releasing](../RELEASING.md) - the ordered checklist for cutting a release
