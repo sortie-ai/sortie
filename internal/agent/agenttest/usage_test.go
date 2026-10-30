@@ -354,19 +354,35 @@ func TestAssertResolvedUsageReporting_IncrementalShapedFailsTurnEndArm(t *testin
 func TestAssertResolvedUsageReporting_TurnEndShapedFailsIncrementalArm(t *testing.T) {
 	t.Parallel()
 
-	reporter := &fakeReporter{}
-	tc := UsageReportingCase{
-		Name: "one figure after the last tool result",
-		Events: []domain.AgentEvent{
-			{Type: domain.EventToolResult},
-			{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2}, Model: "m"},
-		},
-		Result: domain.TurnResult{UsageMeasured: true},
+	tests := []struct {
+		name       string
+		exitReason domain.AgentEventType
+		wantFail   bool
+	}{
+		{name: "empty exit reason", wantFail: true},
+		{name: "cancelled turn", exitReason: domain.EventTurnCancelled},
+		{name: "failed turn", exitReason: domain.EventTurnFailed},
 	}
-	assertResolvedUsageReporting(reporter, tc, registry.UsageArrivalIncremental, registry.UsageAttributionPerModel, true)
 
-	if len(reporter.errors) == 0 {
-		t.Error("assertResolvedUsageReporting(incremental) recorded no failures for a turn-end-shaped stream, want at least one")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := &fakeReporter{}
+			tc := UsageReportingCase{
+				Name: "one figure after the last tool result",
+				Events: []domain.AgentEvent{
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2}, Model: "m"},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, ExitReason: tt.exitReason},
+			}
+			assertResolvedUsageReporting(reporter, tc, registry.UsageArrivalIncremental, registry.UsageAttributionPerModel, true)
+
+			if gotFail := len(reporter.errors) > 0; gotFail != tt.wantFail {
+				t.Errorf("assertResolvedUsageReporting(incremental, %s) failed = %t (errors %v), want %t", tt.name, gotFail, reporter.errors, tt.wantFail)
+			}
+		})
 	}
 }
 

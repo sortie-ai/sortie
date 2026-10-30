@@ -121,47 +121,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 	})
 }
 
-func TestNormalizeBreakdown(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   tokenUsageBreakdown
-		want domain.TokenUsage
-	}{
-		{
-			name: "inputTokens already includes cachedInputTokens",
-			in:   tokenUsageBreakdown{InputTokens: 27428, CachedInputTokens: 13696, OutputTokens: 30, ReasoningOutputTokens: 18, TotalTokens: 27458},
-			want: domain.TokenUsage{InputTokens: 27428, OutputTokens: 30, TotalTokens: 27458, CacheReadTokens: 13696},
-		},
-		{
-			name: "cacheWriteInputTokens is a cache write inside inputTokens",
-			in:   tokenUsageBreakdown{InputTokens: 518, CachedInputTokens: 114, CacheWriteInputTokens: 42, OutputTokens: 47, TotalTokens: 565},
-			want: domain.TokenUsage{InputTokens: 518, OutputTokens: 47, TotalTokens: 565, CacheReadTokens: 114, CacheWriteTokens: 42},
-		},
-		{
-			name: "zero value",
-			in:   tokenUsageBreakdown{},
-			want: domain.TokenUsage{},
-		},
-		{
-			name: "totalTokens field ignored, recomputed from input plus output",
-			in:   tokenUsageBreakdown{InputTokens: 100, OutputTokens: 50, TotalTokens: 999999},
-			want: domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := normalizeBreakdown(tt.in)
-			if got != tt.want {
-				t.Errorf("normalizeBreakdown(%+v) = %+v, want %+v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseTokenUsageUpdated(t *testing.T) {
 	t.Parallel()
 
@@ -175,14 +134,17 @@ func TestParseTokenUsageUpdated(t *testing.T) {
 		if got.ThreadID != "th-1" || got.TurnID != "tn-1" {
 			t.Errorf("ThreadID/TurnID = %q/%q, want %q/%q", got.ThreadID, got.TurnID, "th-1", "tn-1")
 		}
-		if got.TokenUsage.Total.InputTokens != 200 {
-			t.Errorf("TokenUsage.Total.InputTokens = %d, want 200", got.TokenUsage.Total.InputTokens)
+		if in := got.TokenUsage.Total.InputTokens; in == nil || *in != 200 {
+			t.Errorf("TokenUsage.Total.InputTokens = %v, want 200", in)
 		}
-		if got.TokenUsage.Total.CacheWriteInputTokens != 7 {
-			t.Errorf("TokenUsage.Total.CacheWriteInputTokens = %d, want 7", got.TokenUsage.Total.CacheWriteInputTokens)
+		if cw := got.TokenUsage.Total.CacheWriteInputTokens; cw == nil || *cw != 7 {
+			t.Errorf("TokenUsage.Total.CacheWriteInputTokens = %v, want 7", cw)
 		}
-		if got.TokenUsage.Last.OutputTokens != 50 {
-			t.Errorf("TokenUsage.Last.OutputTokens = %d, want 50", got.TokenUsage.Last.OutputTokens)
+		if out := got.TokenUsage.Last.OutputTokens; out == nil || *out != 50 {
+			t.Errorf("TokenUsage.Last.OutputTokens = %v, want 50", out)
+		}
+		if cw := got.TokenUsage.Last.CacheWriteInputTokens; cw != nil {
+			t.Errorf("TokenUsage.Last.CacheWriteInputTokens = %d, want nil", *cw)
 		}
 	})
 

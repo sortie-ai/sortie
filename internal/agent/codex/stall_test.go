@@ -42,6 +42,7 @@ func TestRunTurn_EndsOnCtxDeadlineAgainstAStalledWriter(t *testing.T) {
 			inbox:      inbox,
 			readerDone: make(chan struct{}),
 			acc:        agentcore.NewRunUsage(),
+			ledger:     adaptNewLedger(t),
 		}
 		state.conn = jsonrpc.NewConn(outW, inR, jsonrpc.Deliver(inbox, identity))
 		t.Cleanup(state.conn.Close)

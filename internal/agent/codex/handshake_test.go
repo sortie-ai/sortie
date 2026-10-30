@@ -51,6 +51,7 @@ func newHandshakeConn(t *testing.T, recorder *capturingWriteCloser, lines ...str
 		inbox:      jsonrpc.NewInbox[jsonrpc.Message](),
 		readerDone: make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
+		ledger:     adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(w, inPr, jsonrpc.Deliver(state.inbox, identity))
 	go watchTermination(state)
@@ -99,6 +100,7 @@ func openEndedHandshakeState(t *testing.T, repliesByID map[int64]string) *sessio
 		inbox:      jsonrpc.NewInbox[jsonrpc.Message](),
 		readerDone: make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
+		ledger:     adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(outPw, inPr, jsonrpc.Deliver(state.inbox, identity))
 	t.Cleanup(state.conn.Close)
@@ -140,6 +142,7 @@ func authWaitState(t *testing.T, repliesByID map[int64]string) *sessionState {
 		target: agentcore.LaunchTarget{WorkspacePath: "/tmp"},
 		inbox:  jsonrpc.NewInbox[jsonrpc.Message](),
 		acc:    agentcore.NewRunUsage(),
+		ledger: adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(outPw, inPr, jsonrpc.Deliver(state.inbox, identity))
 
@@ -289,7 +292,7 @@ func TestStartThread_Success(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	threadID, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	threadID, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -310,7 +313,7 @@ func TestStartThread_DefaultApprovalPolicyIsNever(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	if _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger()); err != nil {
+	if _, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger()); err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
 
@@ -347,7 +350,7 @@ func TestStartThread_WithModelAndPersonality(t *testing.T) {
 		ThreadSandbox:  "workspaceWrite",
 	}
 
-	threadID, _, err := startThread(context.Background(), state, pt, discardTestLogger())
+	threadID, _, _, err := startThread(context.Background(), state, pt, discardTestLogger())
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -361,7 +364,7 @@ func TestStartThread_ErrorResponse(t *testing.T) {
 
 	state := handshakeState(t, `{"id":1,"error":{"code":-32000,"message":"workspace not found"}}`)
 
-	_, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	_, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err == nil {
 		t.Fatal("startThread() expected error for error response")
 	}
@@ -373,7 +376,7 @@ func TestStartThread_EmptyThreadID(t *testing.T) {
 	// Response with empty thread ID.
 	state := handshakeState(t, `{"id":1,"result":{"thread":{"id":""}}}`)
 
-	_, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	_, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err == nil {
 		t.Fatal("startThread() expected error for empty thread ID")
 	}
@@ -397,7 +400,7 @@ func TestStartThread_FixtureThreadStartResponse(t *testing.T) {
 	lines[0] = strings.Replace(lines[0], `"id":4,`, `"id":1,`, 1)
 	state := handshakeState(t, lines...)
 
-	_, model, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	_, model, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -417,26 +420,33 @@ func TestStartThread_NoModelMember(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	_, model, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	_, model, path, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
 	if model != "" {
 		t.Errorf("startThread() model = %q, want empty", model)
 	}
+	if path != "" {
+		t.Errorf("startThread() path = %q, want empty for an absent thread.path", path)
+	}
 }
 
 func TestResumeThread_Success(t *testing.T) {
 	t.Parallel()
 
-	state := handshakeState(t, `{"id":1,"result":{"model":"gpt-5.6-sol"}}`)
+	const reportedPath = "<CODEX_HOME>/sessions/2026/10/30/rollout-existing-thread-id.jsonl"
+	state := handshakeState(t, `{"id":1,"result":{"model":"gpt-5.6-sol","thread":{"id":"existing-thread-id","path":"`+reportedPath+`"}}}`)
 
-	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	model, path, err := resumeThread(context.Background(), state, "existing-thread-id")
 	if err != nil {
 		t.Fatalf("resumeThread() error = %v", err)
 	}
 	if model != "gpt-5.6-sol" {
 		t.Errorf("resumeThread() model = %q, want %q", model, "gpt-5.6-sol")
+	}
+	if path != reportedPath {
+		t.Errorf("resumeThread() path = %q, want %q", path, reportedPath)
 	}
 }
 
@@ -445,7 +455,7 @@ func TestResumeThread_ErrorResponse(t *testing.T) {
 
 	state := handshakeState(t, `{"id":1,"error":{"code":-32002,"message":"thread not found"}}`)
 
-	_, err := resumeThread(context.Background(), state, "nonexistent-thread")
+	_, _, err := resumeThread(context.Background(), state, "nonexistent-thread")
 	if err == nil {
 		t.Fatal("resumeThread() expected error for error response")
 	}
@@ -461,7 +471,7 @@ func TestResumeThread_UnmarshalFailureReturnsEmptyModel(t *testing.T) {
 
 	state := handshakeState(t, `{"id":1,"result":{"model":123}}`)
 
-	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	model, _, err := resumeThread(context.Background(), state, "existing-thread-id")
 	if err != nil {
 		t.Fatalf("resumeThread() error = %v", err)
 	}
@@ -509,7 +519,7 @@ func TestStartThread_ContextCancelledDuringNotificationWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := startThread(ctx, state, passthroughConfig{}, discardTestLogger())
+	_, _, _, err := startThread(ctx, state, passthroughConfig{}, discardTestLogger())
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("startThread() = %v, want context.Canceled", err)
 	}

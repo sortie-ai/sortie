@@ -22,6 +22,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -309,6 +310,7 @@ func makeTestStateWithStdin(t *testing.T, fixtureData []byte, recorder *capturin
 		inbox:      jsonrpc.NewInbox[jsonrpc.Message](),
 		readerDone: make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
+		ledger:     adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(w, inPr, jsonrpc.Deliver(state.inbox, identity))
 	go watchTermination(state)
@@ -340,6 +342,7 @@ func makeTestStateWithMalformedBeforeResponse(t *testing.T, malformed, response 
 		inbox:      jsonrpc.NewInbox[jsonrpc.Message](),
 		readerDone: make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
+		ledger:     adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(sig, inPr, jsonrpc.Deliver(state.inbox, identity))
 	go watchTermination(state)
@@ -376,6 +379,7 @@ func gatedTurnStartState(t *testing.T, response string) *sessionState {
 		waitCh:   make(chan struct{}),
 		inbox:    jsonrpc.NewInbox[jsonrpc.Message](),
 		acc:      agentcore.NewRunUsage(),
+		ledger:   adaptNewLedger(t),
 	}
 	state.conn = jsonrpc.NewConn(sig, inPr, jsonrpc.Deliver(state.inbox, identity))
 
@@ -385,6 +389,18 @@ func gatedTurnStartState(t *testing.T, response string) *sessionState {
 	}()
 
 	return state
+}
+
+func adaptNewLedger(t *testing.T) *usage.Ledger {
+	t.Helper()
+
+	ledger, err := usage.NewLedger(usageSources.Live, usageSources.Records)
+	if err != nil {
+		t.Fatalf("usage.NewLedger() error = %v", err)
+	}
+	ledger.SessionCreated()
+
+	return ledger
 }
 
 // fakeSession wraps state in a domain.Session suitable for RunTurn.
@@ -548,97 +564,6 @@ func TestAssertUsageReporting(t *testing.T) {
 	})
 }
 
-// TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline drives a thread
-// whose first matching notification already reports a non-zero
-// total.totalTokens because the thread resumed from a prior run. It
-// asserts a preceding notification carrying another turn's id
-// contributes nothing and only raises the baseline, and that the first
-// reported snapshot for the current turn is the difference between that
-// notification's total and last breakdowns.
-func TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline(t *testing.T) {
-	t.Parallel()
-
-	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"starting\"}}}\n" +
-		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-002\"}}\n" +
-		// A notification from an earlier turn of the resumed thread:
-		// contributes nothing to this turn and only raises the baseline.
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":5000,\"inputTokens\":4000,\"cachedInputTokens\":1000,\"outputTokens\":1000,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":5000,\"inputTokens\":4000,\"cachedInputTokens\":1000,\"outputTokens\":1000,\"reasoningOutputTokens\":0}}}}\n" +
-		// The current turn's first matching notification: total is
-		// already thread-cumulative from the resumed session.
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
-
-	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter()
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "continue",
-		OnEvent: collectEvents(&events),
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
-	if len(tokenUsageEvents) != 1 {
-		t.Fatalf("token_usage event count = %d, want 1 (the other-turn notification contributes nothing)", len(tokenUsageEvents))
-	}
-
-	// The baseline is total minus last (27549-13818, 82-28, 27392-13692),
-	// so the reported snapshot equals last exactly: total_tokens 13846.
-	wantSnapshot := domain.TokenUsage{InputTokens: 13818, OutputTokens: 28, CacheReadTokens: 13692, TotalTokens: 13846}
-	if got := tokenUsageEvents[0].Usage; got != wantSnapshot {
-		t.Errorf("token_usage event Usage = %+v, want %+v (baseline is total minus last)", got, wantSnapshot)
-	}
-	if result.Usage != wantSnapshot {
-		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantSnapshot)
-	}
-}
-
-// TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification
-// drives a turn whose turn/start response body fails to unmarshal,
-// leaving the adapter's current turn id empty, followed by two
-// thread/tokenUsage/updated notifications sharing one non-empty turnId.
-// It asserts the adapter adopts the first notification's turnId rather
-// than treating every notification as belonging to another turn, so
-// both notifications contribute and the run-cumulative snapshot after
-// the second reports the full total rather than zero.
-func TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification(t *testing.T) {
-	t.Parallel()
-
-	fixture := "{\"id\":1,\"result\":\"malformed turn/start body\"}\n" +
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-777\",\"tokenUsage\":{\"last\":{\"totalTokens\":13785,\"inputTokens\":13731,\"cachedInputTokens\":13700,\"outputTokens\":54,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":13785,\"inputTokens\":13731,\"cachedInputTokens\":13700,\"outputTokens\":54,\"reasoningOutputTokens\":0}}}}\n" +
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-777\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-777\",\"status\":\"completed\"}}}\n"
-
-	state := makeTestState(t, []byte(fixture))
-	adapter, _ := NewCodexAdapter()
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "do something",
-		OnEvent: collectEvents(&events),
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
-	if len(tokenUsageEvents) != 2 {
-		t.Fatalf("token_usage event count = %d, want 2 (both notifications must contribute once the empty turn id adopts the first)", len(tokenUsageEvents))
-	}
-
-	wantSnapshot := domain.TokenUsage{InputTokens: 27549, OutputTokens: 82, TotalTokens: 27631}
-	got := tokenUsageEvents[1].Usage
-	if got.InputTokens != wantSnapshot.InputTokens || got.OutputTokens != wantSnapshot.OutputTokens || got.TotalTokens != wantSnapshot.TotalTokens {
-		t.Errorf("second token_usage event Usage = %+v, want input/output/total %+v (not zero)", got, wantSnapshot)
-	}
-	if result.Usage.TotalTokens != wantSnapshot.TotalTokens {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want %d", result.Usage.TotalTokens, wantSnapshot.TotalTokens)
-	}
-}
-
 // TestRunTurn_TokenUsageUpdated_StampsStoredModel drives the same
 // token_usage_updated.jsonl fixture as TestRunTurn_TokenUsageUpdated,
 // with a stored model set on the session before the turn runs, and
@@ -669,8 +594,8 @@ func TestRunTurn_TokenUsageUpdated_StampsStoredModel(t *testing.T) {
 func TestRunTurn_ModelRerouted(t *testing.T) {
 	t.Parallel()
 
-	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
-	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
 
 	fixture := strings.Join([]string{
 		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
@@ -715,9 +640,9 @@ func TestRunTurn_ModelRerouted(t *testing.T) {
 func TestRunTurn_ModelRerouted_MalformedPayload(t *testing.T) {
 	t.Parallel()
 
-	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
 	const malformedReroute = `{"method":"model/rerouted","params":{"toModel":123}}`
-	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
 
 	fixture := strings.Join([]string{
 		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
@@ -769,9 +694,9 @@ func TestRunTurn_ModelRerouted_MalformedPayload(t *testing.T) {
 func TestRunTurn_ModelRerouted_EmptyToModel(t *testing.T) {
 	t.Parallel()
 
-	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
 	const emptyToModelReroute = `{"method":"model/rerouted","params":{"threadId":"thread-001","turnId":"turn-001","fromModel":"gpt-5.6-sol","toModel":""}}`
-	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}}`
 
 	fixture := strings.Join([]string{
 		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
@@ -1563,11 +1488,11 @@ func TestRunTurn_MultiTurnNoRace(t *testing.T) {
 
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0,\"cacheWriteInputTokens\":0},\"total\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0,\"cacheWriteInputTokens\":0}}}}\n" +
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"}}}\n" +
 		"{\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-002\"}}\n" +
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0,\"cacheWriteInputTokens\":0},\"total\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0,\"cacheWriteInputTokens\":0}}}}\n" +
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState(t, []byte(fixture))
@@ -1610,7 +1535,7 @@ func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 	session := fakeSession(state)
 
 	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)})
-	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "thread/tokenUsage/updated", Params: json.RawMessage(`{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"total":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0}}}`)})
+	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "thread/tokenUsage/updated", Params: json.RawMessage(`{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0,"cacheWriteInputTokens":0},"total":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0,"cacheWriteInputTokens":0}}}`)})
 	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"completed"}}`)})
 
 	if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -1747,7 +1672,7 @@ func TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn(t *testing.T) {
 	if err := authenticateIfNeeded(context.Background(), state, discardTestLogger()); err != nil {
 		t.Fatalf("authenticateIfNeeded() error = %v", err)
 	}
-	threadID, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+	threadID, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -1893,7 +1818,7 @@ func TestStartThread_NotificationWaitEOF(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		threadID, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
+		threadID, _, _, err := startThread(context.Background(), state, passthroughConfig{}, discardTestLogger())
 		done <- outcome{threadID, err}
 	}()
 
