@@ -38,6 +38,7 @@ var matchTreeDirs = []string{"tmp/a/chats/session-h-abcd.jsonl"}
 var matchTreeLinks = [][2]string{
 	{"tmp/a/chats/session-i-abcd.jsonl", "session-a-abcd.jsonl"},
 	{"tmp/linked", "a"},
+	{"alias", "tmp"},
 }
 
 var matchCases = []matchCase{
@@ -50,6 +51,17 @@ var matchCases = []matchCase{
 			"tmp/a/chats/session-a-abcd.jsonl",
 			"tmp/it's $HOME/chats/session-g-abcd.jsonl",
 			"tmp/proj b/chats/session-f-abcd.jsonl",
+		},
+	},
+	{
+		name:     "symlinked literal prefix, followed as a read follows it",
+		segments: []string{"alias", "*", "chats", "session-*-abcd.jsonl"},
+		want: []string{
+			"alias/a-b/chats/session-e-abcd.jsonl",
+			"alias/a/chats/session-B-abcd.jsonl",
+			"alias/a/chats/session-a-abcd.jsonl",
+			"alias/it's $HOME/chats/session-g-abcd.jsonl",
+			"alias/proj b/chats/session-f-abcd.jsonl",
 		},
 	},
 	{

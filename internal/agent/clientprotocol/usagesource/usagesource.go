@@ -237,13 +237,8 @@ type PullRuntime interface {
 	// return an error.
 	ScanHomeFile(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error
 
-	// MatchHomeFiles lists the regular files under the runtime's home whose
-	// path matches pattern, in bytewise order of their paths, as ReadHomeFile
-	// resolves the home. A segment of pattern matches a path segment with "*"
-	// standing for any run of characters inside it. No match and a missing home
-	// return no paths and no error; a pattern that is not valid wraps
-	// agentcore.ErrInvalidRuntimePath; a dropped connection and an ended
-	// context are errors.
+	// MatchHomeFiles lists the home's files matching pattern, as
+	// agentcore.LaunchTarget.MatchRuntimeFiles does.
 	MatchHomeFiles(ctx context.Context, pattern agentcore.RuntimePath) ([]agentcore.RuntimePath, error)
 
 	// RemoteHost reports whether the runtime runs on another host, reached

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -173,24 +174,11 @@ func (t LaunchTarget) ScanRuntimeFile(ctx context.Context, env []string, path Ru
 }
 
 // MatchRuntimeFiles lists the regular files under the runtime's home on the
-// session's host whose path matches pattern. Each element of pattern.Segments
-// is a segment pattern: "*" matches any run of characters inside one segment,
-// the empty run included, and every other character matches itself. The home
-// resolves as for [LaunchTarget.ReadRuntimeFile]. An invalid pattern wraps
-// [ErrInvalidRuntimePath] before any file opens or process starts.
+// session's host whose path matches pattern, "*" matching within one segment.
+// No match or a missing home returns an empty slice; an invalid pattern wraps
+// [ErrInvalidRuntimePath].
 //
-// Each result carries the pattern's HomeVar and HomeDefault and the file's own
-// segments, and the results are sorted bytewise by those segments joined with
-// "/". A local match walks real directories only; a remote match runs one
-// read-only command over the session's own SSH launch. Both sides re-check every
-// path against the pattern, so they return the same set. No match, a missing
-// home, and a missing directory return an empty slice and nil; an unreadable
-// directory below the home is an error. A remote SSH connection failure wraps
-// [sshutil.ErrConnectionFailed], any other failed remote command wraps
-// [ErrHostCommandFailed], and a listing above 64 KiB is an error.
-//
-// MatchRuntimeFiles neither logs a path nor puts one in an error, and the
-// caller must do the same.
+// It never puts a path in a log or an error, and the caller must not either.
 func (t LaunchTarget) MatchRuntimeFiles(ctx context.Context, env []string, pattern RuntimePath) ([]RuntimePath, error) {
 	if err := pattern.validatePattern(); err != nil {
 		return nil, err
@@ -215,9 +203,21 @@ func (t LaunchTarget) matchLocal(ctx context.Context, env []string, pattern Runt
 	}
 	defer func() { _ = root.Close() }()
 
-	found, err := matchDir(ctx, root, pattern.Segments, nil)
+	prefix := pattern.Segments[:literalPrefix(pattern)]
+	if len(prefix) > 0 {
+		sub, err := root.OpenRoot(path.Join(prefix...))
+		if err != nil {
+			return emptyWhenMissing(err)
+		}
+		defer func() { _ = sub.Close() }()
+		root = sub
+	}
+	found, err := walkMatches(ctx, root.FS(), pattern.Segments[len(prefix):])
 	if err != nil {
 		return nil, err
+	}
+	for i, segments := range found {
+		found[i] = slices.Concat(prefix, segments)
 	}
 	return matchedPaths(pattern, found), nil
 }
@@ -243,67 +243,53 @@ func withoutPath(op string, err error) error {
 	}
 }
 
-// matchDir returns the files below dir, as segment lists under root, whose
-// path matches pattern. It lists one directory per pattern segment and follows
-// real directories only, so a symlink cannot lead the walk elsewhere.
-func matchDir(ctx context.Context, root *os.Root, pattern, dir []string) ([][]string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// literalPrefix counts the leading segments without "*", short of the last.
+// Both sides resolve that prefix as a read resolves its path, symlinks
+// included, and follow no symlink below it.
+func literalPrefix(pattern RuntimePath) int {
+	literal := 0
+	for literal < len(pattern.Segments)-1 && !strings.Contains(pattern.Segments[literal], "*") {
+		literal++
 	}
-	d, err := root.Open(filepath.Join(append([]string{"."}, dir...)...))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, withoutPath("open runtime directory", err)
-	}
-	entries, err := d.ReadDir(-1)
-	_ = d.Close()
-	if err != nil {
-		return nil, withoutPath("read runtime directory", err)
-	}
-
-	segment := pattern[len(dir)]
-	last := len(dir)+1 == len(pattern)
-	var found [][]string
-	for _, entry := range entries {
-		if !matchSegment(segment, entry.Name()) {
-			continue
-		}
-		path := append(slices.Clone(dir), entry.Name())
-		switch {
-		case last && entry.Type().IsRegular():
-			found = append(found, path)
-		case !last && entry.Type().IsDir():
-			below, err := matchDir(ctx, root, pattern, path)
-			if err != nil {
-				return nil, err
-			}
-			found = append(found, below...)
-		}
-	}
-	return found, nil
+	return literal
 }
 
-// matchSegment reports whether name matches pattern, in which "*" matches any
-// run of characters and every other character matches itself.
-func matchSegment(pattern, name string) bool {
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return pattern == name
-	}
-	rest, ok := strings.CutPrefix(name, parts[0])
-	if !ok {
-		return false
-	}
-	for _, part := range parts[1 : len(parts)-1] {
-		i := strings.Index(rest, part)
-		if i < 0 {
-			return false
+// walkMatches returns the regular files under fsys whose path matches pattern.
+// Unlike fs.Glob it reports an unreadable directory, which would otherwise read
+// as fewer records, and it never follows a symlink.
+func walkMatches(ctx context.Context, fsys fs.FS, pattern []string) ([][]string, error) {
+	var found [][]string
+	err := fs.WalkDir(fsys, ".", func(name string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
-		rest = rest[i+len(part):]
-	}
-	return strings.HasSuffix(rest, parts[len(parts)-1])
+		if err != nil {
+			return withoutPath("read runtime directory", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if name == "." {
+			return nil
+		}
+		segments := strings.Split(name, "/")
+		depth := len(segments)
+		if matched, _ := path.Match(pattern[depth-1], segments[depth-1]); !matched || depth == len(pattern) {
+			if matched && entry.Type().IsRegular() {
+				found = append(found, segments)
+			}
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return found, err
+}
+
+func segmentMatches(pattern, name string) bool {
+	matched, _ := path.Match(pattern, name)
+	return matched
 }
 
 // pathMatches reports whether segments is a path the pattern admits: one
@@ -314,15 +300,13 @@ func pathMatches(pattern RuntimePath, segments []string) bool {
 		return false
 	}
 	for i, segment := range segments {
-		if !ValidPathSegment(segment) || !matchSegment(pattern.Segments[i], segment) {
+		if !ValidPathSegment(segment) || !segmentMatches(pattern.Segments[i], segment) {
 			return false
 		}
 	}
 	return true
 }
 
-// matchedPaths keeps the found paths that pathMatches admits and returns them
-// as runtime paths sorted bytewise by their segments joined with "/".
 func matchedPaths(pattern RuntimePath, found [][]string) []RuntimePath {
 	paths := make([]RuntimePath, 0, len(found))
 	for _, segments := range found {
@@ -701,21 +685,14 @@ func (t LaunchTarget) matchRemote(ctx context.Context, pattern RuntimePath) ([]R
 	return matchedPaths(pattern, found), nil
 }
 
-// remoteMatchCommand renders the one read-only command a remote match runs. The
-// remote shell expands only the home variable and $HOME, as in
-// [remoteReadCommand]; every HomeDefault and Segments element is single-quoted
-// and reaches find as written, so only find reads the "*" wildcards. find starts
-// at the pattern's deepest literal directory with its depth fixed to the
-// remaining segments, because its -path lets "*" match "/". A missing home or
-// start directory prints nothing and exits zero.
+// remoteMatchCommand renders the read-only command a remote match runs. Every
+// literal is single-quoted so only find reads "*", and the depth is fixed
+// because find's -path lets "*" match "/".
 func remoteMatchCommand(pattern RuntimePath) string {
-	literal := 0
-	for literal < len(pattern.Segments)-1 && !strings.Contains(pattern.Segments[literal], "*") {
-		literal++
-	}
+	literal := literalPrefix(pattern)
 	depth := len(pattern.Segments) - literal
 	start := "'.'" + quotedSuffix(pattern.Segments[:literal])
-	return fmt.Sprintf(`h="${%s:-}"; [ -n "$h" ] || h="$HOME"%s; [ -d "$h" ] || exit 0; cd -- "$h" || exit 1; [ -d %s ] || exit 0; LC_ALL=C find %s -mindepth %d -maxdepth %d -type f -path %s -print0`,
+	return fmt.Sprintf(`h="${%s:-}"; [ -n "$h" ] || h="$HOME"%s; [ -d "$h" ] || exit 0; cd -- "$h" || exit 1; [ -d %s ] || exit 0; LC_ALL=C find -H %s -mindepth %d -maxdepth %d -type f -path %s -print0`,
 		pattern.HomeVar, quotedSuffix(pattern.HomeDefault), start, start, depth, depth, "'.'"+quotedSuffix(pattern.Segments))
 }
 
