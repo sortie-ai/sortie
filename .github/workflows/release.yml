@@ -467,8 +467,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_CLIENTPROTOCOL_TEST: "1"
-      SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp --skip-trust --approval-mode yolo -m gemini-2.5-flash
-      SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: gemini --acp -m gemini-2.5-flash
+      SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp --skip-trust --approval-mode yolo
+      SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: gemini --acp
       SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: GEMINI_API_KEY
       SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: GOOGLE_GEMINI_BASE_URL
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -503,7 +503,13 @@ jobs:
         run: npm install -g @google/gemini-cli
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 900s -run 'Integration' -skip '^TestIntegration_ToolForcingTurn$' ./internal/agent/clientprotocol/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' -skip '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+
+      - name: Run scripted-model tests
+        env:
+          SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp --skip-trust --approval-mode yolo -m gemini-2.5-flash
+          SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: gemini --acp -m gemini-2.5-flash
+        run: go test -race -count=1 -v -timeout 900s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
 
   test-integration-acp-kiro:
     name: "Integration: Kiro - ACP"

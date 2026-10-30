@@ -552,7 +552,7 @@ jobs:
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: GEMINI_API_KEY
             run_filter: Integration
-            skip_filter: ^(TestIntegration_ScriptedModel|TestIntegration_ToolForcingTurn)$
+            skip_filter: ^TestIntegration_ScriptedModel$
             tier: live
             test_path: ./internal/agent/clientprotocol/...
             timeout: 900s
@@ -560,7 +560,7 @@ jobs:
             install: npm install -g @google/gemini-cli
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
-            clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo -m gemini-2.5-flash"
+            clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
 
           - name: Kiro - ACP (live)
