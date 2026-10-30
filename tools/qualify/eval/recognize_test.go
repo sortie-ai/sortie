@@ -271,12 +271,13 @@ func TestTokenLocatorReading(t *testing.T) {
 
 	const result = "\n" + `{"type":"result","exitCode":0,"sessionId":"s1"}`
 	tests := []struct {
-		name   string
-		stream string
-		want   string
+		name      string
+		stream    string
+		want      string
+		wantGrade evidence.Grade
 	}{
-		{"the last matching line supplies the figure", `{"type":"checkpoint","data":{"m":{"early":{"n":1}}}}` + "\n" + `{"type":"checkpoint","data":{"m":{"late":{"n":2}}}}` + result, "/data/m/late/n"},
-		{"a stream with no matching line adds no sources", `{"type":"other","data":{"m":{"x":{"n":1}}}}` + result, ""},
+		{"the last matching line supplies the figure", `{"type":"checkpoint","data":{"m":{"early":{"n":1}}}}` + "\n" + `{"type":"checkpoint","data":{"m":{"late":{"n":2}}}}` + result, "/data/m/late/n", evidence.GradeGap},
+		{"a stream with no matching line stays unread", `{"type":"other","data":{"m":{"x":{"n":1}}}}` + result, "", evidence.GradeNotObserved},
 	}
 
 	for _, tt := range tests {
@@ -284,7 +285,7 @@ func TestTokenLocatorReading(t *testing.T) {
 			t.Parallel()
 
 			p := recognizerShapedProfile(tokenLocatorRecognizer(true))
-			_, paths, _ := RecognizeInventory(p, evidence.SurfaceNativeJSON, []evidence.StreamCapture{{Stdout: tt.stream}})
+			_, paths, inventory := RecognizeInventory(p, evidence.SurfaceNativeJSON, []evidence.StreamCapture{{Stdout: tt.stream}})
 
 			got := ""
 			for _, path := range paths {
@@ -292,6 +293,9 @@ func TestTokenLocatorReading(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("RecognizeInventory() paths = %q, want %q", got, tt.want)
+			}
+			if inventory.Grade != tt.wantGrade {
+				t.Errorf("RecognizeInventory() grade = %v, want %v", inventory.Grade, tt.wantGrade)
 			}
 		})
 	}

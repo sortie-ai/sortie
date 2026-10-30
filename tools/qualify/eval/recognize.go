@@ -478,10 +478,11 @@ const tokenWildcard = "*"
 // unsupported path is an unknown, not a zero, so reporting the surface as
 // source-free would turn an unread value into a proven absence.
 type tokenSurfaceReading struct {
-	observations int
-	sessionID    string
-	sources      []evidence.TokenObservation
-	unsupported  []string
+	observations     int
+	withoutTokenLine int
+	sessionID        string
+	sources          []evidence.TokenObservation
+	unsupported      []string
 }
 
 // gradeTokenReading turns one surface's reading into the inventory
@@ -501,6 +502,8 @@ func gradeTokenReading(reading tokenSurfaceReading, inductionFailed evidence.Out
 		return unknown("no observation was recognized, so this surface's token sources stay unread")
 	case len(reading.unsupported) > 0:
 		return unknown("read " + countedObservations(reading.observations) + " and reached a shape this inventory cannot consume at " + strings.Join(reading.unsupported, ", "))
+	case len(reading.sources) == 0 && reading.withoutTokenLine > 0:
+		return unknown("read " + countedObservations(reading.observations) + " and found no line the token locator selects in " + strconv.Itoa(reading.withoutTokenLine) + " of them")
 	case len(reading.sources) > 0 && reading.sessionID == "":
 		return unknown("read " + countedObservations(reading.observations) + " carrying a token-bearing path that no observation attributed to a session")
 	case len(reading.sources) == 0:
@@ -558,6 +561,7 @@ func readNativeTokens(recognizer profile.Recognizer, streams []evidence.StreamCa
 		}
 		tokenLine, found := recognizer.TokenTerminal(output)
 		if !found {
+			reading.withoutTokenLine++
 			continue
 		}
 		for _, declared := range recognizer.TokenPaths {
