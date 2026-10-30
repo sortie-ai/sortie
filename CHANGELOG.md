@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Agents on SSH worker hosts can use Sortie's tools and the HTTP tool servers configured under `mcp_config`. ([#1485](https://github.com/sortie-ai/sortie/issues/1485))
 - When an agent's provider usage limit runs out, Sortie waits for the limit to reset instead of retrying, and keeps dispatching work to other agents and models meanwhile. ([#1523](https://github.com/sortie-ai/sortie/issues/1523), [#1524](https://github.com/sortie-ai/sortie/issues/1524))
 - The dashboard Overview page shows each agent's plan usage limits, how much of each is used, and when each resets. The JSON API serves them as `rate_limits`. ([#1388](https://github.com/sortie-ai/sortie/issues/1388), [#1547](https://github.com/sortie-ai/sortie/issues/1547))
-- Sortie counts token usage and cost for every agent kind on local and SSH worker runs, including cancelled, killed, and resumed turns, so `agent.max_tokens` and the cost limits apply to all of them; usage Sortie cannot determine is reported as unknown or a lower bound, never as zero. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1484](https://github.com/sortie-ai/sortie/issues/1484), [#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1535](https://github.com/sortie-ai/sortie/issues/1535), [#1536](https://github.com/sortie-ai/sortie/issues/1536), [#1537](https://github.com/sortie-ai/sortie/issues/1537), [#1538](https://github.com/sortie-ai/sortie/issues/1538), [#1539](https://github.com/sortie-ai/sortie/issues/1539))
+- Sortie counts token usage and cost for every agent kind on local and SSH worker runs, including cancelled, killed, and resumed turns, so `agent.max_tokens` and the cost limits apply to all of them; usage Sortie cannot determine is reported as unknown or a lower bound, never as zero. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1484](https://github.com/sortie-ai/sortie/issues/1484), [#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1535](https://github.com/sortie-ai/sortie/issues/1535), [#1536](https://github.com/sortie-ai/sortie/issues/1536), [#1537](https://github.com/sortie-ai/sortie/issues/1537), [#1538](https://github.com/sortie-ai/sortie/issues/1538), [#1539](https://github.com/sortie-ai/sortie/issues/1539), [#1540](https://github.com/sortie-ai/sortie/issues/1540))
 
 ### Changed
 
@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The dashboard Session page says once, in plain words, how a run ended and what happens next, and run failures read as plain sentences everywhere they appear.
 - A run stopped on an SSH worker host no longer hangs instead of ending. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 - On the ACP agent kind, a Copilot CLI usage-limit refusal no longer ends the turn as successful, and a Kiro CLI usage-limit refusal is no longer reported as a rejected credential. ([#1524](https://github.com/sortie-ai/sortie/issues/1524))
+- An OpenCode turn that hands work to a subagent includes the subagent's tokens and cost in the run's usage. ([#1540](https://github.com/sortie-ai/sortie/issues/1540))
 
 ## [1.30.0] - 2026-10-23
 
