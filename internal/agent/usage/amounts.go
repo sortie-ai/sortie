@@ -71,9 +71,13 @@ type amountHistory struct {
 
 // ObserveAmounts holds readings of the live source's declared amounts that
 // reach the adapter outside a token reading; the next Settle counts and
-// clears them, whichever turn they arrived in. It is not safe for concurrent
-// use, like every Ledger method.
-func (l *Ledger) ObserveAmounts(readings []AmountReading) {
+// clears those that arrived in a turn. A reading outside a turn counts
+// nothing, the rule ObserveCumulative applies to token readings. It is not
+// safe for concurrent use, like every Ledger method.
+func (l *Ledger) ObserveAmounts(readings []AmountReading, inTurn bool) {
+	if !inTurn {
+		return
+	}
 	l.held = append(l.held, readings...)
 }
 

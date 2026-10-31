@@ -797,11 +797,12 @@ func TestLedger_Amounts(t *testing.T) {
 	currency := usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Currency: true, Shape: usage.AmountSessionCumulative}}}
 
 	type amountStep struct {
-		observe []usage.AmountReading
-		end     usage.TurnEnd
-		live    *usage.SpendReading
-		read    usage.RecordsRead
-		want    []domain.ReportedAmount
+		observe     []usage.AmountReading
+		outsideTurn bool
+		end         usage.TurnEnd
+		live        *usage.SpendReading
+		read        usage.RecordsRead
+		want        []domain.ReportedAmount
 	}
 	tests := []struct {
 		name      string
@@ -887,6 +888,14 @@ func TestLedger_Amounts(t *testing.T) {
 			steps: []amountStep{{observe: []usage.AmountReading{amt("EUR", 1.5)}, end: replied, want: []domain.ReportedAmount{reported("EUR", "", 0, true)}}},
 		},
 		{
+			name: "observed: a reading outside a turn counts nothing, the same reading in a turn counts",
+			live: currency, created: true,
+			steps: []amountStep{
+				{observe: []usage.AmountReading{amt("EUR", 1.5)}, outsideTurn: true, end: replied},
+				{observe: []usage.AmountReading{amt("EUR", 1.5)}, end: replied, want: []domain.ReportedAmount{reported("EUR", "", 1.5, false)}},
+			},
+		},
+		{
 			name: "observed: a currency that is not three letters reads as absent",
 			live: currency, created: true,
 			steps: []amountStep{{observe: []usage.AmountReading{amt("EU1", 1.5)}, end: replied}},
@@ -914,7 +923,7 @@ func TestLedger_Amounts(t *testing.T) {
 			}
 
 			for i, st := range tt.steps {
-				l.ObserveAmounts(st.observe)
+				l.ObserveAmounts(st.observe, !st.outsideTurn)
 
 				got := l.Settle(st.end, st.live, st.read)
 
@@ -962,6 +971,7 @@ func TestNewLedger_RefusesUnsupportedDeclarations(t *testing.T) {
 		records usage.Source
 	}{
 		{"replay on a live source of another shape", usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, Replay: usage.ReplayLastFigure}, usage.Source{}},
+		{"every-turn replay on a token-shaped live source", usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, Replay: usage.ReplayEveryTurn}, usage.Source{}},
 		{"replay on the records source", cumulative, usage.Source{Strategy: usage.StrategyRecords, Spend: replaying}},
 	}
 

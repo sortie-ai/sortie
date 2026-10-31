@@ -50,17 +50,22 @@ const (
 func init() {
 	// The other engine reports no handshake name, so the launch selects the
 	// declaration for it.
-	declaration := Declaration{
-		Live:        usage.Source{Category: usage.SourceProtocol},
-		Pull:        kiroPullSource,
-		PullWindows: kiroPullWindows,
-		Launches:    kiroLaunches,
+	Declarations.Register(kiroV2AgentName, Declaration{
+		Live: usage.Source{
+			Category: usage.SourceProtocol,
+			Spend: usage.SpendDeclaration{
+				Amounts: []usage.AmountDeclaration{{Unit: kiroCreditUnit, Shape: usage.AmountPerTurn}},
+				Replay:  usage.ReplayEveryTurn,
+			},
+		},
+		Pull:                 kiroPullSource,
+		PullWindows:          kiroPullWindows,
+		Launches:             kiroLaunches,
+		SessionUpdateAmounts: kiroSessionUpdateAmounts,
 
 		PromptError:      kiroPromptError,
 		TurnNotification: kiroTurnNotification,
-	}
-	Declarations.Register(kiroAgentName, declaration)
-	Declarations.Register(kiroV2AgentName, declaration)
+	})
 }
 
 // kiroLaunches reports whether target starts the runtime.
@@ -92,8 +97,9 @@ func kiroPromptError(e jsonrpc.Error) PromptVerdict {
 	return PromptVerdict{}
 }
 
-// kiroTurnNotification reads the default engine's notifications. The engine
-// retries a throttled or capacity-short request and announces each retry, so a
+// kiroTurnNotification reads the default engine's notifications: its credit
+// frame, and the retry and rate-limit notifications. The engine retries a
+// throttled or capacity-short request and announces each retry, so a
 // rate-limit notification with no retry announced before it is a usage limit.
 func kiroTurnNotification(sessionID, method string, params json.RawMessage) TurnSignal {
 	members, ok := jsonObject(params)
@@ -104,6 +110,8 @@ func kiroTurnNotification(sessionID, method string, params json.RawMessage) Turn
 		return TurnSignal{}
 	}
 	switch method {
+	case kiroMetadataMethod:
+		return TurnSignal{Amounts: creditReadings(members["meteringUsage"], kiroMeteringAmountMember)}
 	case kiroSessionUpdateMethod:
 		if kind, _ := jsonString(jsonMember(members["update"], "sessionUpdate")); kind == kiroRetryWarningUpdate {
 			return TurnSignal{Retrying: true}
@@ -119,7 +127,7 @@ var kiroPullSource = usage.Source{
 	Strategy: usage.StrategyPull,
 	Windows: usage.WindowDeclaration{
 		Spans: map[string]usage.Span{kiroCreditResource: {Period: "Monthly"}},
-		Units: map[string]string{kiroCreditResource: "credits"},
+		Units: map[string]string{kiroCreditResource: kiroCreditUnit},
 	},
 }
 

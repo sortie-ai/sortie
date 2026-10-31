@@ -666,26 +666,38 @@ func (p *pumpState) handleMessage(msg *jsonrpc.Message) {
 	}
 }
 
-// handleTurnNotification lets the declaration read a notification of the active
-// turn, and records what it shows of a refusal. A notification the declaration
-// does not read, or one outside a turn, is only logged.
+// handleTurnNotification lets the declaration read a notification, in a turn or
+// outside one, hands on the amounts it reports, and records what it shows of a
+// retry or refusal in the active turn. A notification that shows none of these
+// is only logged.
 func (p *pumpState) handleTurnNotification(msg *jsonrpc.Message) {
-	turn := p.activeTurn
-	if turn != nil && p.sessionIDKnown && p.declaration.TurnNotification != nil {
-		signal := p.declaration.TurnNotification(p.sessionID, msg.Method, msg.Params)
-		if signal.Retrying {
-			turn.retrying = true
-		}
-		if signal.Refusal != nil && turn.refusal == nil && !turn.retrying {
-			refusal := *signal.Refusal
-			turn.refusal = &refusal
-		}
-		p.observeAmounts(signal.Amounts)
-		if signal.Retrying || signal.Refusal != nil || len(signal.Amounts) > 0 {
-			return
-		}
+	if !p.sessionIDKnown || p.declaration.TurnNotification == nil {
+		p.state.logger.Debug("unhandled notification", slog.String("method", msg.Method))
+		return
 	}
-	p.state.logger.Debug("unhandled notification", slog.String("method", msg.Method))
+	signal := p.declaration.TurnNotification(p.sessionID, msg.Method, msg.Params)
+	applied := p.applyTurnSignal(signal)
+	p.observeAmounts(signal.Amounts)
+	if !applied && len(signal.Amounts) == 0 {
+		p.state.logger.Debug("unhandled notification", slog.String("method", msg.Method))
+	}
+}
+
+// applyTurnSignal records a retry or refusal in the active turn and reports
+// whether the turn took one; outside a turn it takes none.
+func (p *pumpState) applyTurnSignal(signal usagesource.TurnSignal) bool {
+	turn := p.activeTurn
+	if turn == nil || (!signal.Retrying && signal.Refusal == nil) {
+		return false
+	}
+	if signal.Retrying {
+		turn.retrying = true
+	}
+	if signal.Refusal != nil && turn.refusal == nil && !turn.retrying {
+		refusal := *signal.Refusal
+		turn.refusal = &refusal
+	}
+	return true
 }
 
 // handleStreamEndMessage handles a KindStreamEnd message that reached the pump
@@ -1110,22 +1122,21 @@ func (p *pumpState) observeChildSession(update json.RawMessage) {
 }
 
 // observeSessionUpdateAmounts hands the amounts the declaration reads off a
-// session update of the active turn to the ledger, whatever the update's
-// variant.
+// session update to the ledger, whatever the update's variant.
 func (p *pumpState) observeSessionUpdateAmounts(update json.RawMessage) {
-	if p.activeTurn == nil || p.declaration.SessionUpdateAmounts == nil {
+	if p.declaration.SessionUpdateAmounts == nil {
 		return
 	}
 	p.observeAmounts(p.declaration.SessionUpdateAmounts(update))
 }
 
-// observeAmounts holds readings with the ledger, which counts them in the
-// session's next settlement.
+// observeAmounts hands readings to the ledger, which counts those read in a
+// turn at the session's next settlement and none read outside one.
 func (p *pumpState) observeAmounts(readings []usage.AmountReading) {
 	if p.ledger == nil || len(readings) == 0 {
 		return
 	}
-	p.ledger.ObserveAmounts(readings)
+	p.ledger.ObserveAmounts(readings, p.activeTurn != nil)
 }
 
 func (p *pumpState) observeUsageUpdate() {

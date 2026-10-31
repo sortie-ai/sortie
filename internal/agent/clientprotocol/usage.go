@@ -18,8 +18,7 @@ import (
 // declarationChoice is the declaration a session is measured under and what
 // selected it.
 type declarationChoice struct {
-	// declaration is the effective declaration: spend mapped, by Default when
-	// the selected one maps none.
+	// declaration is the selected declaration as registered.
 	declaration usagesource.Declaration
 
 	// key is the registry key of the selected declaration, or
@@ -77,7 +76,7 @@ func chooseDeclaration(declarations *registry.Registry[usagesource.Declaration, 
 
 	confirmed := named == "" || (declarations.Has(named) && launches(named))
 	return declarationChoice{
-		declaration: declaration.Effective(),
+		declaration: declaration,
 		key:         key,
 		configured:  configured,
 		mismatch:    configured != "" && !confirmed,

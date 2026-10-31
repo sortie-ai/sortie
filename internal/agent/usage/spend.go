@@ -44,6 +44,9 @@ const (
 	// ReplayLastFigure repeats the session's last running figure once,
 	// outside any turn, before the run's first turn.
 	ReplayLastFigure
+	// ReplayEveryTurn repeats the report of every earlier turn of the
+	// session, each once, outside any turn, before the run's first turn.
+	ReplayEveryTurn
 )
 
 // MaxRecordsBytes is the largest records document a reader accepts.
@@ -257,15 +260,16 @@ type Ledger struct {
 // Either source may place cache inside or outside input and reasoning inside
 // or outside output, and may declare amounts. With no records source, a live
 // source that declares amounts and no token shape is also accepted; its ledger
-// settles no token figure and counts only amounts. Any other declaration, and
-// a Replay other than ReplayNone on a live source of another shape or on the
-// records source, return an error wrapping ErrSpendUnsupported.
+// settles no token figure and counts only amounts. Any other declaration, a
+// Replay other than ReplayNone on a live source of another shape or on the
+// records source, and ReplayEveryTurn anywhere but on such an amounts-only
+// live source, return an error wrapping ErrSpendUnsupported.
 func NewLedger(live, records Source) (*Ledger, error) {
 	noRecords := reflect.ValueOf(records).IsZero()
 	if !declaresLive(live) && (!noRecords || !declaresAmountsOnly(live)) {
 		return nil, fmt.Errorf("live source: %w", ErrSpendUnsupported)
 	}
-	if live.Spend.Replay != ReplayNone && live.Spend.Shape != SpendSessionCumulative {
+	if !replayAccepted(live, noRecords) {
 		return nil, fmt.Errorf("live source replay: %w", ErrSpendUnsupported)
 	}
 	if err := checkAmounts(live.Spend.Amounts, false); err != nil {
@@ -293,6 +297,17 @@ func declaresLive(src Source) bool {
 	return src.Strategy == StrategyLive &&
 		(src.Spend.Shape == SpendProcessCumulative || src.Spend.Shape == SpendPerTurn ||
 			src.Spend.Shape == SpendSessionCumulative || src.Spend.Shape == SpendPerRequest)
+}
+
+func replayAccepted(live Source, noRecords bool) bool {
+	switch live.Spend.Replay {
+	case ReplayNone:
+		return true
+	case ReplayEveryTurn:
+		return noRecords && declaresAmountsOnly(live)
+	default:
+		return live.Spend.Shape == SpendSessionCumulative
+	}
 }
 
 func declaresAmountsOnly(src Source) bool {

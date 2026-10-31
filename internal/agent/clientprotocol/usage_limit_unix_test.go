@@ -18,7 +18,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-const scenarioReplayCapture = "clientprotocol.replay-capture"
+const (
+	scenarioReplayCapture = "clientprotocol.replay-capture"
+	usageLimitDir         = "testdata/usage_limit"
+)
 
 func init() { fakeRuntimeScenarios[scenarioReplayCapture] = agenttest.Typed(runReplayCapture) }
 
@@ -124,18 +127,18 @@ func loadReplayCases(t *testing.T) (positive, negative []replayCase) {
 	t.Helper()
 
 	var manifest struct{ Positive, Negative []replayCase }
-	if err := json.Unmarshal(waittest.File(t, "testdata/usage_limit/replay_cases.json"), &manifest); err != nil {
+	if err := json.Unmarshal(waittest.File(t, usageLimitDir+"/replay_cases.json"), &manifest); err != nil {
 		t.Fatalf("replay cases: %v", err)
 	}
 	return manifest.Positive, manifest.Negative
 }
 
-func replayStart(t *testing.T, c replayCase) domain.StartSessionParams {
+func replayStart(t *testing.T, dir string, c replayCase) domain.StartSessionParams {
 	t.Helper()
 
 	words := strings.Fields(c.Command)
 	params := replayParams{Launch: words[1:]}
-	for line := range bytes.Lines(waittest.File(t, "testdata/usage_limit/"+c.Capture)) {
+	for line := range bytes.Lines(waittest.File(t, dir+"/"+c.Capture)) {
 		var record struct {
 			Dir string
 			Msg json.RawMessage
@@ -162,7 +165,7 @@ func replayStart(t *testing.T, c replayCase) domain.StartSessionParams {
 		}
 	}
 	if c.Export != "" {
-		params.Export = string(waittest.File(t, "testdata/usage_limit/"+c.Export))
+		params.Export = string(waittest.File(t, dir+"/"+c.Export))
 	}
 
 	bin := agenttest.FakeRuntime(t, t.TempDir(), words[0], scenarioReplayCapture, params)
@@ -186,7 +189,7 @@ func TestUsageLimitReplay(t *testing.T) {
 	positive, _ := loadReplayCases(t)
 	cases := make([]agenttest.UsageLimitRefusalCase, len(positive))
 	for i, c := range positive {
-		cases[i] = agenttest.UsageLimitRefusalCase{Name: c.Name, Adapter: adapter, Start: replayStart(t, c), Turn: domain.RunTurnParams{Prompt: "go"}, WantModelOnly: c.WantModelOnly}
+		cases[i] = agenttest.UsageLimitRefusalCase{Name: c.Name, Adapter: adapter, Start: replayStart(t, usageLimitDir, c), Turn: domain.RunTurnParams{Prompt: "go"}, WantModelOnly: c.WantModelOnly}
 		if c.WantResetsAtMs != 0 {
 			cases[i].WantResetsAt = time.UnixMilli(c.WantResetsAtMs).UTC()
 		}
@@ -207,7 +210,7 @@ func TestUsageLimitNotRecognized(t *testing.T) {
 				t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 			}
 			ctx := waittest.CleanupContext(t)
-			session, err := adapter.StartSession(ctx, replayStart(t, c))
+			session, err := adapter.StartSession(ctx, replayStart(t, usageLimitDir, c))
 			if err != nil {
 				t.Fatalf("StartSession(%s) error = %v", c.Capture, err)
 			}

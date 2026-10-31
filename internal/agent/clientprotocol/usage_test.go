@@ -260,9 +260,6 @@ func TestChooseDeclaration(t *testing.T) {
 				t.Errorf("chooseDeclaration(%+v, %+v) = {key %q, configured %q, mismatch %v}, want {%q, %q, %v}",
 					tt.info, tt.target, got.key, got.configured, got.mismatch, tt.wantKey, tt.wantConfigured, tt.wantMismatch)
 			}
-			if got.declaration.Live.Spend.Shape == usage.SpendUndeclared || got.declaration.PromptSpend == nil {
-				t.Errorf("chooseDeclaration(%+v, %+v) declaration maps no spend, want the default mapping where the selected one maps none", tt.info, tt.target)
-			}
 		})
 	}
 }
