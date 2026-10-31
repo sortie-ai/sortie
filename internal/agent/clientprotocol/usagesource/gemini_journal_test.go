@@ -30,7 +30,7 @@ func journalRuntime(sessionID string, files ...string) geminiRuntime {
 
 func flashLiteSettled(in, out, cacheRead int64, complete bool, source domain.UsageProvenance) usage.Settlement {
 	run := domain.TokenUsage{InputTokens: in, OutputTokens: out, TotalTokens: in + out, CacheReadTokens: cacheRead}
-	return usage.Settlement{Run: run, ByModel: map[string]domain.TokenUsage{"gemini-3.5-flash-lite": run}, Figure: true, Complete: complete, Provenance: source}
+	return usage.Settlement{Run: run, ByModel: map[string]domain.TokenUsage{"gemini-3.5-flash-lite": run}, Figure: true, Complete: complete, Provenance: []domain.UsageProvenance{source}}
 }
 
 func TestGeminiDeclarationSettlesTheCapturedTurns(t *testing.T) {

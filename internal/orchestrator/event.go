@@ -159,6 +159,12 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		}
 	}
 
+	// Amounts are not token figures, so the usage arrival does not gate
+	// them. The in-flight ceilings read the entry after this call returns.
+	if event.ReportedAmounts != nil {
+		entry.ReportedAmounts = usage.MergeAmounts(entry.ReportedAmounts, event.ReportedAmounts)
+	}
+
 	// Apply the token delta algorithm for any event that reports usage,
 	// not only token_usage events, so an adapter can attach the
 	// authoritative run-cumulative snapshot to a turn-finalization

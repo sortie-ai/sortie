@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
 func skipUnlessIntegration(t *testing.T) {
@@ -130,6 +131,27 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	}
 }
 
+func scriptedLaunch(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+	t.Helper()
+	return fakemodel.Launch{
+		Config: domain.AgentConfig{
+			Command:       integrationCommand(t),
+			TurnTimeoutMS: 300000,
+			ReadTimeoutMS: 30000,
+		},
+		Env: map[string]string{
+			"ANTHROPIC_BASE_URL":                       env.URL,
+			"CLAUDE_CONFIG_DIR":                        filepath.Join(env.Home, ".claude"),
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+			// The runtime warms its connection with a HEAD request to
+			// the base address unless a proxy variable is set, and the
+			// endpoint answers only model requests. An https proxy
+			// leaves the plain-http loopback requests direct.
+			"HTTPS_PROXY": "http://127.0.0.1:9",
+		},
+	}
+}
+
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessIntegration(t)
 
@@ -150,25 +172,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			HostCommand:   integrationCommand(t),
 			RemoteCommand: func(fakemodel.Environment) string { return "claude" },
 		},
-		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
-			return fakemodel.Launch{
-				Config: domain.AgentConfig{
-					Command:       integrationCommand(t),
-					TurnTimeoutMS: 300000,
-					ReadTimeoutMS: 30000,
-				},
-				Env: map[string]string{
-					"ANTHROPIC_BASE_URL":                       env.URL,
-					"CLAUDE_CONFIG_DIR":                        filepath.Join(env.Home, ".claude"),
-					"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-					// The runtime warms its connection with a HEAD request to
-					// the base address unless a proxy variable is set, and the
-					// endpoint answers only model requests. An https proxy
-					// leaves the plain-http loopback requests direct.
-					"HTTPS_PROXY": "http://127.0.0.1:9",
-				},
-			}
-		},
+		Launch: scriptedLaunch,
 		Inspect: func(t *testing.T, run fakemodel.Run) {
 			if run.Environment.Scenario != fakemodel.ScenarioTurn {
 				return
@@ -271,6 +275,63 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			t.Errorf("refused window = {Key %q, Status %q}, want {%q, %q}", w.Key, w.Status, "five_hour", domain.UsageWindowExhausted)
 		}
 	})
+}
+
+func usdAmountOf(amounts []domain.ReportedAmount, model string) float64 {
+	for _, a := range amounts {
+		if a.Unit == domain.UnitUSD && a.Model == model {
+			return a.Amount
+		}
+	}
+	return 0
+}
+
+func TestIntegration_CostUSDIsPerTurn(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	const model = "claude-sonnet-4-5"
+	answer := fakemodel.Response{Text: "ok", Usage: fakemodel.Usage{Prompt: 1200, Candidates: 40}}
+	server := fakemodel.Start(t, []fakemodel.Response{answer, answer})
+	home := t.TempDir()
+	for _, name := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		t.Setenv(name, home)
+	}
+	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
+	t.Setenv("ANTHROPIC_API_KEY", "sortie-scripted-credential")
+	launch := scriptedLaunch(t, fakemodel.Environment{URL: server.URL(), Home: home})
+	for name, value := range launch.Env {
+		t.Setenv(name, value)
+	}
+	adapter, err := NewClaudeCodeAdapter()
+	if err != nil {
+		t.Fatalf("NewClaudeCodeAdapter: %v", err)
+	}
+	ctx := waittest.Context(t)
+	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		Settings:      map[string]any{"model": model},
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   launch.Config,
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(waittest.CleanupContext(t), session) })
+
+	var amounts [2]float64
+	for i := range amounts {
+		result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{Prompt: "Reply with the word ok.", OnEvent: func(domain.AgentEvent) {}})
+		if err != nil {
+			t.Fatalf("RunTurn %d: %v", i+1, err)
+		}
+		amounts[i] = usdAmountOf(result.ReportedAmounts, model)
+	}
+
+	if amounts[0] <= 0 {
+		t.Fatalf("USD amount of %q after turn 1 = %v, want above 0", model, amounts[0])
+	}
+	if amounts[1] != 2*amounts[0] {
+		t.Errorf("USD amount of %q after turn 2 = %v, want %v, twice turn 1", model, amounts[1], 2*amounts[0])
+	}
 }
 
 func TestIntegration_CredentialVerification(t *testing.T) {

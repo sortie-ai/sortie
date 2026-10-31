@@ -86,6 +86,10 @@ func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
 	noPromptSpend := Default
 	noPromptSpend.PromptSpend = nil
 	nameOnly, mergeOnly := Default, Default
+	unreadAmount := Default
+	unreadAmount.SessionUpdateAmounts = nil
+	readerWithoutAmount := Default
+	readerWithoutAmount.Live.Spend.Amounts = nil
 	nameOnly.LaunchAddition = LaunchAddition{Name: "ADDITION_VARIABLE"}
 	mergeOnly.LaunchAddition = LaunchAddition{Merge: func(current string, _ bool) (string, bool) { return current, true }}
 	tests := []struct {
@@ -98,6 +102,8 @@ func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
 		{"the reserved default key", DefaultName, Default},
 		{"a launch addition with a name and no merge", "refused-addition-name-only", nameOnly},
 		{"a launch addition with a merge and no name", "refused-addition-merge-only", mergeOnly},
+		{"a live amount with no reader", "refused-amount-no-reader", unreadAmount},
+		{"an amount reader with no live amount", "refused-reader-no-amount", readerWithoutAmount},
 	}
 
 	for _, tt := range tests {
@@ -128,16 +134,19 @@ func TestEffectiveSuppliesTheDefaultMappingOnlyWhenNoneIsDeclared(t *testing.T) 
 	own := Default
 	own.Live.Spend.LowerBound = false
 	own.Live.Spend.CacheInInput = false
-	vendorOnly := Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{VendorUnit: "credits"}}}
+	own.Live.Spend.Amounts = nil
+	own.SessionUpdateAmounts = nil
+	amountsOnly := Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}}}}
 	tests := []struct {
-		name          string
-		declaration   Declaration
-		wantSpend     usage.SpendDeclaration
-		wantPromptHas bool
+		name              string
+		declaration       Declaration
+		wantSpend         usage.SpendDeclaration
+		wantPromptHas     bool
+		wantAmountsReader bool
 	}{
-		{"windows only", Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive}}, Default.Live.Spend, true},
-		{"its own token mapping", own, own.Live.Spend, true},
-		{"a vendor unit alone", vendorOnly, vendorOnly.Live.Spend, false},
+		{"windows only", Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive}}, Default.Live.Spend, true, true},
+		{"its own token mapping", own, own.Live.Spend, true, false},
+		{"an amount alone", amountsOnly, amountsOnly.Live.Spend, false, false},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +160,9 @@ func TestEffectiveSuppliesTheDefaultMappingOnlyWhenNoneIsDeclared(t *testing.T) 
 			}
 			if (got.PromptSpend != nil) != tt.wantPromptHas {
 				t.Errorf("Effective().PromptSpend set = %v, want %v", got.PromptSpend != nil, tt.wantPromptHas)
+			}
+			if (got.SessionUpdateAmounts != nil) != tt.wantAmountsReader {
+				t.Errorf("Effective().SessionUpdateAmounts set = %v, want %v", got.SessionUpdateAmounts != nil, tt.wantAmountsReader)
 			}
 		})
 	}

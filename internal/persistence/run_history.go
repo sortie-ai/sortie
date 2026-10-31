@@ -60,6 +60,29 @@ type RunModelPart struct {
 	UnratedRecorded bool
 }
 
+// Values of [RunHistory.UsageCompleteness].
+const (
+	// UsageComplete means the run's token figure covers every turn.
+	UsageComplete = "complete"
+
+	// UsageLowerBound means a turn spent tokens no figure covers, so the
+	// run's token total is a lower bound.
+	UsageLowerBound = "lower_bound"
+
+	// UsageUnmeasured means the agent reported no usage, so spend is unknown
+	// rather than zero.
+	UsageUnmeasured = "unmeasured"
+)
+
+// ReportedAmount is one amount the agent reported for a run, in the unit it
+// reported it in.
+type ReportedAmount struct {
+	Unit       string
+	Model      string // Empty when the source attributes the amount to no model.
+	Amount     float64
+	LowerBound bool // True when the run may have spent more in Unit than Amount.
+}
+
 // RunHistory is a single completed run attempt in the run_history table.
 // ID is assigned by the database on insert; leave it zero when calling
 // [Store.AppendRunHistory].
@@ -187,11 +210,27 @@ type RunHistory struct {
 	// ModelCosts prices the parts of ModelUsage, keyed like it. Only
 	// [Store.AppendRunHistoryWithEvents] writes it.
 	ModelCosts map[string]ModelCost
+
+	// UsageProvenance is the sorted, comma-joined source and strategy pairs
+	// that settled the run's token figure; empty when none settled one. It
+	// is written only when UsageCompleteness is set, and the run-history
+	// reads do not select it.
+	UsageProvenance string
+
+	// UsageCompleteness is [UsageComplete], [UsageLowerBound], or
+	// [UsageUnmeasured]; empty writes NULL here and in UsageProvenance, which
+	// reads as not recorded.
+	UsageCompleteness string
+
+	// ReportedAmounts is every amount the agent reported for the run. Only
+	// [Store.AppendRunHistoryWithEvents] writes it; the run-history reads do
+	// not select it.
+	ReportedAmounts []ReportedAmount
 }
 
 // AppendRunHistory inserts a completed run attempt. The input ID is
 // ignored; the returned record has the database-assigned ID. It does not
-// write [RunHistory.ModelUsage].
+// write [RunHistory.ModelUsage] or [RunHistory.ReportedAmounts].
 func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistory, error) {
 	return insertRunHistory(ctx, s.db, run)
 }
@@ -319,6 +358,12 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 		skillsVal = sql.NullString{String: *run.Skills, Valid: true}
 	}
 
+	usageProvenanceVal, usageCompletenessVal := sql.NullString{}, sql.NullString{}
+	if run.UsageCompleteness != "" {
+		usageProvenanceVal = sql.NullString{String: run.UsageProvenance, Valid: true}
+		usageCompletenessVal = sql.NullString{String: run.UsageCompleteness, Valid: true}
+	}
+
 	triggerVal := sql.NullString{}
 	if run.Trigger != nil {
 		triggerVal = sql.NullString{String: *run.Trigger, Valid: true}
@@ -331,8 +376,8 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 
 	res, err := ex.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills, usage_provenance, usage_completeness)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
@@ -344,6 +389,7 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 		dispatchIDVal, run.AgentBlocked,
 		nullFloat(run.EstimatedCostUSD), nullIfEmpty(run.CostStatus),
 		run.DeclaredOutcome, run.AgentText, skillsVal,
+		usageProvenanceVal, usageCompletenessVal,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)

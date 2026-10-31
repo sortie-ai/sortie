@@ -382,3 +382,79 @@ func TestChildSessionSpendSettlesTheTurn(t *testing.T) {
 		})
 	}
 }
+
+func creditsReading(raw json.RawMessage) []usage.AmountReading {
+	var member struct{ Credits *float64 }
+	if json.Unmarshal(raw, &member) != nil || member.Credits == nil {
+		return nil
+	}
+	return []usage.AmountReading{{Unit: "credits", Amount: member.Credits}}
+}
+
+func creditsOnlyDeclaration() usagesource.Declaration {
+	return usagesource.Declaration{
+		Live: usage.Source{
+			Category: usage.SourceProtocol,
+			Strategy: usage.StrategyLive,
+			Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}},
+		},
+		SessionUpdateAmounts: creditsReading,
+		TurnNotification: func(_, method string, params json.RawMessage) usagesource.TurnSignal {
+			if method != "vendor/credits" {
+				return usagesource.TurnSignal{}
+			}
+			return usagesource.TurnSignal{Amounts: creditsReading(params)}
+		},
+	}
+}
+
+func runLinesTurn(t *testing.T, state *sessionState, out *outboundReader, inPw io.Writer, lines ...string) ([]domain.AgentEvent, domain.TurnResult) {
+	t.Helper()
+
+	var events []domain.AgentEvent
+	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+	for _, line := range lines {
+		sendLine(t, inPw, line)
+	}
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+
+	outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+	if outcome.err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
+	}
+	return events, outcome.result
+}
+
+func TestAmountsOnlyDeclarationReportsAmountsAndNoTokenFigure(t *testing.T) {
+	t.Parallel()
+
+	declaration := creditsOnlyDeclaration()
+	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+	if err != nil {
+		t.Fatalf("usage.NewLedger() error = %v, want nil", err)
+	}
+	ledger.SessionCreated()
+	state, out, inPw := newDeclaredSession(t, declaration, ledger)
+
+	events, first := runLinesTurn(t, state, out, inPw,
+		`{"jsonrpc":"2.0","method":"vendor/credits","params":{"credits":2}}`,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"},"credits":3}}}`,
+	)
+	_, second := runLinesTurn(t, state, out, inPw, pulledUsageChunkLine)
+
+	if want := []domain.ReportedAmount{{Unit: "credits", Amount: 5}}; !slices.Equal(first.ReportedAmounts, want) {
+		t.Errorf("first turn ReportedAmounts = %+v, want %+v", first.ReportedAmounts, want)
+	}
+	if first.UsageMeasured || first.Usage != (domain.TokenUsage{}) || len(first.UsageProvenance) != 0 {
+		t.Errorf("first turn UsageMeasured, Usage, UsageProvenance = %t, %+v, %+v, want no token figure", first.UsageMeasured, first.Usage, first.UsageProvenance)
+	}
+	if !slices.ContainsFunc(events, func(e domain.AgentEvent) bool {
+		return e.Type == domain.EventNotification && strings.Contains(e.Message, capabilityLabelTokenCounts)
+	}) {
+		t.Errorf("first turn events carry no gap notice naming %q, want one", capabilityLabelTokenCounts)
+	}
+	if want := []domain.ReportedAmount{{Unit: "credits", Amount: 5, LowerBound: true}}; !slices.Equal(second.ReportedAmounts, want) {
+		t.Errorf("second turn ReportedAmounts = %+v, want %+v", second.ReportedAmounts, want)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -301,8 +302,8 @@ func TestJournalSettlesThroughLedger(t *testing.T) {
 			if got.Run != tt.want {
 				t.Errorf("Settle().Run = %+v, want %+v", got.Run, tt.want)
 			}
-			wantProvenance := domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
-			if got.Provenance != wantProvenance {
+			wantProvenance := []domain.UsageProvenance{{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}}
+			if !slices.Equal(got.Provenance, wantProvenance) {
 				t.Errorf("Settle().Provenance = %+v, want %+v", got.Provenance, wantProvenance)
 			}
 			if tt.incomplete && got.Complete {

@@ -33,8 +33,25 @@ const (
 )
 
 const (
+	// UnitPremiumRequests is the unit of the premium requests a request or a
+	// session spent.
+	UnitPremiumRequests = "premium requests"
+
+	// UnitAICredits is the unit of the AI credits a request or a session
+	// spent. The runtime counts them in billionths; readers record whole
+	// credits.
+	UnitAICredits = "AI credits"
+)
+
+const (
 	usageRecordType     = "session.usage_record"
 	usageCheckpointType = "session.usage_checkpoint"
+
+	nanoPerCredit = 1e9
+
+	initiatorUser     = "user"
+	initiatorAgent    = "agent"
+	initiatorSubAgent = "sub-agent"
 )
 
 // Records declares the journal's per-request usage lines as a records source.
@@ -49,6 +66,10 @@ var Records = usage.Source{
 		CacheInInput:      true,
 		ReasoningInOutput: true,
 		ServedModel:       true,
+		Amounts: []usage.AmountDeclaration{
+			{Unit: UnitPremiumRequests, Shape: usage.AmountPerRequest},
+			{Unit: UnitAICredits, Shape: usage.AmountPerRequest},
+		},
 	},
 	WrittenAtTurnEnd: true,
 }
@@ -73,9 +94,14 @@ type journalLine struct {
 			OutputTokens     json.RawMessage `json:"outputTokens"`
 			CacheReadTokens  json.RawMessage `json:"cacheReadTokens"`
 			CacheWriteTokens json.RawMessage `json:"cacheWriteTokens"`
+			Initiator        string          `json:"initiator"`
+			Cost             json.RawMessage `json:"cost"`
 			Accounting       struct {
 				UsageID string `json:"usageId"`
 			} `json:"accounting"`
+			CopilotUsage struct {
+				TotalNanoAiu json.RawMessage `json:"totalNanoAiu"`
+			} `json:"copilotUsage"`
 		} `json:"usage"`
 	} `json:"data"`
 }
@@ -85,6 +111,12 @@ type journalLine struct {
 // type but the per-request usage record; checkpoint and shutdown lines carry
 // session totals and never yield a per-request reading. A count that is absent or not a
 // JSON integer is nil. Model is the record's own, verbatim.
+//
+// The reading carries the request's premium requests and AI credits. The cost
+// member is the multiplier the runtime applies to every call, so it counts
+// only for a request the user initiated; an agent or sub-agent request
+// charges none, and an absent or other initiator leaves the premium requests
+// unknown.
 func UsageRecord(line []byte) (usage.SpendReading, bool) {
 	var decoded journalLine
 	if err := json.Unmarshal(line, &decoded); err != nil || decoded.Type != usageRecordType {
@@ -98,7 +130,42 @@ func UsageRecord(line []byte) (usage.SpendReading, bool) {
 		CacheWrite: count(u.CacheWriteTokens),
 		Model:      u.Model,
 		Identity:   u.Accounting.UsageID,
+		Amounts: []usage.AmountReading{
+			{Unit: UnitPremiumRequests, Amount: requestPremiumRequests(u.Initiator, u.Cost)},
+			{Unit: UnitAICredits, Amount: credits(u.CopilotUsage.TotalNanoAiu)},
+		},
 	}, true
+}
+
+func requestPremiumRequests(initiator string, cost json.RawMessage) *float64 {
+	switch initiator {
+	case initiatorUser:
+		return number(cost)
+	case initiatorAgent, initiatorSubAgent:
+		none := 0.0
+		return &none
+	default:
+		return nil
+	}
+}
+
+// number returns the non-negative JSON number a member holds, nil for an
+// absent, null, non-numeric, out-of-range, or negative member.
+func number(raw json.RawMessage) *float64 {
+	var n float64
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &n) != nil || n < 0 {
+		return nil
+	}
+	return &n
+}
+
+func credits(nano json.RawMessage) *float64 {
+	n := number(nano)
+	if n == nil {
+		return nil
+	}
+	whole := *n / nanoPerCredit
+	return &whole
 }
 
 func count(raw json.RawMessage) *int64 {
@@ -109,15 +176,16 @@ func count(raw json.RawMessage) *int64 {
 	return &n
 }
 
-// checkpointLine omits the cost, request and nano-AIU members on purpose: the
-// runtime writes them as floats, and a typed integer field would reject the
-// whole line.
 type checkpointLine struct {
 	Type string `json:"type"`
 	Data struct {
 		AccountingSnapshot struct {
 			ModelMetrics map[string]struct {
-				Usage struct {
+				Requests struct {
+					Cost json.RawMessage `json:"cost"`
+				} `json:"requests"`
+				TotalNanoAiu json.RawMessage `json:"totalNanoAiu"`
+				Usage        struct {
 					InputTokens      json.RawMessage `json:"inputTokens"`
 					OutputTokens     json.RawMessage `json:"outputTokens"`
 					CacheReadTokens  json.RawMessage `json:"cacheReadTokens"`
@@ -142,13 +210,18 @@ func UsageCheckpoint(line []byte) (usage.SpendReading, bool) {
 	metrics := decoded.Data.AccountingSnapshot.ModelMetrics
 	entries := make([]usage.SpendReading, 0, len(metrics))
 	for _, model := range slices.Sorted(maps.Keys(metrics)) {
-		u := metrics[model].Usage
+		metric := metrics[model]
+		u := metric.Usage
 		entries = append(entries, usage.SpendReading{
 			Input:      count(u.InputTokens),
 			Output:     count(u.OutputTokens),
 			CacheRead:  count(u.CacheReadTokens),
 			CacheWrite: count(u.CacheWriteTokens),
 			Model:      model,
+			Amounts: []usage.AmountReading{
+				{Unit: UnitPremiumRequests, Amount: number(metric.Requests.Cost)},
+				{Unit: UnitAICredits, Amount: credits(metric.TotalNanoAiu)},
+			},
 		})
 	}
 	return usage.SpendReading{ByModel: entries}, true

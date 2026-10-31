@@ -57,7 +57,7 @@ func TestParseEvent(t *testing.T) {
 	}{
 		{
 			name:     "result event with sessionId and exit code 0",
-			line:     `{"type":"result","timestamp":"2026-01-01T00:00:00Z","sessionId":"aaa-bbb-ccc","exitCode":0,"usage":{"premiumRequests":5,"totalApiDurationMs":1000,"sessionDurationMs":2000}}`,
+			line:     `{"type":"result","timestamp":"2026-01-01T00:00:00Z","sessionId":"aaa-bbb-ccc","exitCode":0,"usage":{"totalApiDurationMs":1000,"sessionDurationMs":2000}}`,
 			wantType: "result",
 			check: func(t *testing.T, ev rawEvent) {
 				t.Helper()
@@ -72,9 +72,6 @@ func TestParseEvent(t *testing.T) {
 				}
 				if ev.Usage == nil {
 					t.Fatal("Usage is nil")
-				}
-				if ev.Usage.PremiumRequests != 5 {
-					t.Errorf("Usage.PremiumRequests = %d, want 5", ev.Usage.PremiumRequests)
 				}
 				if ev.Usage.TotalAPIDurMS != 1000 {
 					t.Errorf("Usage.TotalAPIDurMS = %d, want 1000", ev.Usage.TotalAPIDurMS)
@@ -407,9 +404,6 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 	}
 	if result.Usage == nil {
 		t.Fatal("result.Usage is nil")
-	}
-	if result.Usage.PremiumRequests != 6 {
-		t.Errorf("result.Usage.PremiumRequests = %d, want 6", result.Usage.PremiumRequests)
 	}
 	if result.Usage.TotalAPIDurMS != 6866 {
 		t.Errorf("result.Usage.TotalAPIDurMS = %d, want 6866", result.Usage.TotalAPIDurMS)

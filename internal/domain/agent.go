@@ -102,6 +102,11 @@ type AgentEvent struct {
 	// not that the session has consumed no tokens.
 	Usage TokenUsage
 
+	// ReportedAmounts carries the run-cumulative amounts the runtime reported
+	// as of this event, sorted by Unit then Model; nil when the event carries
+	// none.
+	ReportedAmounts []ReportedAmount
+
 	// UsageByModel is the per-model split of Usage, in the same scope and
 	// covering at most its totals. Nil when the event names the model only
 	// through Model.
@@ -169,6 +174,30 @@ type UsageStrategy int
 type UsageProvenance struct {
 	Source   UsageSource
 	Strategy UsageStrategy
+}
+
+// UnitUSD is the unit of an amount in US dollars, the only unit that prices a
+// share.
+const UnitUSD = "USD"
+
+// ReportedAmount is an amount a runtime reported for a run's spend,
+// cumulative over the run, in the unit it was reported in and never
+// converted.
+type ReportedAmount struct {
+	// Unit is UnitUSD, another ISO 4217 code, or a vendor unit's plural
+	// display name.
+	Unit string
+
+	// Model is the model the source attributes the amount to; empty when it
+	// names none.
+	Model string
+
+	// Amount is finite and not negative.
+	Amount float64
+
+	// LowerBound is true when the run may have spent more in Unit than
+	// Amount.
+	LowerBound bool
 }
 
 // UsageWindowStatus is how near a usage window is to its limit, as the
@@ -426,11 +455,17 @@ type TurnResult struct {
 	// the session spent, read or not.
 	CoversSession bool
 
-	// UsageProvenance names the source and strategy whose figure settled this
-	// turn; its Source is empty when the turn settled no figure or its adapter
-	// does not account through the usage component. Completeness stays in
-	// UsageMeasured and SpendUnaccounted.
-	UsageProvenance UsageProvenance
+	// UsageProvenance lists every source whose readings settled this turn's
+	// token figure, each once, the session's own settling source first; nil
+	// when the turn settled no figure or its adapter does not account through
+	// the usage component. Completeness stays in UsageMeasured and
+	// SpendUnaccounted.
+	UsageProvenance []UsageProvenance
+
+	// ReportedAmounts carries the run-cumulative amounts the runtime reported
+	// as of this turn's end, sorted by Unit then Model; nil when the turn
+	// applied no settlement.
+	ReportedAmounts []ReportedAmount
 }
 
 // AgentAdapter is the contract every coding-agent integration must

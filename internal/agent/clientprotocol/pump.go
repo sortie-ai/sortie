@@ -406,7 +406,7 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		p.puller = ctrl.handshake.puller
 		p.ledger = ctrl.handshake.ledger
 		p.applyHandshakeCapabilityLowering(ctrl.handshake)
-		if p.ledger != nil {
+		if p.ledger != nil && p.declaration.Live.Spend.Shape != usage.SpendUndeclared {
 			p.state.caps.tokenCounts = capabilityOurs
 		}
 
@@ -680,7 +680,8 @@ func (p *pumpState) handleTurnNotification(msg *jsonrpc.Message) {
 			refusal := *signal.Refusal
 			turn.refusal = &refusal
 		}
-		if signal.Retrying || signal.Refusal != nil {
+		p.observeAmounts(signal.Amounts)
+		if signal.Retrying || signal.Refusal != nil || len(signal.Amounts) > 0 {
 			return
 		}
 	}
@@ -745,7 +746,11 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 	}
 
 	if p.ledger != nil {
-		p.settleReply(turn, evidence, resp.StopReason == stopReasonCancelled, p.declaration.PromptSpend(msg.Result))
+		var live *usage.SpendReading
+		if p.declaration.PromptSpend != nil {
+			live = p.declaration.PromptSpend(msg.Result)
+		}
+		p.settleReply(turn, evidence, resp.StopReason == stopReasonCancelled, live)
 		return
 	}
 
@@ -1056,6 +1061,8 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 		return
 	}
 
+	p.observeSessionUpdateAmounts(notif.Update.Remainder)
+
 	sue, recognized := parseSessionUpdate(notif.Update.Remainder)
 	if !recognized {
 		if !p.malformedVariantLogged {
@@ -1100,6 +1107,25 @@ func (p *pumpState) observeChildSession(update json.RawMessage) {
 		return
 	}
 	turn.children.note(p.declaration.ChildSession(p.sessionID, update))
+}
+
+// observeSessionUpdateAmounts hands the amounts the declaration reads off a
+// session update of the active turn to the ledger, whatever the update's
+// variant.
+func (p *pumpState) observeSessionUpdateAmounts(update json.RawMessage) {
+	if p.activeTurn == nil || p.declaration.SessionUpdateAmounts == nil {
+		return
+	}
+	p.observeAmounts(p.declaration.SessionUpdateAmounts(update))
+}
+
+// observeAmounts holds readings with the ledger, which counts them in the
+// session's next settlement.
+func (p *pumpState) observeAmounts(readings []usage.AmountReading) {
+	if p.ledger == nil || len(readings) == 0 {
+		return
+	}
+	p.ledger.ObserveAmounts(readings)
 }
 
 func (p *pumpState) observeUsageUpdate() {

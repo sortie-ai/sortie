@@ -489,6 +489,8 @@ func handleCIFailure(
 		Trigger:        new(""),
 		DispatchID:     new(""),
 		Skills:         new("[]"),
+
+		UsageCompleteness: persistence.UsageComplete,
 	}
 	recordRunCost(&ciRunHistory, state.Rates)
 	if _, err := params.Store.AppendRunHistory(ctx, ciRunHistory); err != nil {

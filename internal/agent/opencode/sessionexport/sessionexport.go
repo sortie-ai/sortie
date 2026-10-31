@@ -16,15 +16,21 @@ import (
 	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // Records declares the session export as a records source for every OpenCode
 // route: one message per finished request, cache outside input, reasoning
-// outside output, written when its request completes.
+// outside output, written when its request completes. Each message also
+// carries its request's cost in US dollars.
 var Records = usage.Source{
 	Category: usage.SourceJournal,
 	Strategy: usage.StrategyRecords,
-	Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
+	Spend: usage.SpendDeclaration{
+		Shape:       usage.SpendPerRequest,
+		ServedModel: true,
+		Amounts:     []usage.AmountDeclaration{{Unit: domain.UnitUSD, Shape: usage.AmountPerRequest}},
+	},
 }
 
 // ErrOtherSession marks an export whose info.id is not the session asked for.
@@ -76,12 +82,23 @@ func count(raw json.RawMessage) *int64 {
 	return &n
 }
 
+// cost returns the non-negative JSON number a message's cost holds, nil for
+// an absent, null, non-numeric, or negative member.
+func cost(raw json.RawMessage) *float64 {
+	var amount float64
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &amount) != nil || amount < 0 {
+		return nil
+	}
+	return &amount
+}
+
 // Parse returns one reading per finished assistant message of an export, in
 // document order. A message counts when it has a non-empty finish. One without
 // a tokens object, an aborted request whose spend is recorded nowhere, keeps
 // its identity with every count unknown, so a caller can still place it in
-// the session's history. The session aggregate in info is never read: it also
-// holds requests no message records. Parse refuses data above
+// the session's history. A message's cost is its request's amount, nil when
+// absent or not a non-negative number. The session aggregate in info is never
+// read: it also holds requests no message records. Parse refuses data above
 // [usage.MaxRecordsBytes], a document that does not decode, and a document of
 // another session ([ErrOtherSession]).
 func Parse(data []byte, sessionID string) ([]usage.SpendReading, error) {
@@ -97,6 +114,7 @@ func Parse(data []byte, sessionID string) ([]usage.SpendReading, error) {
 		}
 		reading := Tokens(m.Tokens)
 		reading.Identity = m.ID
+		reading.Amounts = []usage.AmountReading{{Amount: cost(m.Cost)}}
 		model, _ := decodeObject[exportModel](m.Model)
 		if model.ProviderID != "" && model.ID != "" {
 			reading.Model = model.ProviderID + "/" + model.ID
@@ -111,6 +129,7 @@ type exportMessage struct {
 	Type   string          `json:"type"`
 	Finish string          `json:"finish"`
 	Tokens json.RawMessage `json:"tokens"`
+	Cost   json.RawMessage `json:"cost"`
 	Model  json.RawMessage `json:"model"`
 	Time   json.RawMessage `json:"time"`
 	Error  json.RawMessage `json:"error"`

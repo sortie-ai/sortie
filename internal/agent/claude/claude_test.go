@@ -1044,7 +1044,7 @@ func TestRunTurn_SettlesSpendFromCapturedStreams(t *testing.T) {
 		journalCwd      string
 		wantRequests    int
 		wantUsage       domain.TokenUsage
-		wantProvenance  domain.UsageProvenance
+		wantProvenance  []domain.UsageProvenance
 		wantUnaccounted bool
 	}{
 		{
@@ -1055,7 +1055,7 @@ func TestRunTurn_SettlesSpendFromCapturedStreams(t *testing.T) {
 			journalCwd:      "/workspace/project",
 			wantRequests:    2,
 			wantUsage:       tokens(4, 405, 58949, 32416),
-			wantProvenance:  records,
+			wantProvenance:  []domain.UsageProvenance{records},
 			wantUnaccounted: true,
 		},
 		{
@@ -1066,14 +1066,14 @@ func TestRunTurn_SettlesSpendFromCapturedStreams(t *testing.T) {
 			journal:        "journal/fresh.jsonl",
 			wantRequests:   2,
 			wantUsage:      tokens(4, 134, 92344, 243),
-			wantProvenance: live,
+			wantProvenance: []domain.UsageProvenance{live},
 		},
 		{
 			name:           "later empty result member keeps the earlier member's figure",
 			stream:         "journal/subagent_resumed_stream.jsonl",
 			wantRequests:   6,
 			wantUsage:      tokens(16, 854, 196423, 78745),
-			wantProvenance: live,
+			wantProvenance: []domain.UsageProvenance{live},
 		},
 	}
 
@@ -1121,7 +1121,7 @@ func TestRunTurn_SettlesSpendFromCapturedStreams(t *testing.T) {
 			if result.Usage != tt.wantUsage {
 				t.Errorf("Usage = %+v, want %+v", result.Usage, tt.wantUsage)
 			}
-			if result.UsageProvenance != tt.wantProvenance {
+			if !slices.Equal(result.UsageProvenance, tt.wantProvenance) {
 				t.Errorf("UsageProvenance = %+v, want %+v", result.UsageProvenance, tt.wantProvenance)
 			}
 			if result.SpendUnaccounted != tt.wantUnaccounted {

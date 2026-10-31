@@ -149,6 +149,11 @@ type RunningEntry struct {
 	// run's token counters in every class. Written only by applyUsageDelta.
 	UsageByModel map[string]domain.TokenUsage
 
+	// ReportedAmounts is the run's amounts the agent reported, each in its
+	// own unit, sorted by unit then model. Written only by [HandleAgentEvent]
+	// and never added to a token or money total outside the pricing fallback.
+	ReportedAmounts []domain.ReportedAmount
+
 	ModelName string
 
 	// APIRequestCount is the number of token_usage events received.
@@ -2137,6 +2142,7 @@ func spendOfRunningEntry(entry *RunningEntry) pricing.Spend {
 		},
 		Parts:            entry.UsageByModel,
 		UnaccountedTurns: entry.UnaccountedTurns,
+		Reported:         entry.ReportedAmounts,
 	}
 }
 

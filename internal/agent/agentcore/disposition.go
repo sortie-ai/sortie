@@ -398,7 +398,8 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 //
 // spend is the turn's evidence for the shared spend rule: FinalizeTurn
 // sets the result's SpendUnaccounted, SpendCoverable, and CoversSession
-// from it and leaves Usage and UsageMeasured as meta carries them.
+// from it and leaves Usage and UsageMeasured as meta carries them. The
+// terminal event and the result carry the turn's reported amounts.
 //
 // FinalizeTurn panics when emit is nil. It substitutes slog.Default() when
 // logger is nil. It is not idempotent, because it emits; callers MUST call
@@ -419,15 +420,20 @@ func FinalizeTurn(
 
 	disposition := DecideTurn(ev)
 
+	emitTerminal := func(event domain.AgentEvent) {
+		event.ReportedAmounts = spend.amounts
+		emit(event)
+	}
+
 	switch disposition.ExitReason {
 	case domain.EventTurnCompleted:
-		EmitTurnCompleted(emit, disposition.EventMessage, meta.APIDurationMS, meta.Usage, meta.UsageByModel)
+		EmitTurnCompleted(emitTerminal, disposition.EventMessage, meta.APIDurationMS, meta.Usage, meta.UsageByModel)
 	case domain.EventTurnFailed:
-		EmitTurnFailed(emit, disposition.EventMessage, meta.APIDurationMS, meta.Usage, meta.UsageByModel)
+		EmitTurnFailed(emitTerminal, disposition.EventMessage, meta.APIDurationMS, meta.Usage, meta.UsageByModel)
 	case domain.EventTurnCancelled:
-		EmitTurnCancelled(emit, disposition.EventMessage, meta.Usage, meta.UsageByModel)
+		EmitTurnCancelled(emitTerminal, disposition.EventMessage, meta.Usage, meta.UsageByModel)
 	case domain.EventTurnInputRequired:
-		EmitTurnInputRequired(emit, disposition.EventMessage, meta.Usage, meta.UsageByModel)
+		EmitTurnInputRequired(emitTerminal, disposition.EventMessage, meta.Usage, meta.UsageByModel)
 	}
 
 	if disposition.Row == RowZeroWork {

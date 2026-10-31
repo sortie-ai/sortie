@@ -849,11 +849,11 @@ func TestRunTurn_SpendFromCapturedTurns(t *testing.T) {
 	type turnSpend struct {
 		input, output int64
 		unaccounted   bool
-		provenance    domain.UsageProvenance
+		provenance    string
 		model         string
 	}
-	records := domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
-	live := domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive}
+	records := usage.FormatProvenance([]domain.UsageProvenance{{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}})
+	live := usage.FormatProvenance([]domain.UsageProvenance{{Source: usage.SourceOutput, Strategy: usage.StrategyLive}})
 
 	const twoTurns = "live_two_turns_export.json"
 	history := exportOf(t, twoTurns, textMsg)
@@ -924,7 +924,7 @@ func TestRunTurn_SpendFromCapturedTurns(t *testing.T) {
 					model = e.Model
 				}
 			}
-			got := turnSpend{result.Usage.InputTokens, result.Usage.OutputTokens, result.SpendUnaccounted, result.UsageProvenance, model}
+			got := turnSpend{result.Usage.InputTokens, result.Usage.OutputTokens, result.SpendUnaccounted, usage.FormatProvenance(result.UsageProvenance), model}
 			if got != tt.want || !result.UsageMeasured {
 				t.Errorf("turn spend = %+v measured=%v, want %+v measured=true", got, result.UsageMeasured, tt.want)
 			}

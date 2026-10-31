@@ -2,7 +2,9 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,6 +182,29 @@ func TestParseEvent(t *testing.T) {
 				tt.checkFunc(t, ev)
 			}
 		})
+	}
+}
+
+func TestLiveReadingCostUSD(t *testing.T) {
+	t.Parallel()
+
+	var captured rawEvent
+	for line := range bytes.SplitSeq(loadFixture(t, "journal/subagent_stream.jsonl"), []byte("\n")) {
+		if ev, err := parseEvent(line); err == nil && ev.Type == "result" {
+			captured = ev
+		}
+	}
+	members := rawMembers(`{"a":{"costUSD":1.0},"b":{},"c":{"costUSD":"0.5"},"d":{"costUSD":-1}}`, string(captured.ModelUsageSinceLastResult))
+
+	got := ""
+	for _, entry := range liveReading(members).ByModel {
+		if amount := entry.Amounts[0].Amount; amount != nil {
+			got += fmt.Sprintf(" %s=%v", entry.Model, *amount)
+		}
+	}
+
+	if want := " a=1 claude-haiku-5-5=0.012703265"; got != want {
+		t.Errorf("liveReading(captured and edge members) costs =%q, want %q", got, want)
 	}
 }
 

@@ -38,6 +38,10 @@ const (
 
 	// SourceEmbedded is the price table compiled into the binary.
 	SourceEmbedded PriceSource = "embedded"
+
+	// SourceAgent is the US-dollar amount the agent reported for the part,
+	// used for a model no rate layer prices.
+	SourceAgent PriceSource = "agent"
 )
 
 // Spend is the usage of one finished run or one running session.
@@ -61,6 +65,10 @@ type Spend struct {
 	// UnaccountedTurns counts turns that spent tokens the agent did not
 	// report. [PriceSession] ignores it.
 	UnaccountedTurns int
+
+	// Reported is every amount the agent reported for the run, in the unit it
+	// reported it in.
+	Reported []domain.ReportedAmount
 }
 
 // TokenClass names a class of tokens a rate prices.
@@ -133,8 +141,11 @@ type Price struct {
 // prices the run once, on its summed tokens, so the run's cost is not the
 // sum of its parts' costs: the fresh-input floor applies per priced usage
 // and would otherwise move every multi-model run. Without one, each part is
-// priced on its own tokens and the run's cost is their sum. PriceRun is
-// pure and never mutates its inputs.
+// priced on its own tokens and the run's cost is their sum.
+//
+// A part the rates leave unpriced is priced at the US-dollar amount in
+// [Spend.Reported] attributed to its model, and a part the rates price keeps
+// their price. PriceRun is pure and never mutates its inputs.
 func PriceRun(s Spend, r *Rates) Price {
 	if !s.Measured {
 		return Price{Status: CostUnmeasured}
@@ -158,7 +169,7 @@ func PriceRun(s Spend, r *Rates) Price {
 		return Price{Status: CostUnpriced}
 	}
 
-	parts, cost, priced, degraded := priceParts(r, s.Parts)
+	parts, cost, priced, degraded := priceParts(s.Parts, s.Reported, tableRates(r))
 	if !priced {
 		return Price{Status: CostUnpriced, Parts: parts}
 	}
@@ -171,13 +182,17 @@ func PriceRun(s Spend, r *Rates) Price {
 func priceRunByKind(s Spend, r *Rates, status CostStatus) Price {
 	entry, priceable := completeEntry(r, s.Kind)
 	if !priceable {
-		unrated := unratedByEntry(entry)
-		return Price{
-			Status: CostUnpriced,
-			Parts: partPrices(s.Parts, func(domain.TokenUsage) PartPrice {
-				return PartPrice{Status: CostUnpriced, Unrated: slices.Clone(unrated)}
-			}),
+		if len(s.Parts) == 0 {
+			return Price{Status: CostUnpriced}
 		}
+		parts, cost, priced, degraded := priceParts(s.Parts, s.Reported, incompleteEntry(entry))
+		if !priced {
+			return Price{Status: CostUnpriced, Parts: parts}
+		}
+		if degraded {
+			status = CostPartial
+		}
+		return Price{CostUSD: &cost, Status: status, Parts: parts}
 	}
 
 	return Price{
@@ -196,7 +211,8 @@ func priceRunByKind(s Spend, r *Rates, status CostStatus) Price {
 
 // PriceSession prices a running session's spend so far under r. A session
 // under an incomplete kind entry is unpriced even before it spends, since it
-// still can. PriceSession is pure and never mutates its inputs.
+// still can. A part the rates leave unpriced is priced as [PriceRun] prices
+// it. PriceSession is pure and never mutates its inputs.
 func PriceSession(s Spend, r *Rates) (cost *float64, status CostStatus) {
 	if !s.Measured {
 		return nil, CostUnmeasured
@@ -215,7 +231,11 @@ func PriceSession(s Spend, r *Rates) (cost *float64, status CostStatus) {
 		return nil, CostUnpriced
 	}
 
-	_, total, priced, degraded := priceParts(r, s.Parts)
+	_, total, priced, degraded := priceParts(s.Parts, s.Reported, tableRates(r))
+	return sessionCost(total, priced, degraded)
+}
+
+func sessionCost(total float64, priced, degraded bool) (cost *float64, status CostStatus) {
 	switch {
 	case !priced:
 		return nil, CostUnpriced
@@ -228,7 +248,11 @@ func PriceSession(s Spend, r *Rates) (cost *float64, status CostStatus) {
 func priceSessionByKind(s Spend, r *Rates) (cost *float64, status CostStatus) {
 	entry, priceable := completeEntry(r, s.Kind)
 	if !priceable {
-		return nil, CostUnpriced
+		if !hasSpentInClass(s.Totals) || len(s.Parts) == 0 {
+			return nil, CostUnpriced
+		}
+		_, total, priced, degraded := priceParts(s.Parts, s.Reported, incompleteEntry(entry))
+		return sessionCost(total, priced, degraded)
 	}
 	if !hasSpent(s.Totals) {
 		zero := 0.0
@@ -240,18 +264,42 @@ func priceSessionByKind(s Spend, r *Rates) (cost *float64, status CostStatus) {
 	return EstimateCost(s.Totals, &entry), CostEstimated
 }
 
-// priceParts prices every part at the rates of its own model and sums their
-// costs. priced is false when no part that spent in a class got a price, and
+// partRater prices one model's usage from the rates alone.
+type partRater func(model string, usage domain.TokenUsage) PartPrice
+
+func tableRates(r *Rates) partRater {
+	return func(model string, usage domain.TokenUsage) PartPrice {
+		return pricePart(usage, r.resolve(model))
+	}
+}
+
+// incompleteEntry leaves every part unpriced, naming the classes entry gives
+// no rate.
+func incompleteEntry(entry TokenRateConfig) partRater {
+	unrated := unratedByEntry(entry)
+	return func(string, domain.TokenUsage) PartPrice {
+		return PartPrice{Status: CostUnpriced, Unrated: slices.Clone(unrated)}
+	}
+}
+
+// priceParts prices every part with rate and sums their costs. A part that
+// spent and that rate leaves unpriced is priced from the amount in reported
+// instead. priced is false when no part that spent in a class got a price, and
 // degraded is true when such a part is partial or unpriced.
-func priceParts(r *Rates, parts map[string]domain.TokenUsage) (prices map[string]PartPrice, cost float64, priced, degraded bool) {
+func priceParts(parts map[string]domain.TokenUsage, reported []domain.ReportedAmount, rate partRater) (prices map[string]PartPrice, cost float64, priced, degraded bool) {
 	prices = make(map[string]PartPrice, len(parts))
 	for model, usage := range parts {
-		part := pricePart(usage, r.resolve(model))
+		part := rate(model, usage)
+		if part.Status == CostUnpriced && hasSpent(usage) {
+			if fromAgent, ok := reportedPart(reported, model, len(parts)); ok {
+				part = fromAgent
+			}
+		}
 		prices[model] = part
 		if part.CostUSD != nil {
 			cost += *part.CostUSD
 		}
-		if !hasSpentInClass(usage) {
+		if !hasSpentInClass(usage) && part.Source != SourceAgent {
 			continue
 		}
 		switch part.Status {
@@ -264,6 +312,43 @@ func priceParts(r *Rates, parts map[string]domain.TokenUsage) (prices map[string
 		}
 	}
 	return prices, cost, priced, degraded
+}
+
+// reportedPart prices a part from the US-dollar amount reported for its
+// model. An amount attributed to no model belongs to the part only when the
+// run has no other part and no amount names a model.
+func reportedPart(reported []domain.ReportedAmount, model string, partCount int) (PartPrice, bool) {
+	amount, ok := usdAmount(reported, model, partCount)
+	if !ok {
+		return PartPrice{}, false
+	}
+	status := CostEstimated
+	if amount.LowerBound {
+		status = CostPartial
+	}
+	return PartPrice{CostUSD: &amount.Amount, Status: status, Source: SourceAgent}, true
+}
+
+func usdAmount(reported []domain.ReportedAmount, model string, partCount int) (domain.ReportedAmount, bool) {
+	attributed := false
+	for _, amount := range reported {
+		if amount.Unit != domain.UnitUSD {
+			continue
+		}
+		if model != "" && amount.Model == model {
+			return amount, true
+		}
+		attributed = attributed || amount.Model != ""
+	}
+	if partCount != 1 || attributed {
+		return domain.ReportedAmount{}, false
+	}
+	for _, amount := range reported {
+		if amount.Unit == domain.UnitUSD {
+			return amount, true
+		}
+	}
+	return domain.ReportedAmount{}, false
 }
 
 // pricePart prices one model's usage at res; a nil res holds no rate.

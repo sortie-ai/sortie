@@ -517,7 +517,8 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 }
 
 // newSessionLedger returns the session's spend ledger, or nil when the
-// declaration declares no spend or the ledger refuses it. A session the runtime
+// declaration declares neither a token shape nor an amount or the ledger
+// refuses it. A session the runtime
 // created has no history, so its records boundary is known without a read. The
 // records already on the host of a continued session are read here, before the
 // first prompt, so none of them is counted as this run's spend. A launch whose
@@ -525,7 +526,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 // does a session the declaration's rule names from session, the raw result of
 // the call that opened it.
 func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, created bool, session json.RawMessage) *usage.Ledger {
-	if decl.Live.Spend.Shape == usage.SpendUndeclared {
+	if decl.Live.Spend.Shape == usage.SpendUndeclared && len(decl.Live.Spend.Amounts) == 0 {
 		return nil
 	}
 	if !additionInEffect(state, decl.LaunchAddition) {

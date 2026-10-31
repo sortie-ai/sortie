@@ -81,6 +81,20 @@ func spendOnce(model string, usage domain.TokenUsage) Spend {
 	return Spend{Kind: "m", Measured: true, Totals: usage, Parts: map[string]domain.TokenUsage{model: usage}}
 }
 
+func usd(model string, amount float64, lowerBound bool) domain.ReportedAmount {
+	return domain.ReportedAmount{Unit: domain.UnitUSD, Model: model, Amount: amount, LowerBound: lowerBound}
+}
+
+func spendOfParts(parts map[string]domain.TokenUsage, reported ...domain.ReportedAmount) Spend {
+	spend := Spend{Kind: "m", Measured: true, Parts: parts, Reported: reported}
+	for _, usage := range parts {
+		spend.Totals.InputTokens += usage.InputTokens
+		spend.Totals.OutputTokens += usage.OutputTokens
+		spend.Totals.TotalTokens += usage.TotalTokens
+	}
+	return spend
+}
+
 func TestPriceRun(t *testing.T) {
 	t.Parallel()
 
@@ -342,5 +356,81 @@ func TestPricingWithoutRates(t *testing.T) {
 	if rates.SourceAvailable() || rates.SourceConfigured() || rates.Entries() != nil {
 		t.Errorf("nil rates SourceAvailable, SourceConfigured, Entries = %t, %t, %v, want false, false, nil",
 			rates.SourceAvailable(), rates.SourceConfigured(), rates.Entries())
+	}
+}
+
+func TestPriceReportedAmounts(t *testing.T) {
+	t.Parallel()
+
+	tableEntries := map[string]any{"half-priced": map[string]any{"input_per_mtok": 3.0}}
+	rates := mustLoadRates(t, map[string]any{"price_table": noTables(), "token_rates": tableEntries})
+	halfPriced := PartPrice{CostUSD: new(3.0), Status: CostPartial, Source: SourceOperator, TableVersion: versionOf(t, tableEntries), Unrated: []TokenClass{ClassOutput}}
+	unpriced := PartPrice{Status: CostUnpriced, Unrated: []TokenClass{ClassInput}}
+
+	incompleteKind := mustLoadRates(t, map[string]any{"token_rates": map[string]any{"k": map[string]any{"input_per_mtok": 2.0}}}, "k")
+
+	tests := []struct {
+		name  string
+		spend Spend
+		rates *Rates
+		want  Price
+	}{
+		{
+			name:  "attributed amount prices an unpriced part",
+			spend: spendOfParts(map[string]domain.TokenUsage{"m1": usageIn}, usd("m1", 4.5, false)),
+			want:  pricedOnce("m1", 4.5, CostEstimated, SourceAgent, ""),
+		},
+		{
+			name:  "lower-bound amount prices the part partial",
+			spend: spendOfParts(map[string]domain.TokenUsage{"m1": usageIn}, usd("m1", 4.5, true)),
+			want:  pricedOnce("m1", 4.5, CostPartial, SourceAgent, ""),
+		},
+		{
+			name:  "partial table price is kept",
+			spend: spendOfParts(map[string]domain.TokenUsage{"half-priced": usageS}, usd("half-priced", 9, false)),
+			want:  Price{CostUSD: new(3.0), Status: CostPartial, Parts: map[string]PartPrice{"half-priced": halfPriced}},
+		},
+		{
+			name: "vendor-unit amount leaves the part unpriced",
+			spend: spendOfParts(map[string]domain.TokenUsage{"m1": usageIn},
+				domain.ReportedAmount{Unit: "credits", Model: "m1", Amount: 2}),
+			want: Price{Status: CostUnpriced, Parts: map[string]PartPrice{"m1": unpriced}},
+		},
+		{
+			name:  "unattributed amount prices a one-part run",
+			spend: spendOfParts(map[string]domain.TokenUsage{"m1": usageIn}, usd("", 4.5, false)),
+			want:  pricedOnce("m1", 4.5, CostEstimated, SourceAgent, ""),
+		},
+		{
+			name:  "unattributed amount prices no part of a two-part run",
+			spend: spendOfParts(map[string]domain.TokenUsage{"m1": usageIn, "m2": usageIn}, usd("", 4.5, false)),
+			want:  Price{Status: CostUnpriced, Parts: map[string]PartPrice{"m1": unpriced, "m2": unpriced}},
+		},
+		{
+			name: "incomplete kind entry leaves the part to the amount",
+			spend: Spend{
+				Kind: "k", Measured: true, Totals: usageIn, Parts: map[string]domain.TokenUsage{"m1": usageIn},
+				Reported: []domain.ReportedAmount{usd("m1", 4.5, false)},
+			},
+			rates: incompleteKind,
+			want:  pricedOnce("m1", 4.5, CostEstimated, SourceAgent, ""),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := PriceRun(tt.spend, cmp.Or(tt.rates, rates))
+			sessionCost, sessionStatus := PriceSession(tt.spend, cmp.Or(tt.rates, rates))
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("PriceRun(%s) = %s, want %s", asJSON(t, tt.spend), asJSON(t, got), asJSON(t, tt.want))
+			}
+			if !reflect.DeepEqual(sessionCost, tt.want.CostUSD) || sessionStatus != tt.want.Status {
+				t.Errorf("PriceSession(%s) = %s, %q, want %s, %q",
+					asJSON(t, tt.spend), asJSON(t, sessionCost), sessionStatus, asJSON(t, tt.want.CostUSD), tt.want.Status)
+			}
+		})
 	}
 }

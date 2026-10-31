@@ -41,7 +41,8 @@ const unknownEffortPrefix = "Warning: Unknown --effort value"
 // usageSources declares what each source counts. The stream reports each
 // process's own requests split by served model and carries no history of
 // earlier processes; the journal holds one line per completed request and
-// keeps the history of earlier runs in place.
+// keeps the history of earlier runs in place. Only the stream carries a cost,
+// so a turn the journal settles leaves its amount a lower bound.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
@@ -52,6 +53,7 @@ var usageSources = usage.Sources{
 			ReasoningInOutput: true,
 			ServedModel:       true,
 			DuringTurn:        true,
+			Amounts:           []usage.AmountDeclaration{{Unit: domain.UnitUSD, Shape: usage.AmountPerTurn}},
 		},
 	},
 	Records: usage.Source{

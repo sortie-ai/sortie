@@ -2114,13 +2114,13 @@ func liveOnlyInterruptedViolations(v *findings, result domain.TurnResult, served
 		v.add("Result.SpendUnaccounted is false, want true for a %s turn no records settle", result.ExitReason)
 	}
 	if !result.UsageMeasured {
-		if result.UsageProvenance != (domain.UsageProvenance{}) {
+		if len(result.UsageProvenance) != 0 {
 			v.add("Result.UsageProvenance = %+v, want none for a %s turn with no figure", result.UsageProvenance, result.ExitReason)
 		}
 		return
 	}
-	if result.UsageProvenance != spend.Live {
-		v.add("Result.UsageProvenance = %+v, want %+v, the live source, for a %s turn no records settle", result.UsageProvenance, spend.Live, result.ExitReason)
+	if want := provenanceList(spend.Live); !slices.Equal(result.UsageProvenance, want) {
+		v.add("Result.UsageProvenance = %+v, want %+v, the live source, for a %s turn no records settle", result.UsageProvenance, want, result.ExitReason)
 	}
 	if exceedsInAnyClass(result.Usage, served) {
 		v.add("Result.Usage = %+v exceeds %+v, the usage the endpoint served", result.Usage, served)
@@ -2142,6 +2142,15 @@ func lowerBoundViolations(v *findings, result domain.TurnResult, served domain.T
 	}
 }
 
+// provenanceList is the list a turn settled by p reports; none for the zero
+// provenance.
+func provenanceList(p domain.UsageProvenance) []domain.UsageProvenance {
+	if p == (domain.UsageProvenance{}) {
+		return nil
+	}
+	return []domain.UsageProvenance{p}
+}
+
 func exceedsInAnyClass(figure, served domain.TokenUsage) bool {
 	return figure.InputTokens > served.InputTokens || figure.OutputTokens > served.OutputTokens ||
 		figure.CacheReadTokens > served.CacheReadTokens || figure.CacheWriteTokens > served.CacheWriteTokens
@@ -2152,17 +2161,17 @@ func exceedsInAnyClass(figure, served domain.TokenUsage) bool {
 // cancelled or failed after output from the records, whose figure still misses
 // the request that was held.
 func spendProvenanceViolations(v *findings, result domain.TurnResult, spend SpendSources) {
-	var want domain.UsageProvenance
+	var want []domain.UsageProvenance
 	var wantLowerBound bool
 	switch result.ExitReason {
 	case domain.EventTurnCompleted:
-		want, wantLowerBound = spend.Live, spend.LowerBound
+		want, wantLowerBound = provenanceList(spend.Live), spend.LowerBound
 	case domain.EventTurnCancelled, domain.EventTurnFailed:
-		want, wantLowerBound = spend.Records, true
+		want, wantLowerBound = provenanceList(spend.Records), true
 	default:
 		return
 	}
-	if result.UsageProvenance != want {
+	if !slices.Equal(result.UsageProvenance, want) {
 		v.add("Result.UsageProvenance = %+v, want %+v for a %s turn", result.UsageProvenance, want, result.ExitReason)
 	}
 	if result.SpendUnaccounted != wantLowerBound {
@@ -2189,7 +2198,7 @@ func killedBeforeRecordsViolations(result domain.TurnResult) []string {
 	if !result.SpendUnaccounted {
 		v.add("Result.SpendUnaccounted is false, want true for a turn interrupted before its records were written")
 	}
-	if result.UsageProvenance != (domain.UsageProvenance{}) {
+	if len(result.UsageProvenance) != 0 {
 		v.add("Result.UsageProvenance = %+v, want none for a turn interrupted before its records were written", result.UsageProvenance)
 	}
 	return v.items

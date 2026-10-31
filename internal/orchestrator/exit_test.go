@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	agentusage "github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
@@ -10695,5 +10696,174 @@ func TestHandleWorkerExit_PricesUnderReloadedRatesAndClearsLiveEstimate(t *testi
 	}
 	if meta.EstimatedCostUSD != nil || meta.CostStatus != "" {
 		t.Errorf("session_metadata cost after exit = (%v, %q), want (nil, %q)", meta.EstimatedCostUSD, meta.CostStatus, "")
+	}
+}
+
+const amountIssue = "ISS-AMT"
+
+func exitRow(t *testing.T, state *State, worker WorkerResult) persistence.RunHistory {
+	t.Helper()
+	store := &mockExitStore{}
+	worker.IssueID, worker.Identifier, worker.ExitKind, worker.AgentAdapter = amountIssue, amountIssue+"-ident", WorkerExitNormal, "mock"
+
+	HandleWorkerExit(state, worker, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	return store.runHistories[0]
+}
+
+func tokenEventWithAmounts(amounts ...domain.ReportedAmount) domain.AgentEvent {
+	return domain.AgentEvent{
+		Type:            domain.EventTokenUsage,
+		Timestamp:       baseTime,
+		Model:           "model-x",
+		Usage:           domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+		ReportedAmounts: amounts,
+	}
+}
+
+func TestHandleWorkerExit_UsageProvenanceAndCompleteness(t *testing.T) {
+	t.Parallel()
+
+	union := []domain.UsageProvenance{
+		{Source: agentusage.SourceOutput, Strategy: agentusage.StrategyLive},
+		{Source: agentusage.SourceJournal, Strategy: agentusage.StrategyRecords},
+	}
+	tests := []struct {
+		name             string
+		measured         bool
+		unaccountedTurns int
+		wantProvenance   string
+		wantCompleteness string
+	}{
+		{name: "measured run lists the sorted union", measured: true, wantProvenance: "journal:records,output:live", wantCompleteness: persistence.UsageComplete},
+		{name: "an unaccounted turn makes it a lower bound", measured: true, unaccountedTurns: 2, wantProvenance: "journal:records,output:live", wantCompleteness: persistence.UsageLowerBound},
+		{name: "unmeasured run lists none whatever the worker held", unaccountedTurns: 2, wantProvenance: "", wantCompleteness: persistence.UsageUnmeasured},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := exitState(t, amountIssue, nil)
+			state.Running[amountIssue].UsageMeasured = tt.measured
+
+			run := exitRow(t, state, WorkerResult{UsageProvenance: union, UnaccountedTurns: tt.unaccountedTurns})
+
+			if run.UsageProvenance != tt.wantProvenance {
+				t.Errorf("RunHistory.UsageProvenance = %q, want %q", run.UsageProvenance, tt.wantProvenance)
+			}
+			if run.UsageCompleteness != tt.wantCompleteness {
+				t.Errorf("RunHistory.UsageCompleteness = %q, want %q", run.UsageCompleteness, tt.wantCompleteness)
+			}
+		})
+	}
+}
+
+func TestHandleWorkerExit_ReportedAmountsMergeMonotonicallyWhenUnmeasured(t *testing.T) {
+	t.Parallel()
+
+	state := exitState(t, amountIssue, nil)
+	state.Running[amountIssue].UsageArrival = registry.UsageArrivalNone
+	for _, amount := range []domain.ReportedAmount{
+		{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.5},
+		{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.2, LowerBound: true},
+	} {
+		HandleAgentEvent(state, amountIssue, domain.AgentEvent{Type: domain.EventNotification, Timestamp: baseTime, ReportedAmounts: []domain.ReportedAmount{amount}}, discardLogger(), nil)
+	}
+
+	run := exitRow(t, state, WorkerResult{ReportedAmounts: []domain.ReportedAmount{
+		{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.4},
+		{Unit: "credits", Amount: 3},
+	}})
+
+	want := []persistence.ReportedAmount{
+		{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.5, LowerBound: true},
+		{Unit: "credits", Amount: 3},
+	}
+	if !slices.Equal(run.ReportedAmounts, want) {
+		t.Errorf("RunHistory.ReportedAmounts = %+v, want %+v", run.ReportedAmounts, want)
+	}
+	if run.TokensMeasured || run.EstimatedCostUSD != nil {
+		t.Errorf("RunHistory (TokensMeasured, EstimatedCostUSD) = (%v, %v), want (false, nil): amounts add to no token or money total of an unmeasured run", run.TokensMeasured, run.EstimatedCostUSD)
+	}
+}
+
+func TestHandleWorkerExit_PricesUnpricedModelAtAgentAmount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		amount   domain.ReportedAmount
+		wantPart persistence.ModelCost
+	}{
+		{
+			name:     "a US-dollar amount prices the model under source agent",
+			amount:   domain.ReportedAmount{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75},
+			wantPart: persistence.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "estimated", PriceSource: "agent"},
+		},
+		{
+			name:     "a lower-bound US-dollar amount prices it partial",
+			amount:   domain.ReportedAmount{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75, LowerBound: true},
+			wantPart: persistence.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "partial", PriceSource: "agent"},
+		},
+		{
+			name:     "an amount in credits leaves the model unpriced",
+			amount:   domain.ReportedAmount{Unit: "credits", Model: "model-x", Amount: 3},
+			wantPart: persistence.ModelCost{CostStatus: "unpriced", UnratedClasses: []string{"input", "output"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := exitState(t, amountIssue, nil)
+			HandleAgentEvent(state, amountIssue, tokenEventWithAmounts(tt.amount), discardLogger(), nil)
+
+			run := exitRow(t, state, WorkerResult{})
+
+			if !reflect.DeepEqual(run.ModelCosts, map[string]persistence.ModelCost{"model-x": tt.wantPart}) {
+				t.Errorf("RunHistory.ModelCosts = %+v, want model-x = %+v", run.ModelCosts, tt.wantPart)
+			}
+			if !reflect.DeepEqual(run.EstimatedCostUSD, tt.wantPart.EstimatedCostUSD) || run.CostStatus != tt.wantPart.CostStatus {
+				t.Errorf("RunHistory cost = (%v, %q), want (%v, %q)", run.EstimatedCostUSD, run.CostStatus, tt.wantPart.EstimatedCostUSD, tt.wantPart.CostStatus)
+			}
+		})
+	}
+}
+
+func TestReconcileCIStatus_CIFailedRowRecordsCompleteAndNoProvenance(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-USAGE"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-1"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+
+	reconcileCIStatus(state, ciParams(t, store, ci, nil, scm), discardLogger(), context.Background(), newCIMetricsSpy())
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	row := store.runHistories[0]
+	if row.UsageCompleteness != persistence.UsageComplete || row.UsageProvenance != "" {
+		t.Errorf("ci_failed row (UsageCompleteness, UsageProvenance) = (%q, %q), want (%q, %q)", row.UsageCompleteness, row.UsageProvenance, persistence.UsageComplete, "")
+	}
+}
+
+func TestRunningEntrySessionCost_PricesUnpricedModelAtAgentAmount(t *testing.T) {
+	t.Parallel()
+
+	state := exitState(t, amountIssue, nil)
+	HandleAgentEvent(state, amountIssue, tokenEventWithAmounts(domain.ReportedAmount{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75}), discardLogger(), nil)
+
+	got := state.Running[amountIssue].sessionCost(nil)
+
+	if got.USD == nil || *got.USD != 0.75 || got.Status != pricing.CostEstimated {
+		t.Errorf("sessionCost(nil) = (%v, %q), want (0.75, %q)", got.USD, got.Status, pricing.CostEstimated)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	agentusage "github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/prompt"
@@ -9910,6 +9911,85 @@ func TestRunWorkerAttempt_ReactionRunNeverSendsWorkPrompt(t *testing.T) {
 			}
 			if gotIDs := result.HandedOffComments[ReactionKindReview]; !slices.Equal(gotIDs, tt.wantHandedOff) {
 				t.Errorf("RunWorkerAttempt(kind=%q) HandedOffComments[%q] = %v, want %v", tt.kind, ReactionKindReview, gotIDs, tt.wantHandedOff)
+			}
+		})
+	}
+}
+
+type amountReportingAdapter struct {
+	mockAgentAdapter
+
+	verification domain.TurnResult
+	working      domain.TurnResult
+	viaEvent     bool
+}
+
+func (a *amountReportingAdapter) RunTurn(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	result := a.working
+	if isMockVerificationSession(session) {
+		result = a.verification
+	} else if a.viaEvent {
+		params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC(), ReportedAmounts: result.ReportedAmounts})
+		result.ReportedAmounts = nil
+	}
+	result.SessionID, result.ExitReason = session.ID, domain.EventTurnCompleted
+	return result, nil
+}
+
+func TestRunWorkerAttempt_VerificationAmountsAddToWorkingSessionAmounts(t *testing.T) {
+	t.Parallel()
+
+	verificationSource := domain.UsageProvenance{Source: agentusage.SourceOutput, Strategy: agentusage.StrategyLive}
+	workingSource := domain.UsageProvenance{Source: agentusage.SourceJournal, Strategy: agentusage.StrategyRecords}
+	tests := []struct {
+		name     string
+		viaEvent bool
+	}{
+		{name: "working turn result carries the amounts"},
+		{name: "working turn event carries the amounts", viaEvent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = 1
+			ec := newExitCapture()
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &amountReportingAdapter{
+					viaEvent: tt.viaEvent,
+					verification: domain.TurnResult{
+						UsageProvenance: []domain.UsageProvenance{verificationSource},
+						ReportedAmounts: []domain.ReportedAmount{{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.25}},
+					},
+					working: domain.TurnResult{
+						UsageProvenance: []domain.UsageProvenance{workingSource},
+						ReportedAmounts: []domain.ReportedAmount{{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.5}},
+					},
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+				WorkflowPath:           "/fake/WORKFLOW.md",
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+			result := ec.waitResult(t)
+			if result.ExitKind != WorkerExitNormal {
+				t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+			}
+			wantAmounts := []domain.ReportedAmount{{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75}}
+			if !slices.Equal(result.ReportedAmounts, wantAmounts) {
+				t.Errorf("WorkerResult.ReportedAmounts = %+v, want %+v: the verification amount adds to the working session's", result.ReportedAmounts, wantAmounts)
+			}
+			wantProvenance := []domain.UsageProvenance{verificationSource, workingSource}
+			if !slices.Equal(result.UsageProvenance, wantProvenance) {
+				t.Errorf("WorkerResult.UsageProvenance = %+v, want %+v: the union includes the verification result's", result.UsageProvenance, wantProvenance)
 			}
 		})
 	}

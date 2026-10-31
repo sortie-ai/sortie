@@ -21,6 +21,8 @@ func fixtureLines(t *testing.T, name string) [][]byte {
 	return bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n"))
 }
 
+var unreadAmounts = []usage.AmountReading{{Unit: UnitPremiumRequests}, {Unit: UnitAICredits}}
+
 func TestUsageRecord(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +130,10 @@ func TestUsageRecord(t *testing.T) {
 				line = journal[tt.fixtureLine-1]
 			}
 
+			if tt.wantOK && tt.want.Amounts == nil {
+				tt.want.Amounts = unreadAmounts
+			}
+
 			got, ok := UsageRecord(line)
 
 			if ok != tt.wantOK {
@@ -135,6 +141,46 @@ func TestUsageRecord(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("UsageRecord(%q) = %+v, want %+v", line, got, tt.want)
+			}
+		})
+	}
+}
+
+func recordWith(members string) string {
+	return `{"type":"session.usage_record","data":{"usage":{"model":"m"` + members + `}}}`
+}
+
+func TestUsageRecordAmounts(t *testing.T) {
+	t.Parallel()
+
+	const credits = `,"copilotUsage":{"totalNanoAiu":85860000}`
+	tests := []struct {
+		name        string
+		members     string
+		wantPremium *float64
+		wantCredits *float64
+	}{
+		{"user request reads its cost", `,"initiator":"user","cost":1.0` + credits, new(1.0), new(0.08586)},
+		{"agent request charges none", `,"initiator":"agent","cost":1.0` + credits, new(0.0), new(0.08586)},
+		{"sub-agent request charges none", `,"initiator":"sub-agent","cost":1.0`, new(0.0), nil},
+		{"absent initiator is unknown", `,"cost":1.0`, nil, nil},
+		{"other initiator is unknown", `,"initiator":"system","cost":1.0`, nil, nil},
+		{"string cost is unknown", `,"initiator":"user","cost":"1"`, nil, nil},
+		{"negative cost is unknown", `,"initiator":"user","cost":-1` + credits, nil, new(0.08586)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, _ := UsageRecord([]byte(recordWith(tt.members)))
+
+			want := []usage.AmountReading{
+				{Unit: UnitPremiumRequests, Amount: tt.wantPremium},
+				{Unit: UnitAICredits, Amount: tt.wantCredits},
+			}
+			if !reflect.DeepEqual(got.Amounts, want) {
+				t.Errorf("UsageRecord(%q).Amounts = %+v, want %+v", tt.members, got.Amounts, want)
 			}
 		})
 	}
@@ -155,14 +201,16 @@ func TestUsageCheckpoint(t *testing.T) {
 	}{
 		{"not a checkpoint", `{"type":"session.usage_record"}`, usage.SpendReading{}, false},
 		{"not JSON", `session.usage_checkpoint`, usage.SpendReading{}, false},
-		{"two models sorted by key, float members ignored",
-			checkpointWith(`"b":{"totalNanoAiu":6.5,"usage":{"inputTokens":7,"cacheWriteTokens":0}},"a":{"requests":{"cost":1.0},"usage":{"inputTokens":4,"outputTokens":3,"cacheReadTokens":2,"cacheWriteTokens":1}}`),
+		{"two models sorted by key, amounts read per model",
+			checkpointWith(`"b":{"totalNanoAiu":6500000000,"usage":{"inputTokens":7,"cacheWriteTokens":0}},"a":{"requests":{"cost":1.0},"usage":{"inputTokens":4,"outputTokens":3,"cacheReadTokens":2,"cacheWriteTokens":1}}`),
 			usage.SpendReading{ByModel: []usage.SpendReading{
-				{Input: new(int64(4)), Output: new(int64(3)), CacheRead: new(int64(2)), CacheWrite: new(int64(1)), Model: "a"},
-				{Input: new(int64(7)), CacheWrite: new(int64(0)), Model: "b"},
+				{Input: new(int64(4)), Output: new(int64(3)), CacheRead: new(int64(2)), CacheWrite: new(int64(1)), Model: "a",
+					Amounts: []usage.AmountReading{{Unit: UnitPremiumRequests, Amount: new(1.0)}, {Unit: UnitAICredits}}},
+				{Input: new(int64(7)), CacheWrite: new(int64(0)), Model: "b",
+					Amounts: []usage.AmountReading{{Unit: UnitPremiumRequests}, {Unit: UnitAICredits, Amount: new(6.5)}}},
 			}}, true},
 		{"null and float counts are nil", checkpointWith(`"m":{"usage":{"outputTokens":null,"cacheReadTokens":1.0,"cacheWriteTokens":3}}`),
-			usage.SpendReading{ByModel: []usage.SpendReading{{CacheWrite: new(int64(3)), Model: "m"}}}, true},
+			usage.SpendReading{ByModel: []usage.SpendReading{{CacheWrite: new(int64(3)), Model: "m", Amounts: unreadAmounts}}}, true},
 	}
 
 	for _, tt := range tests {
@@ -173,6 +221,34 @@ func TestUsageCheckpoint(t *testing.T) {
 
 			if ok != tt.wantOK || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("UsageCheckpoint(%q) = %+v, %v, want %+v, %v", tt.line, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestRecordPremiumRequestsSumToLastCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, journal := range []string{"fresh_one_turn", "resume_same_model", "subagent_explore_task"} {
+		t.Run(journal, func(t *testing.T) {
+			t.Parallel()
+
+			records := map[string]float64{}
+			checkpoint := map[string]float64{}
+			for _, line := range fixtureLines(t, "../../testdata/live/"+journal+".events.jsonl") {
+				if r, ok := UsageRecord(line); ok {
+					records[r.Model] += *r.Amounts[0].Amount
+				}
+				if c, ok := UsageCheckpoint(line); ok {
+					clear(checkpoint)
+					for _, m := range c.ByModel {
+						checkpoint[m.Model] = *m.Amounts[0].Amount
+					}
+				}
+			}
+
+			if !reflect.DeepEqual(records, checkpoint) {
+				t.Errorf("premium requests of %s records by model = %v, want %v, its last checkpoint", journal, records, checkpoint)
 			}
 		})
 	}
@@ -204,7 +280,7 @@ func TestScanRecords(t *testing.T) {
 	if !reflect.DeepEqual(gotPath, JournalPath("sess-1")) || gotLimit != MaxFileBytes || gotLineLimit != usage.MaxRecordLineBytes {
 		t.Errorf("ScanRecords scanned (%+v, %d, %d), want (%+v, %d, %d)", gotPath, gotLimit, gotLineLimit, JournalPath("sess-1"), int64(MaxFileBytes), int64(usage.MaxRecordLineBytes))
 	}
-	want := []usage.SpendReading{{Input: new(int64(2)), Model: "b", Identity: "u2"}, {Input: new(int64(1)), Model: "a", Identity: "u1"}}
+	want := []usage.SpendReading{{Input: new(int64(2)), Model: "b", Identity: "u2", Amounts: unreadAmounts}, {Input: new(int64(1)), Model: "a", Identity: "u1", Amounts: unreadAmounts}}
 	if !errors.Is(err, errScan) || !reflect.DeepEqual(got, want) {
 		t.Errorf("ScanRecords = %+v, %v, want %+v, %v", got, err, want, errScan)
 	}

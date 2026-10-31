@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -77,10 +78,9 @@ type SpendDeclaration struct {
 	// complete: the runtime may spend more than it reports.
 	LowerBound bool
 
-	// VendorUnit is the plural unit name of a report that carries no token
-	// counts, or that carries the unit beside token counts on a live source's
-	// terminal line.
-	VendorUnit string
+	// Amounts declares the amounts the source reports beside or instead of
+	// token counts.
+	Amounts []AmountDeclaration
 
 	// Replay declares the figure the source repeats when a session resumes.
 	Replay SpendReplay
@@ -116,6 +116,11 @@ type SpendReading struct {
 	// model request that produced it; nil when it attributes none. It is
 	// read only under SpendSessionCumulative.
 	Own *SpendReading
+
+	// Amounts are the amounts this reading, a ByModel entry, or a record
+	// carries for its own request, turn, or running total; they belong to the
+	// reading's Model and Identity.
+	Amounts []AmountReading
 }
 
 // TurnEnd is how a turn ended, as the transport knows it.
@@ -181,9 +186,14 @@ type Settlement struct {
 	// the session is uncoverable.
 	CoversSession bool
 
-	// Provenance is the settling source's Category and Strategy; zero when
-	// Figure is false.
-	Provenance domain.UsageProvenance
+	// Provenance lists the Category and Strategy of every source whose
+	// readings settled the turn's token figure, each once, the session's own
+	// settling source first; nil when Figure is false.
+	Provenance []domain.UsageProvenance
+
+	// Amounts is the run-cumulative amounts after the turn, sorted by unit
+	// then model; nil when the ledger has counted none.
+	Amounts []domain.ReportedAmount
 
 	// Estimated is true when the figure rests on a history position the
 	// ledger re-derived from a running reading less its own part, and that
@@ -231,28 +241,45 @@ type Ledger struct {
 	turnEstimated    bool                         // a reading of this turn re-derived a non-zero history position
 	turnSplit        map[string]domain.TokenUsage // this turn's increases per served model
 	turnUnnamed      bool                         // an increase of this turn named no model
+
+	amounts            map[amountKey]*amountState   // what the session counted per unit and served model
+	amountUnitsForever map[string]struct{}          // units whose every key, now and later, is a lower bound
+	amountHistory      amountHistory                // what the session held before this run, per key
+	held               []AmountReading              // ObserveAmounts readings the next Settle counts
+	settled            bool                         // Settle has run
+	turnRecords        []knownRecord                // the records this turn's settlement split by model
+	childShares        map[string]domain.TokenUsage // the models this turn's child records added tokens to
 }
 
 // NewLedger returns a ledger for a live source of SpendProcessCumulative,
 // SpendSessionCumulative, SpendPerTurn, or SpendPerRequest shape and, when
 // records is not the zero Source, a records source of SpendPerRequest shape.
 // Either source may place cache inside or outside input and reasoning inside
-// or outside output. Any other declaration, and a Replay other than
-// ReplayNone on a live source of another shape or on the records source,
-// return an error wrapping ErrSpendUnsupported.
+// or outside output, and may declare amounts. With no records source, a live
+// source that declares amounts and no token shape is also accepted; its ledger
+// settles no token figure and counts only amounts. Any other declaration, and
+// a Replay other than ReplayNone on a live source of another shape or on the
+// records source, return an error wrapping ErrSpendUnsupported.
 func NewLedger(live, records Source) (*Ledger, error) {
-	if !declaresLive(live) {
+	noRecords := reflect.ValueOf(records).IsZero()
+	if !declaresLive(live) && (!noRecords || !declaresAmountsOnly(live)) {
 		return nil, fmt.Errorf("live source: %w", ErrSpendUnsupported)
 	}
 	if live.Spend.Replay != ReplayNone && live.Spend.Shape != SpendSessionCumulative {
 		return nil, fmt.Errorf("live source replay: %w", ErrSpendUnsupported)
 	}
+	if err := checkAmounts(live.Spend.Amounts, false); err != nil {
+		return nil, fmt.Errorf("live source amounts: %w: %w", ErrSpendUnsupported, err)
+	}
 	l := &Ledger{live: live.Spend, liveProvenance: provenanceOf(live)}
-	if reflect.ValueOf(records).IsZero() {
+	if noRecords {
 		return l, nil
 	}
 	if !declaresRecords(records) || records.Spend.Replay != ReplayNone {
 		return nil, fmt.Errorf("records source: %w", ErrSpendUnsupported)
+	}
+	if err := checkAmounts(records.Spend.Amounts, true); err != nil {
+		return nil, fmt.Errorf("records source amounts: %w: %w", ErrSpendUnsupported, err)
 	}
 	l.records, l.hasRecs, l.recordsProvenance = records.Spend, true, provenanceOf(records)
 	return l, nil
@@ -266,6 +293,10 @@ func declaresLive(src Source) bool {
 	return src.Strategy == StrategyLive &&
 		(src.Spend.Shape == SpendProcessCumulative || src.Spend.Shape == SpendPerTurn ||
 			src.Spend.Shape == SpendSessionCumulative || src.Spend.Shape == SpendPerRequest)
+}
+
+func declaresAmountsOnly(src Source) bool {
+	return src.Strategy == StrategyLive && src.Spend.Shape == SpendUndeclared && len(src.Spend.Amounts) > 0
 }
 
 func declaresRecords(src Source) bool {
@@ -282,6 +313,11 @@ func declaresRecords(src Source) bool {
 // history position at the total of those records, because a resumed
 // session's counter starts from them. A record that does not normalize
 // leaves that position unknown.
+//
+// A boundary that runs before the session's first Settle also fixes the
+// amount history of each unit and model from the records' amounts, each
+// identity once. A record whose amount does not read leaves its unit's
+// history unknown, and a boundary fixed later never sets amount history.
 func (l *Ledger) Boundary(read RecordsRead) {
 	if l.boundaryKnown || !read.OK {
 		return
@@ -295,6 +331,9 @@ func (l *Ledger) Boundary(read RecordsRead) {
 	l.boundaryKnown = true
 	l.base = l.covered
 	l.split = l.covered
+	if !l.settled {
+		l.fixAmountHistory(read)
+	}
 
 	if l.live.Shape != SpendSessionCumulative || l.live.Replay != ReplayNone || l.history.known {
 		return
@@ -337,9 +376,11 @@ func (l *Ledger) historyTotal(read RecordsRead) (domain.TokenUsage, map[string]d
 
 // SessionCreated records that the runtime created the session the ledger
 // counts, so no history exists: an unknown boundary becomes known and empty
-// without a read. It is called once, before the first Settle.
+// without a read, and every amount history is 0. It is called once, before
+// the first Settle.
 func (l *Ledger) SessionCreated() {
 	l.Boundary(RecordsRead{OK: true})
+	l.amountHistory = amountHistory{fixed: true, created: true}
 	if l.live.Shape == SpendSessionCumulative {
 		l.history = *NewResumeBaseline(&domain.TokenUsage{}, nil)
 	}
@@ -460,17 +501,35 @@ func (l *Ledger) own(r SpendReading) *domain.TokenUsage {
 // the model may leave requests no records read settled. A later turn whose
 // records hold them settles from the records, so the run total converges on
 // the records' figure.
+//
+// The amounts the turn's readings carry count beside the token figure, never
+// inside it. A ledger whose live source declares no token shape settles no
+// token figure and counts only amounts.
 func (l *Ledger) Settle(end TurnEnd, live *SpendReading, read RecordsRead) Settlement {
-	s, added := l.settleSession(end, live, read)
-	if end.Children {
-		s, added = l.countChildren(s, added, end, read)
+	before := l.run
+	l.settled = true
+	var s Settlement
+	var added map[string]domain.TokenUsage
+	if l.countsTokens() {
+		s, added = l.settleSession(end, live, read)
+		if end.Children {
+			s, added = l.countChildren(s, added, end, read)
+		}
+		if l.uncoverable {
+			s.CoversSession = false
+		}
 	}
-	if l.uncoverable {
-		s.CoversSession = false
-	}
+	l.settleAmounts(end, live, s, added, Subtract(l.run, before))
 	l.requests, l.provisional, l.turnUnknown = nil, domain.TokenUsage{}, false
 	l.turnSplit, l.turnUnnamed, l.turnEstimated = nil, false, false
-	return l.settlement(s, added)
+	l.turnRecords, l.childShares, l.held = nil, nil, nil
+	s = l.settlement(s, added)
+	s.Amounts = l.reportedAmounts()
+	return s
+}
+
+func (l *Ledger) countsTokens() bool {
+	return l.live.Shape != SpendUndeclared
 }
 
 // settleSession settles the session's own spend and returns the shares it
@@ -535,7 +594,7 @@ func (l *Ledger) settlePerRequest(end TurnEnd, live *SpendReading, read RecordsR
 	}
 	l.run = Add(l.run, arm.delta)
 	l.covered = arm.covered
-	return Settlement{Figure: true, Spent: true, Provenance: l.liveProvenance}, nil
+	return Settlement{Figure: true, Spent: true, Provenance: []domain.UsageProvenance{l.liveProvenance}}, nil
 }
 
 // commitLive moves the live position, and the history position under
@@ -561,6 +620,7 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 		l.split = l.covered
 	} else if model := strings.TrimSpace(live.Model); recs.usable && fromOK && toOK && from <= to {
 		added = recs.byModel(from, to)
+		l.turnRecords = recs.known[from:to]
 		l.split = l.covered
 	} else if model != "" {
 		added = map[string]domain.TokenUsage{model: arm.delta}
@@ -577,7 +637,7 @@ func (l *Ledger) settleLive(end TurnEnd, live *SpendReading, read RecordsRead, a
 		Spent:         arm.delta.InputTokens+arm.delta.OutputTokens > 0,
 		Complete:      complete,
 		CoversSession: complete && !l.historyEstimated && l.live.Shape != SpendPerTurn && l.live.Shape != SpendPerRequest,
-		Provenance:    l.liveProvenance,
+		Provenance:    []domain.UsageProvenance{l.liveProvenance},
 		Estimated:     arm.estimated,
 	}, added
 }
@@ -655,6 +715,7 @@ func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) (Settlement, map[s
 	var added map[string]domain.TokenUsage
 	if from, ok := recs.at(l.split); ok {
 		added = recs.byModel(from, len(recs.known))
+		l.turnRecords = recs.known[from:]
 		l.split = top
 	}
 	l.addByModel(added)
@@ -663,13 +724,15 @@ func (l *Ledger) settleRecords(end TurnEnd, recs recordsView) (Settlement, map[s
 		Spent:         true,
 		Complete:      complete,
 		CoversSession: complete && !l.historyEstimated,
-		Provenance:    l.recordsProvenance,
+		Provenance:    []domain.UsageProvenance{l.recordsProvenance},
 	}, added
 }
 
 // countChildren adds the records of the turn's child sessions to s and
 // added. Child records move neither the live position nor the records
-// alignment, so the session's own readings and records stay one for one.
+// alignment, so the session's own readings and records stay one for one. The
+// records source joins the settlement's provenance after the source that
+// settled the session's own figure.
 func (l *Ledger) countChildren(s Settlement, added map[string]domain.TokenUsage, end TurnEnd, read RecordsRead) (Settlement, map[string]domain.TokenUsage) {
 	short := !end.ChildrenSettled || !read.ChildrenOK
 	var total domain.TokenUsage
@@ -697,9 +760,10 @@ func (l *Ledger) countChildren(s Settlement, added map[string]domain.TokenUsage,
 	if counted {
 		l.run = Add(l.run, total)
 		l.addByModel(shares)
+		l.childShares = shares
 		added = AddByModel(added, shares)
-		if !s.Figure {
-			s.Provenance = l.recordsProvenance
+		if !slices.Contains(s.Provenance, l.recordsProvenance) {
+			s.Provenance = append(s.Provenance, l.recordsProvenance)
 		}
 		s.Figure, s.Spent = true, true
 	}
@@ -852,8 +916,9 @@ func (l *Ledger) normalizeLive(r SpendReading) (counts domain.TokenUsage, split 
 }
 
 type knownRecord struct {
-	usage domain.TokenUsage
-	model string
+	usage   domain.TokenUsage
+	model   string
+	amounts []AmountReading
 }
 
 // recordsView is the part of a records read that counts.
@@ -889,7 +954,7 @@ func (l *Ledger) recordsView(read RecordsRead) recordsView {
 			stillKnown = false
 			continue
 		}
-		v.known = append(v.known, knownRecord{usage: u, model: strings.TrimSpace(r.Model)})
+		v.known = append(v.known, knownRecord{usage: u, model: strings.TrimSpace(r.Model), amounts: r.Amounts})
 		v.positions = append(v.positions, Add(v.positions[len(v.positions)-1], u))
 	}
 	return v

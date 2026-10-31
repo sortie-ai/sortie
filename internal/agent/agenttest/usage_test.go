@@ -41,7 +41,7 @@ func init() {
 		UsageSources: usage.Sources{Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
+			Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}},
 		}},
 	})
 	registry.Agents.RegisterWithMeta(usageTestKindRecordsOnly, usageTestConstructor, registry.AgentMeta{
@@ -49,7 +49,7 @@ func init() {
 			Live: usage.Source{
 				Category: usage.SourceOutput,
 				Strategy: usage.StrategyLive,
-				Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
+				Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}},
 			},
 			Records: usage.Source{
 				Category: usage.SourceJournal,
