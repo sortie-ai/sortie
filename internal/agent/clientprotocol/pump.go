@@ -1328,23 +1328,15 @@ func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *u
 	}
 }
 
-// resetFromPulledWindows fills a zero reset of the turn's refusal from the
-// earliest exhausted window of the turn-end pull. With a configured model, a
-// window the declaration says meters another model is left out. A reset the
-// records already set is never replaced.
+// resetFromPulledWindows fills a zero reset of the turn's refusal with the one
+// the usage component chooses among the windows of the turn-end pull, under the
+// configured model. A reset the records already set is never replaced.
 func (p *pumpState) resetFromPulledWindows(turn *activeTurn, ev agentcore.TurnEvidence) {
 	if turn.refusal == nil || !turn.refusal.WindowReset || ev.TerminalErrorKind != domain.ErrUsageLimit ||
 		ev.UsageLimit == nil || !ev.UsageLimit.ResetsAt.IsZero() {
 		return
 	}
-	windows := turn.pulledWindows
-	if model := p.state.configuredModel; model != "" && p.declaration.WindowModel != nil {
-		windows = slices.DeleteFunc(slices.Clone(windows), func(w domain.UsageWindow) bool {
-			metered := p.declaration.WindowModel(w.Key)
-			return metered != "" && metered != model
-		})
-	}
-	ev.UsageLimit.ResetsAt = usage.RefusalReset(windows, time.Now().UTC())
+	ev.UsageLimit.ResetsAt = usage.RefusalReset(turn.pulledWindows, p.state.configuredModel, time.Now().UTC())
 }
 
 // recoverThenFinalize ends the active turn on ev: a turn that ends without a

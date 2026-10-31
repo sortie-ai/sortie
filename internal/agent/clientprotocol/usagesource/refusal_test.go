@@ -44,15 +44,15 @@ func TestGeminiPromptError(t *testing.T) {
 	}
 }
 
-func TestGeminiWindowKeySplitsBackToModel(t *testing.T) {
+func TestGeminiBucketReadingStatesItsModel(t *testing.T) {
 	t.Parallel()
 
 	share := 0.5
 	for _, tokenType := range []string{"", "REQUESTS"} {
 		readings := geminiBucketReadings([]geminiBucket{{ModelID: "gemini-2.5-pro", TokenType: tokenType, RemainingFraction: &share}})
 
-		if len(readings) != 1 || geminiWindowModel(readings[0].Window) != "gemini-2.5-pro" {
-			t.Errorf("geminiWindowModel(key of token type %q) from %+v, want model %q", tokenType, readings, "gemini-2.5-pro")
+		if len(readings) != 1 || readings[0].Span.Model != "gemini-2.5-pro" {
+			t.Errorf("geminiBucketReadings(token type %q) = %+v, want one reading with Span.Model %q", tokenType, readings, "gemini-2.5-pro")
 		}
 	}
 }

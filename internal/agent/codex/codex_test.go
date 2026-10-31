@@ -520,12 +520,31 @@ func windowBelowLimit(t *testing.T) func(string) string {
 	}
 }
 
+func withRateLimitsBefore(t *testing.T, rateLimits string) func(string) string {
+	t.Helper()
+	return func(recorded string) string {
+		const recordedLine = `{"method":"account/rateLimits/updated"`
+		if !strings.Contains(recorded, recordedLine) {
+			t.Fatalf("recorded refusal has no %s line", recordedLine)
+		}
+		inserted := `{"method":"account/rateLimits/updated","params":{"rateLimits":` + rateLimits + `}}` + "\n"
+		return strings.Replace(recorded, recordedLine, inserted+recordedLine, 1)
+	}
+}
+
 func TestRunTurn_UsageLimitRefusal(t *testing.T) {
 	t.Parallel()
 
-	replay := func(mutate func(string) string) *replayAdapter {
-		return &replayAdapter{CodexAdapter: &CodexAdapter{}, state: makeTestState(t, recordedRefusalTurn(t, mutate))}
+	replay := func(model string, mutate func(string) string) *replayAdapter {
+		state := makeTestState(t, recordedRefusalTurn(t, mutate))
+		state.passthrough.Model = model
+		return &replayAdapter{CodexAdapter: &CodexAdapter{}, state: state}
 	}
+	exhaustedBucket := func(limitID, limitName string) string {
+		return `{"limitId":"` + limitID + `","limitName":"` + limitName + `","primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":4103049600}}`
+	}
+	const weeklyHeld = `{"limitId":"codex","limitName":null,"primary":null,"secondary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":4103049600}}`
+	recordedReset, laterReset := time.Unix(4102444800, 0).UTC(), time.Unix(4103049600, 0).UTC()
 	var mu sync.Mutex
 	var windows []domain.UsageWindow
 	collect := func(e domain.AgentEvent) {
@@ -536,11 +555,35 @@ func TestRunTurn_UsageLimitRefusal(t *testing.T) {
 	cases := []agenttest.UsageLimitRefusalCase{
 		{
 			Name:         "recorded refusal",
-			Adapter:      replay(func(s string) string { return s }),
+			Adapter:      replay("", func(s string) string { return s }),
 			Turn:         domain.RunTurnParams{OnEvent: collect},
-			WantResetsAt: time.Unix(4102444800, 0).UTC(),
+			WantResetsAt: recordedReset,
 		},
-		{Name: "window below the limit", Adapter: replay(windowBelowLimit(t))},
+		{Name: "window below the limit", Adapter: replay("", windowBelowLimit(t))},
+		{
+			Name:         "weekly window held across notifications",
+			Adapter:      replay("", withRateLimitsBefore(t, weeklyHeld)),
+			WantResetsAt: laterReset,
+		},
+		{
+			Name:    "reset already past",
+			Adapter: replay("", func(s string) string { return strings.Replace(s, "4102444800", "946684800", 1) }),
+		},
+		{
+			Name:         "another model's bucket",
+			Adapter:      replay("gpt-5.4", withRateLimitsBefore(t, exhaustedBucket("codex_bengalfox", "gpt-5.2-codex-sonic"))),
+			WantResetsAt: recordedReset,
+		},
+		{
+			Name:         "the configured model's bucket",
+			Adapter:      replay("gpt-5.2-codex-sonic", withRateLimitsBefore(t, exhaustedBucket("codex_bengalfox", "gpt-5.2-codex-sonic"))),
+			WantResetsAt: laterReset,
+		},
+		{
+			Name:         "bucket label",
+			Adapter:      replay("gpt-5.4", withRateLimitsBefore(t, exhaustedBucket("codex_other", "codex_other"))),
+			WantResetsAt: laterReset,
+		},
 	}
 
 	agenttest.AssertUsageLimitRefusal(t, "codex", cases)
@@ -565,11 +608,6 @@ func TestRunTurn_UsageLimitRefusal(t *testing.T) {
 	}
 }
 
-// TestRunTurn_EmptyTurnStatus pins both ways a turn/completed
-// notification can arrive without a status word: params that fail to
-// unmarshal into an object, and a turn object that omits the status
-// member. Neither builds a terminal message from the empty status, so
-// agentcore.DecideTurn's own fallback message applies.
 func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 	t.Parallel()
 

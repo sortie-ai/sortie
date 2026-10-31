@@ -159,7 +159,8 @@ type ForkPerTurnHooks struct {
 	// RefusalWindowReset reports, once OnFinalize returned for a turn,
 	// whether that turn's usage_limit refusal reads its reset from the
 	// windows PullWindows returned. A refusal that carries no reset then
-	// takes the earliest exhausted window's. Nil means no turn's does.
+	// takes the one the usage component chooses among those windows. Nil
+	// means no turn's does.
 	RefusalWindowReset func() bool
 
 	// TurnEnv returns the started process's environment and the settings
@@ -763,10 +764,11 @@ loop:
 	return result, nil
 }
 
-// fillRefusalReset gives a usage_limit error that carries no reset the earliest
-// exhausted window of the turn's pull, when the adapter says this turn's
-// refusal reads its reset from there. A reset the error already carries is
-// kept.
+// fillRefusalReset gives a usage_limit error that carries no reset the one the
+// usage component chooses among the turn's pulled windows, when the adapter
+// says this turn's refusal reads its reset from there. A reset the error
+// already carries is kept. No model filter applies: no pull of a fork-per-turn
+// kind reports a window that names a model.
 func (s *ForkPerTurnSession) fillRefusalReset(agentErr *domain.AgentError, windows []domain.UsageWindow) {
 	if s.hooks.RefusalWindowReset == nil || agentErr == nil || agentErr.Kind != domain.ErrUsageLimit {
 		return
@@ -774,7 +776,7 @@ func (s *ForkPerTurnSession) fillRefusalReset(agentErr *domain.AgentError, windo
 	if agentErr.UsageLimit == nil || !agentErr.UsageLimit.ResetsAt.IsZero() || !s.hooks.RefusalWindowReset() {
 		return
 	}
-	agentErr.UsageLimit.ResetsAt = usage.RefusalReset(windows, time.Now().UTC())
+	agentErr.UsageLimit.ResetsAt = usage.RefusalReset(windows, "", time.Now().UTC())
 }
 
 // turnStdin returns the reader a turn's process reads from: the SSH

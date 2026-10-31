@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -49,7 +48,6 @@ func init() {
 			return commandNamesRuntime(target, geminiExecutableName, geminiPackageName)
 		},
 		PromptError: geminiPromptError,
-		WindowModel: geminiWindowModel,
 	})
 }
 
@@ -63,18 +61,12 @@ func geminiPromptError(e jsonrpc.Error) PromptVerdict {
 	return PromptVerdict{Refusal: &Refusal{Limit: domain.UsageLimit{ModelOnly: true}, WindowReset: true}}
 }
 
-// geminiWindowKey builds the key of a quota bucket's window, and
-// geminiWindowModel is its only inverse.
+// geminiWindowKey builds the key of a quota bucket's window.
 func geminiWindowKey(modelID, tokenType string) string {
 	if tokenType == "" {
 		return modelID
 	}
 	return modelID + "/" + tokenType
-}
-
-func geminiWindowModel(key string) string {
-	modelID, _, _ := strings.Cut(key, "/")
-	return modelID
 }
 
 // geminiClientMetadata is what the runtime sends with loadCodeAssist when it
@@ -199,7 +191,7 @@ func geminiBucketReadings(buckets []geminiBucket) []usage.WindowReading {
 		}
 		readings = append(readings, usage.WindowReading{
 			Window:   geminiWindowKey(bucket.ModelID, bucket.TokenType),
-			Span:     usage.Span{Scope: bucket.ModelID},
+			Span:     usage.Span{Scope: bucket.ModelID, Model: bucket.ModelID},
 			Share:    bucket.RemainingFraction,
 			ResetsAt: geminiResetUnix(bucket.ResetTime),
 		})

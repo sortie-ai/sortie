@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -257,8 +256,21 @@ type rateLimitsUpdatedParams struct {
 	} `json:"rateLimits"`
 }
 
+// limitModel returns the model the notification's windows meter, or the
+// empty string when the bucket meters every model. The default bucket and a
+// limitName that is absent or only repeats the limitId name no model.
+func (p rateLimitsUpdatedParams) limitModel() string {
+	limits := p.RateLimits
+	switch {
+	case limits.LimitID == "codex", limits.LimitName == nil, *limits.LimitName == "", *limits.LimitName == limits.LimitID:
+		return ""
+	}
+	return *limits.LimitName
+}
+
 func (p rateLimitsUpdatedParams) windowReadings() []usage.WindowReading {
 	var readings []usage.WindowReading
+	model := p.limitModel()
 	for _, w := range []struct {
 		suffix string
 		window *rateLimitWindow
@@ -268,6 +280,7 @@ func (p rateLimitsUpdatedParams) windowReadings() []usage.WindowReading {
 		}
 		share := float64(w.window.UsedPercent)
 		reading := usage.WindowReading{Window: p.RateLimits.LimitID + w.suffix, Share: &share}
+		reading.Span.Model = model
 		if w.window.WindowDurationMins != nil {
 			reading.Span.Minutes = *w.window.WindowDurationMins
 		}
@@ -290,53 +303,6 @@ func parseRateLimitsUpdated(params json.RawMessage) (rateLimitsUpdatedParams, er
 		return rateLimitsUpdatedParams{}, fmt.Errorf("parse account/rateLimits/updated params: %w", err)
 	}
 	return p, nil
-}
-
-// rateLimitWindows holds the latest primary and secondary window
-// reported for one limit id.
-type rateLimitWindows struct {
-	primary, secondary *rateLimitWindow
-}
-
-// rateLimitStore keeps the latest windows per limit id for one session.
-// It is owned by the goroutine reading the session's stream and takes
-// no lock. The zero value is ready to use.
-type rateLimitStore map[string]rateLimitWindows
-
-// record merges a notification into the store: a reported window
-// replaces the stored one, an absent window keeps it, because the
-// runtime sends only the windows that changed.
-func (s *rateLimitStore) record(p rateLimitsUpdatedParams) {
-	if *s == nil {
-		*s = make(rateLimitStore)
-	}
-	id := p.RateLimits.LimitID
-	windows := (*s)[id]
-	if p.RateLimits.Primary != nil {
-		windows.primary = p.RateLimits.Primary
-	}
-	if p.RateLimits.Secondary != nil {
-		windows.secondary = p.RateLimits.Secondary
-	}
-	(*s)[id] = windows
-}
-
-// exhaustedResetsAt returns the latest reset instant among stored
-// windows used up to 100 percent or more, or the zero time when none
-// carries one.
-func (s rateLimitStore) exhaustedResetsAt() time.Time {
-	var latest int64
-	for _, windows := range s {
-		for _, w := range []*rateLimitWindow{windows.primary, windows.secondary} {
-			if w != nil && w.UsedPercent >= 100 && w.ResetsAt != nil && *w.ResetsAt > latest {
-				latest = *w.ResetsAt
-			}
-		}
-	}
-	if latest == 0 {
-		return time.Time{}
-	}
-	return time.Unix(latest, 0).UTC()
 }
 
 // mapCodexErrorInfo maps a codexErrorInfo variant name to a domain error
