@@ -532,29 +532,33 @@ func TestResolveSessionCallTimeoutFallsBack(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: shortReadTimeoutMS}, clientProtocolMaxLineBytes)
-			out := newOutboundReader(outPr)
+			// The session/new answer shares the short read timeout, so only the
+			// bubble's fake clock keeps a slow runner from expiring it.
+			synctest.Test(t, func(t *testing.T) {
+				state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: shortReadTimeoutMS}, clientProtocolMaxLineBytes)
+				out := newOutboundReader(outPr)
 
-			outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", tt.caps)
+				outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", tt.caps)
 
-			probeID := out.awaitMethod(t, negativeControlMethod)
-			if tt.answerProbe {
-				respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-				out.awaitMethod(t, tt.continuationMethod)
-			}
+				probeID := out.awaitMethod(t, negativeControlMethod)
+				if tt.answerProbe {
+					respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+					out.awaitMethod(t, tt.continuationMethod)
+				}
 
-			newID := out.awaitMethod(t, methodSessionNew)
-			respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
+				newID := out.awaitMethod(t, methodSessionNew)
+				respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
 
-			outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-			if outcome.err != nil {
-				t.Fatalf("resolveSession() error = %v, want nil: a call that never answers must fall back rather than fail the run", outcome.err)
-			}
-			if outcome.sessionID != "fallback-session" {
-				t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-			}
+				outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
+				if outcome.err != nil {
+					t.Fatalf("resolveSession() error = %v, want nil: a call that never answers must fall back rather than fail the run", outcome.err)
+				}
+				if outcome.sessionID != "fallback-session" {
+					t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
+				}
 
-			assertSessionContinuationEntry(t, state, out, inPw, true)
+				assertSessionContinuationEntry(t, state, out, inPw, true)
+			})
 		})
 	}
 }
