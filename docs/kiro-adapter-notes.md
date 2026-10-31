@@ -44,9 +44,9 @@ No flag turns the profile check off. Whether it fails for every API key or only 
 
 Every grade on this page was measured under a stored device login, the credential the measurement assumes. Nothing was measured under an API key.
 
-Token accounting has no source on either surface. The runtime reports spend as an abstract credits figure and context use as a percentage, never as tokens. So token-based budgets are inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn in a vendor extension; the native stream has no token field either. Parity holds on this row because the shortfall is shared; conformance fails because the capability works on neither route. A live run with a one-token `agent.max_tokens` ceiling spent tokens, recorded unaccounted spend, and finished without stopping.
+Token accounting has no source on either surface. The runtime reports spend as an abstract credits figure and context use as a percentage, never as tokens. So token-based budgets are inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn in a vendor extension; the native stream has no token field either. Parity holds on this row because the shortfall is shared; conformance fails because the capability works on neither route. A live run with a one-token `agent.max_tokens` ceiling spent tokens and finished without stopping.
 
-Kiro CLI is measured under the default declaration's spend mapping as a lower bound. Its token fields hold zero, so a turn that reached the model carries no figure and stays unaccounted spend. The credits it reports are not read here.
+Sortie records the credits each turn reports, per run and in credits, never converted. A Kiro CLI run carries no token or money figure and counts among the unmeasured runs, so `agent.max_tokens` and the cost limits count nothing for it, and the session, turn, time, and absence limits bound it. The prompt result carries no `usage` member, and no source reads the zero token counts of the default engine's session file.
 
 Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. This runtime never produces either. A request built to trigger one completes normally, so the case is recorded as `outcome_never_produced`.
 
@@ -75,9 +75,26 @@ The handshake advertises `loadSession` true, `mcpCapabilities.http` true with `s
 
 Session continuation restores the session and its memory: the recall turn runs under the seed's own session identifier and returns what the seed asked it to remember. A successful load alone does not prove that; only the recall answer does.
 
-The runtime sends many notifications under its own vendor method prefix. Sortie records them as unrecognized and moves on. Do not add handlers for them to quiet a log; the standard surface already carries everything the adapter reads.
+The runtime sends many notifications under its own vendor method prefix. Sortie reads the credit frame (see "Credits") and the refusal notifications "Usage limits" names, and records the rest as unrecognized. Do not add handlers for the rest to quiet a log.
 
 `limit_reached` was not induced here: the prompt channel cannot carry a request big enough to reach the runtime's limit.
+
+## Credits
+
+The runtime reports each turn's spend in credits and carries no token figure. Sortie records those credits on the run, in credits and never converted. Each engine reports a turn's credits in one frame type:
+
+| Engine | Frame | Entries | Entry read when | Amount member |
+| --- | --- | --- | --- | --- |
+| Default | Notification `_kiro.dev/metadata` | `params.meteringUsage[]` | `unit` is `credit` | `value` |
+| `--agent-engine v3` | `session/update` whose update has `sessionUpdate` `session_info_update` and `_meta.kiro.kind` `turn_completion` | `update._meta.kiro.promptTurnSummaries[]` | `unit` is `credit` | `usage` |
+
+Each entry is one turn's own amount, and the entries of one turn add. An entry of another unit is not read. An amount member that is absent, null, not a JSON number, or negative reads as unknown, never zero, and the credits then count as a lower bound. The other `_kiro.dev/metadata` frames, which carry context use, hold no `meteringUsage` and carry no amount.
+
+In every completed turn captured, on either engine, the credit frame precedes the `session/prompt` result, so the credits settle with their own turn. A cancelled or failed turn reports none: the v3 engine sends an empty `promptTurnSummaries`, and the default engine sends a frame without `meteringUsage`. Such a turn that reached the model marks the credits counted so far as a lower bound.
+
+A session load on the v3 engine replays every earlier `turn_completion`, each marked `_meta.kiro.replay` true, before it answers the load. Sortie reads no frame before that answer, so none of them counts. A credit frame that arrives after the load result and outside a turn counts nothing. The default engine's replay is unobserved: whether it repeats `_kiro.dev/metadata` frames on a load is unknown, and a load adds no credits as long as those frames precede the first prompt.
+
+Credits that Kiro reports outside a prompt turn, such as for a context compaction between turns, count nothing. Whether the runtime reports any is unobserved.
 
 ## Usage limits
 
@@ -100,7 +117,7 @@ Each `usageBreakdowns` entry with `hasLimit` true becomes one window: `resourceT
 
 The figure trails the spend. A 0.035-credit turn did not move `used` at once or a minute later, and it moved some minutes after. A window pulled when a turn ends therefore shows the usage before that turn and the turns just before it.
 
-The usage declaration is registered under the runtime's name `kiro`, which no handshake reports. The default engine's `agentInfo.name` is `Kiro CLI Agent`, and the v3 engine sends none. So when the handshake reports no name, the declaration is selected by the launch command naming `kiro-cli`.
+The usage declaration is registered once, under `Kiro CLI Agent`, the default engine's `agentInfo.name`. The v3 engine sends no name, so on it the declaration is selected by the launch command naming `kiro-cli`.
 
 The two engines report a refusal differently, and the same declaration reads both. Neither is held on a model, because Kiro's credits and request counts belong to the account.
 
@@ -145,8 +162,8 @@ Windows live qualification is unobserved.
 
 ## Verifying a change
 
-The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. Its scripted contract (`TestIntegration_ScriptedModel`) runs with the settings of the nightly "Kiro CLI - ACP (scripted)" row: the command, the credential variable, the model document path, and the model document.
+The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. Its scripted contract (`TestIntegration_ScriptedModel`) runs with the settings of the nightly "Kiro CLI - ACP (scripted)" row: the command, the credential variable, the model document path, and the model document, including the spend declaration `Kiro CLI Agent`. Every scenario expects no token figure and asserts no credits, because the scripted model endpoint emits no metering and the vendor's service computes credits.
 
-The contract's SSH variants add `SORTIE_CLIENTPROTOCOL_SSH_COMMAND`, `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and an `SORTIE_CLIENTPROTOCOL_SSH_INSTALL` that puts `kiro-cli` and `kiro-cli-chat` of the host's release on the lab user's PATH. Name that release by version in the download URL (`https://prod.download.cli.kiro.dev/stable/<version>/kirocli-x86_64-linux.tar.gz`), because the lab caches its image per install script and an unpinned script keeps the first release it fetched.
+The contract's SSH variants add `SORTIE_CLIENTPROTOCOL_SSH_COMMAND`, `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and an `SORTIE_CLIENTPROTOCOL_SSH_INSTALL` that puts `kiro-cli` and `kiro-cli-chat` on the lab user's PATH. The nightly row installs the latest stable release (`https://prod.download.cli.kiro.dev/stable/latest/kirocli-x86_64-linux.tar.gz`). A local lab keeps the release it first fetched until its image is removed (`make ssh-lab-clean`).
 
 The live qualification profile is gated separately and spends real credits.
