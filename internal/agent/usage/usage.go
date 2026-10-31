@@ -116,6 +116,10 @@ type Span struct {
 	// Scope is the model or usage pool the window covers, as display text;
 	// empty for all of the account's usage.
 	Scope string
+
+	// Model is the model the window meters, as its source names it; empty
+	// when the source names none.
+	Model string
 }
 
 // WindowReading is one usage window as a source's parser read it, in the

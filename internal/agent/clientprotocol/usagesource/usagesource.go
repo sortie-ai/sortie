@@ -106,11 +106,6 @@ type Declaration struct {
 	// is neither session/update nor session/request_permission. Nil when the
 	// runtime sends none the declaration reads.
 	TurnNotification func(sessionID, method string, params json.RawMessage) TurnSignal
-
-	// WindowModel returns the model the pulled window with this key meters,
-	// or "" when it meters every model. Nil when no pulled window meters a
-	// single model.
-	WindowModel func(key string) string
 }
 
 // Refusal is a provider usage-limit refusal a declaration read off a

@@ -174,10 +174,11 @@ type sessionState struct {
 	// starts.
 	turnReading *usage.SpendReading
 
-	// rateLimits holds the latest usage windows the runtime reported,
-	// kept across turns because a window is announced before the turn
-	// it refuses ends. Touched only by the goroutine running RunTurn.
-	rateLimits rateLimitStore
+	// windows holds the usage windows the runtime reported, merged by the
+	// usage component and kept across turns because a window is announced
+	// before the turn it refuses ends. Touched only by the goroutine
+	// running RunTurn.
+	windows []domain.UsageWindow
 
 	// usageMeasured reports whether the run has counted a request or
 	// settled a figure. Monotone: set true once and never cleared.
@@ -1058,7 +1059,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						ev.TerminalMessage = agentcore.CredentialRefusedMessage(tc.Turn.Error.Message)
 					}
 					if ev.TerminalErrorKind == domain.ErrUsageLimit {
-						ev.UsageLimit = &domain.UsageLimit{ResetsAt: state.rateLimits.exhaustedResetsAt()}
+						ev.UsageLimit = &domain.UsageLimit{ResetsAt: usage.RefusalReset(state.windows, state.passthrough.Model, time.Now().UTC())}
 					}
 				default:
 					ev.Terminal = agentcore.TerminalFailure
@@ -1245,9 +1246,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					agentcore.EmitNotification(emit, "")
 					continue
 				}
-				state.rateLimits.record(p)
 				at := time.Now().UTC()
-				agentcore.EmitUsageWindows(emit, at, usage.Windows(appServerSource, p.windowReadings(), at))
+				normalized := usage.Windows(appServerSource, p.windowReadings(), at)
+				agentcore.EmitUsageWindows(emit, at, normalized)
+				state.windows = usage.MergeWindows(state.windows, normalized)
 
 			case "model/rerouted":
 				p, parseErr := parseModelRerouted(msg.Params)

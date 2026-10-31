@@ -197,6 +197,10 @@ type UsageWindow struct {
 	// Minutes is the window length; 0 when not reported.
 	Minutes int64
 
+	// Model is the model the window meters, as its source names it; empty
+	// when the source names none.
+	Model string
+
 	// UsedPercent is the share used in percent and may exceed 100. Nil
 	// when not reported.
 	UsedPercent *float64

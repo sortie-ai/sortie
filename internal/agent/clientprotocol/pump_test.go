@@ -1529,7 +1529,8 @@ func TestPumpRefusalResetSourcing(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Second).Add(time.Hour)
 	later := base.Add(time.Hour)
 	window := func(key string, at time.Time) usage.WindowReading {
-		return usage.WindowReading{Window: key, Status: "exhausted", ResetsAt: at.Unix()}
+		model, _, _ := strings.Cut(key, "/")
+		return usage.WindowReading{Window: key, Span: usage.Span{Model: model}, Status: "exhausted", ResetsAt: at.Unix()}
 	}
 	record := func(name string, at time.Time) usagesource.Records {
 		return usagesource.Records{Refusal: usagesource.RecordedRefusal{Name: name, ResetsAt: at}}
@@ -1549,7 +1550,7 @@ func TestPumpRefusalResetSourcing(t *testing.T) {
 		{name: "no window reset", windows: []usage.WindowReading{window("m1", base)}},
 		{name: "records beat an earlier window", refusal: fromRecord, windows: []usage.WindowReading{window("m1", base)}, records: record("quota", later), wantReset: later},
 		{name: "another model's window", refusal: fromWindow, model: "m1", windows: []usage.WindowReading{window("m2/daily", base)}},
-		{name: "the model's own window", refusal: fromWindow, model: "m1", windows: []usage.WindowReading{window("m2/daily", base), window("m1/daily", later)}, wantReset: later},
+		{name: "the model's own window", refusal: fromWindow, model: "m1", windows: []usage.WindowReading{window("m2/daily", later), window("m1/daily", base)}, wantReset: base},
 		{name: "failed pull", refusal: fromWindow, windows: []usage.WindowReading{window("m1", base)}, pullErr: errors.New("pull failed")},
 		{name: "failed records read", refusal: usagesource.Refusal{Name: "quota"}, records: record("quota", base), readErr: errors.New("unreadable")},
 		{name: "record of another refusal", refusal: usagesource.Refusal{Name: "quota"}, records: record("budget", base)},
@@ -1567,7 +1568,6 @@ func TestPumpRefusalResetSourcing(t *testing.T) {
 			declaration.PullWindows = func(context.Context, usagesource.PullRuntime) ([]usage.WindowReading, error) {
 				return tt.windows, tt.pullErr
 			}
-			declaration.WindowModel = func(key string) string { model, _, _ := strings.Cut(key, "/"); return model }
 			declaration.PromptError = func(jsonrpc.Error) usagesource.PromptVerdict { return usagesource.PromptVerdict{Refusal: &tt.refusal} }
 			state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
 			state.configuredModel = tt.model

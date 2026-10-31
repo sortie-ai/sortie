@@ -56,6 +56,7 @@ func Windows(source Source, readings []WindowReading, at time.Time) []domain.Usa
 			Key:         r.Window,
 			Label:       labelOf(lengthOf(span, minutes), strings.TrimSpace(span.Scope)),
 			Minutes:     minutes,
+			Model:       span.Model,
 			UsedPercent: used,
 			Status:      source.Windows.Statuses[r.Status],
 			ResetsAt:    resetsAt,
