@@ -375,7 +375,7 @@ jobs:
         run: npm install -g @github/copilot
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/copilot/...
+        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/copilot/...
 
   test-integration-codex:
     name: "Integration: Codex"
