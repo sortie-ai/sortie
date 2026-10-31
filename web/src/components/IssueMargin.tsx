@@ -3,6 +3,7 @@ import { useId } from "react";
 import { useNow } from "@/app/live";
 import { ExternalLinkIcon } from "@/components/icons";
 import { BudgetMeter } from "@/components/BudgetMeter";
+import { NotedFigure } from "@/components/NotedFigure";
 import { Pair, Pairs, Panel } from "@/components/Panel";
 import { ServedText } from "@/components/ServedText";
 import { StateBadge } from "@/components/StateBadge";
@@ -13,9 +14,9 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { linkActionOf, useAttentionActions } from "@/components/use-attention-actions";
 import { useIssueActions } from "@/components/use-issue-actions";
 import { rowMark } from "@/lib/active-rows";
-import { budgetOf, moneyBudgetText } from "@/lib/budget";
+import { budgetOf, moneyBudgetFigure } from "@/lib/budget";
 import { cn } from "@/lib/cn";
-import { costText, costTitle } from "@/lib/figures";
+import { issueCostFigure, liveCostFigure, liveTokensFigure } from "@/lib/figures";
 import {
   fmtAgo,
   fmtClock,
@@ -403,7 +404,10 @@ function costShares(runs: readonly RunResponse[], chained: boolean): CostShare[]
       hasPriced: before.hasPriced || usd !== null,
       hasUnpriced: before.hasUnpriced || run.cost_status === "unpriced",
       isIncomplete:
-        before.isIncomplete || run.cost_status === "partial" || run.cost_status === "unmeasured",
+        before.isIncomplete ||
+        run.cost_status === "partial" ||
+        run.cost_status === "unmeasured" ||
+        run.usage_completeness === "lower_bound",
     });
   }
   return [...shares.values()];
@@ -419,7 +423,13 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
   const figures = budgetOf(detail, state);
   const { sessions, tokens, money, cost } = figures;
   const note = noTokenBudgetText(tokens);
-  const moneyText = moneyBudgetText(figures);
+  const moneyFigure = moneyBudgetFigure(figures);
+  const moneyText =
+    moneyFigure === undefined || money.limit === null ? undefined : (
+      <>
+        <NotedFigure figure={moneyFigure} /> of {fmtMoney(money.limit)}
+      </>
+    );
   const shares = cost === null ? [] : costShares(detail.history?.runs ?? [], chained);
   const hasPairs = cost !== null && (moneyText === undefined || shares.length > 0);
 
@@ -433,36 +443,44 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
         ) : (
           <BudgetMeter name="Sessions" line={sessions} format={fmtCount} />
         )}
-        <BudgetMeter name="Tokens" line={tokens} format={fmtTokens} />
+        <BudgetMeter
+          name="Tokens"
+          line={tokens}
+          format={fmtTokens}
+          text={
+            tokens.used === null || tokens.limit === null || tokens.complete ? undefined : (
+              <>
+                <NotedFigure figure={liveTokensFigure(tokens.used, false)} /> of{" "}
+                {fmtTokens(tokens.limit)}
+              </>
+            )
+          }
+        />
         {note === undefined ? undefined : <p className="text-body-sm text-ink-muted">{note}</p>}
         {moneyText === undefined ? undefined : (
-          <BudgetMeter
-            name="Cost"
-            line={money}
-            format={fmtMoney}
-            text={moneyText}
-            title={cost === null ? undefined : costTitle(cost.status, cost.usd)}
-          />
+          <BudgetMeter name="Cost" line={money} format={fmtMoney} text={moneyText} />
         )}
       </div>
       {cost === null || !hasPairs ? undefined : (
         <Pairs>
           {moneyText === undefined ? (
             <Pair label="Estimated cost">
-              <strong title={costTitle(cost.status, cost.usd)} className="font-bold">
-                {costText(cost.status, cost.usd)}
+              <strong className="font-bold">
+                <NotedFigure figure={issueCostFigure(detail, cost)} />
               </strong>
             </Pair>
           ) : undefined}
-          {shares.map((share) => {
-            const status = shareStatus(share);
-            const usd = share.hasPriced ? share.usd : null;
-            return (
-              <Pair key={share.name} label={share.name}>
-                <span title={costTitle(status, usd)}>{costText(status, usd)}</span>
-              </Pair>
-            );
-          })}
+          {shares.map((share) => (
+            <Pair key={share.name} label={share.name}>
+              <NotedFigure
+                figure={liveCostFigure(
+                  shareStatus(share),
+                  share.hasPriced ? share.usd : null,
+                  "runs",
+                )}
+              />
+            </Pair>
+          ))}
         </Pairs>
       )}
     </Panel>

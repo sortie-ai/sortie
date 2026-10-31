@@ -16,7 +16,7 @@ import { condition } from "@/lib/condition";
 import { buildEnded } from "@/lib/ended";
 import { issueLinkOf } from "@/lib/issue-link";
 import { localMidnight } from "@/lib/server-clock";
-import { tallyCostTitle, tallyLine } from "@/lib/tally";
+import { tallyLine } from "@/lib/tally";
 import { attentionKey, endedKey, pruneRead, useReadSet } from "@/lib/unread";
 
 import { ActiveList } from "./ActiveList";
@@ -89,7 +89,10 @@ function OverviewBody({ state }: OverviewBodyProps) {
   const tally = useTallyQuery(midnight);
   const isFirstRun = useFirstRunQuery();
   const isFetching = useIsFetching() > 0;
-  const [selection, setSelection] = useState({ key: null as string | null, index: 0 });
+  const [selection, setSelection] = useState({
+    key: null as string | null,
+    index: 0,
+  });
   const [showSelection, setShowSelection] = useState(false);
 
   const rows = useMemo(() => activeRows(state), [state]);
@@ -292,7 +295,6 @@ function OverviewBody({ state }: OverviewBodyProps) {
       : view.tally.summary;
   const tallyParts =
     tallySummary === undefined ? undefined : tallyLine(tallySummary, endedAll.length, hasCost);
-  const tallyTitle = tallySummary === undefined ? undefined : tallyCostTitle(tallySummary, hasCost);
 
   return (
     <div className="flex flex-col gap-xl">
@@ -342,7 +344,6 @@ function OverviewBody({ state }: OverviewBodyProps) {
         unreadIds={endedUnreadIds}
         empty={endedEmpty(view)}
         tally={tallyParts}
-        tallyTitle={tallyTitle}
         selectedKey={selectedKey}
         showSelection={showSelection}
         onOpen={(issue) => selectAndOpen(endedNavKey(issue.issueId), issue.identifier)}

@@ -1,17 +1,17 @@
 import { cn } from "@/lib/cn";
 
 import type { BudgetLine } from "@/lib/budget";
+import type { ReactNode } from "react";
 
 export interface BudgetMeterProps {
   name: string;
   line: BudgetLine;
   format: (n: number) => string;
-  text?: string;
-  title?: string;
+  text?: ReactNode;
 }
 
 /** A missing or non-positive limit renders nothing. */
-export function BudgetMeter({ name, line, format, text, title }: BudgetMeterProps) {
+export function BudgetMeter({ name, line, format, text }: BudgetMeterProps) {
   const { used, limit } = line;
   if (used === null || limit === null || limit <= 0) {
     return undefined;
@@ -20,7 +20,7 @@ export function BudgetMeter({ name, line, format, text, title }: BudgetMeterProp
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-sm gap-y-xxs text-body-md">
       <span className="text-ink">{name}</span>
-      <span title={title} className="text-ink-body tabular-nums">
+      <span className="text-ink-body tabular-nums">
         {text ?? `${format(used)} of ${format(limit)}`}
       </span>
       <span

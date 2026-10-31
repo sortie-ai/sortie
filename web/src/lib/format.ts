@@ -19,7 +19,7 @@ export function fmtDuration(seconds: number | null | undefined): string {
     return UNKNOWN;
   }
   if (seconds < 1) {
-    return "under 1s";
+    return "< 1s";
   }
   if (seconds < 10) {
     return `${(Math.round(seconds * 10) / 10).toFixed(1).replace(/\.0$/, "")}s`;
@@ -66,7 +66,10 @@ export function fmtTokens(n: number | null | undefined): string {
 }
 
 function millions(n: number): string {
-  const hundredths = Math.floor((n + 5_000) / 10_000);
+  return hundredthsOfMillion(Math.floor((n + 5_000) / 10_000));
+}
+
+function hundredthsOfMillion(hundredths: number): string {
   const whole = Math.floor(hundredths / 100);
   const frac = hundredths % 100;
   if (frac === 0) {
@@ -76,6 +79,17 @@ function millions(n: number): string {
     return `${whole}.${frac / 10}M`;
   }
   return `${whole}.${String(frac).padStart(2, "0")}M`;
+}
+
+/** Words a token figure cut rather than rounded, so the text never exceeds the count it bounds: 1,699,999 reads "1.69M", 902,999 reads "902K". */
+export function fmtTokensCut(n: number): string {
+  if (n >= 1_000_000) {
+    return hundredthsOfMillion(Math.floor(n / 10_000));
+  }
+  if (n >= 1_000) {
+    return `${Math.floor(n / 1_000)}K`;
+  }
+  return String(Math.trunc(n));
 }
 
 export function fmtCount(n: number): string {
@@ -148,10 +162,6 @@ export function fmtMoneyCut(usd: number): string {
   return `$${grouped}.${fraction.padEnd(2, "0").slice(0, 2)}`;
 }
 
-export function fmtMoneyAtLeast(usd: number): string {
-  return `at least ${fmtMoneyCut(usd)}`;
-}
-
 const RATE = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 20,
@@ -182,6 +192,16 @@ export function fmtPercent(ratio: number): string {
 /** Writes a quantity with en-US digit grouping and at most two fraction digits, trailing zeros dropped. */
 export function fmtAmount(n: number): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** Writes a vendor-unit amount with at most two fraction digits and digit grouping, rounded, or cut when it is a lower bound so the text never exceeds the amount it bounds. */
+export function fmtVendorAmount(amount: number, lowerBound: boolean): string {
+  if (!lowerBound) {
+    return fmtAmount(amount);
+  }
+  const { whole, fraction } = exactDigits(amount);
+  const cut = fraction.slice(0, 2).replace(/0+$/, "");
+  return cut === "" ? fmtCount(Number(whole)) : `${fmtCount(Number(whole))}.${cut}`;
 }
 
 /** Writes a mean with one decimal place, "4.0" included. */

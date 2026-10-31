@@ -1,4 +1,4 @@
-import { fmtMoney, fmtMoneyAtLeast } from "@/lib/format";
+import { liveMoneyFigure } from "@/lib/figures";
 
 import type {
   ConfigResponse,
@@ -6,6 +6,7 @@ import type {
   IssueHistoryResponse,
   StateResponse,
 } from "@/api/types.gen";
+import type { Figure } from "@/lib/figures";
 
 export interface CostFigure {
   usd: number | null;
@@ -118,11 +119,10 @@ export function budgetOf(
   return hasRateSource(state) ? figures : { ...figures, cost: null };
 }
 
-/** Marked "at least" while the cost is a lower bound; undefined when no cost meter applies. */
-export function moneyBudgetText({ cost, money }: BudgetFigures): string | undefined {
+/** The used amount, cut and noted while the cost is a lower bound; undefined when no cost meter applies. */
+export function moneyBudgetFigure({ cost, money }: BudgetFigures): Figure | undefined {
   if (cost === null || money.limit === null || money.limit <= 0 || money.used === null) {
     return undefined;
   }
-  const used = money.complete ? fmtMoney(money.used) : fmtMoneyAtLeast(money.used);
-  return `${used} of ${fmtMoney(money.limit)}`;
+  return liveMoneyFigure(money.used, money.complete, "runs");
 }

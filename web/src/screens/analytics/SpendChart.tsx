@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { CHART_ESTIMATED, CHART_UNKNOWN, COST_LOWER_BOUND } from "@/lib/figures";
 import {
   fmtMoney,
   fmtUtcClock,
@@ -54,21 +55,20 @@ function barOf(bucket: SpendBucket, top: number): Bar | undefined {
   if (bucket.runs === 0) {
     return undefined;
   }
-  const isUnknown = bucket.cost_unpriced_runs > 0 || bucket.tokens_unmeasured_runs > 0;
   if (bucket.cost_usd === null) {
+    const isUnknown = bucket.cost_unpriced_runs > 0 || bucket.tokens_unmeasured_runs > 0;
     return isUnknown ? { kind: "unknown", height: "2px" } : undefined;
   }
   return {
-    kind: isUnknown || bucket.cost_partial_runs > 0 ? "lower-bound" : "estimated",
+    kind: bucket.cost_lower_bound ? "lower-bound" : "estimated",
     height: `${(bucket.cost_usd / top) * 100}%`,
   };
 }
 
 const NOTE_BY_KIND: Record<BarKind, string> = {
-  estimated: "Estimated cost of the runs that finished in this period.",
-  "lower-bound":
-    "At least this much. Some runs could not be priced or measured, so the cost is higher.",
-  unknown: "Cost unknown. The runs could not be priced or measured.",
+  estimated: CHART_ESTIMATED,
+  "lower-bound": COST_LOWER_BOUND,
+  unknown: CHART_UNKNOWN,
 };
 
 function noteOf(bucket: SpendBucket, bar: Bar | undefined): string {

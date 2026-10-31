@@ -1,1 +1,0 @@
-import{r as e}from"./react-AyOTluXZ.js";var t=e();function n({children:e}){return(0,t.jsx)(`code`,{className:`rounded bg-surface-raised px-xxs font-mono text-[0.9em] wrap-anywhere`,children:e})}export{n as t};
