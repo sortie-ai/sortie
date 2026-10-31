@@ -38,8 +38,8 @@ const defaultCommand = "opencode"
 
 // usageSources: each step_finish report carries one request's token counts,
 // and the session export holds the counts per model for every finished
-// message. The turn's final text step prints no report, so the reports alone
-// never account a whole turn and the export settles it.
+// message. Older releases usually drop the report of the turn's final text
+// step; the reports then fall short of the turn and the export settles it.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,

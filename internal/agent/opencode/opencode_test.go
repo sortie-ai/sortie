@@ -874,6 +874,7 @@ func TestRunTurn_SpendFromCapturedTurns(t *testing.T) {
 	}{
 		{"completed tool turn settles the export's exact figure", "live_tool_turn.jsonl", "", nil, []exportFile{toolTurn}, turnSpend{36542, 175, false, records, servedModel}, true, false},
 		{"failed export leaves the tool step as a lower bound", "live_tool_turn.jsonl", "", nil, nil, turnSpend{17780, 174, true, live, ""}, false, false},
+		{"failed export leaves a turn with a final step report complete", "live_tool_turn_final_report.jsonl", "", nil, nil, turnSpend{518, 42, false, live, ""}, false, false},
 		{"text-only turn settles from the export", "live_text_turn.jsonl", "", nil, []exportFile{history}, turnSpend{17693, 20, false, records, servedModel}, false, false},
 		{"resumed session counts none of its history", "live_tool_turn.jsonl", captureSession, []exportFile{history}, []exportFile{historyAndToolTurn}, turnSpend{36542, 175, false, records, servedModel}, false, false},
 		{"failed start read never counts the history", "live_tool_turn.jsonl", captureSession, nil, []exportFile{historyAndToolTurn}, turnSpend{17780, 174, true, live, ""}, false, false},

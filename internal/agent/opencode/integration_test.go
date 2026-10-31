@@ -114,6 +114,15 @@ func scriptedProviderDocument(url string) string {
 	return fmt.Sprintf(`{"$schema":"https://opencode.ai/config.json","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"%s/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}`, url)
 }
 
+func tokenUsage(u fakemodel.Usage) domain.TokenUsage {
+	return domain.TokenUsage{
+		InputTokens:     u.Prompt,
+		OutputTokens:    u.Candidates + u.Thoughts,
+		TotalTokens:     u.Prompt + u.Candidates + u.Thoughts,
+		CacheReadTokens: u.CachedContent,
+	}
+}
+
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipIfNotEnabled(t)
 
@@ -125,6 +134,8 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		}
 	}
 
+	stepReports := domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive}
+
 	binding := fakemodel.Binding{
 		Kind:                "opencode",
 		Passthrough:         scriptedSettings(true),
@@ -132,7 +143,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		Read:                fakemodel.ReadFile,
 		ReportedModelPrefix: "scripted/",
 		Spend: &fakemodel.SpendSources{
-			Live:              domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			Live:              stepReports,
 			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
 			RecordsAtTurnEnd:  sessionexport.Records.WrittenAtTurnEnd,
 			CancelEndsProcess: true,
@@ -171,7 +182,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 
 	fakemodel.AssertConformance(t, binding)
 
-	t.Run("export failure leaves the tool step counts as a lower bound", func(t *testing.T) {
+	t.Run("export failure leaves the turn to the step reports", func(t *testing.T) {
 		runtime := agenttest.WriteScript(t, t.TempDir(), "export-failing-opencode",
 			"if [ \"$1\" = session ] && [ \"$2\" = export ]; then exit 1; fi\nexec "+integrationCommand()+" \"$@\"\n")
 		failing := binding
@@ -186,10 +197,11 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		}
 
 		toolCall := fakemodel.Usage{Prompt: 211, Candidates: 13, Thoughts: 5, CachedContent: 53}
+		finalText := fakemodel.Usage{Prompt: 307, Candidates: 17, Thoughts: 7, CachedContent: 61}
 		run := fakemodel.RunCustomTurn(t, failing, fakemodel.CustomTurn{
 			Script: []fakemodel.Response{
 				{Call: binding.Read(file), Usage: toolCall},
-				{Text: "ok", Usage: fakemodel.Usage{Prompt: 307, Candidates: 17, Thoughts: 7, CachedContent: 61}},
+				{Text: "ok", Usage: finalText},
 			},
 			Prompt: "Read the file, then reply with the word ok.",
 		})
@@ -197,24 +209,18 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		if run.Err != nil {
 			t.Fatalf("RunTurn() error = %v", run.Err)
 		}
-		want := domain.TokenUsage{
-			InputTokens:     toolCall.Prompt,
-			OutputTokens:    toolCall.Candidates + toolCall.Thoughts,
-			TotalTokens:     toolCall.Prompt + toolCall.Candidates + toolCall.Thoughts,
-			CacheReadTokens: toolCall.CachedContent,
-		}
+		want := usage.Add(tokenUsage(toolCall), tokenUsage(finalText))
 		if !run.Result.UsageMeasured {
 			t.Error("RunTurn().UsageMeasured = false, want true")
 		}
 		if got := run.Result.Usage; got != want {
-			t.Errorf("RunTurn().Usage = %+v, want %+v, the tool-call request alone", got, want)
+			t.Errorf("RunTurn().Usage = %+v, want %+v, the requests the step reports cover", got, want)
 		}
-		wantProvenance := []domain.UsageProvenance{{Source: usage.SourceOutput, Strategy: usage.StrategyLive}}
-		if got := run.Result.UsageProvenance; !slices.Equal(got, wantProvenance) {
-			t.Errorf("RunTurn().UsageProvenance = %+v, want %+v", got, wantProvenance)
+		if got, want := run.Result.UsageProvenance, []domain.UsageProvenance{stepReports}; !slices.Equal(got, want) {
+			t.Errorf("RunTurn().UsageProvenance = %+v, want %+v", got, want)
 		}
-		if !run.Result.SpendUnaccounted {
-			t.Error("RunTurn().SpendUnaccounted = false, want true: the failed export leaves the figure a lower bound")
+		if run.Result.SpendUnaccounted {
+			t.Error("RunTurn().SpendUnaccounted = true, want false: the step reports cover every request")
 		}
 	})
 
