@@ -65,6 +65,33 @@ func goldenStatsRuns() []persistence.RunHistory {
 		{
 			Status: "failed", TurnsCompleted: 1, StartedAt: "yesterday", CompletedAt: ranFor,
 		},
+		{
+			AgentAdapter: "claude-code", Status: "succeeded", TurnsCompleted: 2, CompletedAt: "2026-01-10T10:15:00Z",
+			RuleName: "implement", TemplateID: "tpl-a", ConfiguredModel: "claude-sonnet",
+			InputTokens: 400_000, OutputTokens: 80_000, TotalTokens: 480_000, TokensMeasured: true, UnaccountedTurns: 1,
+			EstimatedCostUSD: new(2.015), CostStatus: "partial",
+			UsageCompleteness: persistence.UsageLowerBound, UsageProvenance: "journal:records,output:live",
+		},
+		{
+			AgentAdapter: "copilot", Status: "succeeded", TurnsCompleted: 1, CompletedAt: "2026-01-10T10:05:00Z",
+			RuleName: "implement", CostStatus: "unmeasured",
+			UsageCompleteness: persistence.UsageUnmeasured,
+			ReportedAmounts:   []persistence.ReportedAmount{{Unit: "credits", Amount: 12.5}},
+		},
+		{
+			AgentAdapter: "copilot", Status: "failed", TurnsCompleted: 1, CompletedAt: "2026-01-10T10:02:00Z",
+			RuleName: "implement", CostStatus: "unmeasured",
+			UsageCompleteness: persistence.UsageUnmeasured,
+		},
+		{
+			AgentAdapter: "gemini", Status: "succeeded", TurnsCompleted: 3, CompletedAt: "2026-01-10T10:12:00Z",
+			RuleName: "review", TemplateID: "tpl-b", ConfiguredModel: "gemini-x",
+			InputTokens: 600_000, OutputTokens: 100_000, TotalTokens: 700_000, TokensMeasured: true,
+			EstimatedCostUSD: new(0.4), CostStatus: "estimated",
+			UsageCompleteness: persistence.UsageComplete, UsageProvenance: "protocol:live",
+			ModelUsage: map[string]persistence.ModelTokens{"gemini-x": {InputTokens: 600_000, OutputTokens: 100_000}},
+			ModelCosts: map[string]persistence.ModelCost{"gemini-x": {EstimatedCostUSD: new(0.4), CostStatus: "estimated", PriceSource: "agent"}},
+		},
 	}
 	for i := range runs {
 		runs[i].IssueID = fmt.Sprintf("ISS-%d", i+1)

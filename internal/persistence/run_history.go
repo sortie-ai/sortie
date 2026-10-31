@@ -58,6 +58,10 @@ type RunModelPart struct {
 	// is nil when it is NULL or empty.
 	UnratedClasses  []string
 	UnratedRecorded bool
+
+	// PriceSource is the layer that priced the part; empty when none is
+	// recorded.
+	PriceSource string
 }
 
 // Values of [RunHistory.UsageCompleteness].
@@ -213,8 +217,7 @@ type RunHistory struct {
 
 	// UsageProvenance is the sorted, comma-joined source and strategy pairs
 	// that settled the run's token figure; empty when none settled one. It
-	// is written only when UsageCompleteness is set, and the run-history
-	// reads do not select it.
+	// is written only when UsageCompleteness is set.
 	UsageProvenance string
 
 	// UsageCompleteness is [UsageComplete], [UsageLowerBound], or
@@ -223,9 +226,18 @@ type RunHistory struct {
 	UsageCompleteness string
 
 	// ReportedAmounts is every amount the agent reported for the run. Only
-	// [Store.AppendRunHistoryWithEvents] writes it; the run-history reads do
-	// not select it.
+	// [Store.AppendRunHistoryWithEvents] writes it.
 	ReportedAmounts []ReportedAmount
+}
+
+// Completeness returns the run's stored completeness, or derives it from
+// TokensMeasured and UnaccountedTurns for a row recorded before provenance
+// was kept.
+func (h RunHistory) Completeness() string {
+	if h.UsageCompleteness != "" {
+		return h.UsageCompleteness
+	}
+	return UsageCompletenessOf(h.TokensMeasured, h.UnaccountedTurns)
 }
 
 // AppendRunHistory inserts a completed run attempt. The input ID is
@@ -295,7 +307,7 @@ func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(runIDs)), ",")
 	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(runIDs); values remain bound parameters
 		`SELECT run_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			estimated_cost_usd, cost_status, unrated_classes
+			estimated_cost_usd, cost_status, unrated_classes, price_source
 		FROM run_model_usage
 		WHERE run_id IN (%s)
 		ORDER BY run_id, model`, placeholders)
@@ -311,7 +323,7 @@ func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int
 		var cost sql.NullFloat64
 		var status, unrated sql.NullString
 		if err := rows.Scan(&runID, &part.Model, &part.Tokens.InputTokens, &part.Tokens.OutputTokens,
-			&part.Tokens.CacheReadTokens, &part.Tokens.CacheWriteTokens, &cost, &status, &unrated); err != nil {
+			&part.Tokens.CacheReadTokens, &part.Tokens.CacheWriteTokens, &cost, &status, &unrated, &part.PriceSource); err != nil {
 			return nil, fmt.Errorf("scan run model usage: %w", err)
 		}
 		if cost.Valid {
@@ -684,7 +696,8 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 			chain_id, stage_previous, stage_previous_outcome, stage_target, stage_result,
 			issue_title, issue_url, dispatched_at,
 			trigger, reaction_kind, session_id, ssh_host, dispatch_id,
-			estimated_cost_usd, cost_status, declared_outcome, agent_text, skills
+			estimated_cost_usd, cost_status, declared_outcome, agent_text, skills,
+			usage_completeness, usage_provenance
 		FROM run_history`
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ") //nolint:gosec // conds holds only fixed predicates with ? placeholders; values are bound via args
@@ -702,6 +715,7 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 	for rows.Next() {
 		var r RunHistory
 		var errVal, wfVal, dispIDVal, reviewMetaVal, skillsVal, triggerVal, reactionVal, sessionVal, hostVal, dispatchIDVal, costStatusVal sql.NullString
+		var completenessVal, provenanceVal sql.NullString
 		var costVal sql.NullFloat64
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
@@ -713,6 +727,7 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 			&r.IssueTitle, &r.IssueURL, &r.DispatchedAt,
 			&triggerVal, &reactionVal, &sessionVal, &hostVal, &dispatchIDVal,
 			&costVal, &costStatusVal, &r.DeclaredOutcome, &r.AgentText, &skillsVal,
+			&completenessVal, &provenanceVal,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -745,6 +760,8 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 			r.EstimatedCostUSD = new(costVal.Float64)
 		}
 		r.CostStatus = costStatusVal.String
+		r.UsageCompleteness = completenessVal.String
+		r.UsageProvenance = provenanceVal.String
 		entries = append(entries, r)
 	}
 	if err := rows.Err(); err != nil {

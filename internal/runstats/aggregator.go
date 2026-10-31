@@ -132,6 +132,11 @@ type costOutcome struct {
 	unpriced bool
 	partial  bool
 	cost     float64
+
+	// agentUSD is the part of cost priced from an agent-reported amount;
+	// agentPriced is false when no such part counts.
+	agentUSD    float64
+	agentPriced bool
 }
 
 // classifyCost classifies a measured run's cost for every figure the report
@@ -155,12 +160,33 @@ func classifyCost(status string, spent bool, cost *float64, costStatus string) c
 	return out
 }
 
+// agentPricedOf sums the parts priced from an agent-reported amount.
+// ok is false when no part is.
+func agentPricedOf(parts []persistence.RunModelPart) (usd float64, ok bool) {
+	for _, part := range parts {
+		if part.PriceSource != agentPriceSource {
+			continue
+		}
+		ok = true
+		if part.EstimatedCostUSD != nil {
+			usd += *part.EstimatedCostUSD
+		}
+	}
+	return usd, ok
+}
+
+// agentPriceSource is the recorded price source of a part priced from an
+// amount the agent reported.
+const agentPriceSource = "agent"
+
 // costAccum accumulates the folded [costOutcome] values of one figure.
 type costAccum struct {
 	costUSD          float64
 	pricedRuns       int
 	costUnpricedRuns int
 	costPartialRuns  int
+	agentPricedUSD   float64
+	hasAgentPriced   bool
 }
 
 func (c *costAccum) add(out costOutcome) {
@@ -168,11 +194,40 @@ func (c *costAccum) add(out costOutcome) {
 		c.costUSD += out.cost
 		c.pricedRuns++
 	}
+	if out.agentPriced {
+		c.agentPricedUSD += out.agentUSD
+		c.hasAgentPriced = true
+	}
 	if out.unpriced {
 		c.costUnpricedRuns++
 	}
 	if out.partial {
 		c.costPartialRuns++
+	}
+}
+
+// agentPriced returns the rounded agent-priced amount, or nil when no part
+// was added.
+func (c *costAccum) agentPriced() *float64 {
+	if !c.hasAgentPriced {
+		return nil
+	}
+	return new(round9(c.agentPricedUSD))
+}
+
+// provenanceAccum accumulates, for one figure, the runs whose token figure is
+// a lower bound or missing.
+type provenanceAccum struct {
+	lowerBoundRuns int
+	causes         persistence.UnmeasuredCauses
+}
+
+func (p *provenanceAccum) addRun(row persistence.RunStatsRow) {
+	switch {
+	case !row.TokensMeasured:
+		p.causes.Add(persistence.UnmeasuredCauseOf(row.Status, row.UsageCompleteness, row.ReportedUnits), row.ReportedUnits)
+	case row.UnaccountedTurns > 0:
+		p.lowerBoundRuns++
 	}
 }
 
@@ -184,6 +239,10 @@ type modelShare struct {
 	cost       *float64
 	costStatus string
 	fromPart   bool
+
+	// priceSource is the part's recorded price source; empty for a share
+	// that carries the run's own figures.
+	priceSource string
 }
 
 // sharesOf splits row across the models it spent tokens on, one share per
@@ -205,10 +264,11 @@ func sharesOf(row persistence.RunStatsRow) []modelShare {
 				CacheRead:  t.CacheReadTokens,
 				CacheWrite: t.CacheWriteTokens,
 			},
-			spent:      true,
-			cost:       part.EstimatedCostUSD,
-			costStatus: part.CostStatus,
-			fromPart:   true,
+			spent:       true,
+			cost:        part.EstimatedCostUSD,
+			costStatus:  part.CostStatus,
+			fromPart:    true,
+			priceSource: part.PriceSource,
 		})
 	}
 	if len(shares) > 0 {
@@ -274,6 +334,7 @@ type groupAccum struct {
 	succeededMeasured int
 	durationSamples   []float64
 	costAccum
+	provenanceAccum
 }
 
 // chainAccum accumulates the by_chain figures a groupAccum does
@@ -302,6 +363,7 @@ type totalAccum struct {
 	durationExcludedRuns int
 	succeededSamples     []float64
 	costAccum
+	provenanceAccum
 }
 
 // dayAccum accumulates the runs that completed within one UTC calendar day.
@@ -421,6 +483,24 @@ func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
 		strings.Join(unrecorded, ", "), strings.Join(dropped, ", "))
 }
 
+// provenanceLabel names the by_provenance group of row: the sources and
+// strategies that settled its token figure, or a sentinel for a run recorded
+// before provenance was kept or one with no source.
+func provenanceLabel(row persistence.RunStatsRow) string {
+	switch {
+	case row.UsageCompleteness == "":
+		return "<unknown>"
+	case row.UsageProvenance == "":
+		return "<none>"
+	}
+	pairs := persistence.ParseUsageProvenance(row.UsageProvenance)
+	names := make([]string, len(pairs))
+	for i, pair := range pairs {
+		names[i] = pair.Source + ":" + pair.Strategy
+	}
+	return strings.Join(names, ",")
+}
+
 // modelOf names the model a run is grouped under: the one the runtime
 // reported, else the configured one, because a run left to the runtime's
 // default configures none.
@@ -495,18 +575,19 @@ type Aggregator struct {
 	total totalAccum
 	days  map[time.Time]*dayAccum // keyed by the UTC midnight starting the day
 
-	byStatus   map[string]*groupAccum
-	byAdapter  map[string]*groupAccum
-	byRule     map[string]*groupAccum
-	byTemplate map[string]*groupAccum
-	byModel    map[string]*groupAccum
-	byChain    map[string]*groupAccum
-	byTrigger  map[string]*groupAccum
-	byOrigin   map[string]*groupAccum
-	chains     map[string]*chainAccum
-	issueIDs   map[string]struct{}
-	passes     map[passKey]*passAccum
-	stages     Stages
+	byStatus     map[string]*groupAccum
+	byAdapter    map[string]*groupAccum
+	byRule       map[string]*groupAccum
+	byTemplate   map[string]*groupAccum
+	byModel      map[string]*groupAccum
+	byChain      map[string]*groupAccum
+	byTrigger    map[string]*groupAccum
+	byOrigin     map[string]*groupAccum
+	byProvenance map[string]*groupAccum
+	chains       map[string]*chainAccum
+	issueIDs     map[string]struct{}
+	passes       map[passKey]*passAccum
+	stages       Stages
 
 	selfReview selfReviewAccum
 
@@ -518,22 +599,23 @@ type Aggregator struct {
 // recorded and prices nothing.
 func New(caps persistence.RunHistoryCapabilities) *Aggregator {
 	return &Aggregator{
-		caps:       caps,
-		tierLabel:  tier(caps),
-		days:       make(map[time.Time]*dayAccum),
-		byStatus:   make(map[string]*groupAccum),
-		byAdapter:  make(map[string]*groupAccum),
-		byRule:     make(map[string]*groupAccum),
-		byTemplate: make(map[string]*groupAccum),
-		byModel:    make(map[string]*groupAccum),
-		byChain:    make(map[string]*groupAccum),
-		byTrigger:  make(map[string]*groupAccum),
-		byOrigin:   make(map[string]*groupAccum),
-		chains:     make(map[string]*chainAccum),
-		passes:     make(map[passKey]*passAccum),
-		issueIDs:   make(map[string]struct{}),
-		selfReview: selfReviewAccum{byVerdict: make(map[string]int)},
-		bySkill:    make(map[string]*SkillCount),
+		caps:         caps,
+		tierLabel:    tier(caps),
+		days:         make(map[time.Time]*dayAccum),
+		byStatus:     make(map[string]*groupAccum),
+		byAdapter:    make(map[string]*groupAccum),
+		byRule:       make(map[string]*groupAccum),
+		byTemplate:   make(map[string]*groupAccum),
+		byModel:      make(map[string]*groupAccum),
+		byChain:      make(map[string]*groupAccum),
+		byTrigger:    make(map[string]*groupAccum),
+		byOrigin:     make(map[string]*groupAccum),
+		byProvenance: make(map[string]*groupAccum),
+		chains:       make(map[string]*chainAccum),
+		passes:       make(map[passKey]*passAccum),
+		issueIDs:     make(map[string]struct{}),
+		selfReview:   selfReviewAccum{byVerdict: make(map[string]int)},
+		bySkill:      make(map[string]*SkillCount),
 	}
 }
 
@@ -593,12 +675,20 @@ func (a *Aggregator) Add(row persistence.RunStatsRow) error {
 		if a.caps.OriginBreakdown() {
 			bumped = append(bumped, bumpGroup(a.byOrigin, originLabel(row), isSucceeded))
 		}
+		if a.caps.UsageProvenance() {
+			bumped = append(bumped, bumpGroup(a.byProvenance, provenanceLabel(row), isSucceeded))
+		}
 
 		for _, g := range bumped {
 			g.turnSum += row.TurnsCompleted
 		}
 		if isSucceeded {
 			a.total.succeededTurns += row.TurnsCompleted
+		}
+
+		a.total.addRun(row)
+		for _, g := range bumped {
+			g.addRun(row)
 		}
 
 		if !row.TokensMeasured {
@@ -630,6 +720,9 @@ func (a *Aggregator) Add(row persistence.RunStatsRow) error {
 
 			if a.caps.RecordedCost() {
 				cost = classifyCost(row.Status, spentTokens(row), row.EstimatedCostUSD, row.CostStatus)
+				if cost.priced {
+					cost.agentUSD, cost.agentPriced = agentPricedOf(row.Parts)
+				}
 				a.total.add(cost)
 				for _, g := range bumped {
 					g.add(cost)
@@ -704,6 +797,7 @@ func (a *Aggregator) foldModels(row persistence.RunStatsRow, isSucceeded bool, s
 		if hasDuration {
 			g.durationSamples = append(g.durationSamples, seconds)
 		}
+		g.addRun(row)
 		if !row.TokensMeasured {
 			g.unmeasuredRuns++
 			continue
@@ -726,7 +820,11 @@ func (a *Aggregator) foldModels(row persistence.RunStatsRow, isSucceeded bool, s
 		if share.fromPart && status == "estimated" && row.UnaccountedTurns > 0 {
 			status = "partial"
 		}
-		g.add(classifyCost(row.Status, share.spent, share.cost, status))
+		out := classifyCost(row.Status, share.spent, share.cost, status)
+		if out.priced && share.priceSource == agentPriceSource {
+			out.agentUSD, out.agentPriced = *share.cost, true
+		}
+		g.add(out)
 	}
 }
 
@@ -827,6 +925,7 @@ func (a *Aggregator) Report(
 		ChainFunnels: a.funnelReport(generatedAt, until),
 		ByTrigger:    []Group{},
 		ByOrigin:     []Group{},
+		ByProvenance: []Group{},
 	}
 	if since != nil {
 		rpt.Since = new(since.UTC().Format(time.RFC3339))
@@ -848,6 +947,9 @@ func (a *Aggregator) Report(
 		}
 		if a.caps.OriginBreakdown() {
 			rpt.ByOrigin = a.groupSlice(a.byOrigin, full)
+		}
+		if a.caps.UsageProvenance() {
+			rpt.ByProvenance = a.groupSlice(a.byProvenance, full)
 		}
 		rpt.SelfReview = a.selfReviewReport()
 	}
@@ -934,6 +1036,8 @@ func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spen
 		sum.pricedRuns += d.pricedRuns
 		sum.costUnpricedRuns += d.costUnpricedRuns
 		sum.costPartialRuns += d.costPartialRuns
+		sum.agentPricedUSD += d.agentPricedUSD
+		sum.hasAgentPriced = sum.hasAgentPriced || d.hasAgentPriced
 	}
 
 	firstAt := days[0]
@@ -960,6 +1064,9 @@ func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spen
 			if sum.pricedRuns > 0 {
 				bucket.CostUSD = new(round9(sum.costUSD))
 			}
+			bucket.CostLowerBound = bucket.CostUSD != nil &&
+				(sum.costUnpricedRuns > 0 || sum.costPartialRuns > 0 || sum.unmeasured > 0)
+			bucket.AgentPricedUSD = sum.agentPriced()
 		}
 		out.Buckets = append(out.Buckets, bucket)
 	}
@@ -992,6 +1099,7 @@ func (a *Aggregator) summary(full bool) Summary {
 		DurationExcludedRuns: a.total.durationExcludedRuns,
 		CostUnpricedRuns:     a.total.costUnpricedRuns,
 		CostPartialRuns:      a.total.costPartialRuns,
+		UnmeasuredUnits:      []string{},
 	}
 	if s.Runs > 0 {
 		s.SuccessRate = round4(float64(s.Succeeded) / float64(s.Runs))
@@ -1012,7 +1120,44 @@ func (a *Aggregator) summary(full bool) Summary {
 			s.CostPerSucceededRunUSD = new(round9(cost / float64(a.total.succeededMeasured)))
 		}
 	}
+	if full {
+		flags := lowerBoundFlagsOf(s.Tokens, s.CostUSD, a.total.unmeasuredRuns, &a.total.costAccum, &a.total.provenanceAccum)
+		s.TokensLowerBoundRuns = flags.tokensLowerBoundRuns
+		s.TokensLowerBound = flags.tokensLowerBound
+		s.CostLowerBound = flags.costLowerBound
+		s.AgentPricedUSD = flags.agentPricedUSD
+		s.UnmeasuredCause = flags.cause
+		s.UnmeasuredUnits = flags.units
+	}
 	return s
+}
+
+// lowerBoundFlags are the lower-bound members every figure of the report
+// serves, computed once here so no client derives them.
+type lowerBoundFlags struct {
+	tokensLowerBoundRuns int
+	tokensLowerBound     bool
+	costLowerBound       bool
+	agentPricedUSD       *float64
+	cause                *string
+	units                []string
+}
+
+// lowerBoundFlagsOf derives the flags of one figure from its served tokens and
+// cost and its folded counts.
+func lowerBoundFlagsOf(tokens *Tokens, costUSD *float64, unmeasuredRuns int, c *costAccum, p *provenanceAccum) lowerBoundFlags {
+	flags := lowerBoundFlags{
+		tokensLowerBoundRuns: p.lowerBoundRuns,
+		tokensLowerBound:     tokens != nil && (unmeasuredRuns > 0 || p.lowerBoundRuns > 0),
+		costLowerBound:       costUSD != nil && (c.costUnpricedRuns > 0 || c.costPartialRuns > 0 || unmeasuredRuns > 0),
+		agentPricedUSD:       c.agentPriced(),
+	}
+	cause, units := p.causes.Result()
+	if cause != "" {
+		flags.cause = new(string(cause))
+	}
+	flags.units = units
+	return flags
 }
 
 // groupSlice converts groups into a [Group] slice, sorted by
@@ -1035,6 +1180,8 @@ func (a *Aggregator) groupStat(g *groupAccum, full bool) Group {
 		Runs:      g.runs,
 		Succeeded: g.succeeded,
 		Duration:  durationStats(g.durationSamples),
+
+		UnmeasuredUnits: []string{},
 	}
 	if g.runs > 0 {
 		stat.SuccessRate = round4(float64(g.succeeded) / float64(g.runs))
@@ -1057,6 +1204,13 @@ func (a *Aggregator) groupStat(g *groupAccum, full bool) Group {
 				stat.CostPerSucceededRunUSD = new(round9(cost / float64(g.succeededMeasured)))
 			}
 		}
+		flags := lowerBoundFlagsOf(stat.Tokens, stat.CostUSD, g.unmeasuredRuns, &g.costAccum, &g.provenanceAccum)
+		stat.TokensLowerBoundRuns = flags.tokensLowerBoundRuns
+		stat.TokensLowerBound = flags.tokensLowerBound
+		stat.CostLowerBound = flags.costLowerBound
+		stat.AgentPricedUSD = flags.agentPricedUSD
+		stat.UnmeasuredCause = flags.cause
+		stat.UnmeasuredUnits = flags.units
 	}
 	return stat
 }

@@ -111,8 +111,20 @@ type RunHistoryEntry struct {
 	Tokens domain.TokenUsage
 	// TokensMeasured is false when the agent reported no usage.
 	TokensMeasured bool
-	// UnaccountedTurns counts turns whose usage the agent never reported.
-	UnaccountedTurns int
+	// UsageCompleteness is "complete", "lower_bound", or "unmeasured".
+	UsageCompleteness string
+	// UsageProvenance lists the run's usage sources, live strategy first; nil
+	// when the run was recorded before provenance was kept.
+	UsageProvenance []UsagePair
+	// VendorAmounts lists the amounts the run reported in a unit other than US
+	// dollars; nil when the run was recorded before provenance was kept.
+	VendorAmounts []VendorAmount
+	// UnmeasuredCause is why the run has no token figure; empty unless
+	// UsageCompleteness is "unmeasured".
+	UnmeasuredCause string
+	// UnmeasuredUnits lists the units the run reported, ascending; empty
+	// unless UnmeasuredCause is "amounts_only".
+	UnmeasuredUnits []string
 	// EstimatedCostUSD and CostStatus are the cost recorded when the run
 	// finished. CostStatus is empty when the run was recorded without one.
 	EstimatedCostUSD *float64
@@ -165,6 +177,42 @@ type RunModelUsage struct {
 	// UnratedRecorded is false for a part recorded without a price or priced
 	// before the classes were recorded.
 	UnratedRecorded bool
+	// PriceSource names where the part's price came from; empty when none is
+	// recorded.
+	PriceSource string
+}
+
+// UsagePair is one source a run's usage was read from and the strategy that
+// read it.
+type UsagePair struct {
+	Source, Strategy string
+}
+
+// VendorAmount is an amount a run reported in a unit other than US dollars.
+// Model is empty when the source attributed it to no model.
+type VendorAmount struct {
+	Unit, Model string
+	Amount      float64
+	LowerBound  bool
+}
+
+// UnitAmount is the sum of one unit's amounts over an issue's runs.
+type UnitAmount struct {
+	Unit       string
+	Amount     float64
+	LowerBound bool
+}
+
+// IssueProvenance is what an issue's recorded runs say about the origin of
+// their figures. UnmeasuredCause is empty when no run is unmeasured, and
+// AgentPricedUSD is nil when no share was priced from an agent-reported
+// amount. AgentPricedModels holds an empty name for an unknown model.
+type IssueProvenance struct {
+	UnmeasuredCause   string
+	UnmeasuredUnits   []string
+	VendorAmounts     []UnitAmount
+	AgentPricedUSD    *float64
+	AgentPricedModels []string
 }
 
 // RunHistoryQuery selects completed runs; a zero field matches every run.
@@ -269,6 +317,8 @@ type IssueRunTotals struct {
 	Usage orchestrator.SnapshotIssueUsage
 	// Tokens sums each token class over the measured runs.
 	Tokens domain.TokenUsage
+	// Provenance is what the runs say about the origin of the figures above.
+	Provenance IssueProvenance
 }
 
 // RunHistoryReader reads persisted run history. Runs come newest first, and

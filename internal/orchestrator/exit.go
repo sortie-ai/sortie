@@ -484,7 +484,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TokensMeasured:   measured,
 		UnaccountedTurns: workerResult.UnaccountedTurns,
 
-		UsageCompleteness: usageCompleteness(measured, workerResult.UnaccountedTurns),
+		UsageCompleteness: persistence.UsageCompletenessOf(measured, workerResult.UnaccountedTurns),
 		ReportedAmounts:   runReportedAmounts(usage.MergeAmounts(entry.ReportedAmounts, workerResult.ReportedAmounts)),
 
 		IssueTitle: issueIdentity.Title,
@@ -1722,20 +1722,6 @@ func runModelUsage(totals map[string]domain.TokenUsage) map[string]persistence.M
 		}
 	}
 	return parts
-}
-
-// usageCompleteness classifies how far a run's recorded token figure
-// reaches: unmeasured when no figure arrived, a lower bound when a turn spent
-// tokens no source counted, complete otherwise.
-func usageCompleteness(measured bool, unaccountedTurns int) string {
-	switch {
-	case !measured:
-		return persistence.UsageUnmeasured
-	case unaccountedTurns > 0:
-		return persistence.UsageLowerBound
-	default:
-		return persistence.UsageComplete
-	}
 }
 
 // runReportedAmounts maps reported amounts to stored rows; nil when none.

@@ -83,9 +83,11 @@ command reads that history back and reports how many runs there were and
 on how many issues, how many succeeded, how long they took, and what they
 cost. The same figures are broken down by outcome, by coding agent, by
 dispatch rule, by prompt template, by the model each run was configured with,
-by stage chain, by retry trigger, and by what started each run. Each stage
-chain also gets a funnel: for every stage, the passes that reached it and how
-each one left it.
+by where each run's usage figures came from, by stage chain, by retry
+trigger, and by what started each run. A token or cost figure that counts
+only part of its runs is marked as a lower bound. Each stage chain also gets
+a funnel: for every stage, the passes that reached it and how each one left
+it.
 
 The database is opened read-only, so this is safe to run while the
 orchestrator is working.

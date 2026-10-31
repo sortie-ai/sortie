@@ -47,9 +47,6 @@ func findGroup(t *testing.T, groups []runstats.Group, name string) runstats.Grou
 	return runstats.Group{}
 }
 
-// statsWorkflow returns a minimal WORKFLOW.md whose front matter is
-// extended with extra, for stats tests that need a specific top-level
-// key such as db_path without a full tracker/agent configuration.
 func statsWorkflow(extra string) []byte {
 	return fmt.Appendf(nil, `---
 tracker:
@@ -65,9 +62,7 @@ Do {{ .issue.title }}.
 `, extra)
 }
 
-// createStatsDB creates a fully migrated SQLite database at dbPath and
-// appends each of runs, then closes the store so a later read-only open
-// sees committed data.
+// createStatsDB closes the store so a later read-only open sees committed data.
 func createStatsDB(t *testing.T, dbPath string, runs ...persistence.RunHistory) {
 	t.Helper()
 	ctx := context.Background()
@@ -79,8 +74,14 @@ func createStatsDB(t *testing.T, dbPath string, runs ...persistence.RunHistory) 
 		t.Fatalf("Migrate: %v", err)
 	}
 	for _, r := range runs {
-		if _, err := store.AppendRunHistory(ctx, r); err != nil {
-			t.Fatalf("AppendRunHistory: %v", err)
+		if len(r.ModelUsage) > 0 || len(r.ReportedAmounts) > 0 {
+			r.DispatchID = new("dispatch-" + r.IssueID)
+			_, err = store.AppendRunHistoryWithEvents(ctx, r, nil, persistence.RunEventLimits{})
+		} else {
+			_, err = store.AppendRunHistory(ctx, r)
+		}
+		if err != nil {
+			t.Fatalf("append run history of %q: %v", r.IssueID, err)
 		}
 	}
 	if err := store.Close(); err != nil {
@@ -88,11 +89,6 @@ func createStatsDB(t *testing.T, dbPath string, runs ...persistence.RunHistory) 
 	}
 }
 
-// createLegacyStatsDB creates dbPath with only the migration-001
-// run_history columns (no schema_migrations tracking) and inserts one
-// row, matching a database written by a pre-migration-010 binary. The
-// modernc.org/sqlite driver is already registered process-wide via
-// internal/persistence's import.
 func createLegacyStatsDB(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
@@ -128,11 +124,6 @@ func createLegacyStatsDB(t *testing.T, dbPath string) {
 	}
 }
 
-// createFullSchemaWithoutCacheWriteTokensDB builds dbPath with every
-// optional run_history column the full schema tier requires, except
-// cache_write_tokens, matching a database migration 020 has not yet
-// reached, and inserts one measured row with the given rate-relevant
-// token counts.
 func createFullSchemaWithoutCacheWriteTokensDB(t *testing.T, dbPath string, inputTokens, outputTokens, cacheReadTokens int64) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
@@ -181,6 +172,14 @@ func createFullSchemaWithoutCacheWriteTokensDB(t *testing.T, dbPath string, inpu
 	); err != nil {
 		t.Fatalf("insert pre-migration-020 row: %v", err)
 	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at,
+			status, tokens_measured)
+		 VALUES ('ISS-UM', 'PROJ-UM', 1, 'claude-code', '/tmp/ws', '2026-01-01T00:00:00Z', '2026-01-01T00:10:00Z',
+			'succeeded', 0)`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-020 unmeasured row: %v", err)
+	}
 }
 
 // newStatsWorkspace creates a temp directory holding a minimal
@@ -227,7 +226,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		t.Fatalf("run(stats) = %d, want 0; stderr: %s", code, stderr.String())
 	}
 	for _, want := range []string{
-		"cost (measured runs)    -   per succeeded run -",
+		"cost                    -   per succeeded run -",
 		"note: the cost figures skip 1 of these runs, because Sortie had no price for the models they used when they were recorded.",
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -306,7 +305,7 @@ func TestStatsTokenReporting(t *testing.T) {
 		}
 	})
 
-	t.Run("text form labels the measured-runs lines and dashes the unmeasured adapter row", func(t *testing.T) {
+	t.Run("text form marks the tokens line a lower bound and dashes the unmeasured adapter row", func(t *testing.T) {
 		t.Parallel()
 
 		agg := runstats.New(fullCaps)
@@ -317,14 +316,10 @@ func TestStatsTokenReporting(t *testing.T) {
 		renderStatsText(&stdout, &stderr, report)
 		out := stdout.String()
 
-		if !strings.Contains(out, "tokens (measured runs)") {
-			t.Errorf("stdout = %q, want the %q label", out, "tokens (measured runs)")
-		}
-		if !strings.Contains(out, "cost (measured runs)") {
-			t.Errorf("stdout = %q, want the %q label", out, "cost (measured runs)")
-		}
-		if strings.Contains(out, "tokens (all runs)") || strings.Contains(out, "cost (all runs)") {
-			t.Errorf("stdout = %q, want no trace of the old \"(all runs)\" labels", out)
+		for _, want := range []string{"tokens (lower bound)    input", "cost                    -   per succeeded run -"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("stdout = %q, want to contain %q", out, want)
+			}
 		}
 
 		unmeasuredLine := ""
@@ -605,7 +600,7 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 				stdout.String())
 		}
 		out := stdout.String()
-		for _, absent := range []string{"by dispatch rule", "by prompt template", "self review", "turns (succeeded)", "tokens (measured runs)"} {
+		for _, absent := range []string{"by dispatch rule", "by prompt template", "self review", "turns (succeeded)", "tokens (lower bound)", "LOWER BOUND", "by usage provenance"} {
 			if strings.Contains(out, absent) {
 				t.Errorf("stdout contains %q, want it absent on the base tier", absent)
 			}
@@ -655,6 +650,9 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 		}
 		if report.Summary.TokensUnmeasuredRuns != 0 {
 			t.Errorf("Summary.TokensUnmeasuredRuns = %d, want 0 on the base tier", report.Summary.TokensUnmeasuredRuns)
+		}
+		if len(report.ByProvenance) != 0 {
+			t.Errorf("ByProvenance = %v, want empty on the base tier", report.ByProvenance)
 		}
 	})
 }
@@ -764,6 +762,9 @@ func TestRunStats_MissingCacheWriteTokensColumnReadsAsZero(t *testing.T) {
 		if tt.report.Summary.Tokens == nil || tt.report.Summary.Tokens.CacheWrite != 0 {
 			t.Errorf("%s: Summary.Tokens.CacheWrite = %v, want 0", tt.label, tt.report.Summary.Tokens)
 		}
+	}
+	if cause := missingColumn.Summary.UnmeasuredCause; cause == nil || *cause != "unknown" || len(missingColumn.ByProvenance) != 0 {
+		t.Errorf("pre-provenance database: Summary.UnmeasuredCause = %v, ByProvenance = %v, want %q and no rows", cause, missingColumn.ByProvenance, "unknown")
 	}
 }
 

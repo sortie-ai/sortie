@@ -524,6 +524,13 @@ func TestScanRunHistoryRange(t *testing.T) {
 
 		withParts := runAt("with-parts", "2026-01-01T00:00:00Z")
 		withParts.DispatchID, withParts.UnaccountedTurns = new("dispatch-1"), 3
+		withParts.TotalTokens, withParts.TokensMeasured = 330, true
+		withParts.UsageCompleteness, withParts.UsageProvenance = UsageLowerBound, "journal:records,output:live"
+		withParts.ReportedAmounts = []ReportedAmount{
+			{Unit: "credits", Model: "model-b", Amount: 2},
+			{Unit: "USD", Model: "model-a", Amount: 1},
+			{Unit: "credits", Model: "model-a", Amount: 3},
+		}
 		withParts.ModelUsage = map[string]ModelTokens{
 			"model-b": {InputTokens: 200, OutputTokens: 20},
 			"model-a": {InputTokens: 100, OutputTokens: 10, CacheReadTokens: 50, CacheWriteTokens: 5},
@@ -559,13 +566,56 @@ func TestScanRunHistoryRange(t *testing.T) {
 		if !reflect.DeepEqual(got[0].Parts, wantParts) {
 			t.Errorf("RunStatsRow{with-parts}.Parts = %+v, want %+v", got[0].Parts, wantParts)
 		}
-		if got[0].UnaccountedTurns != 3 {
-			t.Errorf("RunStatsRow{with-parts}.UnaccountedTurns = %d, want 3", got[0].UnaccountedTurns)
+		if got[0].UnaccountedTurns != 3 || got[0].TotalTokens != 330 {
+			t.Errorf("RunStatsRow{with-parts} UnaccountedTurns, TotalTokens = %d, %d, want 3, 330", got[0].UnaccountedTurns, got[0].TotalTokens)
 		}
-		if got[1].Parts != nil || got[1].UnaccountedTurns != 0 {
-			t.Errorf("RunStatsRow{no-parts} Parts, UnaccountedTurns = %+v, %d, want nil, 0", got[1].Parts, got[1].UnaccountedTurns)
+		if got[0].UsageCompleteness != UsageLowerBound || got[0].UsageProvenance != "journal:records,output:live" || !slices.Equal(got[0].ReportedUnits, []string{"USD", "credits"}) {
+			t.Errorf("RunStatsRow{with-parts} UsageCompleteness, UsageProvenance, ReportedUnits = %q, %q, %q, want %q, %q, %q",
+				got[0].UsageCompleteness, got[0].UsageProvenance, got[0].ReportedUnits, UsageLowerBound, "journal:records,output:live", []string{"USD", "credits"})
+		}
+		if got[1].Parts != nil || got[1].UnaccountedTurns != 0 || got[1].ReportedUnits != nil {
+			t.Errorf("RunStatsRow{no-parts} Parts, UnaccountedTurns, ReportedUnits = %+v, %d, %q, want nil, 0, nil", got[1].Parts, got[1].UnaccountedTurns, got[1].ReportedUnits)
 		}
 	})
+
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, s *Store)
+	}{
+		{"a database before migration 050", func(t *testing.T, s *Store) { migrateToVersion(t, s, 49) }},
+		{"a database whose reported amounts table is missing", func(t *testing.T, s *Store) {
+			migrateOrFatal(t, s)
+			if _, err := s.db.ExecContext(context.Background(), "DROP TABLE run_reported_amounts"); err != nil {
+				t.Fatalf("drop run_reported_amounts: %v", err)
+			}
+		}},
+	} {
+		t.Run(tt.name+" reads empty completeness, provenance and units", func(t *testing.T) {
+			t.Parallel()
+
+			s := openTestStore(t)
+			tt.setup(t, s)
+			insertRunHistoryRow(t, s, "no-provenance", "succeeded", true)
+			ctx := context.Background()
+			caps, err := s.RunHistoryCapabilities(ctx)
+			if err != nil {
+				t.Fatalf("RunHistoryCapabilities: %v", err)
+			}
+
+			var got []RunStatsRow
+			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+				got = append(got, row)
+				return nil
+			})
+
+			if err != nil || caps.UsageProvenance() || len(got) != 1 {
+				t.Fatalf("ScanRunHistoryRange = %d rows, UsageProvenance %v, error %v, want 1, false, nil", len(got), caps.UsageProvenance(), err)
+			}
+			if got[0].UsageCompleteness != "" || got[0].UsageProvenance != "" || got[0].ReportedUnits != nil {
+				t.Errorf("RunStatsRow UsageCompleteness, UsageProvenance, ReportedUnits = %q, %q, %q, want empty", got[0].UsageCompleteness, got[0].UsageProvenance, got[0].ReportedUnits)
+			}
+		})
+	}
 }
 
 func TestScanRunHistoryRange_OptionalColumns(t *testing.T) {
