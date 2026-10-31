@@ -130,6 +130,36 @@ func TestClassifySample(t *testing.T) {
 		}
 	})
 
+	t.Run("timeout_panic_keeps_the_running_tests", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "timeout.json")
+
+		dump := strings.Repeat("goroutine 7 [IO wait]:\n\tinternal/poll.runtime_pollWait()\n", excerptByteLimit/20)
+		content := fmt.Sprintf(`{"Action":"run","Test":"TestHang"}`+"\n"+
+			`{"Action":"output","Test":"TestHang","Output":"=== RUN   TestHang\n"}`+"\n"+
+			`{"Action":"output","Test":"TestHang","Output":"panic: test timed out after 5m0s\n"}`+"\n"+
+			`{"Action":"output","Test":"TestHang","Output":"\trunning tests:\n\t\tTestHang (5m0s)\n"}`+"\n"+
+			`{"Action":"output","Test":"TestHang","Output":%q}`+"\n"+
+			`{"Action":"output","Output":"FAIL\tpkg\t300.037s\n"}`+"\n"+
+			`{"Action":"fail","Test":""}`+"\n", dump)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+
+		got := classifySample("failure", path)
+
+		for _, want := range []string{"panic: test timed out after 5m0s", "TestHang (5m0s)"} {
+			if !strings.Contains(got.excerpt, want) {
+				t.Errorf("classifySample(...).excerpt lacks %q, want the panic's head kept", want)
+			}
+		}
+		if len(got.excerpt) > excerptByteLimit {
+			t.Errorf("len(classifySample(...).excerpt) = %d, want at most %d", len(got.excerpt), excerptByteLimit)
+		}
+	})
+
 	t.Run("scanner_error_makes_report_unusable", func(t *testing.T) {
 		t.Parallel()
 
