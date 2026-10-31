@@ -89,6 +89,32 @@ func TestSupervisedAgent_EndsTheGroupOnceTheParentIsGone(t *testing.T) {
 	}
 }
 
+func TestSupervisedAgent_EndsWhatTheAgentLeftWhenItExits(t *testing.T) {
+	t.Parallel()
+
+	for _, shell := range availableShells(t) {
+		t.Run(shell.name, func(t *testing.T) {
+			t.Parallel()
+
+			leftover := filepath.Join(t.TempDir(), "leftover.pid")
+			agent := "{ sleep 600 & echo $! >" + shellQuote(leftover) + "; exit 3\n}"
+			// The shell leads its own group, as sshd makes it lead the session's.
+			cmd := exec.Command(shell.path, "-c", supervisedAgent(agent, time.Second, ""))
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start %s: %v", shell.path, err)
+			}
+			t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+
+			var exitErr *exec.ExitError
+			if err := waitExit(t, cmd); !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+				t.Fatalf("exit = %v, want exit status 3", err)
+			}
+			waittest.ProcessGone(t, waittest.PIDFile(t, leftover))
+		})
+	}
+}
+
 func startExitWaiter(t *testing.T, shell, barrier string) <-chan error {
 	t.Helper()
 

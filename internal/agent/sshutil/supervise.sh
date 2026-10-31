@@ -43,12 +43,24 @@ sortie_watch_parent() {
 	sortie_stop_session_group "$1"
 }
 
+# An agent that exits by itself can leave children running, such as a
+# background fetch it started. sshd makes this shell the leader of the
+# session's process group, so the rest of the group is the agent's leftovers;
+# a shell that leads no group shares it with processes it must not signal.
+sortie_end_leftovers() {
+	pgid=$(ps -o pgid= -p "$$" 2>/dev/null) || return 0
+	[ "$((pgid))" -eq "$$" ] || return 0
+	trap '' TERM
+	kill -TERM 0 2>/dev/null
+}
+
 sortie_supervise() {
 	sortie_watch_parent "$1" </dev/null >/dev/null 2>&1 4>&- &
 	watchdog=$!
 	wait "$agent_pid"
 	status=$?
 	kill "$watchdog" 2>/dev/null
+	sortie_end_leftovers
 	[ -z "${sortie_barrier-}" ] || rm -f "$sortie_barrier"
 	return "$status"
 }
