@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.31.0] - 2026-10-31
+
 ### Added
 
 - The dashboard Overview page lists the issues Sortie holds back from dispatch and why each one waits. The JSON API serves them as `held`. ([#1387](https://github.com/sortie-ai/sortie/issues/1387))
@@ -1473,7 +1475,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.30.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.31.0...HEAD
+[1.31.0]: https://github.com/sortie-ai/sortie/compare/v1.30.0...v1.31.0
 [1.30.0]: https://github.com/sortie-ai/sortie/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/sortie-ai/sortie/compare/v1.28.1...v1.29.0
 [1.28.1]: https://github.com/sortie-ai/sortie/compare/v1.28.0...v1.28.1
