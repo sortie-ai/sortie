@@ -186,16 +186,25 @@ jobs:
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             credential_env: KIRO_API_KEY
-            run_filter: ^TestIntegration_ScriptedModel$/^credential_verification_context$
+            run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 300s
+            timeout: 900s
             node: false
             install: curl -fsSL https://cli.kiro.dev/install | bash
             version_cmd: kiro-cli --version
             source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
             clientprotocol_command: "kiro-cli acp -a --model scripted-model"
+            clientprotocol_ssh_command: "kiro-cli acp -a --model scripted-model"
+            clientprotocol_ssh_install: |
+              d=$(mktemp -d)
+              curl -fsSL https://prod.download.cli.kiro.dev/stable/latest/kirocli-x86_64-linux.tar.gz | tar -xz -C "$d"
+              Q_INSTALL_GLOBAL=1 Q_SKIP_SETUP=1 "$d/kirocli/install.sh"
+              rm -rf "$d"
+            clientprotocol_http_tools: "1"
             clientprotocol_model_document_path: .kiro/settings/cli.json
             clientprotocol_model_document: '{"api.krs.service":{"endpoint":"{url}","region":"us-east-1"},"api.cps.service":{"endpoint":"{url}","region":"us-east-1"},"api.codewhisperer.service":{"endpoint":"{url}","region":"us-east-1"}}'
+            clientprotocol_profile: tools/qualify/profiles/kiro-cli.json
+            clientprotocol_spend_declaration: Kiro CLI Agent
 
           - name: Jira
             adapter: jira
