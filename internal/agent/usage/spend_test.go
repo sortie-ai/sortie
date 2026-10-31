@@ -896,9 +896,9 @@ func TestLedger_Amounts(t *testing.T) {
 			},
 		},
 		{
-			name: "observed: a currency that is not three letters reads as absent",
+			name: "observed: a currency-declared reading with no unit reads as absent",
 			live: currency, created: true,
-			steps: []amountStep{{observe: []usage.AmountReading{amt("EU1", 1.5)}, end: replied}},
+			steps: []amountStep{{observe: []usage.AmountReading{amt("", 1.5)}, end: replied}},
 		},
 	}
 

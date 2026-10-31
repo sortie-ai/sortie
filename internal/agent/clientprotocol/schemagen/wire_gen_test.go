@@ -57,7 +57,7 @@ func TestGenerateMatchesCommittedWireGen(t *testing.T) {
 	t.Parallel()
 
 	dir := callerDir(t)
-	assetsDir := filepath.Join(dir, "..", "testdata", "schema-v1.25.0")
+	assetsDir := filepath.Join(dir, "..", "testdata", "schema-v1.28.0")
 	wireGenPath := filepath.Join(dir, "..", "wire_gen.go")
 
 	got, err := Generate(assetsDir)
