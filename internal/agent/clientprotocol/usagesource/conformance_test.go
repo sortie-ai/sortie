@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -98,6 +97,7 @@ func TestDeclarationsRefuseWhatTheTransportCannotMeasure(t *testing.T) {
 		declaration Declaration
 	}{
 		{"zero live source", "refused-zero-live", Declaration{}},
+		{"a protocol live source that maps no spend", "refused-no-spend", Declaration{Live: usage.Source{Category: usage.SourceProtocol}}},
 		{"declared spend without a prompt reader", "refused-no-prompt-spend", noPromptSpend},
 		{"the reserved default key", DefaultName, Default},
 		{"a launch addition with a name and no merge", "refused-addition-name-only", nameOnly},
@@ -128,46 +128,6 @@ func registerPanics(key string, declaration Declaration) (panicked bool) {
 	return false
 }
 
-func TestEffectiveSuppliesTheDefaultMappingOnlyWhenNoneIsDeclared(t *testing.T) {
-	t.Parallel()
-
-	own := Default
-	own.Live.Spend.LowerBound = false
-	own.Live.Spend.CacheInInput = false
-	own.Live.Spend.Amounts = nil
-	own.SessionUpdateAmounts = nil
-	amountsOnly := Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive, Spend: usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}}}}
-	tests := []struct {
-		name              string
-		declaration       Declaration
-		wantSpend         usage.SpendDeclaration
-		wantPromptHas     bool
-		wantAmountsReader bool
-	}{
-		{"windows only", Declaration{Live: usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive}}, Default.Live.Spend, true, true},
-		{"its own token mapping", own, own.Live.Spend, true, false},
-		{"an amount alone", amountsOnly, amountsOnly.Live.Spend, false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := tt.declaration.Effective()
-
-			if !reflect.DeepEqual(got.Live.Spend, tt.wantSpend) {
-				t.Errorf("Effective().Live.Spend = %+v, want %+v", got.Live.Spend, tt.wantSpend)
-			}
-			if (got.PromptSpend != nil) != tt.wantPromptHas {
-				t.Errorf("Effective().PromptSpend set = %v, want %v", got.PromptSpend != nil, tt.wantPromptHas)
-			}
-			if (got.SessionUpdateAmounts != nil) != tt.wantAmountsReader {
-				t.Errorf("Effective().SessionUpdateAmounts set = %v, want %v", got.SessionUpdateAmounts != nil, tt.wantAmountsReader)
-			}
-		})
-	}
-}
-
 func TestDeclarationLaunchesFollowTheConfiguredCommand(t *testing.T) {
 	t.Parallel()
 
@@ -182,9 +142,9 @@ func TestDeclarationLaunchesFollowTheConfiguredCommand(t *testing.T) {
 		{"wrapper command", copilotHandshakeName, agentcore.LaunchTarget{Command: "env", Args: []string{"MODEL=x", "copilot", "--acp"}}, true},
 		{"npm package of the 2.x line through a launcher", opencodeHandshakeName, agentcore.LaunchTarget{Command: "npx", Args: []string{"-y", "@opencode/cli@2", "acp"}}, true},
 		{"another runtime's command", copilotHandshakeName, agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, false},
-		{"remote command named, ssh as the executable", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "kiro-cli acp --model x"}, true},
-		{"remote command naming nothing", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
-		{"runtime named only in the ssh arguments", kiroAgentName, agentcore.LaunchTarget{Command: "ssh", Args: []string{"kiro-cli"}, SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
+		{"remote command named, ssh as the executable", kiroV2AgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "kiro-cli acp --model x"}, true},
+		{"remote command naming nothing", kiroV2AgentName, agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
+		{"runtime named only in the ssh arguments", kiroV2AgentName, agentcore.LaunchTarget{Command: "ssh", Args: []string{"kiro-cli"}, SSHHost: "worker", RemoteCommand: "agent --acp"}, false},
 	}
 
 	for _, tt := range tests {

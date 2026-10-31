@@ -674,11 +674,14 @@ func spendSources(t *testing.T) *fakemodel.SpendSources {
 	}
 	liveSpend := declaration.Live.Spend.Shape != usage.SpendUndeclared
 	recordsSpend := declaration.Records.Spend.Shape != usage.SpendUndeclared
-	if !liveSpend && !recordsSpend {
-		return defaultSources
+	if !liveSpend && !recordsSpend && len(declaration.Live.Spend.Amounts) > 0 {
+		return &fakemodel.SpendSources{
+			Live:        domain.UsageProvenance{Source: declaration.Live.Category, Strategy: declaration.Live.Strategy},
+			AmountsOnly: true,
+		}
 	}
 	if !liveSpend || !recordsSpend {
-		t.Fatalf("%s = %q, want a declaration whose live and records sources both declare spend, or neither", variable, name)
+		t.Fatalf("%s = %q, want a declaration whose live and records sources both declare a token shape, or whose live source declares amounts alone", variable, name)
 	}
 	return &fakemodel.SpendSources{
 		Live:             domain.UsageProvenance{Source: declaration.Live.Category, Strategy: declaration.Live.Strategy},

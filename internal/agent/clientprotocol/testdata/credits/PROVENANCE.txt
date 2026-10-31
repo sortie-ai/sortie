@@ -1,0 +1,18 @@
+Source: Kiro CLI 2.21.2 on a real account, captured 2026-10-27.
+
+kiro_v2_completed_turns.jsonl
+  The default engine: initialize, session/new, and two completed
+  session/prompt turns. Every agent frame is the runtime's own.
+  Trimmed: the third turn, which the client cancelled, and everything after
+  the second turn's result.
+
+kiro_v3_session_load.jsonl
+  The v3 engine: initialize, session/load of an earlier session, then one
+  live session/prompt turn. The load replays three earlier turn_completion
+  frames (two completed turns and an aborted one) before its result. Every
+  agent frame is the runtime's own.
+  Trimmed: the context_usage frame after the live turn's result.
+
+Sanitized in both files: the capture workspace path became /workspace and
+the capture home directory became /home/user. No other byte of a frame was
+edited. Client requests are as sent by the capture harness.

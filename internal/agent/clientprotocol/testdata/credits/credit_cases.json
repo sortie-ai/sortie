@@ -1,0 +1,4 @@
+[
+  {"name": "default engine, completed turns", "capture": "kiro_v2_completed_turns.jsonl", "command": "kiro-cli acp", "turns": [0.01611050912106136, 0.016239179104477617]},
+  {"name": "v3 engine, session load", "capture": "kiro_v3_session_load.jsonl", "command": "kiro-cli acp", "resume": "sess_9c5c5d89-7f78-4af5-a82f-d5472adc1f55", "turns": [0.023755560530679933]}
+]

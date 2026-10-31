@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
-	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
 const (
@@ -29,11 +28,6 @@ func declarationsNamedByRows(doc nightlyWorkflowDocument) map[string]bool {
 	return named
 }
 
-func declaresSpend(declaration usagesource.Declaration) bool {
-	return declaration.Live.Spend.Shape != usage.SpendUndeclared ||
-		declaration.Records.Spend.Shape != usage.SpendUndeclared
-}
-
 func allDeclarations(t *testing.T) map[string]usagesource.Declaration {
 	t.Helper()
 
@@ -52,10 +46,9 @@ func unnamedSpendDeclarations(t *testing.T, doc nightlyWorkflowDocument) []strin
 	t.Helper()
 
 	named := declarationsNamedByRows(doc)
-	declarations := allDeclarations(t)
 	var unnamed []string
-	for _, name := range slices.Sorted(maps.Keys(declarations)) {
-		if declaresSpend(declarations[name]) && !named[name] {
+	for _, name := range slices.Sorted(maps.Keys(allDeclarations(t))) {
+		if !named[name] {
 			unnamed = append(unnamed, name)
 		}
 	}
@@ -90,7 +83,8 @@ func TestUnnamedSpendDeclarationsNamesDeclarationWithoutRow(t *testing.T) {
 	named := declarationsNamedByRows(shipped)
 	declarations := allDeclarations(t)
 	want := slices.DeleteFunc(slices.Sorted(maps.Keys(named)), func(name string) bool {
-		return !declaresSpend(declarations[name])
+		_, declared := declarations[name]
+		return !declared
 	})
 	if len(want) == 0 {
 		t.Fatalf("no nightly row names a spend declaration in %s", spendDeclarationEnv)

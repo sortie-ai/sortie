@@ -202,7 +202,7 @@ type handshakeFacts struct {
 
 	toolServersDelivered bool
 
-	// declaration is the effective declaration the session is measured under.
+	// declaration is the declaration the session is measured under.
 	declaration usagesource.Declaration
 
 	// puller is nil when the declaration has no pull or the session verifies a

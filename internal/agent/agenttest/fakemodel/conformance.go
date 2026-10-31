@@ -165,6 +165,12 @@ type SpendSources struct {
 	// runtime process, so a cancel after output leaves the records as a kill
 	// does.
 	CancelEndsProcess bool
+
+	// AmountsOnly declares that the Live source reports spend only in amounts,
+	// which the bench cannot script, and settles no token figure: every turn
+	// expects UsageMeasured false, a zero Usage, and no UsageProvenance, and
+	// the contract asserts nothing about ReportedAmounts. Records must be zero.
+	AmountsOnly bool
 }
 
 // SSHVariant is a binding's fixture for the SSH variant of the tool-server
@@ -414,6 +420,8 @@ func requireValidBinding(t *testing.T, b Binding) {
 		t.Fatalf("Binding.Spend.Live names no Source, want the category of the live spend source")
 	case b.Spend != nil && b.Spend.Records != (domain.UsageProvenance{}) && b.Spend.Records.Source == "":
 		t.Fatalf("Binding.Spend.Records sets a Strategy but names no Source, want the category of the records spend source or none at all")
+	case b.Spend != nil && b.Spend.AmountsOnly && b.Spend.Records != (domain.UsageProvenance{}):
+		t.Fatalf("Binding.Spend.AmountsOnly is set with a Records source, want none: an amounts-only runtime settles no token figure from records")
 	}
 }
 
@@ -2050,6 +2058,11 @@ func exactUsage(run Run, arrival registry.UsageArrival, want domain.TokenUsage, 
 		return v.items
 	}
 
+	if amountsOnly(spend) {
+		noTokenFigureViolations(v, run.Result)
+		return v.items
+	}
+
 	interrupted := run.Result.ExitReason == domain.EventTurnCancelled || run.Result.ExitReason == domain.EventTurnFailed
 	switch {
 	case spend != nil && interrupted && settling.recordsUnread:
@@ -2103,6 +2116,22 @@ func exactUsage(run Run, arrival registry.UsageArrival, want domain.TokenUsage, 
 		spendProvenanceViolations(v, run.Result, *spend)
 	}
 	return v.items
+}
+
+func amountsOnly(spend *SpendSources) bool {
+	return spend != nil && spend.AmountsOnly
+}
+
+func noTokenFigureViolations(v *findings, result domain.TurnResult) {
+	if result.UsageMeasured {
+		v.add("Result.UsageMeasured is true, want false for a runtime that settles no token figure")
+	}
+	if result.Usage != (domain.TokenUsage{}) {
+		v.add("Result.Usage = %+v, want zero for a runtime that settles no token figure", result.Usage)
+	}
+	if len(result.UsageProvenance) > 0 {
+		v.add("Result.UsageProvenance = %v, want empty for a runtime that settles no token figure", result.UsageProvenance)
+	}
 }
 
 // liveOnlyInterruptedViolations adds the violations of a turn interrupted after
@@ -2332,6 +2361,11 @@ func exhaustionViolations(run Run, b Binding, settling usageSettling, nonce stri
 		checkExhaustedExchanges(v, run, turns[0], exhausted, nonce, failures, b.RuntimeFailureFolded)
 	}
 
+	if amountsOnly(b.Spend) {
+		noTokenFigureViolations(v, run.Result)
+		return v.items
+	}
+
 	want := served(run.Exchanges, turnAndAuxiliary, b)
 	if settling.liveLowerBound && (!run.Result.UsageMeasured || run.Result.SpendUnaccounted) {
 		lowerBoundViolations(v, run.Result, want)
@@ -2529,7 +2563,8 @@ func reportedProcessIDs(run Run) []string {
 // which compares it with the completeness the binding expects.
 //
 // Under a lower-bound settling the resumed turn may carry no figure, provided
-// it flags its spend unaccounted; otherwise it must be measured.
+// it flags its spend unaccounted; under AmountsOnly it carries none; otherwise
+// it must be measured.
 func continuationViolations(turns []continuedTurn, resumed domain.Session, exchanges []Exchange, spend *SpendSources, settling usageSettling) []string {
 	v := &findings{property: "continuation"}
 
@@ -2556,7 +2591,7 @@ func continuationViolations(turns []continuedTurn, resumed domain.Session, excha
 	if first := turns[0].result; spend == nil && first.UsageMeasured && first.SpendUnaccounted {
 		v.add("%s turn 1: Result.SpendUnaccounted is true, want false for a completed turn with a measured figure", roleOrigin)
 	}
-	if last := turns[resumedEntry].result; !last.UsageMeasured {
+	if last := turns[resumedEntry].result; !last.UsageMeasured && !amountsOnly(spend) {
 		switch {
 		case !settling.liveLowerBound:
 			v.add("%s turn: Result.UsageMeasured is false, want a measured figure", roleResumed)

@@ -68,7 +68,7 @@ func TestGeminiDeclarationSettlesTheCapturedTurns(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			declaration := mustDeclaration(t, geminiAgentName).Effective()
+			declaration := mustDeclaration(t, geminiAgentName)
 			ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
 			if err != nil {
 				t.Fatalf("NewLedger(%q) = %v, want a ledger", geminiAgentName, err)
