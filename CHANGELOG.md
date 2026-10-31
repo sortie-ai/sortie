@@ -50,7 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A run stopped on an SSH worker host no longer hangs instead of ending. ([#1486](https://github.com/sortie-ai/sortie/issues/1486))
 - On the ACP agent kind, a Copilot CLI usage-limit refusal no longer ends the turn as successful, and a Kiro CLI usage-limit refusal is no longer reported as a rejected credential. ([#1524](https://github.com/sortie-ai/sortie/issues/1524))
 - An OpenCode turn that hands work to a subagent includes the subagent's tokens and cost in the run's usage. ([#1540](https://github.com/sortie-ai/sortie/issues/1540))
-- An ACP agent that reports its session cost in a unit other than a currency, such as credits, has that amount recorded with the run. ([#1229](https://github.com/sortie-ai/sortie/issues/1229))
+- An ACP agent without runtime-specific usage support in Sortie that reports its session cost in a unit other than a currency, such as credits, has that amount recorded with the run. ([#1229](https://github.com/sortie-ai/sortie/issues/1229))
 
 ## [1.30.0] - 2026-10-23
 
