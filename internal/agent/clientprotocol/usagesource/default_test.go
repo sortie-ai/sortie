@@ -24,7 +24,8 @@ func TestDefaultSessionUpdateAmounts(t *testing.T) {
 	}{
 		{"an amount written 1.0", usageUpdateWith(`,"cost":{"amount":1.0,"currency":"USD"}`), "USD", &one},
 		{"a lowercase currency", usageUpdateWith(`,"cost":{"amount":1,"currency":"eur"}`), "EUR", &one},
-		{"a four-letter currency", usageUpdateWith(`,"cost":{"amount":1,"currency":"USDT"}`), "", nil},
+		{"a unit other than a currency", usageUpdateWith(`,"cost":{"amount":1,"currency":"credits"}`), "credits", &one},
+		{"an empty currency", usageUpdateWith(`,"cost":{"amount":1,"currency":""}`), "", nil},
 		{"a null amount", usageUpdateWith(`,"cost":{"amount":null,"currency":"USD"}`), "USD", nil},
 		{"a negative amount", usageUpdateWith(`,"cost":{"amount":-1,"currency":"USD"}`), "USD", nil},
 		{"no cost member", usageUpdateWith(""), "", nil},

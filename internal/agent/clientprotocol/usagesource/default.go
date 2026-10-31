@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
@@ -19,7 +18,7 @@ const DefaultName = "default"
 // that counts either one outside is undercounted, never counted twice. Its
 // figure is therefore always a lower bound. It also reads the standard cost
 // member of a usage_update session update, a running total over the session in
-// the currency the member names.
+// the unit the member names.
 var Default = Declaration{
 	Live: usage.Source{
 		Category: usage.SourceProtocol,
@@ -50,9 +49,10 @@ type standardCost struct {
 }
 
 // standardUpdateAmounts reads the cost member of a usage_update and nothing from
-// any other variant. A currency that is not three ASCII letters leaves the
-// reading absent, because the amount then has no unit; an amount that is not a
-// finite non-negative number reads unknown in the currency it names.
+// any other variant. The currency is the amount's unit, an ISO 4217 code or
+// another unit such as credits; an empty one leaves the reading absent, because
+// the amount then has no unit. An amount that is not a finite non-negative
+// number reads unknown in the unit it names.
 func standardUpdateAmounts(update json.RawMessage) []usage.AmountReading {
 	var decoded standardUpdate
 	if err := json.Unmarshal(update, &decoded); err != nil || decoded.SessionUpdate != usageUpdateVariant {
@@ -66,22 +66,14 @@ func standardUpdateAmounts(update json.RawMessage) []usage.AmountReading {
 		return nil
 	}
 	var currency string
-	if err := json.Unmarshal(cost.Currency, &currency); err != nil || !isCurrencyCode(currency) {
+	if err := json.Unmarshal(cost.Currency, &currency); err != nil {
 		return nil
 	}
-	return []usage.AmountReading{{Unit: strings.ToUpper(currency), Amount: jsonAmount(cost.Amount)}}
-}
-
-func isCurrencyCode(s string) bool {
-	if len(s) != 3 {
-		return false
+	unit, ok := usage.ReadingUnit(currency)
+	if !ok {
+		return nil
 	}
-	for i := range len(s) {
-		if c := s[i]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-			return false
-		}
-	}
-	return true
+	return []usage.AmountReading{{Unit: unit, Amount: jsonAmount(cost.Amount)}}
 }
 
 // jsonAmount returns the number a JSON member holds, nil for an absent, null,

@@ -31,8 +31,8 @@ type AmountDeclaration struct {
 	// exactly when Currency is set.
 	Unit string
 
-	// Currency declares that each reading names its ISO 4217 code, which is
-	// its unit.
+	// Currency declares that each reading names its own unit: an ISO 4217
+	// code for money, or another unit such as credits.
 	Currency bool
 
 	// Shape is how the source counts the amount.
@@ -375,8 +375,7 @@ func (l *Ledger) historyOf(key amountKey) (float64, bool) {
 // declaredUnit returns the unit a reading belongs to under decls. A reading
 // names its unit when the source declares more than one, or declares a
 // currency; a source that declares one fixed unit leaves it empty. It reports
-// false for a reading no declaration covers and for a currency code that is
-// not three ASCII letters.
+// false for a reading no declaration covers and for an empty currency unit.
 func declaredUnit(decls []AmountDeclaration, r AmountReading) (string, bool) {
 	for _, d := range decls {
 		if !d.Currency && r.Unit != "" && d.Unit == r.Unit {
@@ -385,7 +384,7 @@ func declaredUnit(decls []AmountDeclaration, r AmountReading) (string, bool) {
 	}
 	for _, d := range decls {
 		if d.Currency {
-			return currencyCode(r.Unit)
+			return ReadingUnit(r.Unit)
 		}
 	}
 	if len(decls) == 1 && r.Unit == "" {
@@ -409,18 +408,29 @@ func declarationOf(decls []AmountDeclaration, unit string) (AmountDeclaration, b
 	return AmountDeclaration{}, false
 }
 
-// currencyCode returns the uppercased ISO 4217 code of s, or false when s is
-// not three ASCII letters.
-func currencyCode(s string) (string, bool) {
-	if len(s) != 3 {
+// ReadingUnit returns the unit a currency-declared reading names: an ISO 4217
+// code, three ASCII letters, uppercased, or any other unit, such as credits,
+// as reported. It reports false for an empty unit.
+func ReadingUnit(s string) (string, bool) {
+	if s == "" {
 		return "", false
+	}
+	if !isCurrencyCode(s) {
+		return s, true
+	}
+	return strings.ToUpper(s), true
+}
+
+func isCurrencyCode(s string) bool {
+	if len(s) != 3 {
+		return false
 	}
 	for i := range len(s) {
 		if c := s[i] | 0x20; c < 'a' || c > 'z' {
-			return "", false
+			return false
 		}
 	}
-	return strings.ToUpper(s), true
+	return true
 }
 
 // FormatProvenance returns the text of a run's recorded provenance: the
