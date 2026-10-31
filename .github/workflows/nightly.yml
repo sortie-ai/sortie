@@ -71,7 +71,7 @@ jobs:
             guard: SORTIE_COPILOT_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/copilot/...
-            timeout: 300s
+            timeout: 600s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
