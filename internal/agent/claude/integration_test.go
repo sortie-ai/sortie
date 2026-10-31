@@ -164,8 +164,9 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		ProjectInstructions: "CLAUDE.md",
 		Read:                fakemodel.ReadFile,
 		Spend: &fakemodel.SpendSources{
-			Live:    domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive},
-			Records: domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			Live:             domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive},
+			Records:          domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
+			RecordsAtTurnEnd: usageSources.Records.WrittenAtTurnEnd,
 		},
 		SSH: &fakemodel.SSHVariant{
 			Package:       "@anthropic-ai/claude-code",

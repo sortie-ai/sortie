@@ -41,8 +41,10 @@ const unknownEffortPrefix = "Warning: Unknown --effort value"
 // usageSources declares what each source counts. The stream reports each
 // process's own requests split by served model and carries no history of
 // earlier processes; the journal holds one line per completed request and
-// keeps the history of earlier runs in place. Only the stream carries a cost,
-// so a turn the journal settles leaves its amount a lower bound.
+// keeps the history of earlier runs in place. The runtime queues journal
+// writes, so a killed process can leave even its completed requests unwritten.
+// Only the stream carries a cost, so a turn the journal settles leaves its
+// amount a lower bound.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
@@ -64,6 +66,7 @@ var usageSources = usage.Sources{
 			ReasoningInOutput: true,
 			ServedModel:       true,
 		},
+		WrittenAtTurnEnd: true,
 	},
 }
 
@@ -139,9 +142,10 @@ type sessionState struct {
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
 
-	// usageMeasured reports whether a streamed request or a settled figure
-	// has been observed for this session. Monotone: set true once and never
-	// cleared.
+	// usageMeasured reports whether a turn of this session has settled a
+	// figure. A streamed request does not set it: its output count is the
+	// request's opening count, so a turn that ends unsettled is unknown.
+	// Monotone: set true once and never cleared.
 	usageMeasured bool
 
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
@@ -394,7 +398,6 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 							// streamed event of the same model request; only the
 							// id's first sighting represents a new API request.
 							if isNew {
-								state.usageMeasured = true
 								tokenEvt := domain.AgentEvent{
 									Type:         domain.EventTokenUsage,
 									Timestamp:    now,
