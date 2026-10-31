@@ -86,6 +86,8 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `declared_outcome` | TEXT | The recognized `.sortie/status` token that ended the run (`blocked`, `needs-human-review`, or `no-change-needed`), as written (§21.1). The empty string when the run ended on no recognized token, and on a row written before the column existed, which is not backfilled |
 | `agent_text` | TEXT | The statement that came with that token, normalized and masked as §21.1 "Publication" states, the text the `session.stopped` event carries as agent text. The empty string when `declared_outcome` is empty, when the agent wrote no statement, when normalization empties it, and on a row written before the column existed, which is not backfilled |
 | `skills` | TEXT | JSON array of the run's skill calls in completion order, each an object with `skill` and, for a failed call, `tool_error` set to `true`, such as `[{"skill":"ce-plan"},{"skill":"ce-work","tool_error":true}]`; no entry limit, repeats included. The orchestrator marshals it at worker exit from the list it built from every `tool_result` event on arrival, and the store carries it as text, as it carries `review_metadata`. `[]` when the run called no skill, which includes a run whose agent reports none; the worker exit and a recorded CI result both write it. `NULL` only on a row written before the column existed, which is not backfilled, and when marshaling the list failed at worker exit |
+| `usage_provenance` | TEXT | Every source whose readings settled the run's token figure, as `source:strategy` pairs from the usage component's vocabulary (sources `protocol`, `output`, and `journal`; strategies `live` and `records`), each pair once, sorted, and comma-joined, such as `journal:records,output:live`. The empty string when no source settled a figure: an unmeasured run, the `ci_failed` row, or a run with no agent turn. `NULL` on a row written before the column existed, which is not backfilled and reads as provenance unknown |
+| `usage_completeness` | TEXT | `complete`, `lower_bound` when the run ran turns whose spend no source accounted, or `unmeasured`. `complete` on the `ci_failed` row. `NULL` on a row written before the column existed, under the same rule as `usage_provenance` |
 
 The origin columns hold `NULL` for "not recorded" and the empty string for "recorded, none", so an upgrade never reports an earlier run as a local poll-tick dispatch. Every writer binds text; the `trigger` of a run dispatched by a retry whose row never stored what started it is the only value a writer leaves `NULL`. The `ci_failed` row records the empty string in each origin column, because it records a CI verdict and nothing started it. `sortie stats` and `/api/v1/stats` group runs by `trigger` when the database carries the `trigger` column, the empty string as `<none>` and `NULL` as `<unknown>`, and otherwise report no such breakdown. They also group runs by origin from `trigger`, `reaction_kind`, `status`, and `first_after_hop`, and the first rule that matches decides a run's group: a `NULL` `trigger` is `<unknown>`, a non-empty `trigger` names the group, a non-empty `reaction_kind` names it otherwise, a `ci_failed` row is `<none>`, a row with `first_after_hop` set is `stage_hop`, and every other run is `poll_tick`. A database without the `trigger` column gets neither grouping, and one without `first_after_hop` no grouping by origin. An index on `identifier` serves the identifier-filtered reads of the run history API, as the index on `issue_id` serves the reads by issue ID. An index on `display_identifier` serves the issue key of run history by issue, which matches the qualified form (for example `owner/repo#9`) a tracker records beside the bare identifier. An index on `completed_at` serves the read of a window's recorded cost, the aggregate over the rows whose completion time lies in a half-open range. The read binds its bounds in RFC 3339 UTC, the form every writer stores, so the text comparison orders instants correctly.
 
@@ -126,10 +128,10 @@ The recorded cost is written once, in the same write as the row, priced under th
 | `cache_read_tokens` | INTEGER | Cache-read tokens spent on the model |
 | `cache_write_tokens` | INTEGER | Cache-write tokens spent on the model |
 | `estimated_cost_usd` | REAL | The model's share of the run's cost; `NULL` when no rate prices any class the model spent |
-| `cost_status` | TEXT | `estimated`, `partial` when a class the model spent has no rate, or `unpriced` |
-| `price_source` | TEXT | The layer that priced the share: `operator`, `fetched`, or `embedded` (Section 13.5); empty when `cost_status` is `unpriced` |
-| `price_table_version` | TEXT | The version of the rates that priced the share: the pinned upstream revision of the embedded table, or a content digest of the fetched table, the operator's table, or the operator's `token_rates`; for a share priced by a per-model `token_rates` entry that takes some of its rates from a table, the `token_rates` digest, a `+`, and that table's version; empty when `price_source` is empty |
-| `unrated_classes` | TEXT | The token classes whose missing rate left the share `partial` or `unpriced`, comma-joined; see the reading below |
+| `cost_status` | TEXT | `estimated`, `partial` when a class the model spent has no rate or when the agent-reported amount that priced the share is a lower bound, or `unpriced` |
+| `price_source` | TEXT | The layer that priced the share: `operator`, `fetched`, or `embedded` (Section 13.5), or `agent` when the US-dollar amount the agent runtime reported for the model priced a share no layer prices; empty when `cost_status` is `unpriced` |
+| `price_table_version` | TEXT | The version of the rates that priced the share: the pinned upstream revision of the embedded table, or a content digest of the fetched table, the operator's table, or the operator's `token_rates`; for a share priced by a per-model `token_rates` entry that takes some of its rates from a table, the `token_rates` digest, a `+`, and that table's version; empty when `price_source` is empty or `agent` |
+| `unrated_classes` | TEXT | The token classes whose missing rate left the share `partial` or `unpriced`, comma-joined; empty for a share priced by an agent-reported amount; see the reading below |
 
 A measured run writes one row per model it spent tokens on, in the same transaction as its `run_history` row, and the rows sum to the run's token columns class by class; an unmeasured run writes none. The per-model counts follow the same resume baseline as the run's totals, so a resumed session's earlier spend is not counted again. `run_history.reported_model` keeps its meaning, the model the last token-usage event named, and is not derived from these rows.
 
@@ -142,6 +144,18 @@ A measured run writes one row per model it spent tokens on, in the same transact
 | `cache_read,cache_write` | Recorded: the unrated class names, comma-joined, in the order `input`, `output`, `cache_read`, `cache_write` |
 
 A recorded value is written in the statement that writes the share's cost, and a share priced before the column existed keeps `NULL`, because a recorded price never changes.
+
+**`run_reported_amounts`**: each run's amounts the agent runtime reported, in the runtime's own units
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `run_id` | INTEGER | The `run_history.id` of the run (composite PK with `unit` and `model`) |
+| `unit` | TEXT | The unit the runtime reported the amount in: `USD`, another ISO 4217 currency code, or a vendor unit's plural display name such as `premium requests`. Never converted |
+| `model` | TEXT | The model the runtime's source attributes the amount to; the empty string when it attributes none |
+| `amount` | REAL | The run-cumulative amount in `unit`, finite and not negative |
+| `lower_bound` | INTEGER | `1` when the run may have spent more in `unit` than `amount` states, `0` otherwise |
+
+A run writes one row per unit and model of its reported amounts, in the same transaction as its `run_history` row, whether or not the run's token figure is measured. A run whose runtime reported no amount writes none. A run whose `usage_provenance` is `NULL` has no row, and its amounts are not recorded rather than absent. An amount in a unit other than `USD` is recorded and read by no ceiling, cost total, or token total. A `USD` amount prices a per-model share only where no rate layer prices the model, and that share records the price source `agent`.
 
 **`session_metadata`**: last known session metadata per issue (for observability and debug)
 
@@ -434,3 +448,4 @@ Every write of `run_events` updates `bytes` in its own transaction, so the figur
 - Applied migrations are tracked in a `schema_migrations` table. The `applied_at` of the migration that creates `reaction_activity` marks the start of the passes whose reaction activity is recorded (Section 19.2).
 - Migrations are additive (new columns/tables) where possible; destructive migrations require explicit versioning.
 - The migration that adds the recorded cost leaves the pricing of the rows written before it to the first start that applies it, which prices them once under the rates in force at that start and never again (Section 19.2).
+- The migration that adds provenance, completeness, and reported amounts adds nullable columns with no default and backfills nothing, so a row written before it reads as provenance unknown and has no amount row (Section 19.2).

@@ -99,6 +99,8 @@ Records and step reports count the same requests, so the two are never added. A 
 
 The adapter sums per-message figures and ignores the export's session aggregate, for two reasons. The aggregate covers the whole session, including earlier runs, while Sortie reports per run. And its total also includes cache and reasoning tokens, so it is not input plus output.
 
+A finished message's `cost` is read in US dollars as a per-request amount beside its tokens, under the message's `providerID/id` model, and the records source declares it. The `cost` of a `step_finish` report is not read, because its part identity differs from that of the export message that counts the same request, and neither is the export's `info.cost` aggregate. A free model reports `cost` 0 beside non-zero tokens, and a 0 beside tokens is no amount, so the model's amount is a lower bound. A child session's cost is never added to its parent's: the child's tokens count and mark the model's amount a lower bound.
+
 A message counts only once its `finish` field is set. The runtime saves an assistant message with zero tokens before calling the model, so a turn killed mid-step exports a placeholder, not a measurement. A finished message without tokens after the boundary is an aborted request whose spend is recorded nowhere, so it is unknown like any missing count, while one inside the history stays history.
 
 A resumed session reads the export once when it starts. Every message it holds becomes history by identity and never counts as this run's spend, whatever its creation time. A new session starts with no history. When that read fails, the boundary is unknown, never empty, so the session's history is never counted as this run's spend: each turn until a turn-end export is read stands as a lower bound, that read fixes the boundary after its turn settles, and no later turn of the session covers the session.
@@ -225,8 +227,6 @@ A case that was induced and that the surface reported no outcome for keeps its o
 
 Gaps on the protocol route outside the capture:
 
-- The run record does not carry the provenance of a spend figure or whether it is complete.
-- The runtime reports a cost in its session export. Neither the capture nor the money run showed an amount in a unit other than US dollars, so there is no vendor-unit amount to record. Sortie prices the run from its own tables, and the amount the runtime reports is not recorded on the run.
 - The documentation site has no page for the protocol route of this runtime. The sample workflow points at the generic reference page.
 
 ## Protocol-specific observations

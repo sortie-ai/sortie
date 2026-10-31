@@ -133,6 +133,12 @@ Fields (logical):
   - The SSH worker the attempt executed on. Empty for a local attempt. Unknown where the row does not record it.
 - `dispatch_id` (string or unknown)
   - The dispatch ID of the attempt (Section 4.2), the key of its retained agent events. Empty on the recorded CI result, which no dispatch produced. Unknown where the row does not record it.
+- `usage_provenance` (string or unknown)
+  - Every source whose readings settled the attempt's token figure, as `source:strategy` pairs from the usage component's vendor-neutral vocabulary, each pair once, sorted, and comma-joined. Empty when no source settled a figure: an unmeasured attempt, or one with no agent turn. Unknown where the row does not record it, such as a row recorded before the field was kept.
+- `usage_completeness` (string or unknown)
+  - `complete` when every turn's token figure is accounted, `lower_bound` when the attempt ran turns whose spend no source accounted, and `unmeasured` when no figure exists. The recorded CI result is `complete`. Unknown where the row does not record it.
+- `reported_amounts` (list)
+  - Every amount the agent runtime reported for the attempt's spend, each in the unit the runtime reported it in and never converted. An entry holds the `unit`, the `model` the source attributes it to (empty when none), the `amount`, and a `lower_bound` flag set when the attempt may have spent more in that unit than the amount states. The list is empty when the runtime reported none, and a row recorded before the field was kept has no entries, so its amounts are not recorded rather than absent. An amount in a unit other than US dollars never enters a token figure, a money figure, or a ceiling.
 - `error` (optional)
 
 #### 4.1.6 Live Session (Agent Session Metadata)
@@ -155,6 +161,8 @@ Fields:
 - `last_reported_input_tokens` (integer)
 - `last_reported_output_tokens` (integer)
 - `last_reported_total_tokens` (integer)
+- `reported_amounts` (list)
+  - The session's run-cumulative reported amounts as of the latest agent event, in the shape the Run Attempt field of the same name uses. The in-flight cost estimate and the money ceilings read the US-dollar entries; an entry in any other unit is recorded and read by no ceiling.
 - `turn_count` (integer)
   - Number of coding-agent turns started within the current worker lifetime.
   - The worker counts each turn as it starts, self-review turns included, whichever agent events the session emits.

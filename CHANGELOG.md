@@ -27,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The JSON API reports `usage_attribution` `session_total` for ACP sessions, and a running Copilot CLI session on an SSH worker reports its `usage_arrival` instead of `none`. ([#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1539](https://github.com/sortie-ai/sortie/issues/1539))
 - Sortie no longer reuses an SSH connection kept open by `ControlMaster`.
 - Sortie no longer turns on Gemini CLI's telemetry. A Gemini CLI run that leaves the model choice to Gemini CLI now reports its token usage as a lower bound, and requests Gemini CLI makes outside the conversation, such as web search, subagents, and history compression, are no longer counted. ([#1541](https://github.com/sortie-ai/sortie/issues/1541))
+- A run on a model no price table lists gets its cost from the US dollar amount the agent reported for that model, when it reported one, and the cost limits count it. ([#1544](https://github.com/sortie-ai/sortie/issues/1544))
+
+### Removed
+
+- Copilot CLI runs no longer log the `copilot turn completed` record with the turn's premium requests. ([#1544](https://github.com/sortie-ai/sortie/issues/1544))
 
 ### Fixed
 
