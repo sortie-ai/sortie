@@ -6,8 +6,8 @@ the Go source generator; a testdata/ directory is excluded from every Go
 build, so neither file reaches the compiled binary.
 
 Upstream repository: https://github.com/agentclientprotocol/agent-client-protocol
-Tag:    schema-v1.25.0
-Commit: 4cf3dd858c819fc3ab99ae53f76883ede0345a10
+Tag:    schema-v1.28.0
+Commit: ac765763d483dd92fb5b57aec154d45586be2717
 Upstream license at that commit: Apache License 2.0
 
 Format: each asset line below has the form
@@ -16,7 +16,7 @@ fields are separated by a single space; the hex digest is lowercase and
 follows the literal prefix "sha256:". A test asserts that each listed
 file's sha256 equals the value recorded here.
 
-schema.json 255170 sha256:4bcd1d2051ff7ed379bd9b234fb9b09c5ab9245478698e9fab805bd9b52a33a6
+schema.json 256518 sha256:8c24a29c14864d63b377a85f69762c577d441b9519910e2e4b45fbfe11effcd4
 meta.json 1159 sha256:061edb6efa8fb2aa2792459a86ec7268de5fe665bba48b2ffe7939df01481f88
 
 Upstream source paths at the pinned commit:

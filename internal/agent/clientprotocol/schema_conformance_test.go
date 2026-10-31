@@ -29,7 +29,7 @@ import (
 
 // schemaAssetsDir is the directory holding the pinned schema artifact
 // and its provenance file, relative to this package's own directory.
-const schemaAssetsDir = "testdata/schema-v1.25.0"
+const schemaAssetsDir = "testdata/schema-v1.28.0"
 
 // assertProvenance asserts that every asset line PROVENANCE.txt records
 // (the form "<path> <byte-count> sha256:<hex>") matches the file it
