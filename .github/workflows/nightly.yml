@@ -36,6 +36,8 @@ jobs:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SORTIE_OPENCODE_MODEL: openrouter/openai/gpt-5-nano
 
     strategy:
       fail-fast: false
@@ -426,8 +428,7 @@ jobs:
           export "${GUARD}=1"
 
           # The refused-credential case's coordinate name follows the
-          # guard's own name; opencode sets none, since its suite
-          # defaults to the runtime's free model.
+          # guard's own name.
           if [ -n "${CREDENTIAL_ENV}" ]; then
             export "${GUARD%_TEST}_CREDENTIAL_ENV=${CREDENTIAL_ENV}"
           fi
@@ -545,6 +546,7 @@ jobs:
             adapter: opencode
             kind: agent
             guard: SORTIE_OPENCODE_TEST
+            credential_env: OPENROUTER_API_KEY
             run_filter: Integration
             skip_filter: ^TestIntegration_ScriptedModel$
             tier: live
