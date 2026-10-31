@@ -80,6 +80,7 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 	parents := make(map[string]bool)
 	failedParents := make(map[string]bool)
 	var decoded int
+	var panicHead panicHeader
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -90,6 +91,7 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 		}
 		decoded++
 		output.WriteString(event.Output)
+		panicHead.observe(event.Output)
 
 		if event.Test == "" {
 			result := packages[event.Package]
@@ -160,6 +162,7 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 	if failures.Len() > 0 {
 		report.excerpt = excerptTail(failures.String())
 	}
+	report.excerpt = panicHead.prepend(report.excerpt)
 	return report, true
 }
 
@@ -168,4 +171,38 @@ func excerptTail(s string) string {
 		return s
 	}
 	return s[len(s)-excerptByteLimit:]
+}
+
+// panicHeader collects a test binary's panic message and the "running tests"
+// list that follows it, which name the test a timeout stopped. The goroutine
+// dump after them can run past excerptByteLimit, so a tail excerpt loses them.
+type panicHeader struct {
+	text      strings.Builder
+	capturing bool
+	done      bool
+}
+
+func (h *panicHeader) observe(output string) {
+	switch {
+	case h.done:
+	case strings.HasPrefix(output, "panic: "):
+		h.capturing = true
+		h.text.WriteString(output)
+	case h.capturing && strings.HasPrefix(output, "goroutine "):
+		h.capturing, h.done = false, true
+	case h.capturing:
+		h.text.WriteString(output)
+	}
+}
+
+// prepend puts the header ahead of excerpt, within excerptByteLimit, unless
+// excerpt already holds it.
+func (h *panicHeader) prepend(excerpt string) string {
+	header := h.text.String()
+	if header == "" || strings.Contains(excerpt, header) {
+		return excerpt
+	}
+	header = header[:min(len(header), excerptByteLimit)]
+	rest := excerptByteLimit - len(header)
+	return header + excerpt[len(excerpt)-min(len(excerpt), rest):]
 }
