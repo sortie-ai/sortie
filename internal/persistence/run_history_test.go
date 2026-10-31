@@ -95,6 +95,8 @@ func TestQueryRunModelUsage(t *testing.T) {
 			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "partial", UnratedClasses: classes, UnratedRecorded: true}}},
 		{"status without classes reads recorded-empty", usage, map[string]ModelCost{"m": {CostStatus: "estimated"}},
 			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true}}},
+		{"agent price source reads back and a part with none reads empty", usage, map[string]ModelCost{"m": {CostStatus: "estimated", PriceSource: "agent"}},
+			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true, PriceSource: "agent"}}},
 		{"no status reads not recorded", usage, map[string]ModelCost{"m": {UnratedClasses: classes}}, []RunModelPart{part}},
 		{"run without parts has no key", nil, nil, nil},
 	}
@@ -125,9 +127,8 @@ func TestQueryRunModelUsage(t *testing.T) {
 	}
 }
 
-// TestRunHistoryTokenColumns_RoundTrip reads one row back through every
-// reader, because a token column missed in one reader's SELECT or Scan
-// compiles cleanly and fails only at runtime.
+// A token column missed in one reader's SELECT or Scan compiles cleanly and
+// fails only at runtime.
 func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -1156,12 +1157,30 @@ func TestRunHistoryUsageProvenance_RowBeforeMigrationReadsNull(t *testing.T) {
 	s := openTestStore(t)
 	migrateToVersion(t, s, 49)
 	insertRunHistoryRow(t, s, "ISS-OLD", "succeeded", true)
+	insertRunHistoryRow(t, s, "ISS-OLD-UNCOUNTED", "succeeded", true)
+	insertRunHistoryRow(t, s, "ISS-OLD-UNMEASURED", "succeeded", false)
+	if _, err := s.db.ExecContext(context.Background(), "UPDATE run_history SET unaccounted_turns = 2 WHERE issue_id = 'ISS-OLD-UNCOUNTED'"); err != nil {
+		t.Fatalf("set unaccounted_turns: %v", err)
+	}
 
 	migrateOrFatal(t, s)
 
 	columns, amounts := queryUsageRecord(t, s, 1)
 	if columns != "NULL,NULL" || amounts != "" {
 		t.Errorf("usage record of a row written before the migration = %q, %q, want %q, %q", columns, amounts, "NULL,NULL", "")
+	}
+	wantCompleteness := map[string]string{
+		"ISS-OLD":            UsageComplete,
+		"ISS-OLD-UNCOUNTED":  UsageLowerBound,
+		"ISS-OLD-UNMEASURED": UsageUnmeasured,
+	}
+	for _, run := range queryAllRuns(t, s, 10) {
+		if run.UsageCompleteness != "" || run.UsageProvenance != "" {
+			t.Errorf("QueryRunHistory(%s) UsageCompleteness, UsageProvenance = %q, %q, want empty", run.IssueID, run.UsageCompleteness, run.UsageProvenance)
+		}
+		if got := run.Completeness(); got != wantCompleteness[run.IssueID] {
+			t.Errorf("QueryRunHistory(%s).Completeness() = %q, want %q", run.IssueID, got, wantCompleteness[run.IssueID])
+		}
 	}
 }
 
@@ -1199,6 +1218,9 @@ func TestAppendRunHistoryWithEvents_WritesProvenanceAndReportedAmounts(t *testin
 			columns, amounts := queryUsageRecord(t, s, row.ID)
 			if columns != tt.wantColumns || amounts != tt.wantAmounts {
 				t.Errorf("usage record = %q, %q, want %q, %q", columns, amounts, tt.wantColumns, tt.wantAmounts)
+			}
+			if read := queryAllRuns(t, s, 1)[0]; read.UsageCompleteness != tt.completeness || read.UsageProvenance != tt.provenance {
+				t.Errorf("QueryRunHistory UsageCompleteness, UsageProvenance = %q, %q, want %q, %q", read.UsageCompleteness, read.UsageProvenance, tt.completeness, tt.provenance)
 			}
 		})
 	}

@@ -8,6 +8,7 @@ import { ExternalLinkIcon } from "@/components/icons";
 import { IssueMargin, NextOutcomes } from "@/components/IssueMargin";
 import { IssueStory, storyRunsOf } from "@/components/IssueStory";
 import { Lane } from "@/components/Lane";
+import { NotedFigure } from "@/components/NotedFigure";
 import { Parts } from "@/components/Parts";
 import { ServedText } from "@/components/ServedText";
 import { StallNotice } from "@/components/StallNotice";
@@ -15,11 +16,17 @@ import { StateBadge } from "@/components/StateBadge";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { DrawerClose, DrawerTitle } from "@/components/ui/drawer";
 import { useAttentionActions } from "@/components/use-attention-actions";
-import { budgetOf, moneyBudgetText } from "@/lib/budget";
+import { budgetOf, moneyBudgetFigure } from "@/lib/budget";
 import { cn } from "@/lib/cn";
-import { costText, costTitle, NOT_MEASURED, runningTokensText } from "@/lib/figures";
+import {
+  NOT_MEASURED,
+  issueCostFigure,
+  liveCostFigure,
+  liveTokensFigure,
+  runningTokensText,
+} from "@/lib/figures";
 import { closingClock } from "@/lib/ended";
-import { fmtClock, fmtTokens, lowerFirst, plural, upperFirst } from "@/lib/format";
+import { fmtClock, fmtMoney, lowerFirst, plural, upperFirst } from "@/lib/format";
 import { issueLinkOf, latestSessionOf, sessionLinkOf } from "@/lib/issue-link";
 import { agentLabel, hopLabel, modelLabel, ruleLabel } from "@/lib/labels";
 import {
@@ -234,8 +241,8 @@ interface PeekFactsProps {
 function PeekFacts({ detail, state, position }: PeekFactsProps) {
   const config = state?.config;
   const figures = budgetOf(detail, state);
-  const { sessions, uncachedTokens, cost } = figures;
-  const moneyText = moneyBudgetText(figures);
+  const { sessions, tokens, money, uncachedTokens, cost } = figures;
+  const moneyFigure = moneyBudgetFigure(figures);
   const { running } = detail;
   const pullRequest = pullRequestOf(detail);
   const agent = agentParts(detail);
@@ -255,7 +262,7 @@ function PeekFacts({ detail, state, position }: PeekFactsProps) {
   }
   if (running !== null) {
     const tokensText = runningTokensText(running);
-    const sessionCost = costText(running.cost_status, running.estimated_cost_usd);
+    const sessionCost = liveCostFigure(running.cost_status, running.estimated_cost_usd, "session");
     const parts = [
       config === undefined
         ? `turn ${running.turn_count}`
@@ -268,11 +275,11 @@ function PeekFacts({ detail, state, position }: PeekFactsProps) {
         key="session"
         parts={[
           ...parts,
-          ...(cost === null || sessionCost === NOT_MEASURED
+          ...(cost === null || sessionCost.text === NOT_MEASURED
             ? []
             : [
-                <span key="cost" title={costTitle(running.cost_status, running.estimated_cost_usd)}>
-                  {`${sessionCost} est.`}
+                <span key="cost">
+                  <NotedFigure figure={sessionCost} /> est.
                 </span>,
               ]),
         ]}
@@ -296,14 +303,20 @@ function PeekFacts({ detail, state, position }: PeekFactsProps) {
     facts.push([
       "Spent",
       <>
-        <span title={costTitle(cost.status, cost.usd)}>
-          {`${moneyText ?? costText(cost.status, cost.usd)} estimated`}
-        </span>
-        {`, ${fmtTokens(uncachedTokens)} tokens`}
+        <NotedFigure figure={issueCostFigure(detail, cost)} />
+        {moneyFigure === undefined || money.limit === null
+          ? undefined
+          : ` of ${fmtMoney(money.limit)}`}
+        {" estimated, "}
+        <NotedFigure figure={liveTokensFigure(uncachedTokens, tokens.complete)} />
+        {" tokens"}
       </>,
     ]);
   } else {
-    facts.push(["Tokens", fmtTokens(uncachedTokens)]);
+    facts.push([
+      "Tokens",
+      <NotedFigure key="tokens" figure={liveTokensFigure(uncachedTokens, tokens.complete)} />,
+    ]);
   }
   if (pullRequest !== undefined) {
     facts.push([

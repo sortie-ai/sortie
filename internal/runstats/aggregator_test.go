@@ -118,6 +118,42 @@ func sumRuns(groups []Group) int {
 	return runs
 }
 
+func derefCost(usd *float64) any {
+	if usd == nil {
+		return nil
+	}
+	return *usd
+}
+
+func withUsageProvenance(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+	caps.HasUsageProvenance = true
+	return caps
+}
+
+func measuredRow(completeness string) persistence.RunStatsRow {
+	row := withCost(modelRow("claude-code", "model-a", "succeeded", 1_000), new(1.0), "estimated")
+	row.UsageCompleteness = completeness
+	return row
+}
+
+func unmeasuredRow(status, completeness string, units ...string) persistence.RunStatsRow {
+	row := modelRow("claude-code", "model-a", status, 0)
+	row.TokensMeasured, row.UsageCompleteness, row.ReportedUnits = false, completeness, units
+	return row
+}
+
+func withParts(row persistence.RunStatsRow, parts ...persistence.RunModelPart) persistence.RunStatsRow {
+	row.Parts = parts
+	return row
+}
+
+func pricedPart(model, priceSource string, input int64, usd float64) persistence.RunModelPart {
+	return persistence.RunModelPart{
+		Model: model, Tokens: persistence.ModelTokens{InputTokens: input},
+		EstimatedCostUSD: &usd, CostStatus: "estimated", PriceSource: priceSource,
+	}
+}
+
 func TestStatsSummaryFormulas(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +247,65 @@ func TestStatsSummaryFormulas(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("lower-bound flags, unmeasured cause and agent-priced share", func(t *testing.T) {
+		t.Parallel()
+
+		type flags struct {
+			lowerBoundRuns                   int
+			tokensLowerBound, costLowerBound bool
+			cause                            *string
+			units                            []string
+			agentPricedUSD                   *float64
+		}
+		none := []string{}
+		complete := measuredRow("complete")
+		unaccounted := measuredRow("lower_bound")
+		unaccounted.UnaccountedTurns = 1
+		unpriced := withCost(measuredRow("complete"), nil, "unpriced")
+		partial := withCost(measuredRow("complete"), new(1.0), "partial")
+		twoParts := withParts(withCost(measuredRow("complete"), new(5.0), "estimated"), pricedPart("model-a", "agent", 600, 2.0), pricedPart("model-b", "operator", 400, 3.0))
+		ciFailed := withParts(measuredRow("complete"), pricedPart("model-a", "agent", 1_000, 1.0))
+		ciFailed.Status = "ci_failed"
+
+		tests := []struct {
+			name string
+			rows []persistence.RunStatsRow
+			want flags
+		}{
+			{"complete runs only", []persistence.RunStatsRow{complete}, flags{units: none}},
+			{"unaccounted turns flag tokens, not cost", []persistence.RunStatsRow{complete, unaccounted}, flags{lowerBoundRuns: 1, tokensLowerBound: true, units: none}},
+			{"an unpriced run flags cost", []persistence.RunStatsRow{complete, unpriced}, flags{costLowerBound: true, units: none}},
+			{"a partial cost flags cost", []persistence.RunStatsRow{partial}, flags{costLowerBound: true, units: none}},
+			{"reported units beat the status", []persistence.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured", "credits")},
+				flags{tokensLowerBound: true, costLowerBound: true, cause: new("amounts_only"), units: []string{"credits"}}},
+			{"different causes read mixed", []persistence.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured"), unmeasuredRow("succeeded", "unmeasured")},
+				flags{tokensLowerBound: true, costLowerBound: true, cause: new("mixed"), units: none}},
+			{"nothing measured leaves no figure to flag", []persistence.RunStatsRow{unmeasuredRow("failed", "unmeasured")}, flags{cause: new("ended_early"), units: none}},
+			{"a run recorded before provenance reads unknown", []persistence.RunStatsRow{unmeasuredRow("succeeded", "")}, flags{cause: new("unknown"), units: none}},
+			{"a two-part run counts its agent part once", []persistence.RunStatsRow{twoParts}, flags{units: none, agentPricedUSD: new(2.0)}},
+			{"a ci_failed run adds no agent part", []persistence.RunStatsRow{complete, ciFailed}, flags{units: none}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				agg := New(withUsageProvenance(recordedCaps))
+				addRows(t, agg, tt.rows...)
+
+				s := agg.Report(fixedNow, "/wf", "/db", nil, nil).Summary
+
+				got := flags{lowerBoundRuns: s.TokensLowerBoundRuns, tokensLowerBound: s.TokensLowerBound, costLowerBound: s.CostLowerBound, cause: s.UnmeasuredCause, units: s.UnmeasuredUnits, agentPricedUSD: s.AgentPricedUSD}
+				if !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("Summary lower-bound flags over %q = %+v, want %+v", tt.name, got, tt.want)
+				}
+				if s.AgentPricedUSD != nil && (s.CostUSD == nil || *s.AgentPricedUSD > *s.CostUSD) {
+					t.Errorf("Summary.AgentPricedUSD = %v over %q, want at most cost_usd %v", *s.AgentPricedUSD, tt.name, derefCost(s.CostUSD))
+				}
+			})
+		}
+	})
 }
 
 func TestStatsGroupDisclosure(t *testing.T) {
@@ -277,12 +372,51 @@ func TestStatsGroupDisclosure(t *testing.T) {
 		t.Errorf("<none> template group Runs = %d, want 1", templateGroup.Runs)
 	}
 
+	if report.ByProvenance == nil || len(report.ByProvenance) != 0 {
+		t.Errorf("Report.ByProvenance = %v, want [] without the provenance columns", report.ByProvenance)
+	}
+
 	if report.Summary.ZeroDurationRuns != 1 {
 		t.Errorf("Summary.ZeroDurationRuns = %d, want 1", report.Summary.ZeroDurationRuns)
 	}
 	if report.Summary.CostUnpricedRuns != 1 {
 		t.Errorf("Summary.CostUnpricedRuns = %d, want 1 (the unrated run; a ci_failed row records a CI verdict, not an agent session)", report.Summary.CostUnpricedRuns)
 	}
+
+	t.Run("the base tier serves empty unmeasured units", func(t *testing.T) {
+		t.Parallel()
+
+		agg := New(persistence.RunHistoryCapabilities{})
+		addRows(t, agg, modelRow("claude-code", "model-a", "succeeded", 1_000))
+
+		report := agg.Report(fixedNow, "/wf", "/db", nil, nil)
+
+		if group := findGroup(t, report.ByAdapter, "claude-code"); report.Summary.UnmeasuredUnits == nil || group.UnmeasuredUnits == nil {
+			t.Errorf("base tier summary and group UnmeasuredUnits = %v, %v, want [] rather than nil", report.Summary.UnmeasuredUnits, group.UnmeasuredUnits)
+		}
+	})
+
+	t.Run("by_provenance names every run once, live pair first", func(t *testing.T) {
+		t.Parallel()
+
+		agg := New(withUsageProvenance(recordedCaps))
+		for _, stored := range [][2]string{{"", ""}, {"complete", ""}, {"complete", "journal:records,output:live"}, {"complete", "output:live,journal:records"}} {
+			row := measuredRow(stored[0])
+			row.UsageProvenance = stored[1]
+			addRows(t, agg, row)
+		}
+
+		report := agg.Report(fixedNow, "/wf", "/db", nil, nil)
+
+		got := map[string]int{}
+		for _, g := range report.ByProvenance {
+			got[g.Name] = g.Runs
+		}
+		want := map[string]int{"<unknown>": 1, "<none>": 1, "output:live,journal:records": 2}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Report.ByProvenance runs by name = %v, want %v", got, want)
+		}
+	})
 }
 
 func TestStatsSelfReview(t *testing.T) {
@@ -528,9 +662,9 @@ func TestStatsByModel(t *testing.T) {
 	}
 
 	type share struct {
-		runs, succeeded, unpriced, partial int
-		input, output, total               int64
-		cost                               float64
+		runs, succeeded, unpriced, partial, lowerBound int
+		input, output, total                           int64
+		cost, agent                                    float64
 	}
 	part := func(model string, input, output int64, usd *float64, costStatus string) persistence.RunModelPart {
 		return persistence.RunModelPart{
@@ -572,13 +706,23 @@ func TestStatsByModel(t *testing.T) {
 			},
 		},
 		{
+			name: "a part priced from an agent amount reaches only its own model row",
+			rows: []persistence.RunStatsRow{split(0, new(9.0), "estimated",
+				pricedPart("model-a", "agent", 600, 6.0),
+				pricedPart("model-b", "operator", 300, 3.0))},
+			want: map[string]share{
+				"model-a": {runs: 1, succeeded: 1, input: 600, total: 600, cost: 6.0, agent: 6.0},
+				"model-b": {runs: 1, succeeded: 1, input: 300, total: 300, cost: 3.0},
+			},
+		},
+		{
 			name: "unaccounted turns mark the priced part partial and leave the unpriced part unpriced only",
 			rows: []persistence.RunStatsRow{split(2, new(4.0), "partial",
 				part("model-a", 100, 10, new(4.0), "estimated"),
 				part("model-b", 200, 20, nil, "unpriced"))},
 			want: map[string]share{
-				"model-a": {runs: 1, succeeded: 1, input: 100, output: 10, total: 110, cost: 4.0, partial: 1},
-				"model-b": {runs: 1, succeeded: 1, input: 200, output: 20, total: 220, unpriced: 1},
+				"model-a": {runs: 1, succeeded: 1, input: 100, output: 10, total: 110, cost: 4.0, partial: 1, lowerBound: 1},
+				"model-b": {runs: 1, succeeded: 1, input: 200, output: 20, total: 220, unpriced: 1, lowerBound: 1},
 			},
 		},
 		{
@@ -607,13 +751,16 @@ func TestStatsByModel(t *testing.T) {
 				if g.Tokens == nil {
 					t.Fatalf("by_model %q Tokens = nil, want measured tokens", g.Name)
 				}
-				var cost float64
+				var cost, agent float64
 				if g.CostUSD != nil {
 					cost = *g.CostUSD
 				}
+				if g.AgentPricedUSD != nil {
+					agent = *g.AgentPricedUSD
+				}
 				got[g.Name] = share{
-					runs: g.Runs, succeeded: g.Succeeded, unpriced: g.CostUnpricedRuns, partial: g.CostPartialRuns,
-					input: g.Tokens.Input, output: g.Tokens.Output, total: g.Tokens.Total, cost: cost,
+					runs: g.Runs, succeeded: g.Succeeded, unpriced: g.CostUnpricedRuns, partial: g.CostPartialRuns, lowerBound: g.TokensLowerBoundRuns,
+					input: g.Tokens.Input, output: g.Tokens.Output, total: g.Tokens.Total, cost: cost, agent: agent,
 				}
 			}
 			if !reflect.DeepEqual(got, tt.want) {
@@ -677,8 +824,31 @@ func TestStatsSpend(t *testing.T) {
 			wantPeriod: "month",
 			wantBuckets: []SpendBucket{
 				{Start: "2026-06-01T00:00:00Z", Runs: 1, CostUSD: new(4.0)},
-				{Start: "2026-07-01T00:00:00Z", Runs: 1, CostUSD: new(3.0), CostPartialRuns: 1},
+				{Start: "2026-07-01T00:00:00Z", Runs: 1, CostUSD: new(3.0), CostPartialRuns: 1, CostLowerBound: true},
 				{Start: "2026-08-01T00:00:00Z", Runs: 3, CostUnpricedRuns: 1, TokensUnmeasuredRuns: 1},
+			},
+		},
+		{
+			name: "an unmeasured run flags a priced month and its days sum their agent-priced parts",
+			rows: []persistence.RunStatsRow{
+				withParts(run("2026-08-02T10:00:00Z", new(2.0), "estimated"), pricedPart("model-a", "agent", 1_000, 1.0)),
+				withParts(run("2026-08-03T10:00:00Z", new(1.0), "estimated"), pricedPart("model-a", "agent", 1_000, 0.5)),
+				unmeasured,
+			},
+			wantPeriod: "month",
+			wantBuckets: []SpendBucket{
+				{Start: "2026-08-01T00:00:00Z", Runs: 3, CostUSD: new(3.0), TokensUnmeasuredRuns: 1, CostLowerBound: true, AgentPricedUSD: new(1.5)},
+			},
+		},
+		{
+			name: "an unpriced run flags a priced month",
+			rows: []persistence.RunStatsRow{
+				run("2026-08-02T10:00:00Z", new(1.0), "estimated"),
+				run("2026-08-03T10:00:00Z", nil, "unpriced"),
+			},
+			wantPeriod: "month",
+			wantBuckets: []SpendBucket{
+				{Start: "2026-08-01T00:00:00Z", Runs: 2, CostUSD: new(1.0), CostUnpricedRuns: 1, CostLowerBound: true},
 			},
 		},
 		{
@@ -1047,11 +1217,4 @@ func TestStatsRecordedCost(t *testing.T) {
 			}
 		})
 	}
-}
-
-func derefCost(usd *float64) any {
-	if usd == nil {
-		return nil
-	}
-	return *usd
 }

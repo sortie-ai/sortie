@@ -83,3 +83,32 @@ func TestFormatCost(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatCostCut(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input float64
+		want  string
+	}{
+		{"zero", 0, "$0.00"},
+		{"cuts instead of rounding", 1.239, "$1.23"},
+		{"float hazard: 0.29 times 100 is below 29", 0.29, "$0.29"},
+		{"does not round up to 1000", 999.999, "$999.99"},
+		{"cuts a four digit amount", 1234.569, "$1,234.56"},
+		{"whole cents unchanged", 1234.56, "$1,234.56"},
+		{"one decimal digit", 0.5, "$0.50"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := FormatCostCut(tt.input)
+			if got != tt.want {
+				t.Errorf("FormatCostCut(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

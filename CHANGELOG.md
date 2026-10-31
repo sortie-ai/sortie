@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - When an agent's provider usage limit runs out, Sortie waits for the limit to reset instead of retrying, and keeps dispatching work to other agents and models meanwhile. ([#1523](https://github.com/sortie-ai/sortie/issues/1523), [#1524](https://github.com/sortie-ai/sortie/issues/1524))
 - The dashboard Overview page shows each agent's plan usage limits, how much of each is used, and when each resets. The JSON API serves them as `rate_limits`. ([#1388](https://github.com/sortie-ai/sortie/issues/1388), [#1547](https://github.com/sortie-ai/sortie/issues/1547))
 - Sortie counts token usage and cost for every agent kind on local and SSH worker runs, including cancelled, killed, and resumed turns, so `agent.max_tokens` and the cost limits apply to all of them except Kiro CLI runs, whose spend is recorded in credits, which no token or cost limit counts; usage Sortie cannot determine is reported as unknown or a lower bound, never as zero. ([#1483](https://github.com/sortie-ai/sortie/issues/1483), [#1484](https://github.com/sortie-ai/sortie/issues/1484), [#1534](https://github.com/sortie-ai/sortie/issues/1534), [#1535](https://github.com/sortie-ai/sortie/issues/1535), [#1536](https://github.com/sortie-ai/sortie/issues/1536), [#1537](https://github.com/sortie-ai/sortie/issues/1537), [#1538](https://github.com/sortie-ai/sortie/issues/1538), [#1539](https://github.com/sortie-ai/sortie/issues/1539), [#1540](https://github.com/sortie-ai/sortie/issues/1540), [#1541](https://github.com/sortie-ai/sortie/issues/1541), [#1542](https://github.com/sortie-ai/sortie/issues/1542))
+- The dashboard, the JSON API, and `sortie stats` show where each run's token figure came from, whether it is complete, which part of its cost is an amount the agent reported, and any amount reported in the agent's own unit, such as credits. Every total that includes a run Sortie could not fully measure is marked as a lower bound. ([#1545](https://github.com/sortie-ai/sortie/issues/1545))
 
 ### Changed
 
@@ -28,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Sortie no longer reuses an SSH connection kept open by `ControlMaster`.
 - Sortie no longer turns on Gemini CLI's telemetry. A Gemini CLI run that leaves the model choice to Gemini CLI now reports its token usage as a lower bound, and requests Gemini CLI makes outside the conversation, such as web search, subagents, and history compression, are no longer counted. ([#1541](https://github.com/sortie-ai/sortie/issues/1541))
 - A run on a model no price table lists gets its cost from the US dollar amount the agent reported for that model, when it reported one, and the cost limits count it. ([#1544](https://github.com/sortie-ai/sortie/issues/1544))
+- The dashboard marks a lower-bound figure with a dotted underline that explains it on hover instead of writing "at least", shows N/A with the reason where a run has no figure, and writes a duration under one second as `< 1s`. ([#1545](https://github.com/sortie-ai/sortie/issues/1545))
+- Run entries of the JSON API no longer carry `tokens_measured` or `unaccounted_turns`; `usage_completeness` takes their place and reads `complete`, `lower_bound`, or `unmeasured`. ([#1545](https://github.com/sortie-ai/sortie/issues/1545))
 
 ### Removed
 

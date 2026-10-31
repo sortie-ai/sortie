@@ -5,6 +5,7 @@ import { Link, useLocation } from "react-router";
 import { useHistoryRunsQuery, useStateQuery } from "@/api/queries";
 import { useNow } from "@/app/live";
 import { AgentStatement } from "@/components/AgentStatement";
+import { NotedFigure } from "@/components/NotedFigure";
 import { ServedText } from "@/components/ServedText";
 import { Parts } from "@/components/Parts";
 import { StatusMark } from "@/components/StatusMark";
@@ -12,12 +13,11 @@ import { Button, buttonStyles } from "@/components/ui/button";
 import { hasRateSource } from "@/lib/budget";
 import { cn } from "@/lib/cn";
 import {
-  costText,
   NOT_MEASURED,
-  costTitle,
-  runCostText,
+  liveCostFigure,
+  runCostFigure,
   runningTokensText,
-  runTokensText,
+  runTokensFigure,
 } from "@/lib/figures";
 import { closingClock } from "@/lib/ended";
 import { fmtClock, fmtDuration, lowerFirst, parseInstant, plural, pluralVerb } from "@/lib/format";
@@ -198,13 +198,10 @@ function RunCard({ item, identifier, now, hasEstimates }: RunCardProps) {
   const end = endOf(item);
   const duration = fmtDuration(secondsBetween(started, end === null ? now : parseInstant(end)));
   const turns = isLive ? item.running.turn_count : item.run.turns_completed;
-  const tokens = isLive ? runningTokensText(item.running) : runTokensText(item.run);
+  const tokens = isLive ? { text: runningTokensText(item.running) } : runTokensFigure(item.run);
   const cost = isLive
-    ? costText(item.running.cost_status, item.running.estimated_cost_usd)
-    : runCostText(item.run);
-  const costHover = isLive
-    ? costTitle(item.running.cost_status, item.running.estimated_cost_usd)
-    : costTitle(item.run.cost_status, item.run.estimated_cost_usd);
+    ? liveCostFigure(item.running.cost_status, item.running.estimated_cost_usd, "session")
+    : runCostFigure(item.run);
   const error = isLive ? null : item.run.error;
   const statement = isLive ? null : agentStatement(item.run);
   const dispatchId = isLive ? item.running.dispatch_id : item.run.dispatch_id;
@@ -245,14 +242,14 @@ function RunCard({ item, identifier, now, hasEstimates }: RunCardProps) {
         <span>
           Tokens{" "}
           <b className="font-medium text-ink-body tabular-nums">
-            {tokens === NOT_MEASURED ? "not measured" : tokens}
+            <NotedFigure figure={tokens} />
           </b>
         </span>
-        {hasEstimates && cost !== NOT_MEASURED ? (
+        {hasEstimates && cost.text !== NOT_MEASURED ? (
           <span>
             Est. cost{" "}
-            <b title={costHover} className="font-medium text-ink-body tabular-nums">
-              {cost}
+            <b className="font-medium text-ink-body tabular-nums">
+              <NotedFigure figure={cost} />
             </b>
           </span>
         ) : undefined}
@@ -502,7 +499,11 @@ export function IssueStory({ detail, position, progress, needsAttention }: Issue
     detail.pending_reactions?.[0]?.pull_request.number ??
     detail.history?.issue_outcome?.pull_request?.number;
   const closingTime = closingClock(detail, now);
-  const nowLine = { text: detail.status_text_full, time: closingTime, needsAttention };
+  const nowLine = {
+    text: detail.status_text_full,
+    time: closingTime,
+    needsAttention,
+  };
 
   return (
     <div className="flex min-w-0 flex-col">

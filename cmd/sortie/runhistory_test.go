@@ -54,6 +54,14 @@ func (h *runsHarness) append(t *testing.T, run persistence.RunHistory) int64 {
 	return got.ID
 }
 
+func (h *runsHarness) appendWithUsage(t *testing.T, run persistence.RunHistory, dispatchID string) {
+	t.Helper()
+	run.DispatchID = &dispatchID
+	if _, err := h.store.AppendRunHistoryWithEvents(t.Context(), run, nil, persistence.RunEventLimits{}); err != nil {
+		t.Fatalf("AppendRunHistoryWithEvents(%q): %v", run.Identifier, err)
+	}
+}
+
 func (h *runsHarness) get(t *testing.T, route string, out any) int {
 	t.Helper()
 	resp, err := http.Get(h.url + route)
@@ -277,36 +285,64 @@ func TestRunHistoryServesCostAndOrigin(t *testing.T) {
 	measured := runRow("i-0", "OTHER-0")
 	measured.EstimatedCostUSD, measured.CostStatus = new(0.010035), "estimated"
 	measured.Trigger, measured.ReactionKind, measured.InputTokens, measured.OutputTokens, measured.TotalTokens, measured.CacheReadTokens, measured.CacheWriteTokens = new("ci_fix"), "ci", 1000, 500, 1500, 200, 100
-	measured.DispatchID = new("d-1")
 	measured.DeclaredOutcome, measured.AgentText = "blocked", "Which one should the API expose?"
 	measured.ModelUsage = map[string]persistence.ModelTokens{"m-a": {InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 200, CacheWriteTokens: 100}}
-	measured.ModelCosts = map[string]persistence.ModelCost{"m-a": {EstimatedCostUSD: new(0.010035), CostStatus: "partial", UnratedClasses: []string{"cache_write"}}}
+	measured.ModelCosts = map[string]persistence.ModelCost{"m-a": {EstimatedCostUSD: new(0.010035), CostStatus: "partial", PriceSource: "agent", UnratedClasses: []string{"cache_write"}}}
+	measured.UnaccountedTurns = 2
 	unmeasured := runRow("i-0", "OTHER-0")
 	unmeasured.TokensMeasured, unmeasured.CostStatus = false, "unmeasured"
+	creditsOnly := unmeasured
+	creditsOnly.UsageCompleteness = persistence.UsageUnmeasured
+	creditsOnly.ReportedAmounts = []persistence.ReportedAmount{
+		{Unit: "credits", Model: "m-b", Amount: 1.5, LowerBound: true},
+		{Unit: "credits", Amount: 3},
+		{Unit: "USD", Amount: 0.2},
+	}
 
 	h := newRunsHarness(t, orchestrator.RuntimeSnapshotResult{})
-	if _, err := h.store.AppendRunHistoryWithEvents(t.Context(), measured, nil, persistence.RunEventLimits{}); err != nil {
-		t.Fatalf("AppendRunHistoryWithEvents(%q): %v", measured.Identifier, err)
-	}
+	h.appendWithUsage(t, measured, "d-1")
 	h.append(t, unmeasured)
+	h.appendWithUsage(t, creditsOnly, "d-2")
 	var body struct{ Runs []map[string]any }
-	if status := h.get(t, "/api/v1/runs", &body); status != http.StatusOK || len(body.Runs) != 2 {
-		t.Fatalf("GET /api/v1/runs = %d with %d runs, want %d with 2", status, len(body.Runs), http.StatusOK)
+	if status := h.get(t, "/api/v1/runs", &body); status != http.StatusOK || len(body.Runs) != 3 {
+		t.Fatalf("GET /api/v1/runs = %d with %d runs, want %d with 3", status, len(body.Runs), http.StatusOK)
 	}
 
+	noTokens := tokens(nil, nil, nil, nil, nil)
 	wants := []map[string]any{
-		{"tokens": tokens(nil, nil, nil, nil, nil), "estimated_cost_usd": nil, "cost_status": "unmeasured", "model_usage": []any{}, "trigger": nil, "reaction_kind": "", "reaction_config_key": "", "declared_outcome": nil, "agent_text": nil},
+		{"tokens": noTokens, "estimated_cost_usd": nil, "cost_status": "unmeasured", "model_usage": []any{}, "usage_completeness": "unmeasured", "usage_provenance": []any{},
+			"vendor_amounts": []any{
+				map[string]any{"unit": "credits", "model": "", "amount": 3.0, "lower_bound": false},
+				map[string]any{"unit": "credits", "model": "m-b", "amount": 1.5, "lower_bound": true},
+			}, "unmeasured_cause": "amounts_only", "unmeasured_units": []any{"USD", "credits"}},
+		{"tokens": noTokens, "estimated_cost_usd": nil, "cost_status": "unmeasured", "model_usage": []any{}, "trigger": nil, "reaction_kind": "", "reaction_config_key": "", "declared_outcome": nil, "agent_text": nil,
+			"usage_completeness": "unmeasured", "usage_provenance": nil, "vendor_amounts": nil, "unmeasured_cause": "unknown", "unmeasured_units": []any{}},
 		{"tokens": tokens(1000.0, 500.0, 1500.0, 200.0, 100.0), "estimated_cost_usd": 0.010035, "cost_status": "estimated", "trigger": "ci_fix",
 			"model_usage": []any{map[string]any{
 				"model": "m-a", "tokens": tokens(1000.0, 500.0, 1500.0, 200.0, 100.0), "uncached_tokens": 1300.0,
-				"estimated_cost_usd": 0.010035, "cost_status": "partial", "unrated_classes": []any{"cache_write"},
-			}}, "reaction_kind": "ci", "reaction_config_key": "ci_failure", "declared_outcome": "blocked", "agent_text": "Which one should the API expose?"},
+				"estimated_cost_usd": 0.010035, "cost_status": "partial", "unrated_classes": []any{"cache_write"}, "price_source": "agent",
+			}}, "usage_completeness": "lower_bound", "usage_provenance": nil, "vendor_amounts": nil, "unmeasured_cause": nil, "unmeasured_units": []any{},
+			"reaction_kind": "ci", "reaction_config_key": "ci_failure", "declared_outcome": "blocked", "agent_text": "Which one should the API expose?"},
 	}
 	for i, want := range wants {
 		for member, wantValue := range want {
 			if got := body.Runs[i][member]; !reflect.DeepEqual(got, wantValue) {
 				t.Errorf("GET /api/v1/runs runs[%d].%s = %v, want %v", i, member, got, wantValue)
 			}
+		}
+	}
+
+	var detail struct {
+		History struct{ Totals map[string]any }
+	}
+	h.get(t, "/api/v1/OTHER-0", &detail)
+	wantTotals := map[string]any{
+		"unmeasured_cause": "mixed", "unmeasured_units": []any{}, "agent_priced_usd": 0.010035, "agent_priced_models": []any{"m-a"},
+		"vendor_amounts": []any{map[string]any{"unit": "credits", "amount": 4.5, "lower_bound": true}},
+	}
+	for member, wantValue := range wantTotals {
+		if got := detail.History.Totals[member]; !reflect.DeepEqual(got, wantValue) {
+			t.Errorf("GET /api/v1/OTHER-0 history.totals.%s = %v, want %v", member, got, wantValue)
 		}
 	}
 }

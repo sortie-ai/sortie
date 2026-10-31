@@ -9,8 +9,9 @@
 package runstats
 
 // Report is the "sortie stats --format json" envelope. Every slice
-// field, by_trigger, by_origin, and chain_funnels included, is never nil; every pointer field is null
-// when the figure it carries is unavailable. Spend is nil unless
+// field, by_trigger, by_origin, by_provenance, and chain_funnels included, is
+// never nil; every pointer field is null when the figure it carries is
+// unavailable. Spend is nil unless
 // [persistence.RunHistoryCapabilities.RecordedCost] reports true.
 type Report struct {
 	GeneratedAt  string           `json:"generated_at"`
@@ -31,6 +32,7 @@ type Report struct {
 	ChainFunnels []Funnel         `json:"chain_funnels"`
 	ByTrigger    []Group          `json:"by_trigger"`
 	ByOrigin     []Group          `json:"by_origin"`
+	ByProvenance []Group          `json:"by_provenance"`
 	SkillCalls   *SkillCallReport `json:"skill_calls"`
 	SelfReview   *SelfReview      `json:"self_review"`
 }
@@ -41,6 +43,13 @@ type Report struct {
 // no run that spent tokens is priced in range. Succeeded, Failed, Stopped,
 // and Cancelled add up to Runs. CostUSD is the whole spend only while
 // CostUnpricedRuns, CostPartialRuns, and TokensUnmeasuredRuns are all 0.
+//
+// TokensLowerBound and CostLowerBound mark a figure that counts only part of
+// its runs. TokensLowerBoundRuns counts the measured runs with unaccounted
+// turns. AgentPricedUSD is the share of CostUSD priced from amounts the agent
+// reported and never exceeds CostUSD. UnmeasuredCause names why the unmeasured
+// runs have no token figure and is null when none is unmeasured; UnmeasuredUnits
+// lists the units those runs reported only when the cause is "amounts_only".
 type Summary struct {
 	Runs                   int      `json:"runs"`
 	Issues                 int      `json:"issues"`
@@ -59,6 +68,12 @@ type Summary struct {
 	CostUnpricedRuns       int      `json:"cost_unpriced_runs"`
 	CostPartialRuns        int      `json:"cost_partial_runs"`
 	TokensUnmeasuredRuns   int      `json:"tokens_unmeasured_runs"`
+	TokensLowerBoundRuns   int      `json:"tokens_lower_bound_runs"`
+	TokensLowerBound       bool     `json:"tokens_lower_bound"`
+	CostLowerBound         bool     `json:"cost_lower_bound"`
+	AgentPricedUSD         *float64 `json:"agent_priced_usd"`
+	UnmeasuredCause        *string  `json:"unmeasured_cause"`
+	UnmeasuredUnits        []string `json:"unmeasured_units"`
 }
 
 // Spend is the recorded cost of the report's runs per UTC calendar period.
@@ -72,7 +87,9 @@ type Spend struct {
 // SpendBucket covers the report's runs whose completed_at falls in one UTC
 // period. CostUSD is null when no run of the bucket is priced, and is the
 // bucket's whole spend only while CostUnpricedRuns, CostPartialRuns, and
-// TokensUnmeasuredRuns are all 0.
+// TokensUnmeasuredRuns are all 0. CostLowerBound marks a bucket whose cost
+// counts only part of its runs, and AgentPricedUSD is the share of CostUSD
+// priced from amounts the agent reported.
 type SpendBucket struct {
 	Start                string   `json:"start"` // first instant of the period, RFC 3339 in UTC
 	Runs                 int      `json:"runs"`
@@ -80,6 +97,8 @@ type SpendBucket struct {
 	TokensUnmeasuredRuns int      `json:"tokens_unmeasured_runs"`
 	CostUnpricedRuns     int      `json:"cost_unpriced_runs"`
 	CostPartialRuns      int      `json:"cost_partial_runs"`
+	CostLowerBound       bool     `json:"cost_lower_bound"`
+	AgentPricedUSD       *float64 `json:"agent_priced_usd"`
 }
 
 // Duration reports p50, p95, and the arithmetic mean over a sample
@@ -104,7 +123,7 @@ type Tokens struct {
 }
 
 // Group is one row of a by_status, by_adapter, by_rule, by_template,
-// by_model, by_trigger, or by_origin breakdown. MeanTurns, Tokens, CostUSD, and
+// by_model, by_trigger, by_origin, or by_provenance breakdown. MeanTurns, Tokens, CostUSD, and
 // CostPerSucceededRunUSD are null on the base schema tier; CostUSD and
 // CostPerSucceededRunUSD are also null when the group holds no priced
 // run. In by_status, Succeeded and SuccessRate are structural rather
@@ -118,7 +137,9 @@ type Tokens struct {
 // is not rounded to cents. A by_model row counts a run once for every model
 // the run spent tokens on and carries that model's tokens and recorded cost,
 // so its Runs can add up to more than Summary.Runs; a run with unaccounted
-// turns counts as partial in every row whose cost is recorded.
+// turns counts as partial in every row whose cost is recorded. The lower-bound
+// members read as on [Summary] and are zero values, with UnmeasuredUnits empty,
+// on the base tier.
 type Group struct {
 	Name                   string   `json:"name"`
 	Runs                   int      `json:"runs"`
@@ -133,6 +154,12 @@ type Group struct {
 	TokensUnmeasuredRuns   int      `json:"tokens_unmeasured_runs"`
 	CostUnpricedRuns       int      `json:"cost_unpriced_runs"`
 	CostPartialRuns        int      `json:"cost_partial_runs"`
+	TokensLowerBoundRuns   int      `json:"tokens_lower_bound_runs"`
+	TokensLowerBound       bool     `json:"tokens_lower_bound"`
+	CostLowerBound         bool     `json:"cost_lower_bound"`
+	AgentPricedUSD         *float64 `json:"agent_priced_usd"`
+	UnmeasuredCause        *string  `json:"unmeasured_cause"`
+	UnmeasuredUnits        []string `json:"unmeasured_units"`
 }
 
 // ChainGroup is one by_chain entry; Name is the chain identifier.

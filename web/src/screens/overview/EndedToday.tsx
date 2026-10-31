@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import { StandingMark } from "@/components/Lane";
+import { NotedFigure } from "@/components/NotedFigure";
 import { Parts } from "@/components/Parts";
 import { cn } from "@/lib/cn";
 import { endingWord } from "@/lib/ended";
@@ -11,10 +12,24 @@ import { rowStyles, secondLineColor } from "@/lib/rows";
 import { endedNavKey } from "./rows";
 
 import type { EndedIssue } from "@/lib/ended";
-import type { TallyLine } from "@/lib/tally";
+import type { TallyLine, TallyPart } from "@/lib/tally";
 
 const LINK =
   "text-link underline underline-offset-2 hover:text-link-hover focus-visible:outline-2 focus-visible:outline-focus-ring active:text-link-active";
+
+interface TallyPartTextProps {
+  part: TallyPart;
+}
+
+function TallyPartText({ part }: TallyPartTextProps) {
+  return (
+    <>
+      {part.lead}
+      {part.figure === undefined ? undefined : <NotedFigure figure={part.figure} />}
+      {part.tail}
+    </>
+  );
+}
 
 export type EndedEmpty = "unavailable" | "first-run" | "none" | "loading";
 
@@ -25,7 +40,6 @@ export interface EndedTodayProps {
   /** Why the list is empty when it is; ignored while `rows` holds issues. */
   empty: EndedEmpty;
   tally: TallyLine | undefined;
-  tallyTitle?: string;
   selectedKey: string | undefined;
   showSelection: boolean;
   onOpen: (issue: EndedIssue) => void;
@@ -36,7 +50,6 @@ export function EndedToday({
   unreadIds,
   empty,
   tally,
-  tallyTitle,
   selectedKey,
   showSelection,
   onOpen,
@@ -46,11 +59,16 @@ export function EndedToday({
       <div className="flex flex-wrap items-baseline gap-x-sm">
         <h2 className="font-heading text-h7 font-semibold text-ink">Ended today</h2>
         {tally === undefined ? undefined : (
-          <Parts parts={tally.parts} className="text-body-md text-ink-muted wrap-anywhere" />
+          <Parts
+            parts={tally.parts.map((part, index) => (
+              <TallyPartText key={index} part={part} />
+            ))}
+            className="text-body-md text-ink-muted wrap-anywhere"
+          />
         )}
         {tally?.cost === undefined ? undefined : (
-          <span title={tallyTitle} className="text-body-md text-ink-muted wrap-anywhere">
-            {tally.cost}
+          <span className="text-body-md text-ink-muted wrap-anywhere">
+            <TallyPartText part={tally.cost} />
           </span>
         )}
         <Link to="/history" className={cn("ml-auto text-body-md", LINK)}>

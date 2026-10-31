@@ -581,6 +581,19 @@
     },
     "ChainGroup": {
       "properties": {
+        "agent_priced_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost_lower_bound": {
+          "type": "boolean"
+        },
         "cost_partial_runs": {
           "type": "integer"
         },
@@ -664,8 +677,37 @@
             }
           ]
         },
+        "tokens_lower_bound": {
+          "type": "boolean"
+        },
+        "tokens_lower_bound_runs": {
+          "type": "integer"
+        },
         "tokens_unmeasured_runs": {
           "type": "integer"
+        },
+        "unmeasured_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmeasured_units": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -682,6 +724,12 @@
         "tokens_unmeasured_runs",
         "cost_unpriced_runs",
         "cost_partial_runs",
+        "tokens_lower_bound_runs",
+        "tokens_lower_bound",
+        "cost_lower_bound",
+        "agent_priced_usd",
+        "unmeasured_cause",
+        "unmeasured_units",
         "issue",
         "stages",
         "last_hop"
@@ -1004,6 +1052,19 @@
     },
     "Group": {
       "properties": {
+        "agent_priced_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost_lower_bound": {
+          "type": "boolean"
+        },
         "cost_partial_runs": {
           "type": "integer"
         },
@@ -1068,8 +1129,37 @@
             }
           ]
         },
+        "tokens_lower_bound": {
+          "type": "boolean"
+        },
+        "tokens_lower_bound_runs": {
+          "type": "integer"
+        },
         "tokens_unmeasured_runs": {
           "type": "integer"
+        },
+        "unmeasured_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmeasured_units": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1085,7 +1175,13 @@
         "cost_per_succeeded_run_usd",
         "tokens_unmeasured_runs",
         "cost_unpriced_runs",
-        "cost_partial_runs"
+        "cost_partial_runs",
+        "tokens_lower_bound_runs",
+        "tokens_lower_bound",
+        "cost_lower_bound",
+        "agent_priced_usd",
+        "unmeasured_cause",
+        "unmeasured_units"
       ],
       "type": "object"
     },
@@ -1204,6 +1300,29 @@
     },
     "HistoryTotalsResponse": {
       "properties": {
+        "agent_priced_models": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_priced_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cost_status": {
           "type": "string"
         },
@@ -1236,8 +1355,44 @@
             }
           ]
         },
+        "unmeasured_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "unmeasured_runs": {
           "type": "integer"
+        },
+        "unmeasured_units": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vendor_amounts": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UnitAmountResponse"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1247,7 +1402,12 @@
         "uncached_tokens",
         "tokens_complete",
         "estimated_cost_usd",
-        "cost_status"
+        "cost_status",
+        "unmeasured_cause",
+        "unmeasured_units",
+        "vendor_amounts",
+        "agent_priced_usd",
+        "agent_priced_models"
       ],
       "type": "object"
     },
@@ -1982,6 +2142,16 @@
         "model": {
           "type": "string"
         },
+        "price_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tokens": {
           "$ref": "#/$defs/TokenInfo"
         },
@@ -2008,7 +2178,8 @@
         "uncached_tokens",
         "estimated_cost_usd",
         "cost_status",
-        "unrated_classes"
+        "unrated_classes",
+        "price_source"
       ],
       "type": "object"
     },
@@ -2650,6 +2821,19 @@
             }
           ]
         },
+        "by_provenance": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Group"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "by_rule": {
           "anyOf": [
             {
@@ -2813,6 +2997,7 @@
         "chain_funnels",
         "by_trigger",
         "by_origin",
+        "by_provenance",
         "skill_calls",
         "self_review"
       ],
@@ -3327,9 +3512,6 @@
         "tokens": {
           "$ref": "#/$defs/TokenInfo"
         },
-        "tokens_measured": {
-          "type": "boolean"
-        },
         "trigger": {
           "anyOf": [
             {
@@ -3343,13 +3525,62 @@
         "turns_completed": {
           "type": "integer"
         },
-        "unaccounted_turns": {
-          "type": "integer"
-        },
         "uncached_tokens": {
           "anyOf": [
             {
               "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmeasured_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmeasured_units": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage_completeness": {
+          "type": "string"
+        },
+        "usage_provenance": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UsageSourceResponse"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vendor_amounts": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/VendorAmountResponse"
+              },
+              "type": "array"
             },
             {
               "type": "null"
@@ -3375,8 +3606,6 @@
         "turns_completed",
         "tokens",
         "uncached_tokens",
-        "tokens_measured",
-        "unaccounted_turns",
         "estimated_cost_usd",
         "cost_status",
         "self_review",
@@ -3386,6 +3615,11 @@
         "reaction_config_key",
         "session_id",
         "ssh_host",
+        "usage_completeness",
+        "usage_provenance",
+        "vendor_amounts",
+        "unmeasured_cause",
+        "unmeasured_units",
         "dispatch_id",
         "model_usage",
         "stage_chain",
@@ -4677,6 +4911,19 @@
     },
     "SpendBucket": {
       "properties": {
+        "agent_priced_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost_lower_bound": {
+          "type": "boolean"
+        },
         "cost_partial_runs": {
           "type": "integer"
         },
@@ -4709,7 +4956,9 @@
         "cost_usd",
         "tokens_unmeasured_runs",
         "cost_unpriced_runs",
-        "cost_partial_runs"
+        "cost_partial_runs",
+        "cost_lower_bound",
+        "agent_priced_usd"
       ],
       "type": "object"
     },
@@ -5199,8 +5448,21 @@
     },
     "Summary": {
       "properties": {
+        "agent_priced_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cancelled": {
           "type": "integer"
+        },
+        "cost_lower_bound": {
+          "type": "boolean"
         },
         "cost_partial_runs": {
           "type": "integer"
@@ -5272,8 +5534,37 @@
             }
           ]
         },
+        "tokens_lower_bound": {
+          "type": "boolean"
+        },
+        "tokens_lower_bound_runs": {
+          "type": "integer"
+        },
         "tokens_unmeasured_runs": {
           "type": "integer"
+        },
+        "unmeasured_cause": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmeasured_units": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "zero_duration_runs": {
           "type": "integer"
@@ -5296,7 +5587,13 @@
         "duration_excluded_runs",
         "cost_unpriced_runs",
         "cost_partial_runs",
-        "tokens_unmeasured_runs"
+        "tokens_unmeasured_runs",
+        "tokens_lower_bound_runs",
+        "tokens_lower_bound",
+        "cost_lower_bound",
+        "agent_priced_usd",
+        "unmeasured_cause",
+        "unmeasured_units"
       ],
       "type": "object"
     },
@@ -5615,6 +5912,40 @@
       ],
       "type": "object"
     },
+    "UnitAmountResponse": {
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "lower_bound": {
+          "type": "boolean"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit",
+        "amount",
+        "lower_bound"
+      ],
+      "type": "object"
+    },
+    "UsageSourceResponse": {
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "strategy"
+      ],
+      "type": "object"
+    },
     "UsageWindowAmountResponse": {
       "properties": {
         "limit": {
@@ -5697,6 +6028,29 @@
         "resets_at",
         "reported_at",
         "amount"
+      ],
+      "type": "object"
+    },
+    "VendorAmountResponse": {
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "lower_bound": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit",
+        "model",
+        "amount",
+        "lower_bound"
       ],
       "type": "object"
     },

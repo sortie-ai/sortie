@@ -1,6 +1,10 @@
 package server
 
 import (
+	"math"
+	"strconv"
+	"strings"
+
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/pricing"
 )
@@ -122,4 +126,20 @@ func activeCostTotal(running []orchestrator.SnapshotRunningEntry) (total float64
 // and comma thousand separators; see [pricing.FormatUSD].
 func FormatCost(v float64) string {
 	return pricing.FormatUSD(v)
+}
+
+// FormatCostCut formats a USD cost value as [FormatCost] does, truncated
+// toward zero to the cent so a lower bound never reads above the spend it
+// bounds.
+//
+// The cut reads the shortest decimal form of the value, not v*100, because
+// binary floating point puts 0.29*100 below 29 and would drop a cent the value
+// holds.
+func FormatCostCut(usd float64) string {
+	whole, fraction, _ := strings.Cut(strconv.FormatFloat(math.Abs(usd), 'f', -1, 64), ".")
+	cents, _ := strconv.ParseInt(whole+(fraction + "00")[:2], 10, 64)
+	if usd < 0 {
+		cents = -cents
+	}
+	return pricing.FormatUSD(float64(cents) / 100)
 }

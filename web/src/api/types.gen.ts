@@ -148,6 +148,12 @@ export interface ChainGroup {
   tokens_unmeasured_runs: number;
   cost_unpriced_runs: number;
   cost_partial_runs: number;
+  tokens_lower_bound_runs: number;
+  tokens_lower_bound: boolean;
+  cost_lower_bound: boolean;
+  agent_priced_usd: number | null;
+  unmeasured_cause: string | null;
+  unmeasured_units: string[] | null;
   issue: string;
   stages: string[] | null;
   last_hop: string;
@@ -241,6 +247,12 @@ export interface Group {
   tokens_unmeasured_runs: number;
   cost_unpriced_runs: number;
   cost_partial_runs: number;
+  tokens_lower_bound_runs: number;
+  tokens_lower_bound: boolean;
+  cost_lower_bound: boolean;
+  agent_priced_usd: number | null;
+  unmeasured_cause: string | null;
+  unmeasured_units: string[] | null;
 }
 
 export interface HealthCheckResponse {
@@ -278,6 +290,11 @@ export interface HistoryTotalsResponse {
   tokens_complete: boolean;
   estimated_cost_usd: number | null;
   cost_status: string;
+  unmeasured_cause: string | null;
+  unmeasured_units: string[] | null;
+  vendor_amounts: UnitAmountResponse[] | null;
+  agent_priced_usd: number | null;
+  agent_priced_models: string[] | null;
 }
 
 export interface HoldBlockerResponse {
@@ -414,6 +431,7 @@ export interface ModelUsageResponse {
   estimated_cost_usd: number | null;
   cost_status: string;
   unrated_classes: string[] | null;
+  price_source: string | null;
 }
 
 export interface NextOutcomeResponse {
@@ -563,6 +581,7 @@ export interface Report {
   chain_funnels: Funnel[] | null;
   by_trigger: Group[] | null;
   by_origin: Group[] | null;
+  by_provenance: Group[] | null;
   skill_calls: SkillCallReport | null;
   self_review: SelfReview | null;
 }
@@ -660,8 +679,6 @@ export interface RunResponse {
   turns_completed: number;
   tokens: TokenInfo;
   uncached_tokens: number | null;
-  tokens_measured: boolean;
-  unaccounted_turns: number;
   estimated_cost_usd: number | null;
   cost_status: string;
   chain_id?: string;
@@ -676,6 +693,11 @@ export interface RunResponse {
   reaction_config_key: string | null;
   session_id: string | null;
   ssh_host: string | null;
+  usage_completeness: string;
+  usage_provenance: UsageSourceResponse[] | null;
+  vendor_amounts: VendorAmountResponse[] | null;
+  unmeasured_cause: string | null;
+  unmeasured_units: string[] | null;
   dispatch_id: string | null;
   model_usage: ModelUsageResponse[] | null;
   skills?: SkillCall[];
@@ -958,6 +980,8 @@ export interface SpendBucket {
   tokens_unmeasured_runs: number;
   cost_unpriced_runs: number;
   cost_partial_runs: number;
+  cost_lower_bound: boolean;
+  agent_priced_usd: number | null;
 }
 
 export interface SpendCeilingResponse {
@@ -1070,6 +1094,12 @@ export interface Summary {
   cost_unpriced_runs: number;
   cost_partial_runs: number;
   tokens_unmeasured_runs: number;
+  tokens_lower_bound_runs: number;
+  tokens_lower_bound: boolean;
+  cost_lower_bound: boolean;
+  agent_priced_usd: number | null;
+  unmeasured_cause: string | null;
+  unmeasured_units: string[] | null;
 }
 
 export interface TableInForceResponse {
@@ -1125,6 +1155,17 @@ export interface Tokens {
   uncached: number;
 }
 
+export interface UnitAmountResponse {
+  unit: string;
+  amount: number;
+  lower_bound: boolean;
+}
+
+export interface UsageSourceResponse {
+  source: string;
+  strategy: string;
+}
+
 export interface UsageWindowAmountResponse {
   used: number;
   limit: number;
@@ -1138,6 +1179,13 @@ export interface UsageWindowResponse {
   resets_at: string | null;
   reported_at: string;
   amount: UsageWindowAmountResponse | null;
+}
+
+export interface VendorAmountResponse {
+  unit: string;
+  model: string;
+  amount: number;
+  lower_bound: boolean;
 }
 
 export interface VerdictCount {

@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -47,6 +48,12 @@ type RunHistoryCapabilities struct {
 	// HasSkills is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.SkillBreakdown] depends on it.
 	HasSkills bool
+
+	// HasUsageProvenance is outside [RunHistoryCapabilities.Full];
+	// [RunHistoryCapabilities.UsageProvenance] depends on it. It is true when
+	// run_history carries usage_completeness and usage_provenance and the
+	// run_reported_amounts table exists.
+	HasUsageProvenance bool // migration 050
 }
 
 // Full reports whether the database carries every optional run_history
@@ -100,6 +107,13 @@ func (c RunHistoryCapabilities) RecordedCost() bool {
 // RecordedCost plus the skills column.
 func (c RunHistoryCapabilities) SkillBreakdown() bool {
 	return c.RecordedCost() && c.HasSkills
+}
+
+// UsageProvenance reports whether the stats report can read each run's usage
+// completeness, provenance, and reported units: RecordedCost plus the
+// provenance columns.
+func (c RunHistoryCapabilities) UsageProvenance() bool {
+	return c.RecordedCost() && c.HasUsageProvenance
 }
 
 // RunStatsRow is the narrow run_history projection the aggregate read
@@ -161,9 +175,9 @@ type RunStatsRow struct {
 	CostStatus       string
 
 	// Parts are the run's run_model_usage rows ordered by model, carrying
-	// Model, Tokens, EstimatedCostUSD, and CostStatus; UnratedClasses and
-	// UnratedRecorded stay zero. Nil when the run has none or
-	// [RunHistoryCapabilities.RecordedCost] reports false.
+	// Model, Tokens, EstimatedCostUSD, CostStatus, and PriceSource;
+	// UnratedClasses and UnratedRecorded stay zero. Nil when the run has none
+	// or [RunHistoryCapabilities.RecordedCost] reports false.
 	Parts []RunModelPart
 
 	// UnaccountedTurns is run_history.unaccounted_turns; zero when
@@ -173,6 +187,17 @@ type RunStatsRow struct {
 	// Skills is run_history.skills as stored; nil when the column is NULL or
 	// [RunHistoryCapabilities.SkillBreakdown] reports false.
 	Skills *string
+
+	// UsageCompleteness and UsageProvenance are the stored values; each is
+	// empty when the column is NULL or [RunHistoryCapabilities.UsageProvenance]
+	// reports false.
+	UsageCompleteness string
+	UsageProvenance   string
+
+	// ReportedUnits holds the distinct units of the run's reported amounts,
+	// ascending, US dollars included. It is nil when the run reported none or
+	// [RunHistoryCapabilities.UsageProvenance] reports false.
+	ReportedUnits []string
 }
 
 // joinedPart holds the run_model_usage columns of one result row, all NULL
@@ -182,11 +207,12 @@ type joinedPart struct {
 	inputTokens, outputTokens, cacheRead, cacheWrite sql.NullInt64
 	cost                                             sql.NullFloat64
 	costStatus                                       sql.NullString
+	priceSource                                      sql.NullString
 }
 
 // dest lists the scan targets in the order of the part columns.
 func (p *joinedPart) dest() []any {
-	return []any{&p.model, &p.inputTokens, &p.outputTokens, &p.cacheRead, &p.cacheWrite, &p.cost, &p.costStatus}
+	return []any{&p.model, &p.inputTokens, &p.outputTokens, &p.cacheRead, &p.cacheWrite, &p.cost, &p.costStatus, &p.priceSource}
 }
 
 // part returns the part the result row carries; ok is false for a run
@@ -203,7 +229,8 @@ func (p *joinedPart) part() (part RunModelPart, ok bool) {
 			CacheReadTokens:  p.cacheRead.Int64,
 			CacheWriteTokens: p.cacheWrite.Int64,
 		},
-		CostStatus: p.costStatus.String,
+		CostStatus:  p.costStatus.String,
+		PriceSource: p.priceSource.String,
 	}
 	if p.cost.Valid {
 		part.EstimatedCostUSD = new(p.cost.Float64)
@@ -266,6 +293,11 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 		return RunHistoryCapabilities{}, fmt.Errorf("run_history table not found or missing base columns")
 	}
 
+	hasReportedAmounts, err := s.tableExists(ctx, "run_reported_amounts")
+	if err != nil {
+		return RunHistoryCapabilities{}, err
+	}
+
 	return RunHistoryCapabilities{
 		HasTurnsCompleted: columns["turns_completed"],
 		HasReviewMetadata: columns["review_metadata"],
@@ -282,7 +314,24 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 		HasAgentBlocked:  columns["agent_blocked"],
 		HasRecordedCost:  columns["estimated_cost_usd"] && columns["cost_status"],
 		HasSkills:        columns["skills"],
+		HasUsageProvenance: columns["usage_completeness"] && columns["usage_provenance"] &&
+			hasReportedAmounts,
 	}, nil
+}
+
+// tableExists reports whether the database holds a table called name. The
+// caller's earlier statement MUST be closed already, because OpenReadOnly caps
+// the pool at one connection.
+func (s *Store) tableExists(ctx context.Context, name string) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s schema: %w", name, err)
+	}
+	return true, nil
 }
 
 // ScanRunHistoryRange issues one SELECT over run_history bounded by a
@@ -296,7 +345,9 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 //
 // While caps.RecordedCost() holds, the statement joins each run's
 // run_model_usage rows, so the runs and their parts come from one snapshot
-// of the database.
+// of the database. While caps.UsageProvenance() holds it also reads each
+// run's reported units through a per-run subquery and never joins the
+// amounts, which would repeat the run's row and count its tokens twice.
 //
 // visit MUST NOT call any Store method. The scan holds the store's single
 // pooled connection for the duration of iteration, because OpenReadOnly
@@ -317,6 +368,7 @@ func (s *Store) ScanRunHistoryRange(
 	funnels := caps.FunnelBreakdown()
 	recordedCost := caps.RecordedCost()
 	skills := caps.SkillBreakdown()
+	provenance := caps.UsageProvenance()
 	query := runStatsColumnsBase
 	switch {
 	case full && caps.HasCacheWriteTokens:
@@ -348,10 +400,13 @@ func (s *Store) ScanRunHistoryRange(
 		run_history.id,
 		run_model_usage.model, run_model_usage.input_tokens, run_model_usage.output_tokens,
 		run_model_usage.cache_read_tokens, run_model_usage.cache_write_tokens,
-		run_model_usage.estimated_cost_usd, run_model_usage.cost_status`
+		run_model_usage.estimated_cost_usd, run_model_usage.cost_status, run_model_usage.price_source`
 	}
 	if skills {
 		query += ", run_history.skills"
+	}
+	if provenance {
+		query += ", run_history.usage_completeness, run_history.usage_provenance, " + reportedUnitsOfRun
 	}
 	query += "\nFROM run_history"
 	if recordedCost {
@@ -387,6 +442,7 @@ func (s *Store) ScanRunHistoryRange(
 	for rows.Next() {
 		var row RunStatsRow
 		var reviewMeta, displayID, trigger, reactionKind, costStatus, skillCalls sql.NullString
+		var completeness, provenanceText, unitsText sql.NullString
 		var cost sql.NullFloat64
 		var runID int64
 		var joined joinedPart
@@ -430,6 +486,9 @@ func (s *Store) ScanRunHistoryRange(
 		if skills {
 			dest = append(dest, &skillCalls)
 		}
+		if provenance {
+			dest = append(dest, &completeness, &provenanceText, &unitsText)
+		}
 		if err := rows.Scan(dest...); err != nil {
 			return fmt.Errorf("scan run history range: %w", err)
 		}
@@ -448,6 +507,9 @@ func (s *Store) ScanRunHistoryRange(
 		if skillCalls.Valid {
 			row.Skills = new(skillCalls.String)
 		}
+		row.UsageCompleteness = completeness.String
+		row.UsageProvenance = provenanceText.String
+		row.ReportedUnits = splitReportedUnits(unitsText)
 
 		if !recordedCost {
 			if err := visit(row); err != nil {

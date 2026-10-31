@@ -21,15 +21,3 @@ const LAYER_LABELS: Readonly<Record<string, string>> = {
 export function layerLabel(layer: string): string {
   return LAYER_LABELS[layer] ?? layer;
 }
-
-const CLASS_WORDS: Readonly<Record<string, string>> = {
-  input: "input",
-  output: "output",
-  cache_read: "cache read",
-  cache_write: "cache write",
-};
-
-/** Words the token classes a cost has no rate for, joined by commas; a class the client has no wording for reads as served. */
-export function unratedText(classes: readonly string[]): string {
-  return classes.map((name) => CLASS_WORDS[name] ?? name).join(", ");
-}

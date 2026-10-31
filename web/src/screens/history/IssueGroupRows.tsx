@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { useHistoryRunsQuery } from "@/api/queries";
+import { NotedFigure } from "@/components/NotedFigure";
 import { ServedText } from "@/components/ServedText";
 import { StandingMark } from "@/components/Lane";
 import { StatusMark } from "@/components/StatusMark";
@@ -17,15 +18,12 @@ import {
 import { hasRateSource } from "@/lib/budget";
 import { cn } from "@/lib/cn";
 import {
-  NOT_MEASURED,
-  UNPRICED,
-  costTitle,
-  runCacheReadsText,
-  runCostText,
-  runTokensText,
+  runCostFigure,
+  runTokensFigure,
   totalsCacheReadsText,
-  totalsCostText,
-  totalsTokensText,
+  totalsCostFigure,
+  totalsTokensFigure,
+  vendorAmountFigure,
 } from "@/lib/figures";
 import { fmtCount, fmtDuration, fmtStamp, parseInstant, plural, upperFirst } from "@/lib/format";
 import { issueLinkOf } from "@/lib/issue-link";
@@ -35,7 +33,14 @@ import { issueStanding } from "@/lib/lane";
 import { agentStatement, runOutcome } from "@/lib/run-status";
 
 import type { HistoryFilter } from "@/api/client";
-import type { IssueGroupResponse, RunResponse, SkillCall, StateResponse } from "@/api/types.gen";
+import type {
+  HistoryTotalsResponse,
+  IssueGroupResponse,
+  RunResponse,
+  SkillCall,
+  StateResponse,
+} from "@/api/types.gen";
+import type { ReactNode } from "react";
 
 const READ_FAILED = "Run history could not be read.";
 
@@ -89,19 +94,18 @@ function hopText(run: RunResponse): string | undefined {
   return upperFirst(hopLabel(run.stage_target, run.stage_result));
 }
 
-function tokensPart(text: string): string {
-  return text === NOT_MEASURED ? "tokens not measured" : `${text} tokens`;
+function tokensPart(totals: HistoryTotalsResponse): ReactNode {
+  const figure = <NotedFigure figure={totalsTokensFigure(totals)} />;
+  return totals.uncached_tokens === null ? <>tokens {figure}</> : <>{figure} tokens</>;
 }
 
-function cacheReadsTitle(text: string | null): string | undefined {
-  return text === null ? undefined : `${text} cache reads`;
-}
-
-function costPart(text: string): string {
-  if (text === UNPRICED) {
-    return "cost unpriced";
-  }
-  return text === NOT_MEASURED ? "cost not measured" : `${text} estimated`;
+function costPart(totals: HistoryTotalsResponse): ReactNode {
+  const figure = <NotedFigure figure={totalsCostFigure(totals)} />;
+  return totals.cost_status === "unpriced" || totals.cost_status === "unmeasured" ? (
+    <>cost {figure}</>
+  ) : (
+    <>{figure} estimated</>
+  );
 }
 
 function skillsTitle(skills: readonly SkillCall[]): string {
@@ -196,10 +200,12 @@ function RunRow({ run, columns }: RunRowProps) {
       <SkillsCell skills={run.skills} />
       <TableCell>{fmtDuration(runSeconds(run))}</TableCell>
       <TableCell>{fmtCount(run.turns_completed)}</TableCell>
-      <TableCell title={cacheReadsTitle(runCacheReadsText(run))}>{runTokensText(run)}</TableCell>
+      <TableCell>
+        <NotedFigure figure={runTokensFigure(run)} />
+      </TableCell>
       {columns.hasCost ? (
-        <TableCell title={costTitle(run.cost_status, run.estimated_cost_usd)}>
-          {runCostText(run)}
+        <TableCell>
+          <NotedFigure figure={runCostFigure(run)} />
         </TableCell>
       ) : undefined}
       <TableCell>{fmtStamp(run.completed_at)}</TableCell>
@@ -233,17 +239,19 @@ export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
   );
   const ending = group.status === "history" ? group.issue_outcome : null;
   const cacheReads = totalsCacheReadsText(group.totals);
-  const costHover = costTitle(group.totals.cost_status, group.totals.estimated_cost_usd);
-  const secondLine = (
-    [
-      ["key", group.issue_title ? key : undefined],
-      ["status", standing.word || undefined],
-      ["runs", plural(group.totals.run_count, "run", "runs")],
-      ["tokens", tokensPart(totalsTokensText(group.totals))],
-      ["cache-reads", cacheReads === null ? undefined : `${cacheReads} cache reads`],
-      ["cost", columns.hasCost ? costPart(totalsCostText(group.totals)) : undefined],
-    ] as const
-  ).filter(([, part]) => part !== undefined);
+  const parts: [string, ReactNode][] = [
+    ["key", group.issue_title ? key : undefined],
+    ["status", standing.word || undefined],
+    ["runs", plural(group.totals.run_count, "run", "runs")],
+    ["tokens", tokensPart(group.totals)],
+    ["cache-reads", cacheReads === null ? undefined : `${cacheReads} cache reads`],
+    ["cost", columns.hasCost ? costPart(group.totals) : undefined],
+    ...(group.totals.vendor_amounts ?? []).map((amount): [string, ReactNode] => [
+      `vendor-${amount.unit}`,
+      <NotedFigure key={amount.unit} figure={vendorAmountFigure(amount, "full")} />,
+    ]),
+  ];
+  const secondLine = parts.filter(([, part]) => part !== undefined);
 
   const expandedRuns = expansion.data?.pages.flatMap((page) => page.runs ?? []);
   const runs = expandedRuns ?? group.runs ?? [];
@@ -284,9 +292,7 @@ export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
               </p>
               <p className="flex flex-wrap gap-x-md text-body-sm text-ink-muted wrap-anywhere">
                 {secondLine.map(([id, part]) => (
-                  <span key={id} title={id === "cost" ? costHover : undefined}>
-                    {part}
-                  </span>
+                  <span key={id}>{part}</span>
                 ))}
               </p>
             </div>
