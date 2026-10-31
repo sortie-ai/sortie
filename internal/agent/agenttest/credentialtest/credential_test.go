@@ -47,7 +47,7 @@ func init() {
 			Live: usage.Source{
 				Category: usage.SourceOutput,
 				Strategy: usage.StrategyLive,
-				Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
+				Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}},
 			},
 			Records: usage.Source{
 				Category: usage.SourceJournal,

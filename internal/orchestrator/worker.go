@@ -15,6 +15,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -133,6 +134,16 @@ type WorkerResult struct {
 	// UsageByModel is the worker mirror's per-model totals, which sum to
 	// Usage in every class.
 	UsageByModel map[string]domain.TokenUsage
+
+	// UsageProvenance is the union of the provenance of every turn result
+	// the worker folded, the credential verification step's included. Nil
+	// when no turn settled a token figure.
+	UsageProvenance []domain.UsageProvenance
+
+	// ReportedAmounts is the worker mirror's run-cumulative amounts the
+	// runtime reported, each in its own unit, sorted by unit then model.
+	// Nil when the run reported none.
+	ReportedAmounts []domain.ReportedAmount
 
 	// WorkspacePath is the workspace directory for this attempt, empty if
 	// preparation failed.
@@ -665,6 +676,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		localUsageByModel = map[string]domain.TokenUsage{}
 		localModelName    string
 		localRequestCount int
+		localProvenance   []domain.UsageProvenance
+		localAmounts      []domain.ReportedAmount
 	)
 
 	// localCurrentModel is metricModel for the worker's local mirror.
@@ -691,6 +704,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// worker mirror. A rejected measurement reports false so the caller
 	// skips the state-file write.
 	foldRelayedEvent := func(event domain.AgentEvent) (measurementArrived bool) {
+		if event.ReportedAmounts != nil {
+			localAmounts = usage.MergeAmounts(localAmounts, event.ReportedAmounts)
+		}
 		measurementArrived = event.Type == domain.EventTokenUsage || hasUsage(event.Usage)
 		if measurementArrived && !admitMeasurement() {
 			return false
@@ -712,6 +728,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	foldTurnResult := func(result domain.TurnResult) (carriesMeasurement bool) {
+		for _, member := range result.UsageProvenance {
+			if !slices.Contains(localProvenance, member) {
+				localProvenance = append(localProvenance, member)
+			}
+		}
+		if result.ReportedAmounts != nil {
+			localAmounts = usage.MergeAmounts(localAmounts, result.ReportedAmounts)
+		}
 		if result.SessionID != previousSessionID {
 			localCoverable = 0
 		}
@@ -772,6 +796,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 		result.SessionID = acceptedSessionID
 		result.UsageByModel = maps.Clone(localUsageByModel)
+		result.UsageProvenance = slices.Clone(localProvenance)
+		result.ReportedAmounts = slices.Clone(localAmounts)
 		reported = true
 		deps.OnExit(issue.ID, result)
 	}
@@ -1155,6 +1181,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	var verificationSpend domain.TokenUsage
 	var verificationUsageByModel map[string]domain.TokenUsage
+	var verificationAmounts []domain.ReportedAmount
 	if verificationSkipped {
 		logger.Info("agent credential verification skipped", slog.Time("proven_at", provenAt.UTC()))
 	} else {
@@ -1174,6 +1201,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 		verificationSpend = localLastUsage
 		verificationUsageByModel = maps.Clone(localUsageByModel)
+		verificationAmounts = localAmounts
 
 		if verificationErr != nil {
 			startErr := fmt.Errorf("agent session start: %w", verificationErr)
@@ -1278,6 +1306,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if event.UsageByModel != nil {
 			event.UsageByModel = agentcore.AddUsageByModel(event.UsageByModel, verificationUsageByModel)
 		}
+		if event.ReportedAmounts != nil {
+			event.ReportedAmounts = usage.AddAmounts(event.ReportedAmounts, verificationAmounts)
+		}
 		if foldRelayedEvent(event) {
 			if err := publishWorkerState(turnNumber); err != nil {
 				logger.Warn("failed to write status state file on token event", slog.Any("error", err))
@@ -1295,6 +1326,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// the file would keep denying a measurement that exists.
 	handleTurnResult := func(result domain.TurnResult) {
 		result.Usage = applyUsageOffset(result.Usage, verificationSpend)
+		if result.ReportedAmounts != nil {
+			result.ReportedAmounts = usage.AddAmounts(result.ReportedAmounts, verificationAmounts)
+		}
 		if foldTurnResult(result) {
 			if err := publishWorkerState(turnNumber); err != nil {
 				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))

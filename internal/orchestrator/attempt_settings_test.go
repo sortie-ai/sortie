@@ -19,7 +19,7 @@ var (
 	vendorOnlyLive = usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{VendorUnit: "premium requests"},
+		Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountSessionCumulative}}},
 	}
 	journalRecords = usage.Source{
 		Category: usage.SourceJournal,

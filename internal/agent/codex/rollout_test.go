@@ -249,9 +249,9 @@ func TestRollout_SettlesEachTurnAtTheRunsRequests(t *testing.T) {
 			for i, want := range tt.want {
 				fromRecords := tt.lastFromRecords && i == len(tt.want)-1
 				runTotal += want.TotalTokens
-				if got[i].Counts != want || got[i].Complete == fromRecords || (got[i].Provenance.Source == usage.SourceJournal) != fromRecords {
-					t.Errorf("turn %d settled %+v complete %v source %q, want %+v from records %v",
-						i, got[i].Counts, got[i].Complete, got[i].Provenance.Source, want, fromRecords)
+				if got[i].Counts != want || got[i].Complete == fromRecords || slices.ContainsFunc(got[i].Provenance, func(p domain.UsageProvenance) bool { return p.Source == usage.SourceJournal }) != fromRecords {
+					t.Errorf("turn %d settled %+v complete %v provenance %+v, want %+v from records %v",
+						i, got[i].Counts, got[i].Complete, got[i].Provenance, want, fromRecords)
 				}
 				if got[i].Run.TotalTokens != runTotal {
 					t.Errorf("turn %d run TotalTokens = %d, want %d", i, got[i].Run.TotalTokens, runTotal)
@@ -292,8 +292,8 @@ func TestRollout_TurnKilledDuringToolCallSettlesFromRecords(t *testing.T) {
 	got := waittest.Receive(t, done, "RunTurn outcome")
 
 	wantUsage := domain.TokenUsage{InputTokens: 14503, OutputTokens: 52, CacheReadTokens: 13312, TotalTokens: 14555}
-	wantProvenance := domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
-	if got.Usage != wantUsage || got.UsageProvenance != wantProvenance || !got.SpendUnaccounted {
+	wantProvenance := []domain.UsageProvenance{{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}}
+	if got.Usage != wantUsage || !slices.Equal(got.UsageProvenance, wantProvenance) || !got.SpendUnaccounted {
 		t.Errorf("RunTurn() = usage %+v provenance %+v unaccounted %v, want %+v %+v true",
 			got.Usage, got.UsageProvenance, got.SpendUnaccounted, wantUsage, wantProvenance)
 	}

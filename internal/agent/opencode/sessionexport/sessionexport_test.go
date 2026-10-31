@@ -43,10 +43,11 @@ func TestParseCaptures(t *testing.T) {
 		fixture   string
 		sessionID string
 		want      []counts
+		wantCosts []float64
 	}{
-		{"two-turns-export.json", "ses_e7ac6691effe73waoQYzNihPM6", []counts{{15681, 2, 0, 1536}, {827, 2, 0, 17152}}},
-		{"flash-latest-export.json", "ses_e7ac4b348ffeP2wfjLJwh4m3tB", []counts{{17283, 1, 39, 0}, {2924, 17, 52, 15232}, {2221, 14, 62, 16108}}},
-		{"child-cancel-parent-export.json", "ses_e79773d5cffeGZOgs16v5Zm70A", []counts{{102, 106, 79, 17152}}},
+		{"two-turns-export.json", "ses_e7ac6691effe73waoQYzNihPM6", []counts{{15681, 2, 0, 1536}, {827, 2, 0, 17152}}, []float64{0, 0}},
+		{"flash-latest-export.json", "ses_e7ac4b348ffeP2wfjLJwh4m3tB", []counts{{17283, 1, 39, 0}, {2924, 17, 52, 15232}, {2221, 14, 62, 16108}}, []float64{0.01311225, 0.0035941499999999995, 0.00315885}},
+		{"child-cancel-parent-export.json", "ses_e79773d5cffeGZOgs16v5Zm70A", []counts{{102, 106, 79, 17152}}, []float64{0}},
 	}
 
 	for _, tt := range tests {
@@ -54,12 +55,17 @@ func TestParseCaptures(t *testing.T) {
 			t.Parallel()
 
 			var got []counts
+			var gotCosts []float64
 			for _, r := range mustParse(t, loadFixture(t, tt.fixture), tt.sessionID) {
 				got = append(got, counts{*r.Input, *r.Output, *r.Reasoning, *r.CacheRead})
+				gotCosts = append(gotCosts, *r.Amounts[0].Amount)
 			}
 
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("Parse(%s) counts = %v, want %v", tt.fixture, got, tt.want)
+			}
+			if !slices.Equal(gotCosts, tt.wantCosts) {
+				t.Errorf("Parse(%s) costs = %v, want %v", tt.fixture, gotCosts, tt.wantCosts)
 			}
 		})
 	}
@@ -100,18 +106,18 @@ func TestParseMapsMembers(t *testing.T) {
 	}{
 		{
 			"every member",
-			`{"id":"msg_1","type":"assistant","finish":"stop",` +
+			`{"id":"msg_1","type":"assistant","finish":"stop","cost":1.0,` +
 				`"model":{"providerID":"anthropic","id":"claude-sonnet-4-5"},` +
 				`"tokens":{"input":3000,"output":500,"reasoning":70,"cache":{"read":400,"write":900}}}`,
 			usage.SpendReading{
 				Input: new(int64(3000)), Output: new(int64(500)), Reasoning: new(int64(70)), CacheRead: new(int64(400)), CacheWrite: new(int64(900)),
-				Model: "anthropic/claude-sonnet-4-5", Identity: "msg_1",
+				Model: "anthropic/claude-sonnet-4-5", Identity: "msg_1", Amounts: []usage.AmountReading{{Amount: new(1.0)}},
 			},
 		},
 		{
 			"model without an id",
 			`{"id":"msg_1","type":"assistant","finish":"stop","model":{"providerID":"anthropic"}}`,
-			usage.SpendReading{Identity: "msg_1"},
+			usage.SpendReading{Identity: "msg_1", Amounts: []usage.AmountReading{{}}},
 		},
 	}
 
@@ -125,6 +131,18 @@ func TestParseMapsMembers(t *testing.T) {
 				t.Errorf("Parse(%s) = %+v, want %+v", tt.message, got, want)
 			}
 		})
+	}
+}
+
+func TestParseReadsAnUnusableCostAsUnknown(t *testing.T) {
+	t.Parallel()
+
+	for _, cost := range []string{`null`, `"0.5"`, `-1`} {
+		records := mustParse(t, exportDoc(`{"id":"m","type":"assistant","finish":"stop","cost":`+cost+`}`), "ses_t")
+
+		if len(records) != 1 || records[0].Amounts[0].Amount != nil {
+			t.Errorf("Parse(cost %s) = %+v, want one reading with an unknown amount", cost, records)
+		}
 	}
 }
 

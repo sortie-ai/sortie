@@ -106,6 +106,14 @@ type Declaration struct {
 	// is neither session/update nor session/request_permission. Nil when the
 	// runtime sends none the declaration reads.
 	TurnNotification func(sessionID, method string, params json.RawMessage) TurnSignal
+
+	// SessionUpdateAmounts reads the amounts the update object of one
+	// session/update of the session carries, whatever its variant, under the
+	// amounts Live.Spend declares. It returns nil when the update carries none.
+	// Nil when the declaration reads its amounts off turn notifications only,
+	// and never set while Live.Spend declares none; Effective supplies Default's
+	// when the declaration maps no spend.
+	SessionUpdateAmounts func(update json.RawMessage) []usage.AmountReading
 }
 
 // Refusal is a provider usage-limit refusal a declaration read off a
@@ -146,6 +154,10 @@ type TurnSignal struct {
 	// Retrying is true when the runtime announced a retry of a refused model
 	// request of the turn.
 	Retrying bool
+
+	// Amounts are the amounts the notification reports, under the amounts
+	// Live.Spend declares. Nil when it reports none.
+	Amounts []usage.AmountReading
 }
 
 // Records is what one read of a session's records returned.
@@ -263,21 +275,24 @@ var ErrMethodNotFound = errors.New("method not found")
 var Declarations = registry.NewCheckedRegistry("usage declaration", checkDeclaration, DefaultName)
 
 // Effective returns d with Default's spend mapping when d maps no spend of its
-// own, that is, when its live source declares neither a token shape nor a
-// vendor unit. Every other field is kept.
+// own, that is, when its live source declares neither a token shape nor an
+// amount. Every other field is kept. A declaration with amounts and no token
+// shape keeps its own mapping and settles no token figure.
 func (d Declaration) Effective() Declaration {
-	if d.Live.Spend.Shape != usage.SpendUndeclared || d.Live.Spend.VendorUnit != "" {
+	if d.Live.Spend.Shape != usage.SpendUndeclared || len(d.Live.Spend.Amounts) > 0 {
 		return d
 	}
 	d.Live.Spend = Default.Live.Spend
 	d.PromptSpend = Default.PromptSpend
+	d.SessionUpdateAmounts = Default.SessionUpdateAmounts
 	return d
 }
 
 // checkDeclaration refuses a declaration the transport cannot measure a
-// session with: the transport reads spend only off the prompt result, through
-// the ledger. It also refuses an InitializeMeta that no launch selects or that
-// is not a JSON object.
+// session with: the transport reads token counts only off the prompt result,
+// through the ledger, and amounts only off session updates and turn
+// notifications. It also refuses an InitializeMeta that no launch selects or
+// that is not a JSON object.
 func checkDeclaration(d Declaration, _ struct{}) error {
 	effective := d.Effective()
 	if err := (usage.Sources{Live: effective.Live, Records: d.Records}).Check(); err != nil {
@@ -296,9 +311,13 @@ func checkDeclaration(d Declaration, _ struct{}) error {
 		return errors.New("InitializeMeta requires Launches")
 	case d.InitializeMeta != nil && !isJSONObject(d.InitializeMeta):
 		return errors.New("InitializeMeta must be a JSON object")
+	case len(d.Live.Spend.Amounts) > 0 && d.SessionUpdateAmounts == nil && d.TurnNotification == nil:
+		return errors.New("live source declares an amount, but SessionUpdateAmounts and TurnNotification are both nil")
+	case d.SessionUpdateAmounts != nil && len(d.Live.Spend.Amounts) == 0:
+		return errors.New("SessionUpdateAmounts requires the live source to declare an amount")
 	case d.Live.Spend.DuringTurn:
-		return errors.New("live source reports during the turn, but the transport reads spend off the prompt result only")
-	case effective.Live.Spend.Shape != usage.SpendUndeclared:
+		return errors.New("live source reports during the turn, but the transport reads token counts off the prompt result only")
+	case effective.Live.Spend.Shape != usage.SpendUndeclared || len(effective.Live.Spend.Amounts) > 0:
 		if _, err := usage.NewLedger(effective.Live, d.Records); err != nil {
 			return err
 		}

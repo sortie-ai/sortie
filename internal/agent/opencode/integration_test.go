@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -208,8 +209,8 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		if got := run.Result.Usage; got != want {
 			t.Errorf("RunTurn().Usage = %+v, want %+v, the tool-call request alone", got, want)
 		}
-		wantProvenance := domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive}
-		if got := run.Result.UsageProvenance; got != wantProvenance {
+		wantProvenance := []domain.UsageProvenance{{Source: usage.SourceOutput, Strategy: usage.StrategyLive}}
+		if got := run.Result.UsageProvenance; !slices.Equal(got, wantProvenance) {
 			t.Errorf("RunTurn().UsageProvenance = %+v, want %+v", got, wantProvenance)
 		}
 		if !run.Result.SpendUnaccounted {

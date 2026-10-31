@@ -2,6 +2,9 @@ package usagesource
 
 import (
 	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -124,5 +127,43 @@ func TestCopilotDeclarationAutoRecords(t *testing.T) {
 	}
 	if byModel := got.ByModel["gpt-6.1-terra"]; len(got.ByModel) != 1 || byModel != want {
 		t.Errorf("Settle().ByModel = %+v, want only gpt-6.1-terra at %+v", got.ByModel, want)
+	}
+}
+
+func TestCopilotDeclarationSettlesRecordedAmounts(t *testing.T) {
+	t.Parallel()
+
+	journal, err := os.ReadFile(filepath.Join("..", "..", "copilot", "testdata", "live", "subagent_explore_task.events.jsonl"))
+	if err != nil {
+		t.Fatalf("reading the captured journal: %v", err)
+	}
+	var records []usage.SpendReading
+	for line := range strings.Lines(string(journal)) {
+		if reading, ok := sessionstate.UsageRecord([]byte(line)); ok {
+			records = append(records, reading)
+		}
+	}
+	declaration := mustDeclaration(t, copilotHandshakeName)
+	ledger, err := usage.NewLedger(declaration.Live, declaration.Records)
+	if err != nil {
+		t.Fatalf("NewLedger: %v", err)
+	}
+	ledger.Boundary(usage.RecordsRead{OK: true})
+
+	got := ledger.Settle(usage.TurnEnd{Replied: true, ModelReached: true}, nil, usage.RecordsRead{Readings: records, OK: true})
+
+	want := map[[2]string]float64{
+		{sessionstate.UnitPremiumRequests, "mai-code-1.1-flash"}: 1,
+		{sessionstate.UnitPremiumRequests, "gpt-5.6-luna"}:       0,
+		{sessionstate.UnitAICredits, "mai-code-1.1-flash"}:       0.207156,
+		{sessionstate.UnitAICredits, "gpt-5.6-luna"}:             0.142194,
+	}
+	if len(got.Amounts) != len(want) {
+		t.Fatalf("Settle().Amounts = %+v, want %d entries", got.Amounts, len(want))
+	}
+	for _, a := range got.Amounts {
+		if w, ok := want[[2]string{a.Unit, a.Model}]; !ok || math.Abs(a.Amount-w) > 1e-9 {
+			t.Errorf("Settle().Amounts entry %+v, want one of %v", a, want)
+		}
 	}
 }

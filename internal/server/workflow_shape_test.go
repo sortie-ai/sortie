@@ -86,7 +86,7 @@ func journaledAgentMeta() registry.AgentMeta {
 		Live: usage.Source{
 			Category: usage.SourceOutput,
 			Strategy: usage.StrategyLive,
-			Spend:    usage.SpendDeclaration{VendorUnit: "premium requests"},
+			Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "premium requests", Shape: usage.AmountSessionCumulative}}},
 		},
 		Records: usage.Source{
 			Category: usage.SourceJournal,

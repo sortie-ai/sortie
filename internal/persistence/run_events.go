@@ -51,8 +51,9 @@ func (e *RunEventsError) Unwrap() error {
 const runEventsSavepoint = "run_events"
 
 // AppendRunHistoryWithEvents appends run, its [RunHistory.ModelUsage] with
-// the [RunHistory.ModelCosts] pricing it, and events under *run.DispatchID in
-// one transaction, then prunes under limits. A *[RunEventsError] means the
+// the [RunHistory.ModelCosts] pricing it, its [RunHistory.ReportedAmounts],
+// and events under *run.DispatchID in one transaction, then prunes under
+// limits. A *[RunEventsError] means the
 // row was stored and the events were not; any other error means neither was.
 func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run RunHistory, events []RunEvent, limits RunEventLimits) (RunHistory, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -67,6 +68,10 @@ func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run RunHistory, 
 	}
 
 	if err := insertRunModelUsage(ctx, tx, row.ID, run.ModelUsage, run.ModelCosts); err != nil {
+		return RunHistory{}, err
+	}
+
+	if err := insertRunReportedAmounts(ctx, tx, row.ID, run.ReportedAmounts); err != nil {
 		return RunHistory{}, err
 	}
 
@@ -95,6 +100,20 @@ func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run RunHistory, 
 		return row, &RunEventsError{Err: eventsErr}
 	}
 	return row, nil
+}
+
+// insertRunReportedAmounts inserts one run_reported_amounts row per amount for
+// runID.
+func insertRunReportedAmounts(ctx context.Context, ex statementExecer, runID int64, amounts []ReportedAmount) error {
+	for _, amount := range amounts {
+		if _, err := ex.ExecContext(ctx,
+			`INSERT INTO run_reported_amounts (run_id, unit, model, amount, lower_bound) VALUES (?, ?, ?, ?, ?)`,
+			runID, amount.Unit, amount.Model, amount.Amount, amount.LowerBound,
+		); err != nil {
+			return fmt.Errorf("append run reported amount for run %d unit %q: %w", runID, amount.Unit, err)
+		}
+	}
+	return nil
 }
 
 // AppendRunEvents stores events under dispatchID for a run whose history row

@@ -60,8 +60,8 @@ const defaultCommand = "copilot"
 
 // usageSources: the usage checkpoint on the event stream is the running total
 // per served model, the journal's per-request lines settle a turn the
-// checkpoints left unsettled, and the result event's premium requests are a
-// vendor unit.
+// checkpoints left unsettled. Premium requests and AI credits ride on both,
+// each in its own unit and never converted.
 var usageSources = usage.Sources{
 	Live: usage.Source{
 		Category: usage.SourceOutput,
@@ -71,7 +71,10 @@ var usageSources = usage.Sources{
 			CacheInInput:      true,
 			ReasoningInOutput: true,
 			ServedModel:       true,
-			VendorUnit:        "premium requests",
+			Amounts: []usage.AmountDeclaration{
+				{Unit: sessionstate.UnitPremiumRequests, Shape: usage.AmountSessionCumulative},
+				{Unit: sessionstate.UnitAICredits, Shape: usage.AmountSessionCumulative},
+			},
 		},
 	},
 	Records: sessionstate.Records,
@@ -458,8 +461,6 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			var apiDurationMS int64
 			if lastResult != nil && lastResult.Usage != nil {
 				apiDurationMS = lastResult.Usage.TotalAPIDurMS
-				state.logger().Info("copilot turn completed",
-					slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
 			}
 
 			switch {

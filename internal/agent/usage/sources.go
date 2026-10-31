@@ -85,15 +85,23 @@ func (t Attribution) NamesModel() bool {
 }
 
 // Check returns nil when s is a valid registration, or the first defect found.
-// A defect in the live source wraps [ErrNoLiveSource].
+// A defect in the live source wraps [ErrNoLiveSource]. A live source reports
+// spend when it declares a token shape or at least one amount; an amount
+// declaration is malformed when it names no unit or both a unit and a
+// currency, repeats a unit, leaves its shape undeclared, or has a shape its
+// source cannot count: a records amount is per request and a live amount is
+// not.
 func (s Sources) Check() error {
 	switch {
 	case s.Live.Category != SourceProtocol && s.Live.Category != SourceOutput:
 		return fmt.Errorf("live source category %q: %w", s.Live.Category, ErrNoLiveSource)
 	case s.Live.Strategy != StrategyLive:
 		return fmt.Errorf("live source strategy %d: %w", s.Live.Strategy, ErrNoLiveSource)
-	case s.Live.Spend.Shape == SpendUndeclared && s.Live.Spend.VendorUnit == "":
+	case s.Live.Spend.Shape == SpendUndeclared && len(s.Live.Spend.Amounts) == 0:
 		return fmt.Errorf("live source reports no spend: %w", ErrNoLiveSource)
+	}
+	if err := checkAmounts(s.Live.Spend.Amounts, false); err != nil {
+		return fmt.Errorf("live source amounts: %w: %w", err, ErrNoLiveSource)
 	}
 	if reflect.ValueOf(s.Records).IsZero() {
 		return nil
@@ -105,6 +113,34 @@ func (s Sources) Check() error {
 		return fmt.Errorf("records source strategy %d is not records", s.Records.Strategy)
 	case s.Records.Spend.Shape == SpendUndeclared:
 		return errors.New("records source counts no tokens")
+	}
+	if err := checkAmounts(s.Records.Spend.Amounts, true); err != nil {
+		return fmt.Errorf("records source amounts: %w", err)
+	}
+	return nil
+}
+
+// checkAmounts returns the first defect in the amount declarations of one
+// source; records is true for a records source.
+func checkAmounts(decls []AmountDeclaration, records bool) error {
+	units := make(map[string]struct{}, len(decls))
+	for _, d := range decls {
+		switch {
+		case d.Currency && d.Unit != "":
+			return fmt.Errorf("amount names the unit %q and a currency", d.Unit)
+		case !d.Currency && d.Unit == "":
+			return errors.New("amount names no unit")
+		case d.Shape == AmountUndeclared:
+			return fmt.Errorf("amount %q declares no shape", d.Unit)
+		case records && d.Shape != AmountPerRequest:
+			return fmt.Errorf("records amount %q is not per request", d.Unit)
+		case !records && d.Shape == AmountPerRequest:
+			return fmt.Errorf("live amount %q is per request", d.Unit)
+		}
+		if _, repeat := units[d.Unit]; repeat {
+			return fmt.Errorf("amount unit %q is declared twice", d.Unit)
+		}
+		units[d.Unit] = struct{}{}
 	}
 	return nil
 }

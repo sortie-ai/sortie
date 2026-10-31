@@ -17,7 +17,8 @@ type TurnSpend struct {
 	settled      bool
 	sessionTotal bool
 	estimated    bool
-	provenance   domain.UsageProvenance
+	provenance   []domain.UsageProvenance
+	amounts      []domain.ReportedAmount
 }
 
 // MarkModelReached records that the runtime served this turn output: a
@@ -48,7 +49,8 @@ func (s *TurnSpend) MarkEstimated() {
 }
 
 // ApplySettlement marks the turn's evidence from a ledger settlement and
-// returns the figure it produced, or nil when the settlement has none.
+// returns the figure it produced, or nil when the settlement has none. It keeps
+// the settlement's amounts whether or not a figure came with them.
 func (s *TurnSpend) ApplySettlement(settlement usage.Settlement) *RecoveredUsage {
 	if settlement.Spent {
 		s.MarkModelReached()
@@ -62,6 +64,7 @@ func (s *TurnSpend) ApplySettlement(settlement usage.Settlement) *RecoveredUsage
 	if settlement.Estimated {
 		s.MarkEstimated()
 	}
+	s.amounts = settlement.Amounts
 	if !settlement.Figure {
 		return nil
 	}
@@ -99,4 +102,5 @@ func (s TurnSpend) applyTo(result *domain.TurnResult, completed bool) {
 	result.SpendCoverable = completed && unsettled && !s.estimated
 	result.CoversSession = s.settled && s.sessionTotal && !s.estimated
 	result.UsageProvenance = s.provenance
+	result.ReportedAmounts = s.amounts
 }

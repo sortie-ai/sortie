@@ -1538,40 +1538,6 @@ func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 	requireAgentError(t, err, domain.ErrPortExit)
 }
 
-// TestRunTurn_PremiumRequestsLoggedOnce pins the premium_requests side
-// effect: the Info log keeps firing on exactly today's condition, a
-// result event carrying a non-nil usage object, exactly once per turn.
-func TestRunTurn_PremiumRequestsLoggedOnce(t *testing.T) {
-	// No t.Parallel(): installs a global slog default; t.Setenv is also
-	// incompatible with t.Parallel.
-	spy := agenttest.InstallLogSpy(t)
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-
-	const successJSONL = `{"type":"session.task_complete","data":{"summary":"done","success":true}}
-{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"premium-session","exitCode":0,"usage":{"premiumRequests":3,"totalApiDurationMs":10}}`
-
-	adapter, session := newTestSession(t, t.TempDir())
-	state := session.Internal.(*sessionState)
-	state.target.Command = fakeCopilotBinaryWithOutput(t, successJSONL, 0)
-
-	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	var premiumCount int
-	for _, e := range spy.Entries() {
-		if e.Msg == "copilot turn completed" {
-			premiumCount++
-		}
-	}
-	if premiumCount != 1 {
-		t.Errorf("premium_requests Info line count = %d, want 1", premiumCount)
-	}
-}
-
 // TestRunTurn_CompleteVersusIncompleteDisposition drives the two endings
 // the autopilot continuation ceiling makes indistinguishable at the exit
 // code and process-exit level: a stream that reports session.task_complete

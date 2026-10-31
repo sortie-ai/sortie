@@ -1135,3 +1135,91 @@ func TestUsageCompletedBetween(t *testing.T) {
 		})
 	}
 }
+
+func queryUsageRecord(t *testing.T, s *Store, runID int64) (columns, amounts string) {
+	t.Helper()
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT quote(usage_provenance) || ',' || quote(usage_completeness),
+			(SELECT COALESCE(group_concat(unit || '/' || model || '/' || amount || '/' || lower_bound, ';'), '')
+			   FROM (SELECT * FROM run_reported_amounts WHERE run_id = ? ORDER BY unit, model))
+		 FROM run_history WHERE id = ?`, runID, runID,
+	).Scan(&columns, &amounts)
+	if err != nil {
+		t.Fatalf("select usage record of run %d: %v", runID, err)
+	}
+	return columns, amounts
+}
+
+func TestRunHistoryUsageProvenance_RowBeforeMigrationReadsNull(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 49)
+	insertRunHistoryRow(t, s, "ISS-OLD", "succeeded", true)
+
+	migrateOrFatal(t, s)
+
+	columns, amounts := queryUsageRecord(t, s, 1)
+	if columns != "NULL,NULL" || amounts != "" {
+		t.Errorf("usage record of a row written before the migration = %q, %q, want %q, %q", columns, amounts, "NULL,NULL", "")
+	}
+}
+
+func TestAppendRunHistoryWithEvents_WritesProvenanceAndReportedAmounts(t *testing.T) {
+	t.Parallel()
+
+	recorded := []ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1.5, LowerBound: true}, {Unit: "credits", Amount: 2}}
+	const recordedRows = "USD/m1/1.5/1;credits//2.0/0"
+	tests := []struct {
+		name, completeness, provenance, wantColumns, wantAmounts string
+		amounts                                                  []ReportedAmount
+	}{
+		{
+			name: "recorded run", completeness: UsageLowerBound, provenance: "journal:records,output:live", amounts: recorded,
+			wantColumns: "'journal:records,output:live','lower_bound'", wantAmounts: recordedRows,
+		},
+		{
+			name: "unmeasured run keeps its amounts and an empty provenance", completeness: UsageUnmeasured, amounts: recorded,
+			wantColumns: "'','unmeasured'", wantAmounts: recordedRows,
+		},
+		{name: "writer that sets neither field writes NULL", wantColumns: "NULL,NULL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openTestStore(t)
+			migrateOrFatal(t, s)
+			run := newTestRun(1)
+			run.UsageCompleteness, run.UsageProvenance, run.ReportedAmounts = tt.completeness, tt.provenance, tt.amounts
+
+			row := appendWithPartsOrFatal(t, s, run)
+
+			columns, amounts := queryUsageRecord(t, s, row.ID)
+			if columns != tt.wantColumns || amounts != tt.wantAmounts {
+				t.Errorf("usage record = %q, %q, want %q, %q", columns, amounts, tt.wantColumns, tt.wantAmounts)
+			}
+		})
+	}
+}
+
+func TestAppendRunHistoryWithEvents_FailedReportedAmountInsertLeavesNoRun(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	run := newTestRun(1)
+	run.DispatchID = new("dispatch-1")
+	run.UsageCompleteness = UsageComplete
+	run.ReportedAmounts = []ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1}, {Unit: "USD", Model: "m1", Amount: 2}}
+
+	_, err := s.AppendRunHistoryWithEvents(context.Background(), run, nil, unboundedRunEvents)
+
+	if err == nil {
+		t.Fatal("AppendRunHistoryWithEvents(duplicate amount key) = nil, want error")
+	}
+	if rows := queryAllRuns(t, s, 10); len(rows) != 0 {
+		t.Errorf("run rows after a failed amount insert = %d, want 0", len(rows))
+	}
+}

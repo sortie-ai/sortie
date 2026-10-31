@@ -2,7 +2,9 @@ package usagesource
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
@@ -15,7 +17,9 @@ const DefaultName = "default"
 // counts inside input and reasoning inside output keep every reading at or
 // below the true spend whichever convention the runtime follows: a runtime
 // that counts either one outside is undercounted, never counted twice. Its
-// figure is therefore always a lower bound.
+// figure is therefore always a lower bound. It also reads the standard cost
+// member of a usage_update session update, a running total over the session in
+// the currency the member names.
 var Default = Declaration{
 	Live: usage.Source{
 		Category: usage.SourceProtocol,
@@ -25,9 +29,72 @@ var Default = Declaration{
 			CacheInInput:      true,
 			ReasoningInOutput: true,
 			LowerBound:        true,
+			Amounts:           []usage.AmountDeclaration{{Currency: true, Shape: usage.AmountSessionCumulative}},
 		},
 	},
-	PromptSpend: standardPromptSpend,
+	PromptSpend:          standardPromptSpend,
+	SessionUpdateAmounts: standardUpdateAmounts,
+}
+
+// usageUpdateVariant is the sessionUpdate value of a usage_update.
+const usageUpdateVariant = "usage_update"
+
+type standardUpdate struct {
+	SessionUpdate string          `json:"sessionUpdate"`
+	Cost          json.RawMessage `json:"cost"`
+}
+
+type standardCost struct {
+	Amount   json.RawMessage `json:"amount"`
+	Currency json.RawMessage `json:"currency"`
+}
+
+// standardUpdateAmounts reads the cost member of a usage_update and nothing from
+// any other variant. A currency that is not three ASCII letters leaves the
+// reading absent, because the amount then has no unit; an amount that is not a
+// finite non-negative number reads unknown in the currency it names.
+func standardUpdateAmounts(update json.RawMessage) []usage.AmountReading {
+	var decoded standardUpdate
+	if err := json.Unmarshal(update, &decoded); err != nil || decoded.SessionUpdate != usageUpdateVariant {
+		return nil
+	}
+	if len(decoded.Cost) == 0 || string(decoded.Cost) == "null" {
+		return nil
+	}
+	var cost standardCost
+	if err := json.Unmarshal(decoded.Cost, &cost); err != nil {
+		return nil
+	}
+	var currency string
+	if err := json.Unmarshal(cost.Currency, &currency); err != nil || !isCurrencyCode(currency) {
+		return nil
+	}
+	return []usage.AmountReading{{Unit: strings.ToUpper(currency), Amount: jsonAmount(cost.Amount)}}
+}
+
+func isCurrencyCode(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	for i := range len(s) {
+		if c := s[i]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonAmount returns the number a JSON member holds, nil for an absent, null,
+// non-numeric, non-finite, or negative member.
+func jsonAmount(raw json.RawMessage) *float64 {
+	if string(raw) == "null" {
+		return nil
+	}
+	var amount float64
+	if err := json.Unmarshal(raw, &amount); err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {
+		return nil
+	}
+	return &amount
 }
 
 type standardPromptResult struct {

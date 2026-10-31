@@ -42,8 +42,10 @@ var (
 
 	unnormalizable = usage.SpendReading{Output: new(int64(5)), CacheRead: new(int64(0)), CacheWrite: new(int64(0)), Model: "m", Identity: "h"}
 
-	liveProv = domain.UsageProvenance{Source: usage.SourceProtocol, Strategy: usage.StrategyLive}
-	recProv  = domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}
+	liveProv = []domain.UsageProvenance{{Source: usage.SourceProtocol, Strategy: usage.StrategyLive}}
+	recProv  = []domain.UsageProvenance{{Source: usage.SourceJournal, Strategy: usage.StrategyRecords}}
+
+	liveRecProv = []domain.UsageProvenance{liveProv[0], recProv[0]}
 )
 
 func u(in, out int64) domain.TokenUsage { return uc(in, out, 0) }
@@ -422,7 +424,7 @@ func TestLedger(t *testing.T) {
 			}},
 		},
 		{
-			name:  "child records count once per identity, the first alone under the records provenance, without moving the live position or the alignment",
+			name:  "child records count once per identity, the first alone under the records provenance and later ones beside the live source, without moving the live position or the alignment",
 			start: recs(hist),
 			steps: []step{
 				{
@@ -431,7 +433,7 @@ func TestLedger(t *testing.T) {
 				},
 				{
 					end: withChild, live: live(35, 5), read: withKids(recs(hist, ra, rb, rc), rec("c1", "m3", 7, 2), rec("c2", "m3", 3, 1)), needs: true,
-					want: usage.Settlement{Run: u(45, 8), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1), "m3": u(10, 3)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveProv},
+					want: usage.Settlement{Run: u(45, 8), ByModel: byModel{"m1": u(25, 4), "m2": u(10, 1), "m3": u(10, 3)}, Model: "m1", Figure: true, Spent: true, Complete: true, CoversSession: true, Provenance: liveRecProv},
 				},
 			},
 		},
@@ -441,16 +443,16 @@ func TestLedger(t *testing.T) {
 			steps: []step{
 				{
 					end: usage.TurnEnd{Replied: true, ModelReached: true, Children: true}, live: live(10, 1), read: withKids(recs(hist), rec("c1", "m3", 7, 2)), needs: true,
-					want: usage.Settlement{Run: u(17, 3), ByModel: byModel{"m3": u(7, 2)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+					want: usage.Settlement{Run: u(17, 3), ByModel: byModel{"m3": u(7, 2)}, Model: "m3", Figure: true, Spent: true, Provenance: liveRecProv},
 				},
 				{
 					end: withChild, live: live(20, 2), needs: true,
 					read: usage.RecordsRead{Readings: recs(hist).Readings, OK: true, ChildReadings: []usage.SpendReading{rec("c2", "m3", 7, 2)}},
-					want: usage.Settlement{Run: u(34, 6), ByModel: byModel{"m3": u(14, 4)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+					want: usage.Settlement{Run: u(34, 6), ByModel: byModel{"m3": u(14, 4)}, Model: "m3", Figure: true, Spent: true, Provenance: liveRecProv},
 				},
 				{
 					end: withChild, live: live(30, 3), read: withKids(recs(hist), rec("c3", "m3", 7, 2), rec("z", "m3", 0, 0)), needs: true,
-					want: usage.Settlement{Run: u(51, 9), ByModel: byModel{"m3": u(21, 6)}, Model: "m3", Figure: true, Spent: true, Provenance: liveProv},
+					want: usage.Settlement{Run: u(51, 9), ByModel: byModel{"m3": u(21, 6)}, Model: "m3", Figure: true, Spent: true, Provenance: liveRecProv},
 				},
 			},
 		},
@@ -754,6 +756,176 @@ func TestLedger_ObserveRequest(t *testing.T) {
 
 				if got != o.want || gotNew != o.wantNew {
 					t.Fatalf("observation %d: ObserveRequest(%q) = %+v, %v, want %+v, %v", i, o.reading.Identity, got, gotNew, o.want, o.wantNew)
+				}
+			}
+		})
+	}
+}
+
+func amt(unit string, v float64) usage.AmountReading {
+	return usage.AmountReading{Unit: unit, Amount: &v}
+}
+
+func spending(r usage.SpendReading, v float64) usage.SpendReading {
+	r.Amounts = []usage.AmountReading{amt("", v)}
+	return r
+}
+
+func liveSpending(model string, in, out int64, v float64) *usage.SpendReading {
+	r := spending(*liveWith(model, in, out, 0), v)
+	return &r
+}
+
+func reported(unit, model string, v float64, lowerBound bool) domain.ReportedAmount {
+	return domain.ReportedAmount{Unit: unit, Model: model, Amount: v, LowerBound: lowerBound}
+}
+
+func TestLedger_Amounts(t *testing.T) {
+	t.Parallel()
+
+	const requests = "premium requests"
+	usd := func(shape usage.AmountShape) []usage.AmountDeclaration {
+		return []usage.AmountDeclaration{{Unit: domain.UnitUSD, Shape: shape}}
+	}
+	perRequests := func(shape usage.AmountShape) []usage.AmountDeclaration {
+		return []usage.AmountDeclaration{{Unit: requests, Shape: shape}}
+	}
+	records := func(amounts []usage.AmountDeclaration) *usage.SpendDeclaration {
+		return &usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true, Amounts: amounts}
+	}
+	cumulative := usage.SpendDeclaration{Shape: usage.SpendSessionCumulative, ServedModel: true, Amounts: perRequests(usage.AmountSessionCumulative)}
+	currency := usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Currency: true, Shape: usage.AmountSessionCumulative}}}
+
+	type amountStep struct {
+		observe []usage.AmountReading
+		end     usage.TurnEnd
+		live    *usage.SpendReading
+		read    usage.RecordsRead
+		want    []domain.ReportedAmount
+	}
+	tests := []struct {
+		name      string
+		live      usage.SpendDeclaration
+		records   *usage.SpendDeclaration
+		created   bool
+		start     usage.RecordsRead
+		steps     []amountStep
+		wantProvs []domain.UsageProvenance
+	}{
+		{
+			name:    "per turn: costs sum per model, a zero cost beside tokens records none, and a records-settled turn marks its model",
+			live:    usage.SpendDeclaration{Shape: usage.SpendPerTurn, ServedModel: true, Amounts: usd(usage.AmountPerTurn)},
+			records: &usage.SpendDeclaration{Shape: usage.SpendPerRequest, ServedModel: true},
+			start:   recs(hist),
+			steps: []amountStep{
+				{end: replied, live: entries(spending(entry("m1", 20, 3), 0.25), spending(entry("m2", 10, 1), 0)), read: recs(hist, ra, rb), want: []domain.ReportedAmount{reported("USD", "m1", 0.25, false)}},
+				{end: replied, live: entries(spending(entry("m2", 4, 1), 0.125)), read: recs(hist, ra, rb, rd), want: []domain.ReportedAmount{reported("USD", "m1", 0.25, false), reported("USD", "m2", 0.125, true)}},
+				{end: cancelled, read: recs(hist, ra, rb, rd, rc), want: []domain.ReportedAmount{reported("USD", "m1", 0.25, true), reported("USD", "m2", 0.125, true)}},
+			},
+		},
+		{
+			name:    "session cumulative: a resumed session counts only the increase over its history records",
+			live:    cumulative,
+			records: records(perRequests(usage.AmountPerRequest)),
+			start:   recs(spending(hist, 3)),
+			steps: []amountStep{
+				{end: replied, live: liveSpending("m0", 90, 8, 5), read: recs(spending(hist, 3)), want: []domain.ReportedAmount{reported(requests, "m0", 2, false)}},
+			},
+		},
+		{
+			name:    "session cumulative: an interrupted turn the records settle, then a live turn, counts each request once",
+			live:    cumulative,
+			records: records(perRequests(usage.AmountPerRequest)),
+			created: true,
+			steps: []amountStep{
+				{end: cancelled, read: recs(spending(ra, 2)), want: []domain.ReportedAmount{reported(requests, "m1", 2, false)}},
+				{end: replied, live: liveSpending("m1", 30, 4, 5), read: recs(spending(ra, 2)), want: []domain.ReportedAmount{reported(requests, "m1", 5, false)}},
+			},
+		},
+		{
+			name:    "session cumulative: records and a running amount of the same requests in one settlement count once",
+			live:    cumulative,
+			records: records(perRequests(usage.AmountPerRequest)),
+			created: true,
+			steps: []amountStep{
+				{end: replied, live: liveSpending("m1", 30, 4, 5), read: recs(spending(ra, 2), spending(rec("b", "m1", 10, 1), 3)), want: []domain.ReportedAmount{reported(requests, "m1", 5, false)}},
+			},
+		},
+		{
+			name: "session cumulative: a falling reading lowers nothing and marks its key",
+			live: cumulative, created: true,
+			steps: []amountStep{
+				{end: replied, live: liveSpending("m1", 30, 4, 5), want: []domain.ReportedAmount{reported(requests, "m1", 5, false)}},
+				{end: replied, live: liveSpending("m1", 40, 5, 3), want: []domain.ReportedAmount{reported(requests, "m1", 5, true)}},
+			},
+		},
+		{
+			name:      "records per request: history never counts and child records add no amount but mark their model",
+			live:      usage.SpendDeclaration{Shape: usage.SpendPerTurn, ServedModel: true},
+			records:   records(usd(usage.AmountPerRequest)),
+			start:     recs(spending(hist, 9)),
+			wantProvs: liveRecProv,
+			steps: []amountStep{
+				{
+					end: withChild, live: live(30, 4), read: withKids(recs(spending(hist, 9), spending(ra, 0.25), spending(rb, 0.125)), spending(rec("c1", "m3", 7, 2), 4)),
+					want: []domain.ReportedAmount{reported("USD", "m1", 0.25, false), reported("USD", "m2", 0.125, false)},
+				},
+				{
+					end: replied, live: live(4, 1), read: recs(spending(hist, 9), spending(ra, 0.25), spending(rb, 0.125), spending(rec("d", "m3", 4, 1), 0.5)),
+					want: []domain.ReportedAmount{reported("USD", "m1", 0.25, false), reported("USD", "m2", 0.125, false), reported("USD", "m3", 0.5, true)},
+				},
+			},
+		},
+		{
+			name: "observed: a created session counts from 0 in the reading's own currency",
+			live: currency, created: true,
+			steps: []amountStep{{observe: []usage.AmountReading{amt("eur", 1.5)}, end: replied, want: []domain.ReportedAmount{reported("EUR", "", 1.5, false)}}},
+		},
+		{
+			name:  "observed: a continued session's first reading counts nothing and marks its key",
+			live:  currency,
+			steps: []amountStep{{observe: []usage.AmountReading{amt("EUR", 1.5)}, end: replied, want: []domain.ReportedAmount{reported("EUR", "", 0, true)}}},
+		},
+		{
+			name: "observed: a currency that is not three letters reads as absent",
+			live: currency, created: true,
+			steps: []amountStep{{observe: []usage.AmountReading{amt("EU1", 1.5)}, end: replied}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tt.live.CacheInInput, tt.live.ReasoningInOutput = true, true
+			liveSource := usage.Source{Category: usage.SourceProtocol, Strategy: usage.StrategyLive, Spend: tt.live}
+			var recordsSource usage.Source
+			if tt.records != nil {
+				tt.records.CacheInInput, tt.records.ReasoningInOutput = true, true
+				recordsSource = usage.Source{Category: usage.SourceJournal, Strategy: usage.StrategyRecords, Spend: *tt.records}
+			}
+			l, err := usage.NewLedger(liveSource, recordsSource)
+			if err != nil {
+				t.Fatalf("NewLedger() = %v, want nil", err)
+			}
+			l.Boundary(tt.start)
+			if tt.created {
+				l.SessionCreated()
+			}
+
+			for i, st := range tt.steps {
+				l.ObserveAmounts(st.observe)
+
+				got := l.Settle(st.end, st.live, st.read)
+
+				if !reflect.DeepEqual(got.Amounts, st.want) {
+					t.Fatalf("step %d: Settle(%+v).Amounts = %+v, want %+v", i, st.end, got.Amounts, st.want)
+				}
+				if tt.live.Shape == usage.SpendUndeclared && (got.Figure || got.Provenance != nil) {
+					t.Errorf("step %d: Settle(%+v) = figure %v, provenance %v, want neither for a ledger that counts no tokens", i, st.end, got.Figure, got.Provenance)
+				}
+				if i == 0 && tt.wantProvs != nil && !reflect.DeepEqual(got.Provenance, tt.wantProvs) {
+					t.Errorf("step %d: Settle(%+v).Provenance = %v, want %v", i, st.end, got.Provenance, tt.wantProvs)
 				}
 			}
 		})

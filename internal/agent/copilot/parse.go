@@ -28,10 +28,9 @@ type rawEvent struct {
 }
 
 type rawUsage struct {
-	PremiumRequests int64          `json:"premiumRequests"`
-	TotalAPIDurMS   int64          `json:"totalApiDurationMs"`
-	SessionDurMS    int64          `json:"sessionDurationMs"`
-	CodeChanges     *rawCodeChange `json:"codeChanges,omitempty"`
+	TotalAPIDurMS int64          `json:"totalApiDurationMs"`
+	SessionDurMS  int64          `json:"sessionDurationMs"`
+	CodeChanges   *rawCodeChange `json:"codeChanges,omitempty"`
 }
 
 type rawCodeChange struct {

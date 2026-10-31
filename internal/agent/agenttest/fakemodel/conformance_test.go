@@ -262,7 +262,7 @@ func conformanceLiveOnlyInterrupted(s *conformanceUsageState) {
 	s.settling.recordsUnread = true
 	s.run.Result.ExitReason = domain.EventTurnCancelled
 	s.run.Result.SpendUnaccounted = true
-	s.run.Result.UsageProvenance = live
+	s.run.Result.UsageProvenance = []domain.UsageProvenance{live}
 }
 
 func conformanceLiveLowerBound(s *conformanceUsageState) {
@@ -288,7 +288,7 @@ func conformanceRegisterKinds() {
 				Live: usage.Source{
 					Category: usage.SourceOutput,
 					Strategy: usage.StrategyLive,
-					Spend:    usage.SpendDeclaration{VendorUnit: "credits"},
+					Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerTurn}}},
 				},
 				Records: usage.Source{
 					Category: usage.SourceJournal,
@@ -1267,7 +1267,7 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			mutate: func(s *conformanceUsageState) {
 				live := domain.UsageProvenance{Source: "protocol", Strategy: 1}
 				s.spend = &SpendSources{Live: live, Records: domain.UsageProvenance{Source: "journal", Strategy: 2}, LowerBound: true}
-				s.run.Result.UsageProvenance = live
+				s.run.Result.UsageProvenance = []domain.UsageProvenance{live}
 			},
 			want: []string{"SpendUnaccounted"},
 		},
@@ -1284,7 +1284,7 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			mutate: func(s *conformanceUsageState) {
 				conformanceLiveOnlyInterrupted(s)
 				s.run.Result.UsageMeasured = false
-				s.run.Result.UsageProvenance = domain.UsageProvenance{}
+				s.run.Result.UsageProvenance = nil
 			},
 		},
 		{
@@ -1307,7 +1307,7 @@ func TestConformancePropertyExactUsage(t *testing.T) {
 			name: "interrupted turn no records settle carries the records provenance",
 			mutate: func(s *conformanceUsageState) {
 				conformanceLiveOnlyInterrupted(s)
-				s.run.Result.UsageProvenance = s.spend.Records
+				s.run.Result.UsageProvenance = []domain.UsageProvenance{s.spend.Records}
 			},
 			want: []string{"the live source"},
 		},

@@ -149,6 +149,22 @@ func countOf(raw json.RawMessage) *int64 {
 	return &count
 }
 
+// costUSDOf returns the costUSD of a per-model result entry: the cost of the
+// requests the result covers, so a turn's amount and never the process's
+// running total. It is nil for an absent, null, non-numeric, or negative
+// member.
+func costUSDOf(raw json.RawMessage) *float64 {
+	var entry struct {
+		CostUSD json.RawMessage `json:"costUSD"`
+	}
+	var cost float64
+	if json.Unmarshal(raw, &entry) != nil || absent(entry.CostUSD) ||
+		json.Unmarshal(entry.CostUSD, &cost) != nil || cost < 0 {
+		return nil
+	}
+	return &cost
+}
+
 // absent reports whether a raw member is missing or null.
 func absent(raw json.RawMessage) bool {
 	return len(raw) == 0 || string(raw) == "null"
@@ -184,6 +200,7 @@ func liveReading(members []json.RawMessage) *usage.SpendReading {
 		for _, model := range slices.Sorted(maps.Keys(perModel)) {
 			entry := spendReadingOf(perModel[model], resultMembers)
 			entry.Model = model
+			entry.Amounts = []usage.AmountReading{{Amount: costUSDOf(perModel[model])}}
 			entries = append(entries, entry)
 		}
 	}

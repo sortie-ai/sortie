@@ -16,7 +16,7 @@ var (
 	vendorLive = usage.Source{
 		Category: usage.SourceOutput,
 		Strategy: usage.StrategyLive,
-		Spend:    usage.SpendDeclaration{VendorUnit: "premium requests"},
+		Spend:    usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "premium requests", Shape: usage.AmountSessionCumulative}}},
 	}
 	journal = usage.Source{
 		Category: usage.SourceJournal,
@@ -27,6 +27,11 @@ var (
 
 func withSpend(src usage.Source, spend usage.SpendDeclaration) usage.Source {
 	src.Spend = spend
+	return src
+}
+
+func withAmounts(src usage.Source, amounts ...usage.AmountDeclaration) usage.Source {
+	src.Spend.Amounts = amounts
 	return src
 }
 
@@ -50,7 +55,18 @@ func TestSources_Check(t *testing.T) {
 		{name: "live defect wins over a records defect", sources: usage.Sources{Live: withSpend(mappedLive, usage.SpendDeclaration{}), Records: withSpend(journal, usage.SpendDeclaration{})}, wantErr: true, wantNoLive: true},
 		{name: "records category is not a journal", sources: usage.Sources{Live: mappedLive, Records: usage.Source{Category: usage.SourceOutput, Strategy: usage.StrategyRecords, Spend: journal.Spend}}, wantErr: true},
 		{name: "records strategy is live", sources: usage.Sources{Live: mappedLive, Records: usage.Source{Category: usage.SourceJournal, Strategy: usage.StrategyLive, Spend: journal.Spend}}, wantErr: true},
-		{name: "records source counts no tokens", sources: usage.Sources{Live: mappedLive, Records: withSpend(journal, usage.SpendDeclaration{VendorUnit: "credits"})}, wantErr: true},
+		{name: "live amount in a currency", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Currency: true, Shape: usage.AmountSessionCumulative})}},
+		{name: "live token source declaring a per-turn amount", sources: usage.Sources{Live: withAmounts(mappedLive, usage.AmountDeclaration{Unit: "USD", Shape: usage.AmountPerTurn})}},
+		{name: "records per-request amount", sources: usage.Sources{Live: mappedLive, Records: withAmounts(journal, usage.AmountDeclaration{Unit: "USD", Shape: usage.AmountPerRequest})}},
+		{name: "live amount with no unit and no currency", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Shape: usage.AmountPerTurn})}, wantErr: true, wantNoLive: true},
+		{name: "live amount with a unit and a currency", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Unit: "USD", Currency: true, Shape: usage.AmountPerTurn})}, wantErr: true, wantNoLive: true},
+		{name: "live amount unit declared twice", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountPerTurn}, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountSessionCumulative})}, wantErr: true, wantNoLive: true},
+		{name: "two live currency amounts", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Currency: true, Shape: usage.AmountPerTurn}, usage.AmountDeclaration{Currency: true, Shape: usage.AmountSessionCumulative})}, wantErr: true, wantNoLive: true},
+		{name: "live amount with an undeclared shape", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Unit: "credits"})}, wantErr: true, wantNoLive: true},
+		{name: "live amount per request", sources: usage.Sources{Live: withAmounts(vendorLive, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountPerRequest})}, wantErr: true, wantNoLive: true},
+		{name: "records amount not per request", sources: usage.Sources{Live: mappedLive, Records: withAmounts(journal, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountPerTurn})}, wantErr: true},
+		{name: "records amount unit declared twice", sources: usage.Sources{Live: mappedLive, Records: withAmounts(journal, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountPerRequest}, usage.AmountDeclaration{Unit: "credits", Shape: usage.AmountPerRequest})}, wantErr: true},
+		{name: "records source counts no tokens", sources: usage.Sources{Live: mappedLive, Records: withSpend(journal, usage.SpendDeclaration{Amounts: []usage.AmountDeclaration{{Unit: "credits", Shape: usage.AmountPerRequest}}})}, wantErr: true},
 	}
 
 	for _, tt := range tests {

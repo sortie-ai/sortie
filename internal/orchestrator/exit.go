@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -483,6 +484,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TokensMeasured:   measured,
 		UnaccountedTurns: workerResult.UnaccountedTurns,
 
+		UsageCompleteness: usageCompleteness(measured, workerResult.UnaccountedTurns),
+		ReportedAmounts:   runReportedAmounts(usage.MergeAmounts(entry.ReportedAmounts, workerResult.ReportedAmounts)),
+
 		IssueTitle: issueIdentity.Title,
 		IssueURL:   issueIdentity.URL,
 
@@ -512,6 +516,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		runHistory.CacheWriteTokens = 0
 	} else {
 		runHistory.ModelUsage = runModelUsage(entry.UsageByModel)
+		runHistory.UsageProvenance = usage.FormatProvenance(workerResult.UsageProvenance)
 	}
 	if params.Rates != nil {
 		state.Rates = params.Rates
@@ -1719,6 +1724,37 @@ func runModelUsage(totals map[string]domain.TokenUsage) map[string]persistence.M
 	return parts
 }
 
+// usageCompleteness classifies how far a run's recorded token figure
+// reaches: unmeasured when no figure arrived, a lower bound when a turn spent
+// tokens no source counted, complete otherwise.
+func usageCompleteness(measured bool, unaccountedTurns int) string {
+	switch {
+	case !measured:
+		return persistence.UsageUnmeasured
+	case unaccountedTurns > 0:
+		return persistence.UsageLowerBound
+	default:
+		return persistence.UsageComplete
+	}
+}
+
+// runReportedAmounts maps reported amounts to stored rows; nil when none.
+func runReportedAmounts(amounts []domain.ReportedAmount) []persistence.ReportedAmount {
+	if len(amounts) == 0 {
+		return nil
+	}
+	rows := make([]persistence.ReportedAmount, len(amounts))
+	for i, amount := range amounts {
+		rows[i] = persistence.ReportedAmount{
+			Unit:       amount.Unit,
+			Model:      amount.Model,
+			Amount:     amount.Amount,
+			LowerBound: amount.LowerBound,
+		}
+	}
+	return rows
+}
+
 // recordRunCost prices a run under rates and stores the result on its row.
 // The row's token columns and ModelUsage must be final, because the price is
 // fixed when the row is written.
@@ -1735,6 +1771,15 @@ func recordRunCost(row *persistence.RunHistory, rates *pricing.Rates) {
 			}
 		}
 	}
+	reported := make([]domain.ReportedAmount, len(row.ReportedAmounts))
+	for i, amount := range row.ReportedAmounts {
+		reported[i] = domain.ReportedAmount{
+			Unit:       amount.Unit,
+			Model:      amount.Model,
+			Amount:     amount.Amount,
+			LowerBound: amount.LowerBound,
+		}
+	}
 	price := pricing.PriceRun(pricing.Spend{
 		Kind:     row.AgentAdapter,
 		Measured: row.TokensMeasured,
@@ -1747,6 +1792,7 @@ func recordRunCost(row *persistence.RunHistory, rates *pricing.Rates) {
 		},
 		Parts:            parts,
 		UnaccountedTurns: row.UnaccountedTurns,
+		Reported:         reported,
 	}, rates)
 
 	row.EstimatedCostUSD = price.CostUSD

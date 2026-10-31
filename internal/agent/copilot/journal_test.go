@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
@@ -87,7 +88,7 @@ func TestUsageCheckpointSettlesLiveCaptures(t *testing.T) {
 			if got.Run != tt.want || (tt.wantByModel != nil && !maps.Equal(got.ByModel, tt.wantByModel)) {
 				t.Errorf("Settle(%s line %d) Run, ByModel = %+v, %+v, want %+v, %+v", tt.fixture, tt.settleLine, got.Run, got.ByModel, tt.want, tt.wantByModel)
 			}
-			if got.Run != appended || !maps.Equal(got.ByModel, appendedByModel) || !got.Complete || got.Provenance != live {
+			if got.Run != appended || !maps.Equal(got.ByModel, appendedByModel) || !got.Complete || !slices.Equal(got.Provenance, []domain.UsageProvenance{live}) {
 				t.Errorf("Settle(%s line %d) Run, ByModel, Complete, Provenance = %+v, %+v, %t, %+v, want the appended records' sum %+v, %+v, true, %+v",
 					tt.fixture, tt.settleLine, got.Run, got.ByModel, got.Complete, got.Provenance, appended, appendedByModel, live)
 			}
@@ -104,11 +105,11 @@ func TestRunTurnKilledMidTurnSettlesFromJournalOrOutput(t *testing.T) {
 		name, fixture, sessionID string
 		journal                  bool
 		want                     domain.TokenUsage
-		wantSource               domain.UsageProvenance
+		wantSource               []domain.UsageProvenance
 	}{
-		{name: "sigterm with journal", fixture: "kill_sigterm_midturn", sessionID: sigtermSession, journal: true, want: sigterm, wantSource: fromJournal},
-		{name: "sigterm without journal", fixture: "kill_sigterm_midturn", sessionID: sigtermSession, want: sigterm, wantSource: fromOutput},
-		{name: "sigkill with journal", fixture: "kill_sigkill_midturn", sessionID: sigkillSession, journal: true, want: sigkill, wantSource: fromJournal},
+		{name: "sigterm with journal", fixture: "kill_sigterm_midturn", sessionID: sigtermSession, journal: true, want: sigterm, wantSource: []domain.UsageProvenance{fromJournal}},
+		{name: "sigterm without journal", fixture: "kill_sigterm_midturn", sessionID: sigtermSession, want: sigterm, wantSource: []domain.UsageProvenance{fromOutput}},
+		{name: "sigkill with journal", fixture: "kill_sigkill_midturn", sessionID: sigkillSession, journal: true, want: sigkill, wantSource: []domain.UsageProvenance{fromJournal}},
 		{name: "sigkill without journal", fixture: "kill_sigkill_midturn", sessionID: sigkillSession},
 	}
 
@@ -135,7 +136,7 @@ func TestRunTurnKilledMidTurnSettlesFromJournalOrOutput(t *testing.T) {
 
 			got, _ := adapter.RunTurn(t.Context(), session, domain.RunTurnParams{Prompt: "kill", OnEvent: func(domain.AgentEvent) {}})
 
-			if got.Usage != tt.want || got.UsageMeasured != (tt.want != domain.TokenUsage{}) || got.UsageProvenance != tt.wantSource || !got.SpendUnaccounted {
+			if got.Usage != tt.want || got.UsageMeasured != (tt.want != domain.TokenUsage{}) || !slices.Equal(got.UsageProvenance, tt.wantSource) || !got.SpendUnaccounted {
 				t.Errorf("RunTurn(%s) Usage, UsageMeasured, UsageProvenance, SpendUnaccounted = %+v, %t, %+v, %t, want %+v, measured only for a non-zero figure, %+v, true",
 					tt.fixture, got.Usage, got.UsageMeasured, got.UsageProvenance, got.SpendUnaccounted, tt.want, tt.wantSource)
 			}
