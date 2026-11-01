@@ -91,7 +91,7 @@ Chosen option: **one persisted comment feed served at every prompt boundary, wit
 ### Negative
 
 - Adapter contracts change: `CommentIssue` returns the created identity on every tracker; comments carry author identity and kind; each tracker gains its incremental read and each forge a permission lookup; agent adapters report whether a session carried history, which the Codex and Agent Client Protocol kinds do not do when a resume falls back to a new session.
-- With the feature on, a run makes up to one extra comment read per turn: at the default `agent.max_turns` of 20, up to 19 beyond the first turn, plus one per self-review turn and one permission lookup per new forge author.
+- With the feature on, a run makes up to one extra comment read per turn: at the default `agent.max_turns` of 20, up to 19 beyond the first turn, plus one per self-review turn, one permission lookup per forge author not yet granted, and one more for each new comment from an author who was refused.
 - The schema gains the given record and the own-comment record, with rows per conversation.
 - `.park.comments` changes for existing workflows even with the feature off.
 - A template that shows part of the feed marks all pending comments given.
