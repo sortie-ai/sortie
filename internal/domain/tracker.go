@@ -228,3 +228,38 @@ type BlockerReader interface {
 // blocker source and does not implement [BlockerReader]. Callers
 // treat it as a condition the next attempt will not fix.
 var ErrNoBlockerReader = errors.New("tracker adapter declares per-issue blockers and implements no reader")
+
+// CommentReadPoint is the opaque position a [CommentChangeReader] returns
+// so the next read of the same issue covers only what changed since. Its
+// text means nothing to a caller, and it is meaningful only for the issue
+// whose read returned it. The zero value reads the full list.
+type CommentReadPoint string
+
+// CommentChanges is the result of one [CommentChangeReader] read.
+type CommentChanges struct {
+	// Comments are the comments the read returns, oldest first by creation
+	// time with ties by ascending ID, each ID at most once. It is never
+	// nil on success.
+	Comments []Comment
+
+	// Next is the point the next read of the same issue passes.
+	Next CommentReadPoint
+}
+
+// CommentChangeReader is the optional capability a tracker adapter
+// implements to read an issue's comments created or edited since an
+// earlier read.
+type CommentChangeReader interface {
+	// FetchIssueCommentChanges returns the comments of one issue created
+	// or edited since the read that returned since; a zero or undecodable
+	// since reads the full list. Comments may also hold unchanged
+	// comments, so the caller decides what changed by identity and body.
+	// Next can move without a changed comment. Errors are those of
+	// [TrackerAdapter.FetchIssueComments].
+	//
+	// A read from Next can omit every unchanged comment this read
+	// returned, so the caller passes Next only once each of them is
+	// recorded as given or left out by selection, and passes since again
+	// when it discards the result before then.
+	FetchIssueCommentChanges(ctx context.Context, issueID string, since CommentReadPoint) (CommentChanges, error)
+}

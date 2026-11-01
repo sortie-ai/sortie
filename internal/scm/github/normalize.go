@@ -2,6 +2,7 @@ package github
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/issuekit"
@@ -42,6 +43,7 @@ type githubLabel struct {
 
 type githubUser struct {
 	Login string `json:"login"`
+	Type  string `json:"type"`
 }
 
 type githubIssueType struct {
@@ -52,11 +54,17 @@ type githubIssueType struct {
 // indicates the list entry is a pull request, not an issue.
 type githubPR struct{}
 
+// githubApp is a marker struct: a non-nil pointer means the comment was
+// created through a GitHub App.
+type githubApp struct{}
+
 type githubComment struct {
-	ID        int64      `json:"id"`
-	User      githubUser `json:"user"`
-	Body      string     `json:"body"`
-	CreatedAt string     `json:"created_at"`
+	ID                    int64      `json:"id"`
+	User                  githubUser `json:"user"`
+	Body                  string     `json:"body"`
+	CreatedAt             string     `json:"created_at"`
+	UpdatedAt             string     `json:"updated_at"`
+	PerformedViaGitHubApp *githubApp `json:"performed_via_github_app"`
 }
 
 // searchResponse represents GET /search/issues response.
@@ -177,13 +185,32 @@ func normalizeComments(comments []githubComment) []domain.Comment {
 	source := make([]issuekit.SourceComment, len(comments))
 	for i, c := range comments {
 		source[i] = issuekit.SourceComment{
-			ID:        strconv.FormatInt(c.ID, 10),
-			Author:    c.User.Login,
-			Body:      c.Body,
-			CreatedAt: c.CreatedAt,
+			ID:         strconv.FormatInt(c.ID, 10),
+			Author:     c.User.Login,
+			AuthorID:   c.User.Login,
+			AuthorKind: commentAuthorKind(c),
+			Body:       c.Body,
+			CreatedAt:  c.CreatedAt,
+			UpdatedAt:  c.UpdatedAt,
 		}
 	}
 	return issuekit.NormalizeComments(source)
+}
+
+// commentAuthorKind maps the comment's user type and creating app to a
+// [domain.CommentAuthorKind]. An app's own [bot] account is a bot, so the
+// user type decides before the app does.
+func commentAuthorKind(c githubComment) domain.CommentAuthorKind {
+	switch {
+	case strings.EqualFold(c.User.Type, "Bot"):
+		return domain.CommentAuthorBot
+	case !strings.EqualFold(c.User.Type, "User"):
+		return domain.CommentAuthorUnknown
+	case c.PerformedViaGitHubApp != nil:
+		return domain.CommentAuthorApp
+	default:
+		return domain.CommentAuthorPerson
+	}
 }
 
 // isClosed reports whether the issue's native status is closed; every other

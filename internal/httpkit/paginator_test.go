@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 )
@@ -262,34 +263,50 @@ func TestTokenPaginator_cancellation(t *testing.T) {
 func TestLinkPaginator_order(t *testing.T) {
 	t.Parallel()
 
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/p1":
-			serveLinkPage(w, []int{1, 2}, fmt.Sprintf(`<%s/p2>; rel="next"`, srv.URL))
-		case "/p2":
-			serveLinkPage(w, []int{3, 4}, "")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	c := mustClient(t, ClientOptions{BaseURL: srv.URL})
-	p := NewLinkPaginator(c, "/p1", nil, decodeInts, PaginatorOptions{})
-
-	items, err := p.All(context.Background())
-	if err != nil {
-		t.Fatalf("All: %v", err)
+	tests := []struct {
+		name     string
+		stop     func(page []int) bool
+		want     []int
+		wantReqs int32
+	}{
+		{"no predicate walks every page", nil, []int{1, 2, 3, 4}, 2},
+		{"predicate true on page 1 stops the walk", func([]int) bool { return true }, []int{1, 2}, 1},
 	}
-	want := []int{1, 2, 3, 4}
-	if len(items) != len(want) {
-		t.Fatalf("All() = %v, want %v", items, want)
-	}
-	for i, v := range want {
-		if items[i] != v {
-			t.Errorf("All()[%d] = %d, want %d", i, items[i], v)
-		}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var reqs atomic.Int32
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reqs.Add(1)
+				switch r.URL.Path {
+				case "/p1":
+					serveLinkPage(w, []int{1, 2}, fmt.Sprintf(`<%s/p2>; rel="next"`, srv.URL))
+				case "/p2":
+					serveLinkPage(w, []int{3, 4}, "")
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+			p := NewLinkPaginator(c, "/p1", nil, decodeInts, PaginatorOptions{}).StopWhen(tt.stop)
+
+			got, err := p.All(context.Background())
+			if err != nil {
+				t.Fatalf("All: %v", err)
+			}
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("All() = %v, want %v", got, tt.want)
+			}
+			if n := reqs.Load(); n != tt.wantReqs {
+				t.Errorf("All() sent %d requests, want %d", n, tt.wantReqs)
+			}
+		})
 	}
 }
 

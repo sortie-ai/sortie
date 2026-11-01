@@ -72,6 +72,7 @@ type Paginator[T any] struct {
 	pageDecode  LinkPageDecoder[T]
 	pageOptions PageOptions
 	options     PaginatorOptions
+	stop        func(page []T) bool
 }
 
 // NewTokenPaginator constructs a [Paginator] for APIs that expose a next-page token.
@@ -116,6 +117,20 @@ func NewPagePaginator[T any](client *Client, path string, baseParams url.Values,
 	}
 }
 
+// StopWhen sets a predicate that [Paginator.All] consults once per page,
+// after decoding the page and adding its items, in every mode. When it
+// returns true, All returns the items gathered so far, that page's
+// included, requests no further page, and does not call OnLimitReached. A
+// nil predicate walks every page. It returns p.
+func (p *Paginator[T]) StopWhen(stop func(page []T) bool) *Paginator[T] {
+	p.stop = stop
+	return p
+}
+
+func (p *Paginator[T]) stopAfter(page []T) bool {
+	return p.stop != nil && p.stop(page)
+}
+
 // All fetches every page and returns the accumulated items.
 func (p *Paginator[T]) All(ctx context.Context) ([]T, error) {
 	switch p.mode {
@@ -151,7 +166,8 @@ func (p *Paginator[T]) allTokens(ctx context.Context) ([]T, error) {
 		}
 		items = append(items, pageItems...)
 
-		if token == "" {
+		stopped := p.stopAfter(pageItems)
+		if token == "" || stopped {
 			return items, nil
 		}
 
@@ -195,8 +211,9 @@ func (p *Paginator[T]) allLinks(ctx context.Context) ([]T, error) {
 		}
 		items = append(items, pageItems...)
 
+		stopped := p.stopAfter(pageItems)
 		nextURL = parseLinkNext(headers.Get("Link"))
-		if nextURL == "" {
+		if nextURL == "" || stopped {
 			return items, nil
 		}
 
@@ -242,7 +259,8 @@ func (p *Paginator[T]) allPages(ctx context.Context) ([]T, error) {
 		}
 		items = append(items, pageItems...)
 
-		if len(pageItems) < p.pageOptions.PageSize {
+		stopped := p.stopAfter(pageItems)
+		if len(pageItems) < p.pageOptions.PageSize || stopped {
 			return items, nil
 		}
 

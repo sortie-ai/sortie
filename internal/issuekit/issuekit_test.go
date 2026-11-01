@@ -2,7 +2,10 @@ package issuekit
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 func TestNormalizeLabels_nil(t *testing.T) {
@@ -217,18 +220,17 @@ func TestNormalizeComments_order(t *testing.T) {
 	t.Parallel()
 
 	in := []SourceComment{
-		{ID: "1", Author: "Alice", Body: "first", CreatedAt: "2025-01-01"},
+		{ID: "1", Author: "Alice", AuthorID: "alice", AuthorKind: domain.CommentAuthorBot, Body: "first", CreatedAt: "2025-01-01", UpdatedAt: "2025-01-03"},
+		{ID: "2", Author: "Bob", Body: "second", CreatedAt: "2025-01-02"},
+	}
+	want := []domain.Comment{
+		{ID: "1", Author: "Alice", AuthorID: "alice", AuthorKind: domain.CommentAuthorBot, Body: "first", CreatedAt: "2025-01-01", UpdatedAt: "2025-01-03"},
 		{ID: "2", Author: "Bob", Body: "second", CreatedAt: "2025-01-02"},
 	}
 
 	got := NormalizeComments(in)
-	if len(got) != 2 {
-		t.Fatalf("NormalizeComments len = %d, want 2", len(got))
-	}
-	if got[0].ID != "1" || got[0].Author != "Alice" || got[0].Body != "first" || got[0].CreatedAt != "2025-01-01" {
-		t.Errorf("NormalizeComments[0] = %+v, want {ID:1 Author:Alice Body:first CreatedAt:2025-01-01}", got[0])
-	}
-	if got[1].ID != "2" || got[1].Author != "Bob" || got[1].Body != "second" || got[1].CreatedAt != "2025-01-02" {
-		t.Errorf("NormalizeComments[1] = %+v, want {ID:2 Author:Bob Body:second CreatedAt:2025-01-02}", got[1])
+
+	if !slices.Equal(got, want) {
+		t.Errorf("NormalizeComments(%+v) = %+v, want %+v", in, got, want)
 	}
 }

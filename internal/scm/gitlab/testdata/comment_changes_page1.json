@@ -1,0 +1,82 @@
+[
+  {
+    "id": 605,
+    "type": null,
+    "body": "Bumped the base image to 1.24.3.",
+    "author": {
+      "id": 77,
+      "username": "renovate-bot",
+      "name": "Renovate Bot",
+      "state": "active"
+    },
+    "created_at": "2026-01-10T12:40:00.123Z",
+    "updated_at": "2026-01-10T12:40:00.123Z",
+    "system": false,
+    "internal": false,
+    "noteable_id": 4210,
+    "noteable_type": "Issue",
+    "noteable_iid": 55,
+    "confidential": false,
+    "resolvable": false
+  },
+  {
+    "id": 604,
+    "type": null,
+    "body": "changed the description",
+    "author": {
+      "id": 13,
+      "username": "carol",
+      "name": "Carol White",
+      "state": "active"
+    },
+    "created_at": "2026-01-10T12:35:00.000Z",
+    "updated_at": "2026-01-10T12:35:00.000Z",
+    "system": true,
+    "internal": false,
+    "noteable_id": 4210,
+    "noteable_type": "Issue",
+    "noteable_iid": 55,
+    "confidential": false,
+    "resolvable": false
+  },
+  {
+    "id": 603,
+    "type": null,
+    "body": "Edited: rollback verified on staging.",
+    "author": {
+      "id": 11,
+      "username": "alice",
+      "name": "Alice Smith",
+      "state": "active"
+    },
+    "created_at": "2026-01-10T10:00:00.000Z",
+    "updated_at": "2026-01-10T12:20:00.000Z",
+    "system": false,
+    "internal": false,
+    "noteable_id": 4210,
+    "noteable_type": "Issue",
+    "noteable_iid": 55,
+    "confidential": false,
+    "resolvable": false
+  },
+  {
+    "id": 602,
+    "type": null,
+    "body": "Started investigating the failure.",
+    "author": {
+      "id": 11,
+      "username": "alice",
+      "name": "Alice Smith",
+      "state": "active"
+    },
+    "created_at": "2026-01-10T10:00:00.000Z",
+    "updated_at": "2026-01-10T12:00:00.000Z",
+    "system": false,
+    "internal": false,
+    "noteable_id": 4210,
+    "noteable_type": "Issue",
+    "noteable_iid": 55,
+    "confidential": false,
+    "resolvable": false
+  }
+]

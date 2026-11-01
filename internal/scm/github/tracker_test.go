@@ -1120,7 +1120,9 @@ func TestFetchIssueComments_SinglePage(t *testing.T) {
 	t.Parallel()
 
 	fixture := loadFixture(t, "comments.json")
+	var requests requestLog
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r)
 		w.WriteHeader(http.StatusOK)
 		w.Write(fixture) //nolint:errcheck // test helper
 	}))
@@ -1142,6 +1144,11 @@ func TestFetchIssueComments_SinglePage(t *testing.T) {
 		t.Errorf("comments[1].Author = %q, want bob", comments[1].Author)
 	}
 	adaptertest.AssertCommentsAscending(t, comments)
+
+	wantRequests := []string{`GET /repos/owner/repo/issues/42/comments?per_page=50 if-none-match=""`}
+	if got := requests.all(); !slices.Equal(got, wantRequests) {
+		t.Errorf("FetchIssueComments requests = %q, want %q", got, wantRequests)
+	}
 }
 
 func TestFetchIssueComments_EmptyIsNonNil(t *testing.T) {
@@ -1208,6 +1215,171 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 	a := mustAdapter(t, validConfig(srv.URL))
 	_, err := a.FetchIssueComments(context.Background(), "999")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+}
+
+type requestLog struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (l *requestLog) add(r *http.Request) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.list = append(l.list, fmt.Sprintf("%s %s if-none-match=%q", r.Method, r.URL.RequestURI(), r.Header.Get("If-None-Match")))
+}
+
+func (l *requestLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.list)
+}
+
+type commentPageReply struct {
+	status int
+	etag   string
+	body   []byte
+}
+
+func TestFetchIssueCommentChanges(t *testing.T) {
+	t.Parallel()
+
+	page := loadFixture(t, "comment_changes_page.json")
+	nextPage := loadFixture(t, "comment_changes_next_page.json")
+	pageComments := []domain.Comment{
+		{ID: "9001", Author: "alice", AuthorID: "alice", AuthorKind: domain.CommentAuthorPerson, Body: "Looks good, please proceed.", CreatedAt: "2026-01-15T10:00:00Z", UpdatedAt: "2026-01-15T10:00:00Z"},
+		{ID: "9002", Author: "bob", AuthorID: "bob", AuthorKind: domain.CommentAuthorPerson, Body: "Please fix the indentation, then rebase.", CreatedAt: "2026-01-16T11:30:00Z", UpdatedAt: "2026-01-17T08:15:00Z"},
+		{ID: "9003", Author: "github-actions[bot]", AuthorID: "github-actions[bot]", AuthorKind: domain.CommentAuthorBot, Body: "CI finished: all checks passed.", CreatedAt: "2026-01-17T09:00:00Z", UpdatedAt: "2026-01-17T09:00:00Z"},
+	}
+
+	const (
+		page1Request  = `GET /repos/owner/repo/issues/42/comments?page=1&per_page=100 if-none-match=""`
+		page1Validate = `GET /repos/owner/repo/issues/42/comments?page=1&per_page=100 if-none-match="W/\"v1\""`
+		page2Request  = `GET /repos/owner/repo/issues/42/comments?page=2&per_page=100 if-none-match=""`
+		page2Validate = `GET /repos/owner/repo/issues/42/comments?page=2&per_page=100 if-none-match="W/\"v2\""`
+		onePageV1     = `[{"etag":"W/\"v1\"","count":2}]`
+		fullPageV1    = `[{"etag":"W/\"v1\"","count":100}]`
+		fullThenOne   = `[{"etag":"W/\"v1\"","count":100},{"etag":"W/\"v2\"","count":1}]`
+	)
+
+	tests := []struct {
+		name         string
+		since        domain.CommentReadPoint
+		cacheOff     bool
+		replies      map[string]commentPageReply
+		wantRequests []string
+		wantComments []domain.Comment
+		wantNext     domain.CommentReadPoint
+		wantErr      domain.TrackerErrorKind
+	}{
+		{
+			name:         "new and edited comments come back with author fields and the new body",
+			since:        onePageV1,
+			replies:      map[string]commentPageReply{"1": {http.StatusOK, `W/"v2"`, page}},
+			wantRequests: []string{page1Validate},
+			wantComments: pageComments,
+			wantNext:     `[{"etag":"W/\"v2\"","count":3}]`,
+		},
+		{
+			name:  "every page not modified returns nothing and keeps the point",
+			since: fullThenOne,
+			replies: map[string]commentPageReply{
+				"1": {status: http.StatusNotModified},
+				"2": {status: http.StatusNotModified},
+			},
+			wantRequests: []string{page1Validate, page2Validate},
+			wantComments: []domain.Comment{},
+			wantNext:     fullThenOne,
+		},
+		{
+			name:  "a full page that answers not modified is followed by an unconditional next page",
+			since: fullPageV1,
+			replies: map[string]commentPageReply{
+				"1": {status: http.StatusNotModified},
+				"2": {http.StatusOK, `W/"v2"`, nextPage},
+			},
+			wantRequests: []string{page1Validate, page2Request},
+			wantComments: []domain.Comment{
+				{ID: "9101", Author: "carol", AuthorID: "carol", AuthorKind: domain.CommentAuthorPerson, Body: "The 101st comment.", CreatedAt: "2026-01-18T12:00:00Z", UpdatedAt: "2026-01-18T12:00:00Z"},
+			},
+			wantNext: fullThenOne,
+		},
+		{
+			name:         "undecodable point reads page one unconditionally",
+			since:        "x",
+			replies:      map[string]commentPageReply{"1": {http.StatusOK, `W/"v1"`, page}},
+			wantRequests: []string{page1Request},
+			wantComments: pageComments,
+			wantNext:     `[{"etag":"W/\"v1\"","count":3}]`,
+		},
+		{
+			name:         "disabled conditional requests send no validator and return no point",
+			since:        onePageV1,
+			cacheOff:     true,
+			replies:      map[string]commentPageReply{"1": {http.StatusOK, `W/"v2"`, page}},
+			wantRequests: []string{page1Request},
+			wantComments: pageComments,
+		},
+		{
+			name:         "body that is not an array is a payload error",
+			replies:      map[string]commentPageReply{"1": {http.StatusOK, `W/"v1"`, []byte(`{"message":"unexpected"}`)}},
+			wantRequests: []string{page1Request},
+			wantErr:      domain.ErrTrackerPayload,
+		},
+		{
+			name:         "missing issue is not found",
+			replies:      map[string]commentPageReply{"1": {status: http.StatusNotFound}},
+			wantRequests: []string{page1Request},
+			wantErr:      domain.ErrTrackerNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests requestLog
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.add(r)
+				reply, ok := tt.replies[r.URL.Query().Get("page")]
+				if !ok {
+					reply.status = http.StatusInternalServerError
+				}
+				if reply.etag != "" {
+					w.Header().Set("ETag", reply.etag)
+				}
+				w.WriteHeader(reply.status)
+				w.Write(reply.body) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
+			cfg := validConfig(srv.URL)
+			if tt.cacheOff {
+				cfg["etag_cache_size"] = 0
+			}
+
+			got, err := mustAdapter(t, cfg).FetchIssueCommentChanges(context.Background(), "42", tt.since)
+
+			if gotRequests := requests.all(); !slices.Equal(gotRequests, tt.wantRequests) {
+				t.Errorf("FetchIssueCommentChanges(%q) requests = %q, want %q", tt.since, gotRequests, tt.wantRequests)
+			}
+			if tt.wantErr != "" {
+				assertTrackerErrorKind(t, err, tt.wantErr)
+				if got.Comments != nil || got.Next != "" {
+					t.Errorf("FetchIssueCommentChanges(%q) on error = %+v, want zero value", tt.since, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FetchIssueCommentChanges(%q): %v", tt.since, err)
+			}
+			if got.Comments == nil || !slices.Equal(got.Comments, tt.wantComments) {
+				t.Errorf("FetchIssueCommentChanges(%q).Comments = %+v, want %+v", tt.since, got.Comments, tt.wantComments)
+			}
+			if got.Next != tt.wantNext {
+				t.Errorf("FetchIssueCommentChanges(%q).Next = %q, want %q", tt.since, got.Next, tt.wantNext)
+			}
+			adaptertest.AssertCommentsAscending(t, got.Comments)
+		})
+	}
 }
 
 const labelFakeNumber = 42

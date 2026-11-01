@@ -122,7 +122,11 @@ State filtering stays client-side. The server-side label filter is AND across na
 
 **The notes route mixes system notes in with human comments.** Passing a "marked as related to" system note to an agent as human feedback would pollute every continuation prompt. There is a server-side filter parameter for this, and it fails loudly on a bad value, so it cannot be silently dropped by a version that lacks it. The adapter still keeps a client-side guard on the per-note system flag, because the field is authoritative and the check is free.
 
-Two more properties of that route: it defaults to **newest-first**, so ascending order is requested explicitly, and it **paginates**, unlike Gitea's equivalent.
+Further properties of that route: it defaults to **newest-first**, so the full reads request ascending order explicitly, and it **paginates**, unlike Gitea's equivalent.
+
+**The change read orders by update time, newest first, and stops early.** It requests comment notes ordered by `updated_at` descending, and reads pages down to the first page that ends in a note updated before the point it was given, so an idle issue costs one page while fewer than 100 notes were updated at or after the point. The point is the newest `updated_at` seen so far. Notes updated exactly at the point are read again, so notes that share that time are all read; identity and body, not the read boundary, decide what is new. A note whose `updated_at` moved without an edit, as GitLab moves it when a note is resolved, is read again as well.
+
+**The issue's `updated_at` is no probe.** GitLab skips that bump for a note made within a minute of another update, so a new comment can leave it unchanged. A `304` is charged against the rate limit here, so the change read sends no conditional request.
 
 Internal notes are passed through. They are genuine human comments, and an operator who does not want them in prompts controls that by not writing them.
 
@@ -261,6 +265,8 @@ An already-absent branch is returned as a not-found error that the caller treats
 The marker is available on the per-user route, and a non-administrator token can read it, which is the only reason the platform half of the predicate is usable at all. So bot review comments resolve the distinct author ids of the notes already fetched, look each up once, cache for the adapter's lifetime, and pass the result into the shared union with the configured allowlist. Cost is bounded by distinct authors on one merge request, not by comment count. GitLab is the only one of the three forges that spends a request to answer the platform half.
 
 An adapter run with an empty allowlist may skip the lookup, but then bot selection returns nothing, so the allowlist stops being optional. That degradation belongs in the operator-facing documentation.
+
+**The change read resolves each note author's kind through the same cached lookup.** A note carries no author kind, so `fetch_issue_comment_changes` looks up each distinct author once for the adapter's lifetime and reads the marker from the per-user route. A `404` for the user reads as a person and is cached too, and any other failure fails the read and caches nothing. The full comment reads send no per-user request, so the kind they report is empty. GitLab.com caps the per-user route at 300 requests per 10 minutes per user, and a lookup the cap rejects fails the read.
 
 **The generated-bot username pattern is a hint, not a contract.** GitLab names its own managed token identities predictably, so a prefix match would classify them for free. It would not classify a third-party review bot driven by a personal access token, which is the common case for the review-comments reaction. Never use the pattern as the only platform signal.
 

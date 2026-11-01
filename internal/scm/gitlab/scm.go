@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -24,15 +23,13 @@ var _ domain.SCMAdapter = (*GitLabSCMAdapter)(nil)
 
 // GitLabSCMAdapter implements [domain.SCMAdapter] for GitLab merge
 // requests over the REST API v4. The client and logger are set once at
-// construction and never mutated; botCache is the only mutable state,
-// guarded by a mutex held only around map access. The adapter is safe
-// for concurrent use.
+// construction and never mutated; the bot lookup in bots is the only
+// mutable state and guards itself. The adapter is safe for concurrent
+// use.
 type GitLabSCMAdapter struct {
 	client *httpkit.Client
 	log    *slog.Logger
-
-	mu       sync.Mutex
-	botCache map[int64]bool
+	bots   *botFlags
 }
 
 // NewGitLabSCMAdapter creates a [GitLabSCMAdapter] from adapter-specific
@@ -82,10 +79,11 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 		userAgent = "sortie/dev"
 	}
 
+	client := newGitLabClient(baseURL, apiKey, userAgent)
 	return &GitLabSCMAdapter{
-		client:   newGitLabClient(baseURL, apiKey, userAgent),
-		log:      slog.Default(),
-		botCache: make(map[int64]bool),
+		client: client,
+		log:    slog.Default(),
+		bots:   newBotFlags(client),
 	}, nil
 }
 

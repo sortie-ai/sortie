@@ -38,9 +38,8 @@ type gitlabReferences struct {
 }
 
 // gitlabUser carries the username and instance-global id used for an
-// issue assignee, a note author, and a merge-request reviewer. The
-// tracker read path uses only Username; the source-control bot lookup
-// addresses users by ID.
+// issue assignee, a note author, and a merge-request reviewer. The bot
+// lookup addresses users by ID; every other read uses only Username.
 type gitlabUser struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
@@ -55,6 +54,7 @@ type gitlabNote struct {
 	Author    gitlabUser          `json:"author"`
 	Body      string              `json:"body"`
 	CreatedAt string              `json:"created_at"`
+	UpdatedAt string              `json:"updated_at"`
 	System    bool                `json:"system"`
 	Position  *gitlabNotePosition `json:"position"`
 }
@@ -159,8 +159,10 @@ func normalizeComments(raw []gitlabNote) []domain.Comment {
 		staged = append(staged, issuekit.SourceComment{
 			ID:        strconv.FormatInt(n.ID, 10),
 			Author:    n.Author.Username,
+			AuthorID:  n.Author.Username,
 			Body:      n.Body,
 			CreatedAt: n.CreatedAt,
+			UpdatedAt: n.UpdatedAt,
 		})
 	}
 	return issuekit.NormalizeComments(staged)
