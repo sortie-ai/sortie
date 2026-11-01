@@ -1627,14 +1627,33 @@ func TestCommentIssue_Success(t *testing.T) {
 func TestCommentIssue_Error(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   domain.TrackerErrorKind
+	}{
+		{name: "404 maps to not found", status: http.StatusNotFound, want: domain.ErrTrackerNotFound},
+		{name: "201 with only a node_id maps to payload error", status: http.StatusCreated, body: `{"node_id":"IC_kwDOA1b2c4wAAAGF","body":"comment"}`, want: domain.ErrTrackerPayload},
+		{name: "201 with malformed JSON maps to payload error", status: http.StatusCreated, body: `{"id":`, want: domain.ErrTrackerPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body)) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
 
-	a := mustAdapter(t, validConfig(srv.URL))
-	_, err := a.CommentIssue(context.Background(), "999", "comment")
-	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+			a := mustAdapter(t, validConfig(srv.URL))
+			id, err := a.CommentIssue(context.Background(), "999", "comment")
+			assertTrackerErrorKind(t, err, tt.want)
+			if id != "" {
+				t.Errorf("CommentIssue identity = %q, want empty on error", id)
+			}
+		})
+	}
 }
 
 func TestSetMetrics_RecordsOperations(t *testing.T) {
