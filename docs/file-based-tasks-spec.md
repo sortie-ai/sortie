@@ -235,7 +235,7 @@ If `path` is missing or empty, the adapter constructor returns a `TrackerError` 
 
 ## 9. Adapter Operations
 
-The file adapter implements the five read operations of Sections 9.1 to 9.5 and the label writes of Section 9.6. Its state transitions and comments are kept in memory like the label writes, so the file stays unmodified. The file is re-read from disk on each operation call to support test scenarios that modify the fixture between operations.
+The file adapter implements the read operations of Sections 9.1 to 9.5 and the label writes of Section 9.6. Its state transitions and comments are kept in memory like the label writes, so the file stays unmodified. A comment that `CommentIssue` posts follows the file's comments of its issue in every later read and carries an `id` the adapter generates, which `CommentIssue` returns. The file is re-read from disk on each operation call to support test scenarios that modify the fixture between operations.
 
 ### 9.1 FetchCandidateIssues
 

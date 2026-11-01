@@ -39,7 +39,7 @@ func rebuildHoldLane(t *testing.T, routerHasTracker bool, entries []config.Notif
 		State:           state,
 		Logger:          discardLogger(),
 		TrackerAdapter:  tracker,
-		Router:          route.NewRouter(routerTracker, spyLookup(slack)),
+		Router:          route.NewRouter(routerTracker, nil, spyLookup(slack), nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,

@@ -5625,7 +5625,7 @@ func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore,
 		State:           state,
 		Logger:          discardLogger(),
 		TrackerAdapter:  tracker,
-		Router:          route.NewRouter(tracker, nil),
+		Router:          route.NewRouter(tracker, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -5641,7 +5641,7 @@ func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
-		Router:          route.NewRouter(tracker, nil),
+		Router:          route.NewRouter(tracker, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -5657,7 +5657,7 @@ func budgetOrchestratorWithMetrics(state *State, wm *stubWorkflowManager, store 
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
-		Router:          route.NewRouter(tracker, nil),
+		Router:          route.NewRouter(tracker, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -7746,7 +7746,7 @@ func drainTestOrchestrator(state *State, wm *stubWorkflowManager, store *stubSto
 		State:           state,
 		Logger:          logger,
 		TrackerAdapter:  tracker,
-		Router:          route.NewRouter(tracker, nil),
+		Router:          route.NewRouter(tracker, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store,
@@ -8496,8 +8496,10 @@ func (s *sweepThrottleTracker) FetchIssueComments(_ context.Context, _ string) (
 
 func (s *sweepThrottleTracker) TransitionIssue(_ context.Context, _, _ string) error { return nil }
 
-func (s *sweepThrottleTracker) CommentIssue(_ context.Context, _, _ string) error { return nil }
-func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error     { return nil }
+func (s *sweepThrottleTracker) CommentIssue(_ context.Context, _, _ string) (string, error) {
+	return testCommentID, nil
+}
+func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error { return nil }
 
 func (s *sweepThrottleTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
 
@@ -9717,7 +9719,7 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 		State:           state1,
 		Logger:          discardLogger(),
 		TrackerAdapter:  tracker1,
-		Router:          route.NewRouter(tracker1, nil),
+		Router:          route.NewRouter(tracker1, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store1,
@@ -9770,7 +9772,7 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 		State:           state2,
 		Logger:          logger,
 		TrackerAdapter:  tracker2,
-		Router:          route.NewRouter(tracker2, nil),
+		Router:          route.NewRouter(tracker2, nil, nil, nil),
 		AgentAdapter:    &mockAgentAdapter{},
 		WorkflowManager: wm,
 		Store:           store2,
@@ -11321,7 +11323,7 @@ func TestHandleTick_FreshDispatchIsGivenPullRequestComments(t *testing.T) {
 				State:            state,
 				Logger:           discardLogger(),
 				TrackerAdapter:   tracker,
-				Router:           route.NewRouter(tracker, nil),
+				Router:           route.NewRouter(tracker, nil, nil, nil),
 				AgentAdapter:     &mockAgentAdapter{},
 				WorkflowManager:  wm,
 				Store:            &stubStore{},

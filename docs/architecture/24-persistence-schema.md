@@ -348,6 +348,15 @@ One row per parked issue, holding current state rather than history. The row mov
 
 One row per issue whose current budget hold has been announced to at least one destination. A row records that the notice had a destination: a hold whose `budget.held` event reached none writes no row, and the issue is routed again on a later pass, so a destination subscribed afterward still receives the notice. The row is written before the delivery and survives a failed delivery. The table holds current state rather than history: the row is deleted when the hold clears, on the same evidence rule that prunes the in-memory announcement latch, or when every budget is disabled. An issue held by a ceiling and then closed, or otherwise never observed as a candidate again, never has its row deleted, so the row persists for the rest of the deployment's lifetime. `noticed_at` exists so an operator reading the database can align a row with the notice, which is the comment on the issue when the `tracker_comment` destination received it; no runtime decision reads it.
 
+**`posted_comments`**: the identity of each comment the `tracker_comment` destination posted, per issue
+
+| Column       | Type    | Notes                                                                 |
+| ------------ | ------- | --------------------------------------------------------------------- |
+| `issue_id`   | TEXT PK | Tracker-internal issue ID; the primary key is composite with `comment_id` |
+| `comment_id` | TEXT PK | The identity `comment_issue` returned                                 |
+
+One row per comment the `tracker_comment` destination posted, written after the post and before the delivery completes. A comment is listed on its issue from the moment the tracker creates it, and its row exists once its delivery returns, so a reader that waited for a delivery finds the row of that delivery's comment and a detached delivery gives a reader no such order. That destination is the only writer, and every comment Sortie posts passes through it. A pair written again changes nothing. Nothing deletes a row, because a comment stays on its issue when the issue closes or reopens. A post whose response was lost and a failed write leave no row. The table starts empty on upgrade, so a comment Sortie posted before the upgrade has none. The record is how Sortie tells its own comments from a person's among an issue's comments.
+
 **`usage_limit_holds`**: the new sessions a provider usage limit stops until it resets
 
 | Column          | Type    | Notes                                                                                   |

@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/github`: the design decisions behind it, the places GitHub's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-10-10
+Last updated: 2026-11-01
 
 ## Shape of the package
 
@@ -33,6 +33,8 @@ One consequence: the pull request payload under the current pin carries no merge
 **Issue types exist but only for organizations.** Personal repositories, and organizations that have not configured them, return nothing, and the field normalizes to empty. Do not build anything that assumes it is populated.
 
 **Issues are addressed by repository-scoped number, not by the global id.** Both the domain ID and the domain identifier are that number; the global id is never read. `DisplayID` is qualified to `owner/repo#N` so a bare number is never ambiguous across repositories, and the qualifier does not overwrite a value already present.
+
+**A comment's identity is its decimal `id`, never its `node_id`.** A comment carries a numeric `id` and a `node_id` in the create response and in every read. `CommentIssue` returns the decimal `id`, and every read reports the same value as the comment's identity, because Sortie recognizes its own comments by exact match with the identity it recorded when it posted them.
 
 **Mergeability is computed asynchronously.** GitHub recomputes it after a push, so a read taken too soon returns a value that maps to unknown. Callers treat unknown as a deferral condition and re-read on the next tick; it is not a failure and must not be turned into one.
 

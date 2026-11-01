@@ -919,7 +919,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		TrackerAdapter:                    br.trackerAdapter,
 		TrackerKind:                       br.cfg.Tracker.Kind,
 		TrackerProject:                    br.cfg.Tracker.Project,
-		Router:                            route.NewRouter(br.trackerAdapter, registry.Notifiers.Get),
+		Router:                            route.NewRouter(br.trackerAdapter, store, registry.Notifiers.Get, br.logger),
 		AgentAdapter:                      agentAdapter,
 		AgentAdapterByKind:                agentAdapterByKind,
 		WorkflowManager:                   br.mgr,

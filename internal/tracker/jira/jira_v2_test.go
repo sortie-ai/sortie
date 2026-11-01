@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -596,20 +597,36 @@ func TestCommentIssue_V2RawStringBody(t *testing.T) {
 		gotMethod string
 		gotPath   string
 		gotBody   []byte
+		requests  atomic.Int32
 	)
+	list := loadFixture(t, "comments_v2.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method == http.MethodGet {
+			w.Write(list) //nolint:errcheck // test helper
+			return
+		}
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		gotBody, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusCreated)
+		writeCommentCreated(w, "40002")
 	}))
 	defer srv.Close()
 
 	a := mustAdapter(t, v2Config(srv.URL))
 	const text = "h2. Heading\n\n*bold* body"
-	if err := a.CommentIssue(context.Background(), "SRV-1", text); err != nil {
+	id, err := a.CommentIssue(context.Background(), "SRV-1", text)
+	if err != nil {
 		t.Fatalf("CommentIssue (v2): %v", err)
 	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests during CommentIssue (v2) = %d, want 1", n)
+	}
+	comments, err := a.FetchIssueComments(context.Background(), "SRV-1")
+	if err != nil {
+		t.Fatalf("FetchIssueComments (v2): %v", err)
+	}
+	adaptertest.AssertPostedCommentListed(t, id, comments)
 
 	if gotMethod != "POST" {
 		t.Errorf("method = %q, want POST", gotMethod)

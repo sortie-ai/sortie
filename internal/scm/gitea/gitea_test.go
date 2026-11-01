@@ -1678,33 +1678,47 @@ func TestTransitionIssue(t *testing.T) {
 func TestCommentIssue(t *testing.T) {
 	t.Parallel()
 
-	t.Run("posts the markdown body verbatim and returns nil on 201", func(t *testing.T) {
+	t.Run("posts the markdown body verbatim and returns the created comment's identity", func(t *testing.T) {
 		t.Parallel()
 
 		const markdown = "## Status update\n\n- retried the failing step\n- **no repro** locally\n"
+		const commentsPath = "/api/v1/repos/" + testOwner + "/" + testRepo + "/issues/42/comments"
+		const created = `{"id":7312450,"user":{"login":"sortie-bot"},"body":"status update","created_at":"2026-08-04T12:00:00Z"}`
+		const listed = `[{"id":9001,"user":{"login":"alice"},"body":"Looks good.","created_at":"2026-01-15T10:00:00Z"},` + created + `]`
 
 		mux := newPreflightMux(t)
 		var gotBody struct {
 			Body string `json:"body"`
 		}
-		var calls atomic.Int32
-		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
-			calls.Add(1)
+		var requests atomic.Int32
+		mux.HandleFunc("POST "+commentsPath, func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
 			decodeRequestBody(t, r, &gotBody)
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(`{"id":1}`)) //nolint:errcheck // test helper
+			w.Write([]byte(created)) //nolint:errcheck // test helper
+		})
+		mux.HandleFunc("GET "+commentsPath, func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.Write([]byte(listed)) //nolint:errcheck // test helper
 		})
 		a := mustAdapter(t, mux)
 
-		if err := a.CommentIssue(context.Background(), "42", markdown); err != nil {
+		id, err := a.CommentIssue(context.Background(), "42", markdown)
+		if err != nil {
 			t.Fatalf("CommentIssue: %v", err)
+		}
+		if got := requests.Load(); got != 1 {
+			t.Errorf("request count during CommentIssue = %d, want 1", got)
 		}
 		if gotBody.Body != markdown {
 			t.Errorf("comment body = %q, want %q (verbatim, no conversion)", gotBody.Body, markdown)
 		}
-		if got := calls.Load(); got != 1 {
-			t.Errorf("call count = %d, want 1", got)
+
+		comments, err := a.FetchIssueComments(context.Background(), "42")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
 		}
+		adaptertest.AssertPostedCommentListed(t, id, comments)
 	})
 }
 
@@ -1719,6 +1733,7 @@ func TestWriteErrorMapping(t *testing.T) {
 	}{
 		{"403 forbidden maps to auth error", http.StatusForbidden, "error_403.json", domain.ErrTrackerAuth},
 		{"422 unprocessable maps to payload error", http.StatusUnprocessableEntity, "error_422.json", domain.ErrTrackerPayload},
+		{"201 without a comment id maps to payload error", http.StatusCreated, "comment_created_no_id.json", domain.ErrTrackerPayload},
 	}
 
 	for _, tt := range tests {
@@ -1732,8 +1747,11 @@ func TestWriteErrorMapping(t *testing.T) {
 			})
 			a := mustAdapter(t, mux)
 
-			err := a.CommentIssue(context.Background(), "42", "body")
+			id, err := a.CommentIssue(context.Background(), "42", "body")
 			assertTrackerErrorKind(t, err, tt.wantKind)
+			if id != "" {
+				t.Errorf("CommentIssue identity = %q, want empty on error", id)
+			}
 		})
 	}
 }

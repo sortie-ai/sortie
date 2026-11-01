@@ -204,9 +204,9 @@ func (s *reviewTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]d
 func (s *reviewTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error {
 	return nil
 }
-func (s *reviewTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
+func (s *reviewTrackerStub) CommentIssue(_ context.Context, _ string, _ string) (string, error) {
 	s.commentIssueCalls++
-	return nil
+	return testCommentID, nil
 }
 func (s *reviewTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	s.addLabelCalled++

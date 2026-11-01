@@ -243,10 +243,10 @@ func (s *ciTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]domai
 	return nil, nil
 }
 func (s *ciTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
-func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, text string) error {
+func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, text string) (string, error) {
 	s.commentIssueCalls++
 	s.lastComment = text
-	return s.commentIssueErr
+	return commentResult(s.commentIssueErr)
 }
 func (s *ciTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	s.addLabelCalled++
@@ -1309,14 +1309,14 @@ func (b *blockingCITracker) AddLabel(ctx context.Context, _ string, _ string) er
 }
 
 func (b *blockingCITracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
-func (b *blockingCITracker) CommentIssue(ctx context.Context, _ string, _ string) error {
+func (b *blockingCITracker) CommentIssue(ctx context.Context, _ string, _ string) (string, error) {
 	if b.commentGate != nil {
 		select {
 		case <-b.commentGate:
 		case <-ctx.Done():
 		}
 	}
-	return nil
+	return testCommentID, nil
 }
 
 // TestEscalateCIFailure_LabelTracksTrackerOps verifies that the AddLabel

@@ -692,22 +692,45 @@ func (a *LinearAdapter) TransitionIssue(ctx context.Context, issueID, targetStat
 	})
 }
 
-// CommentIssue posts text as a markdown comment on the issue. The body is sent
-// verbatim with no wrapping or escaping; issueID is passed verbatim.
+// CommentIssue posts text as a markdown comment on the issue and returns the
+// created comment's identity. The body is sent verbatim with no wrapping or
+// escaping; issueID is passed verbatim.
 //
 // The method performs no internal retry because commentCreate is not
 // idempotent and the orchestrator owns retry policy.
-func (a *LinearAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
-	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return a.postComment(ctx, issueID, text)
+func (a *LinearAdapter) CommentIssue(ctx context.Context, issueID, text string) (string, error) {
+	var commentID string
+	err := trackermetrics.Track(a.metrics, "comment", func() error {
+		id, err := a.postComment(ctx, issueID, text)
+		commentID = id
+		return err
 	})
+	if err != nil {
+		return "", err
+	}
+	return commentID, nil
 }
 
-func (a *LinearAdapter) postComment(ctx context.Context, issueID, body string) error {
-	return runMutation(ctx, a.client, a.log, queryCommentCreate, map[string]any{
+func (a *LinearAdapter) postComment(ctx context.Context, issueID, body string) (string, error) {
+	var commentID string
+	decode := func(raw []byte) ([]graphQLError, bool, error) {
+		errs, success, comment, err := decodeCommentCreate(raw)
+		commentID = comment
+		return errs, success, err
+	}
+	if err := runMutation(ctx, a.client, a.log, queryCommentCreate, map[string]any{
 		"issueId": issueID,
 		"body":    body,
-	}, decodeCommentCreateSuccess)
+	}, decode); err != nil {
+		return "", err
+	}
+	if commentID == "" {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "linear graphql: commentCreate reported success but returned no comment id",
+		}
+	}
+	return commentID, nil
 }
 
 // AddLabel attaches the named label to the issue, creating the label
@@ -1016,13 +1039,17 @@ func (a *LinearAdapter) createLabel(ctx context.Context, teamID, name string) (s
 	return labelID, nil
 }
 
-// decodeCommentCreateSuccess decodes a commentCreate mutation response.
-func decodeCommentCreateSuccess(body []byte) ([]graphQLError, bool, error) {
+// decodeCommentCreate decodes a commentCreate mutation response and returns the
+// created comment's id, empty when the payload carries no comment.
+func decodeCommentCreate(body []byte) (errs []graphQLError, success bool, commentID string, err error) {
 	var resp graphQLResponse[commentCreateData]
 	if err := unmarshal(body, &resp); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
-	return resp.Errors, resp.Data.CommentCreate.Success, nil
+	if c := resp.Data.CommentCreate.Comment; c != nil {
+		commentID = c.ID
+	}
+	return resp.Errors, resp.Data.CommentCreate.Success, commentID, nil
 }
 
 // isRejection reports whether err is the tracker refusing a write as not found

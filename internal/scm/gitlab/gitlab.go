@@ -1125,7 +1125,8 @@ func (a *GitLabAdapter) setClosed(path string) func(ctx context.Context, closed 
 	}
 }
 
-// CommentIssue posts text verbatim as a new issue note. No Markdown
+// CommentIssue posts text verbatim as a new issue note and returns the
+// created note's identity, the decimal form of its numeric id. No Markdown
 // conversion, no escaping, and no truncation are applied. issueID is
 // guarded through [parseIID] before any request; a rejected value or a
 // missing iid returns [domain.ErrTrackerNotFound].
@@ -1137,16 +1138,23 @@ func (a *GitLabAdapter) setClosed(path string) func(ctx context.Context, closed 
 // success. Whenever GitLab executed one or more quick actions, whether or
 // not a note was also created, the executed command keys are logged at
 // WARN; the note text itself is never logged.
-func (a *GitLabAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
-	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return a.postComment(ctx, issueID, text)
+func (a *GitLabAdapter) CommentIssue(ctx context.Context, issueID, text string) (string, error) {
+	var commentID string
+	err := trackermetrics.Track(a.metrics, "comment", func() error {
+		var postErr error
+		commentID, postErr = a.postComment(ctx, issueID, text)
+		return postErr
 	})
+	if err != nil {
+		return "", err
+	}
+	return commentID, nil
 }
 
-func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) error {
+func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) (string, error) {
 	n, ok := parseIID(issueID)
 	if !ok {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("issue not found: %s", issueID),
 		}
@@ -1155,7 +1163,7 @@ func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) e
 
 	payload, err := json.Marshal(map[string]string{"body": body})
 	if err != nil {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to marshal comment payload",
 			Err:     err,
@@ -1164,12 +1172,12 @@ func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) e
 
 	respBody, err := a.client.Send(ctx, http.MethodPost, path, bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var created gitlabNoteCreated
 	if err := json.Unmarshal(respBody, &created); err != nil {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to parse note-creation response",
 			Err:     err,
@@ -1188,12 +1196,12 @@ func (a *GitLabAdapter) postComment(ctx context.Context, issueID, body string) e
 	}
 
 	if created.ID == nil {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("gitlab created no note for issue %s: the comment body was consumed as quick actions", issueID),
 		}
 	}
-	return nil
+	return strconv.FormatInt(*created.ID, 10), nil
 }
 
 // AddLabel attaches label to the issue, resolving its canonical stored

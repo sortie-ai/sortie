@@ -1998,32 +1998,46 @@ func TestTransitionIssue(t *testing.T) {
 func TestCommentIssue(t *testing.T) {
 	t.Parallel()
 
-	t.Run("posts the note verbatim including newlines", func(t *testing.T) {
+	t.Run("posts the note verbatim including newlines and returns the created note's identity", func(t *testing.T) {
 		t.Parallel()
 
 		const text = "Automated check failed.\nSee the CI log for detail."
 
+		created := loadFixture(t, "note_created.json")
+		listed := append(append([]byte("["), created...), ']')
+		notesPath := "/api/v4/projects/" + testEscapedProject + "/issues/1/notes"
 		s := newPreflightServer(t)
 		var postBody []byte
-		var postCalls atomic.Int32
-		s.handleMethod(http.MethodPost, "/api/v4/projects/"+testEscapedProject+"/issues/1/notes", func(w http.ResponseWriter, r *http.Request) {
-			postCalls.Add(1)
+		var requests atomic.Int32
+		s.handleMethod(http.MethodPost, notesPath, func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
 			postBody = readRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
-			w.Write(loadFixture(t, "note_created.json")) //nolint:errcheck // test helper
+			w.Write(created) //nolint:errcheck // test helper
+		})
+		s.handle(notesPath, func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.Write(listed) //nolint:errcheck // test helper
 		})
 		a := mustAdapter(t, s)
 
-		if err := a.CommentIssue(context.Background(), "1", text); err != nil {
+		id, err := a.CommentIssue(context.Background(), "1", text)
+		if err != nil {
 			t.Fatalf("CommentIssue: %v", err)
 		}
-		if got := postCalls.Load(); got != 1 {
-			t.Errorf("POST call count = %d, want 1", got)
+		if got := requests.Load(); got != 1 {
+			t.Errorf("request count during CommentIssue = %d, want 1", got)
 		}
 		want := `{"body":` + strconv.Quote(text) + `}`
 		if string(postBody) != want {
 			t.Errorf("POST body = %s, want %s (text must pass through byte-identical, including newlines)", postBody, want)
 		}
+
+		comments, err := a.FetchIssueComments(context.Background(), "1")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		adaptertest.AssertPostedCommentListed(t, id, comments)
 	})
 
 	t.Run("a 2xx that created no note reports ErrTrackerPayload", func(t *testing.T) {
@@ -2036,7 +2050,7 @@ func TestCommentIssue(t *testing.T) {
 		})
 		a := mustAdapter(t, s)
 
-		err := a.CommentIssue(context.Background(), "2", "/close")
+		_, err := a.CommentIssue(context.Background(), "2", "/close")
 		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 	})
 
@@ -2053,7 +2067,7 @@ func TestCommentIssue(t *testing.T) {
 		var buf bytes.Buffer
 		a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-		if err := a.CommentIssue(context.Background(), "3", "/close\nSome text"); err != nil {
+		if _, err := a.CommentIssue(context.Background(), "3", "/close\nSome text"); err != nil {
 			t.Fatalf("CommentIssue: %v", err)
 		}
 		output := buf.String()
@@ -2608,7 +2622,7 @@ func TestWriteIdentifierGuard(t *testing.T) {
 			err := a.TransitionIssue(context.Background(), raw, "done")
 			assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
-			err = a.CommentIssue(context.Background(), raw, "text")
+			_, err = a.CommentIssue(context.Background(), raw, "text")
 			assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
 			err = a.AddLabel(context.Background(), raw, "needs-human")

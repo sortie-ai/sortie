@@ -85,8 +85,8 @@ func (r *goldenRecorder) setFailing(failing bool) {
 	r.failing = failing
 }
 
-func (r *goldenRecorder) CommentIssue(_ context.Context, issueID, text string) error {
-	return r.record("comment", issueID, text)
+func (r *goldenRecorder) CommentIssue(_ context.Context, issueID, text string) (string, error) {
+	return commentResult(r.record("comment", issueID, text))
 }
 
 func (r *goldenRecorder) AddLabel(_ context.Context, issueID, label string) error {
@@ -165,7 +165,7 @@ func goldenWiring(t *testing.T, cfg config.ServiceConfig, rec *goldenRecorder) g
 		t.Fatalf("building reaction configuration: %v", err)
 	}
 
-	router := route.NewRouter(rec, nil)
+	router := route.NewRouter(rec, nil, nil, nil)
 	err = router.Update(route.Inputs{
 		Comments:           cfg.Tracker.Comments,
 		CommentEscalations: goldenCommentEscalations(cfg, reconcile),

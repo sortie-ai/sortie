@@ -5416,7 +5416,7 @@ func (m *commentAwareMetrics) IncTrackerComments(lifecycle, result string) {
 }
 
 func routerWithComments(tracker domain.TrackerAdapter, comments config.TrackerCommentsConfig) *route.Router {
-	router := route.NewRouter(tracker, nil)
+	router := route.NewRouter(tracker, nil, nil, nil)
 	if err := router.Update(route.Inputs{Comments: comments}); err != nil {
 		panic(err)
 	}

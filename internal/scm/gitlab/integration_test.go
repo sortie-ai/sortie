@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -773,7 +774,8 @@ func TestIntegration_CommentIssue(t *testing.T) {
 	candidate := firstCandidate(t, ctx, adapter)
 
 	body := "sortie write-path integration test comment at " + time.Now().UTC().Format(time.RFC3339)
-	if err := adapter.CommentIssue(ctx, candidate.ID, body); err != nil {
+	id, err := adapter.CommentIssue(ctx, candidate.ID, body)
+	if err != nil {
 		t.Fatalf("CommentIssue(%s): %v", candidate.Identifier, err)
 	}
 
@@ -781,9 +783,7 @@ func TestIntegration_CommentIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssueComments(%s): %v", candidate.ID, err)
 	}
-	if !slices.ContainsFunc(comments, func(c domain.Comment) bool { return c.Body == body }) {
-		t.Errorf("FetchIssueComments(%s) does not contain the posted comment %q", candidate.ID, body)
-	}
+	adaptertest.AssertPostedCommentListed(t, id, comments)
 }
 
 func TestIntegration_AddLabel(t *testing.T) {

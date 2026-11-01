@@ -739,8 +739,8 @@ func (s *recoveryTrackerStub) FetchIssueComments(_ context.Context, _ string) ([
 func (s *recoveryTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error {
 	return nil
 }
-func (s *recoveryTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
-	return nil
+func (s *recoveryTrackerStub) CommentIssue(_ context.Context, _ string, _ string) (string, error) {
+	return testCommentID, nil
 }
 func (s *recoveryTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	return nil

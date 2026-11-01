@@ -131,19 +131,27 @@ type TrackerAdapter interface {
 	// The text parameter is plain text; adapters convert to their native
 	// format internally (e.g. ADF wrapping for Jira).
 	//
-	// Returns nil on success. Returns a [*TrackerError] on tracker failure:
+	// On success it returns the created comment's identity and a nil
+	// error. The identity is non-empty and equals the [Comment.ID] that
+	// [TrackerAdapter.FetchIssueComments] and [TrackerAdapter.FetchIssueByID]
+	// report for that comment. It comes from the response of the one create
+	// request the call sends; the call sends no other request (no read-back,
+	// no search).
+	//
+	// Returns an empty commentID and a [*TrackerError] on tracker failure:
 	//   - [ErrTrackerTransport]: network or server failure.
 	//   - [ErrTrackerAuth]: insufficient permissions.
 	//   - [ErrTrackerAPI]: non-success response (rate limit, unexpected status).
 	//   - [ErrTrackerNotFound]: the issue does not exist.
-	//   - [ErrTrackerPayload]: malformed request or response.
+	//   - [ErrTrackerPayload]: malformed request or response, including a
+	//     successful create response that does not carry the identity.
 	//
 	// When ctx is canceled or its deadline is exceeded, implementations
 	// may return ctx.Err() directly (e.g. [context.Canceled] or
 	// [context.DeadlineExceeded]) instead of a [*TrackerError].
 	//
 	// All errors are non-fatal; the orchestrator logs WARN and continues.
-	CommentIssue(ctx context.Context, issueID string, text string) error
+	CommentIssue(ctx context.Context, issueID string, text string) (commentID string, err error)
 
 	// AddLabel adds a label to the specified issue and removes no other
 	// label. A tracker that models a label group as single-select may

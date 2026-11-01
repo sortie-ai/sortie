@@ -3,7 +3,8 @@
 // and the deprecated tracker comment settings into one subscription
 // table, owns the notifier destinations the main process builds, and
 // wraps the tracker adapter as the built-in tracker_comment destination,
-// which posts the public rendering of an event.
+// which posts the public rendering of an event and records the identity
+// of the comment it created.
 //
 // The package registers no notifier kind and imports no notifier kind
 // package: the caller supplies a [NotifierLookup], so the orchestrator
@@ -17,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"sync"
@@ -27,6 +29,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// PostedCommentRecorder stores the identity of a comment posted on an issue.
+type PostedCommentRecorder interface {
+	AddPostedComment(ctx context.Context, issueID, commentID string) error
+}
 
 // NotifierLookup resolves a notifications kind to its constructor.
 type NotifierLookup func(kind string) (registry.NotifierConstructor, error)
@@ -76,16 +83,24 @@ type snapshot struct {
 // Update must be called from a single goroutine.
 type Router struct {
 	tracker domain.TrackerAdapter
+	posted  PostedCommentRecorder
 	lookup  NotifierLookup
+	logger  *slog.Logger
 	source  string
 	state   atomic.Pointer[snapshot]
 }
 
 // NewRouter returns a Router with empty inputs installed. A nil tracker
-// means no tracker_comment destination exists. The host name is read
-// once and stamps every event that carries no source.
-func NewRouter(tracker domain.TrackerAdapter, lookup NotifierLookup) *Router {
-	r := &Router{tracker: tracker, lookup: lookup}
+// means no tracker_comment destination exists. The tracker_comment
+// destination records the identity of each comment it posts through posted;
+// a nil posted records nothing. A nil logger falls back to
+// [slog.Default]. The host name is read once and stamps every event that
+// carries no source.
+func NewRouter(tracker domain.TrackerAdapter, posted PostedCommentRecorder, lookup NotifierLookup, logger *slog.Logger) *Router {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	r := &Router{tracker: tracker, posted: posted, lookup: lookup, logger: logger}
 	if host, err := os.Hostname(); err == nil {
 		r.source = host
 	}
@@ -179,7 +194,7 @@ func (r *Router) Route(n domain.Notification) Delivery {
 		targets = append(targets, target{
 			destination: domain.TrackerCommentKind,
 			kind:        domain.TrackerCommentKind,
-			notifier:    trackerComment{adapter: r.tracker},
+			notifier:    trackerComment{adapter: r.tracker, posted: r.posted, logger: r.logger},
 		})
 	}
 	for i, destination := range snap.destinations {
