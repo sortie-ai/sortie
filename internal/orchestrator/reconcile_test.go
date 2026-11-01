@@ -258,7 +258,7 @@ func (m *mockReconcileTracker) TransitionIssue(context.Context, string, string) 
 	panic("TransitionIssue must not be called by ReconcileRunningIssues")
 }
 
-func (m *mockReconcileTracker) CommentIssue(context.Context, string, string) error {
+func (m *mockReconcileTracker) CommentIssue(context.Context, string, string) (string, error) {
 	panic("CommentIssue must not be called by ReconcileRunningIssues")
 }
 
@@ -317,7 +317,7 @@ func (s *sweepTracker) TransitionIssue(context.Context, string, string) error {
 	panic("TransitionIssue must not be called by SweepWorkspaces")
 }
 
-func (s *sweepTracker) CommentIssue(context.Context, string, string) error {
+func (s *sweepTracker) CommentIssue(context.Context, string, string) (string, error) {
 	panic("CommentIssue must not be called by SweepWorkspaces")
 }
 

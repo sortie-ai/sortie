@@ -10,6 +10,7 @@ package file
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,8 +35,8 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 
-// FileAdapter reads issues from a JSON file and implements all seven
-// [domain.TrackerAdapter] operations. The file is re-read on each
+// FileAdapter reads issues from a JSON file and implements
+// [domain.TrackerAdapter]. The file is re-read on each
 // call, so a caller can add or change issues while Sortie runs. State
 // mutations via [FileAdapter.TransitionIssue] are stored in an
 // in-memory override map layered on top of disk reads. Overrides are
@@ -371,18 +372,27 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 // CommentIssue records a comment for the given issue in the adapter's
 // in-memory comment store. Subsequent [FileAdapter.FetchIssueByID] and
 // [FileAdapter.FetchIssueComments] calls include these comments after
-// any comments present in the fixture file. Returns a [*domain.TrackerError]
-// with Kind [domain.ErrTrackerNotFound] if the issue does not exist.
-func (a *FileAdapter) CommentIssue(_ context.Context, issueID string, text string) error {
-	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return a.postComment(issueID, text)
+// any comments present in the fixture file. Returns the identity the adapter
+// generated for the comment, which those calls report as its ID. Returns a
+// [*domain.TrackerError] with Kind [domain.ErrTrackerNotFound] if the issue
+// does not exist.
+func (a *FileAdapter) CommentIssue(_ context.Context, issueID string, text string) (string, error) {
+	var commentID string
+	err := trackermetrics.Track(a.metrics, "comment", func() error {
+		var postErr error
+		commentID, postErr = a.postComment(issueID, text)
+		return postErr
 	})
+	if err != nil {
+		return "", err
+	}
+	return commentID, nil
 }
 
-func (a *FileAdapter) postComment(issueID, body string) error {
+func (a *FileAdapter) postComment(issueID, body string) (string, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	found := false
@@ -393,19 +403,23 @@ func (a *FileAdapter) postComment(issueID, body string) error {
 		}
 	}
 	if !found {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("issue not found: %s", issueID),
 		}
 	}
 
+	// Random rather than sequential so the ID cannot equal a fixture comment's
+	// free-text id.
+	commentID := rand.Text()
 	a.mu.Lock()
 	a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
+		ID:        commentID,
 		Body:      body,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	a.mu.Unlock()
-	return nil
+	return commentID, nil
 }
 
 // SetMetrics configures the metrics recorder for tracker API call

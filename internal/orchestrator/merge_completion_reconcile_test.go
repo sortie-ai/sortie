@@ -104,10 +104,10 @@ func (f *mgcTrackerFake) TransitionIssue(_ context.Context, issueID, target stri
 	return f.transitionErr
 }
 
-func (f *mgcTrackerFake) CommentIssue(ctx context.Context, issueID, text string) error {
+func (f *mgcTrackerFake) CommentIssue(ctx context.Context, issueID, text string) (string, error) {
 	f.commentCalls = append(f.commentCalls, mgcCommentCall{issueID: issueID, text: text})
 	f.commentCtx = ctx
-	return f.commentErr
+	return commentResult(f.commentErr)
 }
 
 func (f *mgcTrackerFake) AddLabel(ctx context.Context, issueID, label string) error {

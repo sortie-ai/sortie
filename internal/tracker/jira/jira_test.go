@@ -1780,12 +1780,12 @@ func TestJiraAdapterMetrics(t *testing.T) {
 	t.Run("CommentIssue/success", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusCreated)
+			writeCommentCreated(w, "20001")
 		}))
 		defer srv.Close()
 
 		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
-		if err := a.CommentIssue(ctx, "PROJ-5", "test"); err != nil {
+		if _, err := a.CommentIssue(ctx, "PROJ-5", "test"); err != nil {
 			t.Fatalf("CommentIssue: %v", err)
 		}
 		requireSingleCall(t, spy, "comment", "success")
@@ -1799,7 +1799,7 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		defer srv.Close()
 
 		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
-		err := a.CommentIssue(ctx, "PROJ-5", "test")
+		_, err := a.CommentIssue(ctx, "PROJ-5", "test")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -1874,19 +1874,35 @@ func TestCommentIssue_Success(t *testing.T) {
 		receivedMethod string
 		receivedPath   string
 		receivedBody   []byte
+		requests       atomic.Int32
 	)
+	list := loadFixture(t, "comments.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method == http.MethodGet {
+			w.Write(list) //nolint:errcheck // test helper
+			return
+		}
 		receivedMethod = r.Method
 		receivedPath = r.URL.Path
 		receivedBody, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusCreated)
+		writeCommentCreated(w, "20002")
 	}))
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	if err := a.CommentIssue(context.Background(), "PROJ-123", "Hello\nWorld"); err != nil {
+	id, err := a.CommentIssue(context.Background(), "PROJ-123", "Hello\nWorld")
+	if err != nil {
 		t.Fatalf("CommentIssue() unexpected error: %v", err)
 	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests during CommentIssue() = %d, want 1", n)
+	}
+	comments, err := a.FetchIssueComments(context.Background(), "PROJ-123")
+	if err != nil {
+		t.Fatalf("FetchIssueComments: %v", err)
+	}
+	adaptertest.AssertPostedCommentListed(t, id, comments)
 
 	wantPath := "/rest/api/3/issue/PROJ-123/comment"
 	if receivedMethod != "POST" {
@@ -1918,18 +1934,23 @@ func TestCommentIssue_Success(t *testing.T) {
 	}
 }
 
+func writeCommentCreated(w http.ResponseWriter, id string) {
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintf(w, `{"id":%q}`, id) //nolint:errcheck // test helper
+}
+
 func TestCommentIssue_IDURLEscaped(t *testing.T) {
 	t.Parallel()
 
 	var receivedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedPath = r.URL.EscapedPath()
-		w.WriteHeader(http.StatusCreated)
+		writeCommentCreated(w, "20001")
 	}))
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	if err := a.CommentIssue(context.Background(), "PROJ 123", "text"); err != nil {
+	if _, err := a.CommentIssue(context.Background(), "PROJ 123", "text"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := "/rest/api/3/issue/PROJ%20123/comment"
@@ -1944,11 +1965,14 @@ func TestCommentIssue_ErrorCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		status   int
+		body     string
 		wantKind domain.TrackerErrorKind
 	}{
-		{"not_found", http.StatusNotFound, domain.ErrTrackerNotFound},
-		{"unauthorized", http.StatusUnauthorized, domain.ErrTrackerAuth},
-		{"server_error", http.StatusInternalServerError, domain.ErrTrackerTransport},
+		{"not_found", http.StatusNotFound, "", domain.ErrTrackerNotFound},
+		{"unauthorized", http.StatusUnauthorized, "", domain.ErrTrackerAuth},
+		{"server_error", http.StatusInternalServerError, "", domain.ErrTrackerTransport},
+		{"created_with_empty_id", http.StatusCreated, `{"id":""}`, domain.ErrTrackerPayload},
+		{"created_with_empty_body", http.StatusCreated, "", domain.ErrTrackerPayload},
 	}
 
 	for _, tt := range tests {
@@ -1957,12 +1981,17 @@ func TestCommentIssue_ErrorCases(t *testing.T) {
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body)) //nolint:errcheck // test helper
 			}))
 			defer srv.Close()
 
 			a := mustAdapter(t, validConfig(srv.URL))
-			err := a.CommentIssue(context.Background(), "PROJ-123", "text")
+			id, err := a.CommentIssue(context.Background(), "PROJ-123", "text")
+
 			assertTrackerErrorKind(t, err, tt.wantKind)
+			if id != "" {
+				t.Errorf("CommentIssue() id = %q on error, want empty", id)
+			}
 		})
 	}
 }

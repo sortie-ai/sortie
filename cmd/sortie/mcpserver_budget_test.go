@@ -95,8 +95,10 @@ func (tr *budgetE2ETracker) FetchIssueComments(_ context.Context, _ string) ([]d
 }
 
 func (tr *budgetE2ETracker) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
-func (tr *budgetE2ETracker) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
-func (tr *budgetE2ETracker) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
+func (tr *budgetE2ETracker) CommentIssue(_ context.Context, _ string, _ string) (string, error) {
+	return "comment-1", nil
+}
+func (tr *budgetE2ETracker) AddLabel(_ context.Context, _ string, _ string) error { return nil }
 
 func (tr *budgetE2ETracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
 

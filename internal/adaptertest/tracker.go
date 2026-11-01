@@ -61,6 +61,31 @@ func AssertCommentsAscending(t *testing.T, comments []domain.Comment) {
 	}
 }
 
+// AssertPostedCommentListed pins the [domain.TrackerAdapter.CommentIssue]
+// clause that a nil-error call returns a non-empty identity equal to the
+// Comment.ID the tracker's read path reports for the created comment.
+// commentID is the value CommentIssue returned and comments is the list
+// fetched afterwards; exactly one entry must carry that ID.
+func AssertPostedCommentListed(t *testing.T, commentID string, comments []domain.Comment) {
+	t.Helper()
+
+	ids := make([]string, len(comments))
+	n := 0
+	for i, c := range comments {
+		ids[i] = c.ID
+		if c.ID == commentID {
+			n++
+		}
+	}
+	if commentID == "" {
+		t.Errorf("AssertPostedCommentListed: CommentIssue returned an empty identity, want non-empty (listed IDs %q)", ids)
+		return
+	}
+	if n != 1 {
+		t.Errorf("AssertPostedCommentListed: identity %q appears %d times among listed IDs %q, want exactly 1", commentID, n, ids)
+	}
+}
+
 // AssertEmptyNonNil pins the clause that an operation returning no
 // results MUST return a non-nil empty slice rather than nil, so a
 // template or caller iterating the result never distinguishes "no

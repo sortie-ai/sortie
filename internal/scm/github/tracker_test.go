@@ -1584,25 +1584,43 @@ func TestTransitionIssue_WriteOrder(t *testing.T) {
 func TestCommentIssue_Success(t *testing.T) {
 	t.Parallel()
 
+	const created = `{"id":1234567890123,"node_id":"IC_kwDOA1b2c4wAAAGF","user":{"login":"sortie-bot"},"body":"Hello from Sortie!","created_at":"2026-08-04T12:00:00Z"}`
+	const listed = `[{"id":4001,"node_id":"IC_kwDOA1b2c4wAAAAB","user":{"login":"alice"},"body":"Looks good.","created_at":"2026-01-15T10:00:00Z"},` + created + `]`
+
 	var gotBody map[string]string
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("method = %q, want POST", r.Method)
+		requests.Add(1)
+		if r.Method == http.MethodGet {
+			w.Write([]byte(listed)) //nolint:errcheck // test helper
+			return
 		}
 		body, _ := io.ReadAll(r.Body)
 		json.Unmarshal(body, &gotBody) //nolint:errcheck // test helper
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"id":12345}`)) //nolint:errcheck // test helper
+		w.Write([]byte(created)) //nolint:errcheck // test helper
 	}))
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	if err := a.CommentIssue(context.Background(), "42", "Hello from Sortie!"); err != nil {
+	id, err := a.CommentIssue(context.Background(), "42", "Hello from Sortie!")
+	if err != nil {
 		t.Fatalf("CommentIssue: %v", err)
 	}
-
+	if got := requests.Load(); got != 1 {
+		t.Errorf("request count during CommentIssue = %d, want 1", got)
+	}
 	if gotBody["body"] != "Hello from Sortie!" {
 		t.Errorf("request body.body = %q, want %q", gotBody["body"], "Hello from Sortie!")
+	}
+
+	comments, err := a.FetchIssueComments(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("FetchIssueComments: %v", err)
+	}
+	adaptertest.AssertPostedCommentListed(t, id, comments)
+	if id != "1234567890123" {
+		t.Errorf("CommentIssue identity = %q, want the decimal id %q", id, "1234567890123")
 	}
 }
 
@@ -1615,7 +1633,7 @@ func TestCommentIssue_Error(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	err := a.CommentIssue(context.Background(), "999", "comment")
+	_, err := a.CommentIssue(context.Background(), "999", "comment")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
 

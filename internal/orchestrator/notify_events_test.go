@@ -89,11 +89,11 @@ type opsTracker struct {
 	labelErr   error
 }
 
-func (o *opsTracker) CommentIssue(_ context.Context, _, text string) error {
+func (o *opsTracker) CommentIssue(_ context.Context, _, text string) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.comments = append(o.comments, text)
-	return o.commentErr
+	return commentResult(o.commentErr)
 }
 
 func (o *opsTracker) AddLabel(_ context.Context, _, label string) error {
@@ -136,7 +136,7 @@ func (c *escalationCounters) IncAutoMergeReactions(result string)   { c.record("
 func mustRouter(t *testing.T, tracker domain.TrackerAdapter, lookup route.NotifierLookup, in route.Inputs) *route.Router {
 	t.Helper()
 
-	router := route.NewRouter(tracker, lookup)
+	router := route.NewRouter(tracker, nil, lookup, nil)
 	if err := router.Update(in); err != nil {
 		t.Fatalf("Router.Update: %v", err)
 	}
@@ -500,7 +500,7 @@ func TestNotifyEvents_ReloadKeepsHeldEscalationPosting(t *testing.T) {
 
 	ops := &opsTracker{mockTrackerAdapter: &mockTrackerAdapter{}}
 	o := &Orchestrator{
-		router:       route.NewRouter(ops, nil),
+		router:       route.NewRouter(ops, nil, nil, nil),
 		logger:       discardLogger(),
 		reviewConfig: ReviewReactionConfig{Escalation: "comment"},
 	}

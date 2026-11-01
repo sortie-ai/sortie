@@ -1308,19 +1308,30 @@ func TestTransitionIssue(t *testing.T) {
 func TestCommentIssue(t *testing.T) {
 	t.Parallel()
 
-	t.Run("sends the markdown body verbatim and returns nil", func(t *testing.T) {
+	t.Run("sends the markdown body verbatim and returns the listed identity", func(t *testing.T) {
 		t.Parallel()
 
 		f := newFakeClient()
 		seedPreflight(f, t)
 		f.queueBody("CommentCreate", loadFixture(t, "comment_create_success.json"))
+		f.queueBody("query IssueComments", loadFixture(t, "comments_single_page.json"))
 
 		adapter := newTestAdapter(t, f)
 
 		body := "CI failed on `make test`.\n\n- step: build\n- see **logs** for details"
-		if err := adapter.CommentIssue(context.Background(), "SOR-5", body); err != nil {
+		before := len(f.calls)
+		id, err := adapter.CommentIssue(context.Background(), "SOR-5", body)
+		if err != nil {
 			t.Fatalf("CommentIssue: %v", err)
 		}
+		if n := len(f.calls) - before; n != 1 {
+			t.Errorf("requests during CommentIssue = %d, want 1", n)
+		}
+		comments, err := adapter.FetchIssueComments(context.Background(), "SOR-5")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		adaptertest.AssertPostedCommentListed(t, id, comments)
 
 		calls := f.callsFor("CommentCreate")
 		if len(calls) != 1 {
@@ -1343,7 +1354,7 @@ func TestCommentIssue(t *testing.T) {
 
 		adapter := newTestAdapter(t, f)
 
-		err := adapter.CommentIssue(context.Background(), "SOR-5", "body")
+		_, err := adapter.CommentIssue(context.Background(), "SOR-5", "body")
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})
@@ -1939,29 +1950,32 @@ func TestCreateLabel(t *testing.T) {
 	})
 }
 
-func TestDecodeCommentCreateSuccess(t *testing.T) {
+func TestDecodeCommentCreate(t *testing.T) {
 	t.Parallel()
 
 	t.Run("malformed body is a payload error", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := decodeCommentCreateSuccess([]byte("{not json"))
+		_, _, _, err := decodeCommentCreate([]byte("{not json"))
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 	})
 
-	t.Run("well-formed success body reports success with no error", func(t *testing.T) {
+	t.Run("well-formed success body reports success and the comment id", func(t *testing.T) {
 		t.Parallel()
 
-		errs, success, err := decodeCommentCreateSuccess(loadFixture(t, "comment_create_success.json"))
+		errs, success, id, err := decodeCommentCreate(loadFixture(t, "comment_create_success.json"))
 		if err != nil {
-			t.Fatalf("decodeCommentCreateSuccess: %v", err)
+			t.Fatalf("decodeCommentCreate: %v", err)
 		}
 		if !success {
-			t.Errorf("decodeCommentCreateSuccess success = %v, want true", success)
+			t.Errorf("decodeCommentCreate success = %v, want true", success)
 		}
 		if len(errs) != 0 {
-			t.Errorf("decodeCommentCreateSuccess errs = %v, want empty", errs)
+			t.Errorf("decodeCommentCreate errs = %v, want empty", errs)
+		}
+		if id != "comment-b" {
+			t.Errorf("decodeCommentCreate id = %q, want %q", id, "comment-b")
 		}
 	})
 }
@@ -2004,6 +2018,7 @@ func TestWriteErrorMapping(t *testing.T) {
 		{"invalid input maps to payload", "mutation_invalid_input.json", domain.ErrTrackerPayload},
 		{"ratelimited maps to API", "mutation_ratelimited.json", domain.ErrTrackerAPI},
 		{"success false with no errors maps to API", "mutation_success_false.json", domain.ErrTrackerAPI},
+		{"success true without a comment maps to payload", "comment_create_no_comment.json", domain.ErrTrackerPayload},
 	}
 
 	for _, tt := range tests {
@@ -2011,13 +2026,16 @@ func TestWriteErrorMapping(t *testing.T) {
 			t.Parallel()
 
 			f := newFakeClient()
+			seedPreflight(f, t)
 			f.queueBody("CommentCreate", loadFixture(t, tt.fixture))
+			adapter := newTestAdapter(t, f)
 
-			err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
-				queryCommentCreate, map[string]any{"issueId": "SOR-5", "body": "x"},
-				decodeCommentCreateSuccess)
+			id, err := adapter.CommentIssue(context.Background(), "SOR-5", "x")
 
 			assertTrackerErrorKind(t, err, tt.wantKind)
+			if id != "" {
+				t.Errorf("CommentIssue id = %q on error, want empty", id)
+			}
 		})
 	}
 }

@@ -778,28 +778,54 @@ func (a *GitHubAdapter) setIssueClosed(ctx context.Context, issuePath string, cl
 	return err
 }
 
-// CommentIssue posts a Markdown comment on the specified issue.
+// CommentIssue posts a Markdown comment on the specified issue and returns
+// the created comment's identity, the decimal form of its numeric id.
 // GitHub natively accepts Markdown, so no format conversion is needed.
-func (a *GitHubAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
-	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return a.postComment(ctx, issueID, text)
+func (a *GitHubAdapter) CommentIssue(ctx context.Context, issueID string, text string) (string, error) {
+	var commentID string
+	err := trackermetrics.Track(a.metrics, "comment", func() error {
+		var postErr error
+		commentID, postErr = a.postComment(ctx, issueID, text)
+		return postErr
 	})
+	if err != nil {
+		return "", err
+	}
+	return commentID, nil
 }
 
-func (a *GitHubAdapter) postComment(ctx context.Context, issueID, body string) error {
+func (a *GitHubAdapter) postComment(ctx context.Context, issueID, body string) (string, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
 
 	payload, err := json.Marshal(map[string]string{"body": body})
 	if err != nil {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to marshal comment payload",
 			Err:     err,
 		}
 	}
 
-	_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-	return err
+	respBody, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+
+	var created githubComment
+	if err := json.Unmarshal(respBody, &created); err != nil {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse comment creation response",
+			Err:     err,
+		}
+	}
+	if created.ID == 0 {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "comment creation response carries no id",
+		}
+	}
+	return strconv.FormatInt(created.ID, 10), nil
 }
 
 // SetMetrics configures the metrics recorder for tracker API call

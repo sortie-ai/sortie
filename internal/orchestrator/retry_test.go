@@ -237,9 +237,9 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 
 // CommentIssue is reachable only from the budget hold notice path's
 // detached goroutine, never synchronously from HandleRetryTimer.
-func (m *mockRetryTracker) CommentIssue(_ context.Context, issueID, text string) error {
+func (m *mockRetryTracker) CommentIssue(_ context.Context, issueID, text string) (string, error) {
 	m.commentCalls = append(m.commentCalls, mockRetryCommentCall{IssueID: issueID, Text: text})
-	return m.commentIssueErr
+	return commentResult(m.commentIssueErr)
 }
 
 func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) error {
@@ -275,7 +275,7 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 	return HandleRetryTimerParams{
 		Store:             store,
 		TrackerAdapter:    tracker,
-		Router:            route.NewRouter(tracker, nil),
+		Router:            route.NewRouter(tracker, nil, nil, nil),
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,

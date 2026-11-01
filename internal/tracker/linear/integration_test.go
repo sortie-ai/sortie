@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -293,9 +294,16 @@ func TestIntegration_CommentIssue(t *testing.T) {
 	issue := firstCandidate(t, adapter, ctx)
 
 	body := "sortie write-path integration test comment at " + time.Now().UTC().Format(time.RFC3339)
-	if err := adapter.CommentIssue(ctx, issue.ID, body); err != nil {
+	id, err := adapter.CommentIssue(ctx, issue.ID, body)
+	if err != nil {
 		t.Fatalf("CommentIssue(%s): %v", issue.Identifier, err)
 	}
+
+	comments, err := adapter.FetchIssueComments(ctx, issue.Identifier)
+	if err != nil {
+		t.Fatalf("FetchIssueComments(%s): %v", issue.Identifier, err)
+	}
+	adaptertest.AssertPostedCommentListed(t, id, comments)
 }
 
 func TestIntegration_AddLabel(t *testing.T) {

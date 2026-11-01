@@ -796,7 +796,7 @@ func TestParkReleaseHandOff(t *testing.T) {
 				regs.ReloadWorkflow = func() error { return nil }
 				regs.ConfigFunc = wm.Config
 				NewOrchestrator(OrchestratorParams{
-					State: state, Logger: discardLogger(), TrackerAdapter: tracker, Router: route.NewRouter(tracker, nil),
+					State: state, Logger: discardLogger(), TrackerAdapter: tracker, Router: route.NewRouter(tracker, nil, nil, nil),
 					AgentAdapter: agent, WorkflowManager: wm, Store: store, PreflightParams: regs,
 				}).handleTick(ctx)
 			}

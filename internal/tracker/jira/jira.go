@@ -578,29 +578,55 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	})
 }
 
-// CommentIssue posts a comment on the specified Jira issue. On version
-// "3" the text is split by newlines into ADF paragraph nodes. On
-// version "2" the text is sent verbatim as a raw wiki-markup body.
-func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
-	return trackermetrics.Track(a.metrics, "comment", func() error {
-		return a.postComment(ctx, issueID, commentPayload(a.apiVersion, text))
+// CommentIssue posts a comment on the specified Jira issue and returns the
+// created comment's identity. On version "3" the text is split by newlines
+// into ADF paragraph nodes. On version "2" the text is sent verbatim as a raw
+// wiki-markup body.
+func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) (string, error) {
+	var commentID string
+	err := trackermetrics.Track(a.metrics, "comment", func() error {
+		id, err := a.postComment(ctx, issueID, commentPayload(a.apiVersion, text))
+		commentID = id
+		return err
 	})
+	if err != nil {
+		return "", err
+	}
+	return commentID, nil
 }
 
-func (a *JiraAdapter) postComment(ctx context.Context, issueID string, body any) error {
+func (a *JiraAdapter) postComment(ctx context.Context, issueID string, body any) (string, error) {
 	path := a.basePath + "/issue/" + url.PathEscape(issueID) + "/comment"
 
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return &domain.TrackerError{
+		return "", &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to marshal comment request",
 			Err:     err,
 		}
 	}
 
-	_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-	return err
+	resp, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+
+	var created jiraComment
+	if err := json.Unmarshal(resp, &created); err != nil {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse comment create response",
+			Err:     err,
+		}
+	}
+	if created.ID == "" {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "comment create response carries no comment id",
+		}
+	}
+	return created.ID, nil
 }
 
 // commentPayload builds the comment-create request body for the given

@@ -326,14 +326,23 @@ type commentIssueCall struct {
 	Text    string
 }
 
-func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
+func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, text string) (string, error) {
 	m.commentMu.Lock()
 	m.commentCalls = append(m.commentCalls, commentIssueCall{IssueID: issueID, Text: text})
 	m.commentMu.Unlock()
 	if m.commentIssueFn != nil {
-		return m.commentIssueFn(ctx, issueID, text)
+		return commentResult(m.commentIssueFn(ctx, issueID, text))
 	}
-	return nil
+	return testCommentID, nil
+}
+
+const testCommentID = "comment-1"
+
+func commentResult(err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	return testCommentID, nil
 }
 
 func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error {

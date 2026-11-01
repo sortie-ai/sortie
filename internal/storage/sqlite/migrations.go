@@ -161,6 +161,9 @@ var migration049SQL string
 //go:embed sql/050_run_usage_provenance_and_reported_amounts.sql
 var migration050SQL string
 
+//go:embed sql/051_posted_comments.sql
+var migration051SQL string
+
 // reactionActivityMigration is the version of the migration that creates the
 // reaction_activity table.
 const reactionActivityMigration = 38
@@ -216,4 +219,5 @@ var migrations = []Migration{
 	{Version: 48, Description: "usage-limit holds and the usage-limit notice flag on retry entries", SQL: migration048SQL},
 	{Version: 49, Description: "drop the resume columns from run history", SQL: migration049SQL},
 	{Version: 50, Description: "usage provenance and completeness on run history and the amounts a run reported", SQL: migration050SQL},
+	{Version: 51, Description: "identities of the tracker comments Sortie posts", SQL: migration051SQL},
 }

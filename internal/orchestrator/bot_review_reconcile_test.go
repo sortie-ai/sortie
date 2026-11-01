@@ -1008,10 +1008,10 @@ func (s *botReviewErrTrackerStub) FetchIssueComments(_ context.Context, _ string
 func (s *botReviewErrTrackerStub) TransitionIssue(_ context.Context, _, _ string) error {
 	return nil
 }
-func (s *botReviewErrTrackerStub) CommentIssue(_ context.Context, _, text string) error {
+func (s *botReviewErrTrackerStub) CommentIssue(_ context.Context, _, text string) (string, error) {
 	s.commentCalls++
 	s.lastCommentText = text
-	return s.commentErr
+	return commentResult(s.commentErr)
 }
 func (s *botReviewErrTrackerStub) AddLabel(_ context.Context, _, label string) error {
 	s.addLabelCalls++

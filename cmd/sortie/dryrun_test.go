@@ -382,8 +382,10 @@ func (f *dryRunFakeTracker) FetchIssueComments(context.Context, string) ([]domai
 	return []domain.Comment{}, nil
 }
 func (f *dryRunFakeTracker) TransitionIssue(context.Context, string, string) error { return nil }
-func (f *dryRunFakeTracker) CommentIssue(context.Context, string, string) error    { return nil }
-func (f *dryRunFakeTracker) AddLabel(context.Context, string, string) error        { return nil }
+func (f *dryRunFakeTracker) CommentIssue(context.Context, string, string) (string, error) {
+	return "comment-1", nil
+}
+func (f *dryRunFakeTracker) AddLabel(context.Context, string, string) error { return nil }
 
 func (f *dryRunFakeTracker) RemoveLabel(_ context.Context, _ string, _ string) error { return nil }
 
