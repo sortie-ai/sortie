@@ -16,7 +16,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workspace"
@@ -93,15 +92,17 @@ func (m *mockSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) e
 	return nil
 }
 
-// reviewReconcileStore is a self-contained ReconcileStore for review tests.
 type reviewReconcileStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
+	storage.IssueOutcomeStore
 	reactionActivityLog
 	noEscalationRecords
 	unsupportedReactionObservationStore
 
-	savedEntries    []persistence.RetryEntry
+	savedEntries    []storage.RetryEntry
 	deletedIssueIDs []string
-	outcomes        []persistence.IssueOutcome
+	outcomes        []storage.IssueOutcome
 
 	saveRetryEntryErr   error
 	deleteRetryEntryErr error
@@ -121,7 +122,7 @@ type reviewReconcileStore struct {
 
 var _ ReconcileStore = (*reviewReconcileStore)(nil)
 
-func (s *reviewReconcileStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (s *reviewReconcileStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	s.savedEntries = append(s.savedEntries, entry)
 	return s.saveRetryEntryErr
 }
@@ -131,7 +132,7 @@ func (s *reviewReconcileStore) DeleteRetryEntry(_ context.Context, issueID strin
 	return s.deleteRetryEntryErr
 }
 
-func (s *reviewReconcileStore) RecordIssueOutcome(_ context.Context, outcome persistence.IssueOutcome) error {
+func (s *reviewReconcileStore) RecordIssueOutcome(_ context.Context, outcome storage.IssueOutcome) error {
 	s.outcomes = append(s.outcomes, outcome)
 	return nil
 }
@@ -330,6 +331,11 @@ func reviewParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker do
 }
 
 type fingerprintModelStore struct {
+	storage.AggregateMetricsStore
+	storage.SessionMetadataStore
+	storage.ParkedIssueStore
+	storage.RunEventStore
+	storage.BudgetHoldNoticeStore
 	livePassLog
 	noUsageLimitHolds
 	reviewReconcileStore
@@ -391,7 +397,7 @@ func (s *fingerprintModelStore) storedIDs(issueID, kind string) []string {
 	return slices.Sorted(maps.Keys(s.rows[ReactionKey(issueID, kind)]))
 }
 
-func (s *fingerprintModelStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
+func (s *fingerprintModelStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []storage.RunEvent, _ storage.RunEventLimits) (storage.RunHistory, error) {
 	return run, nil
 }
 
@@ -415,7 +421,7 @@ func (s *fingerprintModelStore) UsageCompletedBetween(context.Context, time.Time
 	return storage.IssueTokenUsage{}, nil
 }
 
-func (s *fingerprintModelStore) UpsertParkedIssue(context.Context, persistence.ParkedIssue) error {
+func (s *fingerprintModelStore) UpsertParkedIssue(context.Context, storage.ParkedIssue) error {
 	return nil
 }
 
@@ -425,15 +431,15 @@ func (s *fingerprintModelStore) ResetHandoffAbsenceSequence(context.Context, str
 	return nil
 }
 
-func (s *fingerprintModelStore) UpsertBudgetHoldNotice(context.Context, persistence.BudgetHoldNotice) error {
+func (s *fingerprintModelStore) UpsertBudgetHoldNotice(context.Context, storage.BudgetHoldNotice) error {
 	return nil
 }
 
-func (s *fingerprintModelStore) UpsertAggregateMetrics(context.Context, persistence.AggregateMetrics) error {
+func (s *fingerprintModelStore) UpsertAggregateMetrics(context.Context, storage.AggregateMetrics) error {
 	return nil
 }
 
-func (s *fingerprintModelStore) UpsertSessionMetadata(context.Context, persistence.SessionMetadata) error {
+func (s *fingerprintModelStore) UpsertSessionMetadata(context.Context, storage.SessionMetadata) error {
 	return nil
 }
 
@@ -3914,7 +3920,7 @@ func (s *reviewReconcileStore) DeleteStageHop(context.Context, string) error { r
 
 func (s *reviewReconcileStore) MarkStageHopDispatched(context.Context, string) error { return nil }
 
-func (s *reviewReconcileStore) RecordStageHop(context.Context, persistence.StageHop) error {
+func (s *reviewReconcileStore) RecordStageHop(context.Context, storage.StageHop) error {
 	return nil
 }
 

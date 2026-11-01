@@ -16,9 +16,9 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestNewState(t *testing.T) {
@@ -2272,7 +2272,7 @@ func TestPopulateParked(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 4, 0, nil, AgentTotals{})
-		rows := []persistence.ParkedIssue{
+		rows := []storage.ParkedIssue{
 			{IssueID: "id-2", Identifier: "PROJ-2", Reason: parkReasonHandoffAbsence, Label: "needs-human", ParkedAt: "2026-08-17T01:00:00Z"},
 		}
 
@@ -2287,7 +2287,7 @@ func TestPopulateParked(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 4, 0, nil, AgentTotals{})
-		rows := []persistence.ParkedIssue{
+		rows := []storage.ParkedIssue{
 			{IssueID: "", Identifier: "PROJ-MALFORMED", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
 			{IssueID: "id-3", Identifier: "PROJ-3", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
 		}
@@ -2310,7 +2310,7 @@ func TestPopulateParked(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 4, 0, nil, AgentTotals{})
-		PopulateParked(state, []persistence.ParkedIssue{
+		PopulateParked(state, []storage.ParkedIssue{
 			{IssueID: "id-4", Identifier: "PROJ-4", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
 		}, nil)
 

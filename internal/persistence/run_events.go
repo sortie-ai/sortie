@@ -10,54 +10,16 @@ import (
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// RunEvent is one stored event of a finished run. Payload is the event's
-// members other than Seq, At, and Event, as a JSON object; Size is the byte
-// length of At, Event, and Payload together.
-type RunEvent struct {
-	Seq     int64
-	At      string // RFC 3339 with nanoseconds, UTC.
-	Event   string
-	Payload string
-	Size    int64
-}
-
-// RunEventLimits bounds the stored events of every run together.
-type RunEventLimits struct {
-	// MaxAge is the least a run's events stay stored, counted from the
-	// completion of the run whose write prunes them.
-	MaxAge time.Duration
-
-	// MaxBytes caps the sum of the stored events' Size.
-	MaxBytes int64
-
-	// MaxExpiredRuns is the most runs past MaxAge one write deletes.
-	MaxExpiredRuns int
-}
-
-// RunEventsError reports that a run's history row was stored and its events
-// were not.
-type RunEventsError struct {
-	Err error
-}
-
-// Error returns the message of the underlying error.
-func (e *RunEventsError) Error() string {
-	return "store run events: " + e.Err.Error()
-}
-
-// Unwrap returns the underlying error.
-func (e *RunEventsError) Unwrap() error {
-	return e.Err
-}
+var _ storage.RunEventStore = (*Store)(nil)
 
 const runEventsSavepoint = "run_events"
 
 // AppendRunHistoryWithEvents appends run, its [storage.RunHistory.ModelUsage] with
 // the [storage.RunHistory.ModelCosts] pricing it, its [storage.RunHistory.ReportedAmounts],
 // and events under *run.DispatchID in one transaction, then prunes under
-// limits. A *[RunEventsError] means the
+// limits. A *[storage.RunEventsError] means the
 // row was stored and the events were not; any other error means neither was.
-func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []RunEvent, limits RunEventLimits) (storage.RunHistory, error) {
+func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []storage.RunEvent, limits storage.RunEventLimits) (storage.RunHistory, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return storage.RunHistory{}, fmt.Errorf("begin append run history for %q: %w", run.IssueID, err)
@@ -99,7 +61,7 @@ func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunH
 		return storage.RunHistory{}, fmt.Errorf("commit append run history for %q: %w", run.IssueID, err)
 	}
 	if eventsErr != nil {
-		return row, &RunEventsError{Err: eventsErr}
+		return row, &storage.RunEventsError{Err: eventsErr}
 	}
 	return row, nil
 }
@@ -121,7 +83,7 @@ func insertRunReportedAmounts(ctx context.Context, ex statementExecer, runID int
 // AppendRunEvents stores events under dispatchID for a run whose history row
 // is stored, in one transaction, then prunes under limits; completedAt is
 // that row's completed_at.
-func (s *Store) AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []RunEvent, limits RunEventLimits) error {
+func (s *Store) AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []storage.RunEvent, limits storage.RunEventLimits) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin append run events %q: %w", dispatchID, err)
@@ -140,7 +102,7 @@ func (s *Store) AppendRunEvents(ctx context.Context, dispatchID, completedAt str
 // RunEvents returns one run's stored events ascending by seq: all when newest
 // is 0, else the newest up to newest. It returns an empty non-nil slice when
 // the run has none.
-func (s *Store) RunEvents(ctx context.Context, dispatchID string, newest int) ([]RunEvent, error) {
+func (s *Store) RunEvents(ctx context.Context, dispatchID string, newest int) ([]storage.RunEvent, error) {
 	query := `SELECT seq, at, event, payload, size FROM run_events WHERE dispatch_id = ? ORDER BY seq`
 	args := []any{dispatchID}
 	if newest > 0 {
@@ -156,9 +118,9 @@ func (s *Store) RunEvents(ctx context.Context, dispatchID string, newest int) ([
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	events := []RunEvent{}
+	events := []storage.RunEvent{}
 	for rows.Next() {
-		var e RunEvent
+		var e storage.RunEvent
 		if err := rows.Scan(&e.Seq, &e.At, &e.Event, &e.Payload, &e.Size); err != nil {
 			return nil, fmt.Errorf("scan run event %q: %w", dispatchID, err)
 		}
@@ -173,7 +135,7 @@ func (s *Store) RunEvents(ctx context.Context, dispatchID string, newest int) ([
 // storeEvents inserts events under id, keeps run_events_total in step, and
 // prunes the events of other runs under limits. It is the only writer of
 // run_events and run_events_total, and runs inside the caller's transaction.
-func storeEvents(ctx context.Context, tx *sql.Tx, id, completedAt string, events []RunEvent, limits RunEventLimits) error {
+func storeEvents(ctx context.Context, tx *sql.Tx, id, completedAt string, events []storage.RunEvent, limits storage.RunEventLimits) error {
 	if id == "" {
 		return errors.New("store run events: empty dispatch ID")
 	}
@@ -226,7 +188,7 @@ func storeEvents(ctx context.Context, tx *sql.Tx, id, completedAt string, events
 // are taken, or while the total less the taken size exceeds MaxBytes, and
 // stops at the first run neither condition takes. The walk reads the index
 // only and is closed before it returns, so the caller may write.
-func runsToPrune(ctx context.Context, tx *sql.Tx, keep, cutoff string, total int64, limits RunEventLimits) ([]string, int64, error) {
+func runsToPrune(ctx context.Context, tx *sql.Tx, keep, cutoff string, total int64, limits storage.RunEventLimits) ([]string, int64, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT completed_at, dispatch_id, size FROM run_events WHERE dispatch_id <> ? ORDER BY completed_at, dispatch_id`, keep)
 	if err != nil {

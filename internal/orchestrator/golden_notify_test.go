@@ -16,8 +16,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 var recordGolden = flag.Bool("record-golden", false, "rewrite the golden notification fixtures instead of comparing against them")
@@ -41,6 +41,7 @@ type goldenStepRecord struct {
 }
 
 type goldenRecorder struct {
+	storage.BudgetHoldNoticeStore
 	reactionActivityLog
 	*mockTrackerAdapter
 	*reviewReconcileStore
@@ -51,9 +52,9 @@ type goldenRecorder struct {
 }
 
 var (
-	_ domain.TrackerAdapter = (*goldenRecorder)(nil)
-	_ ReconcileStore        = (*goldenRecorder)(nil)
-	_ budgetHoldNoticeStore = (*goldenRecorder)(nil)
+	_ domain.TrackerAdapter         = (*goldenRecorder)(nil)
+	_ ReconcileStore                = (*goldenRecorder)(nil)
+	_ storage.BudgetHoldNoticeStore = (*goldenRecorder)(nil)
 )
 
 func newGoldenRecorder() *goldenRecorder {
@@ -98,7 +99,7 @@ func (r *goldenRecorder) MarkReactionObservationDispatched(_ context.Context, is
 	return r.record("observation_dispatched", issueID, kind)
 }
 
-func (r *goldenRecorder) UpsertBudgetHoldNotice(_ context.Context, notice persistence.BudgetHoldNotice) error {
+func (r *goldenRecorder) UpsertBudgetHoldNotice(_ context.Context, notice storage.BudgetHoldNotice) error {
 	return r.record("budget_notice_row", notice.IssueID, notice.Reason)
 }
 

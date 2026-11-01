@@ -10,43 +10,23 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // ReconcileStore is the persistence interface required by
-// [ReconcileRunningIssues]. Satisfied by [persistence.Store] in production
-// and by test doubles in unit tests.
+// [ReconcileRunningIssues].
 type ReconcileStore interface {
-	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	AppendRunHistory(ctx context.Context, run storage.RunHistory) (storage.RunHistory, error)
-	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
-	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
-	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
-	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
-	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
-	ListReactionHandedOffComments(ctx context.Context, issueID, kind string) ([]string, error)
-	UpsertReactionObservation(
-		ctx context.Context,
-		issueID, kind, fingerprint string,
-		observedAt time.Time,
-	) (persistence.ReactionObservation, error)
-	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
-	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
-	DeleteStageHop(ctx context.Context, issueID string) error
-	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-	GetReactionEscalation(ctx context.Context, issueID, kind string) (persistence.ReactionEscalation, bool, error)
-	SaveReactionEscalation(ctx context.Context, rec persistence.ReactionEscalation) error
-	EndReactionEscalation(ctx context.Context, issueID, kind string) error
-	DeleteReactionEscalations(ctx context.Context, issueID string) error
-	RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error
-	RecordReactionTriageOutcome(ctx context.Context, outcome persistence.ReactionTriageOutcome) error
-	LatestReactionTriageDisposition(ctx context.Context, issueID, kind, fingerprint string) (disposition string, found bool, err error)
+	storage.RetryEntryStore
+	storage.RunHistoryStore
+	storage.ReactionFingerprintStore
+	storage.ReactionHandoffStore
+	storage.StageHopStore
+	storage.IssueOutcomeStore
+	storage.ReactionEscalationStore
+	storage.ReactionActivityStore
+	storage.ReactionTriageOutcomeStore
 }
-
-var _ ReconcileStore = (*persistence.Store)(nil)
 
 // ReconcileParams holds the dependencies for [ReconcileRunningIssues] that
 // are not part of the core [State]. This separates pure state mutation from
@@ -512,11 +492,11 @@ type issueReleaseCounts struct {
 	RetryCancelled   bool
 }
 
-// retryEntryDeleter is the pair of store methods [releaseIssueRuntimeState]
-// needs: the issue's persisted retry and its escalation records.
+// retryEntryDeleter is what [releaseIssueRuntimeState] clears: the issue's
+// persisted retry and its escalation records.
 type retryEntryDeleter interface {
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	DeleteReactionEscalations(ctx context.Context, issueID string) error
+	storage.RetryEntryStore
+	storage.ReactionEscalationStore
 }
 
 // releaseIssueRuntimeState drops one issue's runtime reaction bookkeeping
@@ -778,11 +758,6 @@ func clearNoStateObserved(entry *RunningEntry, hop *StageHopEntry) {
 // non-terminal workspaces.
 const sweepEveryNTicks = 60
 
-// SweepStore is the persistence interface required by [SweepWorkspaces].
-type SweepStore interface {
-	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
-}
-
 // sweepSummary accumulates the per-pass outcome counts reported by
 // [emitSweepSummary]. The nine counters after candidates partition the
 // candidate set: candidates equals their sum on every pass.
@@ -1001,7 +976,7 @@ type SweepWorkspacesParams struct {
 	// Store resolves each age candidate's latest recorded activity. A
 	// nil Store disables the age pass, reported as agePass
 	// "unavailable".
-	Store SweepStore
+	Store storage.RunHistoryStore
 
 	// NowFunc returns the current time. If nil, time.Now is used.
 	NowFunc func() time.Time

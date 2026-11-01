@@ -13,7 +13,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -170,6 +169,10 @@ type mgcFingerprintRecord struct {
 // cross-kind-clear interaction are exercised against real stored
 // state rather than canned values.
 type mgcStoreFake struct {
+	storage.RunHistoryStore
+	storage.RetryEntryStore
+	storage.ReactionFingerprintStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -203,7 +206,7 @@ func newMGCStore() *mgcStoreFake {
 	return &mgcStoreFake{fingerprints: make(map[string]mgcFingerprintRecord)}
 }
 
-func (s *mgcStoreFake) SaveRetryEntry(context.Context, persistence.RetryEntry) error { return nil }
+func (s *mgcStoreFake) SaveRetryEntry(context.Context, storage.RetryEntry) error { return nil }
 func (s *mgcStoreFake) DeleteRetryEntry(context.Context, string) error {
 	s.deleteRetryCalls++
 	return nil
@@ -261,10 +264,10 @@ func (s *mgcStoreFake) UpsertReactionObservation(
 	_ context.Context,
 	issueID, kind, fingerprint string,
 	observedAt time.Time,
-) (persistence.ReactionObservation, error) {
+) (storage.ReactionObservation, error) {
 	s.observeCalls++
 	if s.observeErr != nil {
-		return persistence.ReactionObservation{}, s.observeErr
+		return storage.ReactionObservation{}, s.observeErr
 	}
 	key := issueID + ":" + kind
 	rec, exists := s.fingerprints[key]
@@ -275,7 +278,7 @@ func (s *mgcStoreFake) UpsertReactionObservation(
 		}
 		s.fingerprints[key] = rec
 	}
-	return persistence.ReactionObservation{
+	return storage.ReactionObservation{
 		FirstObservedAt: rec.updatedAt,
 		Dispatched:      rec.dispatched,
 	}, nil

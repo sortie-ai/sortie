@@ -4,7 +4,7 @@
 
 Sortie uses an embedded SQLite database for durable state. The database file path defaults to `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path` front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and runs all pending schema migrations before beginning normal operation. The last price tables accepted from a download (Section 13.5) are files beside the database file, outside the schema.
 
-Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts. Only the code that opens the database depends on the SQLite store itself; every other component depends on the contracts.
+Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts. Only the code that opens the database depends on the SQLite store itself; every other component depends on the contracts. An operation that must see or change two domains at one instant is a single operation of one contract, which every implementation carries out atomically: appending a finished run with its events, recording a stage hop with the deletion of the issue's retry entry, and listing the live passes with the retry entries.
 
 ### 19.2 Tables
 

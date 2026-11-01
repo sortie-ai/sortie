@@ -22,7 +22,7 @@ type runRef struct {
 }
 
 type runsHarness struct {
-	store *persistence.Store
+	store orchestrator.OrchestratorStore
 	url   string
 }
 
@@ -58,7 +58,7 @@ func (h *runsHarness) append(t *testing.T, run storage.RunHistory) int64 {
 func (h *runsHarness) appendWithUsage(t *testing.T, run storage.RunHistory, dispatchID string) {
 	t.Helper()
 	run.DispatchID = &dispatchID
-	if _, err := h.store.AppendRunHistoryWithEvents(t.Context(), run, nil, persistence.RunEventLimits{}); err != nil {
+	if _, err := h.store.AppendRunHistoryWithEvents(t.Context(), run, nil, storage.RunEventLimits{}); err != nil {
 		t.Fatalf("AppendRunHistoryWithEvents(%q): %v", run.Identifier, err)
 	}
 }
@@ -102,7 +102,7 @@ func (h *runsHarness) drain(t *testing.T, query string, afterFirstPage func()) (
 	return nil, nil
 }
 
-func (h *runsHarness) recordOutcome(t *testing.T, outcome persistence.IssueOutcome) {
+func (h *runsHarness) recordOutcome(t *testing.T, outcome storage.IssueOutcome) {
 	t.Helper()
 	if err := h.store.RecordIssueOutcome(t.Context(), outcome); err != nil {
 		t.Fatalf("RecordIssueOutcome(%q): %v", outcome.IssueID, err)
@@ -176,7 +176,7 @@ func TestRunHistoryFilters(t *testing.T) {
 			}
 			for _, issueID := range []string{tt.hit, tt.miss} {
 				if at, ended := endedAt[issueID]; ended {
-					h.recordOutcome(t, persistence.IssueOutcome{IssueID: issueID, Kind: persistence.IssueOutcomeTerminal, ObservedAt: at, State: "Done"})
+					h.recordOutcome(t, storage.IssueOutcome{IssueID: issueID, Kind: storage.IssueOutcomeTerminal, ObservedAt: at, State: "Done"})
 				}
 			}
 			seed(tt.miss)
@@ -200,31 +200,31 @@ func TestRunHistoryServesIssueOutcome(t *testing.T) {
 	const at = "2026-03-02T10:00:00Z"
 	tests := []struct {
 		name   string
-		stored *persistence.IssueOutcome
+		stored *storage.IssueOutcome
 		want   any
 	}{
 		{name: "none while the issue runs"},
 		{
 			name:   "handed off",
-			stored: &persistence.IssueOutcome{Kind: persistence.IssueOutcomeHandedOff, ObservedAt: at, State: "In Review"},
+			stored: &storage.IssueOutcome{Kind: storage.IssueOutcomeHandedOff, ObservedAt: at, State: "In Review"},
 			want: map[string]any{"kind": "handed_off", "observed_at": at, "state": "In Review",
 				"status_text": "Handed off to In Review", "status_text_full": "Handed off: Sortie moved the issue to In Review."},
 		},
 		{
 			name:   "terminal",
-			stored: &persistence.IssueOutcome{Kind: persistence.IssueOutcomeTerminal, ObservedAt: at, State: "Done"},
+			stored: &storage.IssueOutcome{Kind: storage.IssueOutcomeTerminal, ObservedAt: at, State: "Done"},
 			want: map[string]any{"kind": "terminal", "observed_at": at, "state": "Done",
 				"status_text": "Reached Done", "status_text_full": "Reached the tracker state Done."},
 		},
 		{
 			name:   "merged by auto-merge",
-			stored: &persistence.IssueOutcome{Kind: persistence.IssueOutcomeMerged, ObservedAt: at, MergeReactionKind: "merge", PRNumber: 88, PRRepository: "acme/api"},
+			stored: &storage.IssueOutcome{Kind: storage.IssueOutcomeMerged, ObservedAt: at, MergeReactionKind: "merge", PRNumber: 88, PRRepository: "acme/api"},
 			want: map[string]any{"kind": "merged", "observed_at": at, "merge_path": "auto_merge", "pull_request": map[string]any{"number": 88.0, "repository": "acme/api"},
 				"status_text": "Merged #88", "status_text_full": "Ended merged: auto-merge merged PR #88."},
 		},
 		{
 			name:   "merged by merge completion",
-			stored: &persistence.IssueOutcome{Kind: persistence.IssueOutcomeMerged, ObservedAt: at, MergeReactionKind: "merge-completion", PRNumber: 89, PRRepository: "acme/web"},
+			stored: &storage.IssueOutcome{Kind: storage.IssueOutcomeMerged, ObservedAt: at, MergeReactionKind: "merge-completion", PRNumber: 89, PRRepository: "acme/web"},
 			want: map[string]any{"kind": "merged", "observed_at": at, "merge_path": "merge_completion", "pull_request": map[string]any{"number": 89.0, "repository": "acme/web"},
 				"status_text": "Merged #89", "status_text_full": "Ended merged: merge completion saw PR #89 merge."},
 		},

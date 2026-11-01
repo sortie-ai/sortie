@@ -11,7 +11,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
@@ -109,16 +108,16 @@ const (
 	ciCallUpsertFingerprint ciReconcileStoreCall = "upsert_fingerprint"
 )
 
-// ciReconcileStore records calls to ReconcileStore methods and returns
-// configurable errors. Parallel to mockReconcileStore but distinct so
-// ci_reconcile_test.go is self-contained.
 type ciReconcileStore struct {
+	storage.RetryEntryStore
+	storage.ReactionHandoffStore
+	storage.StageHopStore
 	noopOutcomeRecorder
 	noEscalationRecords
 	reactionActivityLog
 	unsupportedReactionObservationStore
 
-	savedEntries    []persistence.RetryEntry
+	savedEntries    []storage.RetryEntry
 	deletedIssueIDs []string
 	runHistories    []storage.RunHistory
 
@@ -153,7 +152,7 @@ type ciReconcileStore struct {
 
 var _ ReconcileStore = (*ciReconcileStore)(nil)
 
-func (s *ciReconcileStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (s *ciReconcileStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	s.savedEntries = append(s.savedEntries, entry)
 	return s.saveRetryEntryErr
 }
@@ -811,7 +810,7 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 		t.Error("claim released after CI failure under max retries; want preserved")
 	}
 
-	continuations := store.activities(persistence.ReactionActivityContinuation)
+	continuations := store.activities(storage.ReactionActivityContinuation)
 	if len(continuations) != 1 || continuations[0].IssueID != "ISS-CI-5" || continuations[0].ChainID != "chain-ci-5" || continuations[0].Kind != ReactionKindCI {
 		t.Errorf("RecordReactionActivity continuation records = %+v, want one for ISS-CI-5 kind %q chain %q", continuations, ReactionKindCI, "chain-ci-5")
 	}
@@ -2325,7 +2324,7 @@ func TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow(t *testing.T) {
 	store := openInMemoryStore(t)
 
 	const issueID = "ISS-CI-ORPHAN"
-	seeded := persistence.RetryEntry{
+	seeded := storage.RetryEntry{
 		IssueID:    issueID,
 		Identifier: issueID + "-ident",
 		Attempt:    5,

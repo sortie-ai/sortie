@@ -180,9 +180,9 @@ func (m *budgetE2EWorkflowManager) WorkflowAbsPath() string { return m.absPath }
 
 func (m *budgetE2EWorkflowManager) LoadStatus() workflow.LoadStatus { return workflow.LoadStatus{} }
 
-func waitForSessionMetadataTotal(t *testing.T, store *persistence.Store, issueID string, want int64) persistence.SessionMetadata {
+func waitForSessionMetadataTotal(t *testing.T, store storage.SessionMetadataStore, issueID string, want int64) storage.SessionMetadata {
 	t.Helper()
-	var meta persistence.SessionMetadata
+	var meta storage.SessionMetadata
 	waittest.Until(t, func() error {
 		var found bool
 		var err error
@@ -387,6 +387,11 @@ func TestMCPServerBudget(t *testing.T) {
 		t.Fatal("SessionToolRegistry.Store is nil, want a read-only store backing cost_budget")
 	}
 
+	sessions, ok := reg.Store.(storage.SessionMetadataStore)
+	if !ok {
+		t.Fatalf("SessionToolRegistry.Store = %T, want a storage.SessionMetadataStore", reg.Store)
+	}
+
 	costBudget, ok := reg.Registry.Get("cost_budget")
 	if !ok {
 		t.Fatal("cost_budget tool not registered")
@@ -404,7 +409,7 @@ func TestMCPServerBudget(t *testing.T) {
 	agent.cacheReadTokens = 600
 	agent.emitUsage <- eventTotal
 
-	meta := waitForSessionMetadataTotal(t, reg.Store, issueID, eventTotal)
+	meta := waitForSessionMetadataTotal(t, sessions, issueID, eventTotal)
 	if meta.DispatchID != params.DispatchID {
 		t.Fatalf("session_metadata.dispatch_id = %q, want %q (the dispatch id recorded in mcp.json)", meta.DispatchID, params.DispatchID)
 	}
@@ -557,13 +562,18 @@ func TestMCPServerBudget_WarningThreshold(t *testing.T) {
 		}
 	})
 
+	sessions, ok := reg.Store.(storage.SessionMetadataStore)
+	if !ok {
+		t.Fatalf("SessionToolRegistry.Store = %T, want a storage.SessionMetadataStore", reg.Store)
+	}
+
 	costBudget, ok := reg.Registry.Get("cost_budget")
 	if !ok {
 		t.Fatal("cost_budget tool not registered")
 	}
 
 	agent.emitUsage <- 600
-	meta1 := waitForSessionMetadataTotal(t, reg.Store, issueID, 600)
+	meta1 := waitForSessionMetadataTotal(t, sessions, issueID, 600)
 	if meta1.DispatchID != params.DispatchID {
 		t.Fatalf("session_metadata.dispatch_id = %q, want %q", meta1.DispatchID, params.DispatchID)
 	}
@@ -583,7 +593,7 @@ func TestMCPServerBudget_WarningThreshold(t *testing.T) {
 	// sessionMetadataWriteInterval of the write above: only the pending
 	// write bypassing the throttle lets it reach session_metadata at all.
 	agent.emitUsage <- 1100
-	waitForSessionMetadataTotal(t, reg.Store, issueID, 1100)
+	waitForSessionMetadataTotal(t, sessions, issueID, 1100)
 
 	above := executeBudgetTool(t, costBudget)
 	if above.UsedTokens != 1100 {

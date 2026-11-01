@@ -974,7 +974,7 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 		}
 	}
 
-	if err := store.UpsertParkedIssue(ctx, persistence.ParkedIssue{
+	if err := store.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID:     issueID,
 		Identifier:  "PROJ-ORD",
 		Reason:      parkReasonHandoffAbsence,

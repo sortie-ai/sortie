@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestListLivePasses_MergesRetryEntriesInIssueThenKindOrder(t *testing.T) {
@@ -12,16 +14,16 @@ func TestListLivePasses_MergesRetryEntriesInIssueThenKindOrder(t *testing.T) {
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
-	for _, pass := range []LivePass{
-		{"ISS-2", LivePassBudget, "chain-r", "plan", "specify"},
-		{"ISS-1", LivePassBudget, "chain-b", "implement", "plan"},
-		{"ISS-1", LivePassRunning, "chain-a", "specify", ""},
+	for _, pass := range []storage.LivePass{
+		{IssueID: "ISS-2", Kind: storage.LivePassBudget, ChainID: "chain-r", RuleName: "plan", StagePrevious: "specify"},
+		{IssueID: "ISS-1", Kind: storage.LivePassBudget, ChainID: "chain-b", RuleName: "implement", StagePrevious: "plan"},
+		{IssueID: "ISS-1", Kind: storage.LivePassRunning, ChainID: "chain-a", RuleName: "specify", StagePrevious: ""},
 	} {
 		if err := s.UpsertLivePass(ctx, pass); err != nil {
 			t.Fatalf("UpsertLivePass(%v) = %v, want nil", pass, err)
 		}
 	}
-	retry := RetryEntry{
+	retry := storage.RetryEntry{
 		IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000,
 		RuleName: "plan", ChainID: "chain-q", StagePrevious: "specify",
 	}
@@ -31,11 +33,11 @@ func TestListLivePasses_MergesRetryEntriesInIssueThenKindOrder(t *testing.T) {
 
 	got, err := s.ListLivePasses(ctx)
 
-	want := []LivePass{
-		{"ISS-1", LivePassBudget, "chain-b", "implement", "plan"},
-		{"ISS-1", LivePassRetry, "chain-q", "plan", "specify"},
-		{"ISS-1", LivePassRunning, "chain-a", "specify", ""},
-		{"ISS-2", LivePassBudget, "chain-r", "plan", "specify"},
+	want := []storage.LivePass{
+		{IssueID: "ISS-1", Kind: storage.LivePassBudget, ChainID: "chain-b", RuleName: "implement", StagePrevious: "plan"},
+		{IssueID: "ISS-1", Kind: storage.LivePassRetry, ChainID: "chain-q", RuleName: "plan", StagePrevious: "specify"},
+		{IssueID: "ISS-1", Kind: storage.LivePassRunning, ChainID: "chain-a", RuleName: "specify", StagePrevious: ""},
+		{IssueID: "ISS-2", Kind: storage.LivePassBudget, ChainID: "chain-r", RuleName: "plan", StagePrevious: "specify"},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("ListLivePasses() = %v, %v, want %v, nil", got, err, want)
@@ -54,22 +56,22 @@ func TestLivePassWrites(t *testing.T) {
 			t.Fatalf("%s = %v, want nil", step, err)
 		}
 	}
-	check("UpsertLivePass first", s.UpsertLivePass(ctx, LivePass{"ISS-1", LivePassRunning, "chain-a", "specify", ""}))
-	check("UpsertLivePass replacing", s.UpsertLivePass(ctx, LivePass{"ISS-1", LivePassRunning, "chain-a", "plan", "specify"}))
-	check("UpsertLivePass other kind", s.UpsertLivePass(ctx, LivePass{"ISS-1", LivePassBudget, "chain-a", "plan", "specify"}))
-	check("DeleteLivePass missing row", s.DeleteLivePass(ctx, "ISS-9", LivePassRunning))
+	check("UpsertLivePass first", s.UpsertLivePass(ctx, storage.LivePass{IssueID: "ISS-1", Kind: storage.LivePassRunning, ChainID: "chain-a", RuleName: "specify", StagePrevious: ""}))
+	check("UpsertLivePass replacing", s.UpsertLivePass(ctx, storage.LivePass{IssueID: "ISS-1", Kind: storage.LivePassRunning, ChainID: "chain-a", RuleName: "plan", StagePrevious: "specify"}))
+	check("UpsertLivePass other kind", s.UpsertLivePass(ctx, storage.LivePass{IssueID: "ISS-1", Kind: storage.LivePassBudget, ChainID: "chain-a", RuleName: "plan", StagePrevious: "specify"}))
+	check("DeleteLivePass missing row", s.DeleteLivePass(ctx, "ISS-9", storage.LivePassRunning))
 
 	replaced, err := s.ListLivePasses(ctx)
 	check("ListLivePasses after upsert", err)
-	wantReplaced := []LivePass{
-		{"ISS-1", LivePassBudget, "chain-a", "plan", "specify"},
-		{"ISS-1", LivePassRunning, "chain-a", "plan", "specify"},
+	wantReplaced := []storage.LivePass{
+		{IssueID: "ISS-1", Kind: storage.LivePassBudget, ChainID: "chain-a", RuleName: "plan", StagePrevious: "specify"},
+		{IssueID: "ISS-1", Kind: storage.LivePassRunning, ChainID: "chain-a", RuleName: "plan", StagePrevious: "specify"},
 	}
 	if !slices.Equal(replaced, wantReplaced) {
 		t.Errorf("ListLivePasses() after replacing upsert = %v, want %v", replaced, wantReplaced)
 	}
 
-	check("DeleteLivePass", s.DeleteLivePass(ctx, "ISS-1", LivePassRunning))
+	check("DeleteLivePass", s.DeleteLivePass(ctx, "ISS-1", storage.LivePassRunning))
 	afterDelete, err := s.ListLivePasses(ctx)
 	check("ListLivePasses after delete", err)
 	if want := wantReplaced[:1]; !slices.Equal(afterDelete, want) {

@@ -6,31 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// ReactionEscalation is the durable record of one reaction kind's
-// escalation on an issue. EscalatedAt is nil once the escalation ended;
-// the row then keeps Subject so a later escalation of the same subject
-// applies no second action.
-type ReactionEscalation struct {
-	IssueID     string
-	Kind        string
-	Subject     string
-	EscalatedAt *time.Time
-	Trigger     string
-	Attempts    int
-	PRNumber    int
-	PROwner     string
-	PRRepo      string
-	PRBranch    string
-}
+var _ storage.ReactionEscalationStore = (*Store)(nil)
 
 const reactionEscalationColumns = `issue_id, kind, subject, escalated_at, escalation_trigger,
 	attempts, pr_number, pr_owner, pr_repo, pr_branch`
 
 // GetReactionEscalation returns the record of the given issue and kind.
 // The bool is false when no row exists.
-func (s *Store) GetReactionEscalation(ctx context.Context, issueID, kind string) (ReactionEscalation, bool, error) {
+func (s *Store) GetReactionEscalation(ctx context.Context, issueID, kind string) (storage.ReactionEscalation, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT `+reactionEscalationColumns+`
 		FROM reaction_escalations
@@ -39,17 +26,17 @@ func (s *Store) GetReactionEscalation(ctx context.Context, issueID, kind string)
 	)
 	rec, err := scanReactionEscalation(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ReactionEscalation{}, false, nil
+		return storage.ReactionEscalation{}, false, nil
 	}
 	if err != nil {
-		return ReactionEscalation{}, false, err
+		return storage.ReactionEscalation{}, false, err
 	}
 	return rec, true, nil
 }
 
 // SaveReactionEscalation inserts the record or replaces the row with the
 // same issue and kind.
-func (s *Store) SaveReactionEscalation(ctx context.Context, rec ReactionEscalation) error {
+func (s *Store) SaveReactionEscalation(ctx context.Context, rec storage.ReactionEscalation) error {
 	var escalatedAt sql.NullString
 	if rec.EscalatedAt != nil {
 		escalatedAt = sql.NullString{String: rec.EscalatedAt.UTC().Format(time.RFC3339Nano), Valid: true}
@@ -96,7 +83,7 @@ func (s *Store) DeleteReactionEscalations(ctx context.Context, issueID string) e
 // ListStandingReactionEscalations returns the records whose escalation
 // has not ended, ordered by issue and kind. It returns an empty non-nil
 // slice when none stand.
-func (s *Store) ListStandingReactionEscalations(ctx context.Context) ([]ReactionEscalation, error) {
+func (s *Store) ListStandingReactionEscalations(ctx context.Context) ([]storage.ReactionEscalation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+reactionEscalationColumns+`
 		FROM reaction_escalations
@@ -107,7 +94,7 @@ func (s *Store) ListStandingReactionEscalations(ctx context.Context) ([]Reaction
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	records := []ReactionEscalation{}
+	records := []storage.ReactionEscalation{}
 	for rows.Next() {
 		rec, err := scanReactionEscalation(rows)
 		if err != nil {
@@ -125,21 +112,21 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanReactionEscalation(row rowScanner) (ReactionEscalation, error) {
+func scanReactionEscalation(row rowScanner) (storage.ReactionEscalation, error) {
 	var (
-		rec         ReactionEscalation
+		rec         storage.ReactionEscalation
 		escalatedAt sql.NullString
 	)
 	if err := row.Scan(
 		&rec.IssueID, &rec.Kind, &rec.Subject, &escalatedAt, &rec.Trigger,
 		&rec.Attempts, &rec.PRNumber, &rec.PROwner, &rec.PRRepo, &rec.PRBranch,
 	); err != nil {
-		return ReactionEscalation{}, err
+		return storage.ReactionEscalation{}, err
 	}
 	if escalatedAt.Valid {
 		at, err := time.Parse(time.RFC3339Nano, escalatedAt.String)
 		if err != nil {
-			return ReactionEscalation{}, fmt.Errorf("parse reaction escalation time: %w", err)
+			return storage.ReactionEscalation{}, fmt.Errorf("parse reaction escalation time: %w", err)
 		}
 		rec.EscalatedAt = &at
 	}

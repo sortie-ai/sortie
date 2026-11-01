@@ -18,6 +18,7 @@ import (
 )
 
 type fakeSpendStore struct {
+	storage.RunHistoryStore
 	byStart map[int64]storage.IssueTokenUsage
 	err     error
 	calls   int
@@ -227,7 +228,7 @@ func TestEvaluateSpendCeiling_IndependentOfRatesAndRestart(t *testing.T) {
 		}
 		return store
 	}
-	evaluate := func(store spendStore, rates *pricing.Rates) SpendCeilingStatus {
+	evaluate := func(store storage.RunHistoryStore, rates *pricing.Rates) SpendCeilingStatus {
 		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		evaluateSpendCeiling(state, spendCeilingParams{Store: store, Ceilings: map[SpendWindow]float64{SpendWindowDaily: 3}, Rates: rates, Now: now, Logger: discardLogger()})
 		if len(state.SpendCeilings) != 1 {

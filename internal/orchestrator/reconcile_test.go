@@ -17,23 +17,20 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-// unsupportedReactionObservationStore lets unrelated store doubles satisfy
-// the compile-time interface while failing loudly if a merge-completion test
-// accidentally uses a double without real observation semantics. It also
-// supplies a safe, conservative default for CountWorkerRunsCompletedSince
-// for any store double that does not implement its own.
-type unsupportedReactionObservationStore struct{}
+type unsupportedReactionObservationStore struct {
+	storage.ReactionFingerprintStore
+	storage.RunHistoryStore
+}
 
 func (unsupportedReactionObservationStore) UpsertReactionObservation(
 	context.Context,
 	string, string, string,
 	time.Time,
-) (persistence.ReactionObservation, error) {
+) (storage.ReactionObservation, error) {
 	panic("reaction observation persistence is unsupported by this test double")
 }
 
@@ -50,9 +47,9 @@ func (unsupportedReactionObservationStore) CountWorkerRunsCompletedSince(context
 	return 0, errors.New("worker run count is unsupported by this test double")
 }
 
-type noUsageLimitHolds struct{}
+type noUsageLimitHolds struct{ storage.UsageLimitHoldStore }
 
-func (noUsageLimitHolds) SaveUsageLimitHold(context.Context, persistence.UsageLimitHold) error {
+func (noUsageLimitHolds) SaveUsageLimitHold(context.Context, storage.UsageLimitHold) error {
 	return nil
 }
 
@@ -60,13 +57,15 @@ func (noUsageLimitHolds) DeleteUsageLimitHold(context.Context, string, bool, str
 	return nil
 }
 
-type noEscalationRecords struct{}
-
-func (noEscalationRecords) GetReactionEscalation(context.Context, string, string) (persistence.ReactionEscalation, bool, error) {
-	return persistence.ReactionEscalation{}, false, nil
+type noEscalationRecords struct {
+	storage.ReactionEscalationStore
 }
 
-func (noEscalationRecords) SaveReactionEscalation(context.Context, persistence.ReactionEscalation) error {
+func (noEscalationRecords) GetReactionEscalation(context.Context, string, string) (storage.ReactionEscalation, bool, error) {
+	return storage.ReactionEscalation{}, false, nil
+}
+
+func (noEscalationRecords) SaveReactionEscalation(context.Context, storage.ReactionEscalation) error {
 	return nil
 }
 
@@ -75,12 +74,14 @@ func (noEscalationRecords) EndReactionEscalation(context.Context, string, string
 func (noEscalationRecords) DeleteReactionEscalations(context.Context, string) error { return nil }
 
 type reactionActivityLog struct {
+	storage.ReactionActivityStore
+
 	mu             sync.Mutex
-	recorded       []persistence.ReactionActivity
-	triageOutcomes []persistence.ReactionTriageOutcome
+	recorded       []storage.ReactionActivity
+	triageOutcomes []storage.ReactionTriageOutcome
 }
 
-func (l *reactionActivityLog) RecordReactionTriageOutcome(_ context.Context, outcome persistence.ReactionTriageOutcome) error {
+func (l *reactionActivityLog) RecordReactionTriageOutcome(_ context.Context, outcome storage.ReactionTriageOutcome) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.triageOutcomes = append(l.triageOutcomes, outcome)
@@ -98,17 +99,17 @@ func (l *reactionActivityLog) LatestReactionTriageDisposition(_ context.Context,
 	return "", false, nil
 }
 
-func (l *reactionActivityLog) RecordReactionActivity(_ context.Context, records []persistence.ReactionActivity) error {
+func (l *reactionActivityLog) RecordReactionActivity(_ context.Context, records []storage.ReactionActivity) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.recorded = append(l.recorded, records...)
 	return nil
 }
 
-func (l *reactionActivityLog) activities(activity string) []persistence.ReactionActivity {
+func (l *reactionActivityLog) activities(activity string) []storage.ReactionActivity {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var out []persistence.ReactionActivity
+	var out []storage.ReactionActivity
 	for _, r := range l.recorded {
 		if r.Activity == activity {
 			out = append(out, r)
@@ -118,36 +119,38 @@ func (l *reactionActivityLog) activities(activity string) []persistence.Reaction
 }
 
 type livePassLog struct {
-	upserted []persistence.LivePass
-	deleted  []persistence.LivePass
+	storage.LivePassStore
+
+	upserted []storage.LivePass
+	deleted  []storage.LivePass
 }
 
-func (l *livePassLog) UpsertLivePass(_ context.Context, pass persistence.LivePass) error {
+func (l *livePassLog) UpsertLivePass(_ context.Context, pass storage.LivePass) error {
 	l.upserted = append(l.upserted, pass)
 	return nil
 }
 
 func (l *livePassLog) DeleteLivePass(_ context.Context, issueID, kind string) error {
-	l.deleted = append(l.deleted, persistence.LivePass{IssueID: issueID, Kind: kind})
+	l.deleted = append(l.deleted, storage.LivePass{IssueID: issueID, Kind: kind})
 	return nil
 }
 
-func requireLivePasses(t *testing.T, op string, got, want []persistence.LivePass) {
+func requireLivePasses(t *testing.T, op string, got, want []storage.LivePass) {
 	t.Helper()
 	if !slices.Equal(got, want) {
 		t.Errorf("%s live passes = %+v, want %+v", op, got, want)
 	}
 }
 
-// mockReconcileStore records calls to ReconcileStore methods and returns
-// configurable errors.
 type mockReconcileStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
 	unsupportedReactionObservationStore
 
-	savedEntries   []persistence.RetryEntry
+	savedEntries   []storage.RetryEntry
 	deletedIssueID []string
 
 	saveRetryEntryErr   error
@@ -161,7 +164,7 @@ type mockReconcileStore struct {
 
 var _ ReconcileStore = (*mockReconcileStore)(nil)
 
-func (m *mockReconcileStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (m *mockReconcileStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	m.savedEntries = append(m.savedEntries, entry)
 	return m.saveRetryEntryErr
 }
@@ -2178,11 +2181,13 @@ func TestReconcileRunningIssues_ReactionInTerminalStateCancelsAndCleans(t *testi
 }
 
 type sweepStoreDouble struct {
+	storage.RunHistoryStore
+
 	completions map[string]string
 	err         error
 }
 
-var _ SweepStore = (*sweepStoreDouble)(nil)
+var _ storage.RunHistoryStore = (*sweepStoreDouble)(nil)
 
 func (s *sweepStoreDouble) LatestRunCompletionByIdentifier(_ context.Context, identifiers []string) (map[string]string, error) {
 	if s.err != nil {
@@ -3178,9 +3183,9 @@ func TestReconcileOverdueRetries_StartupReconstructedEntrySkipped(t *testing.T) 
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
-	PopulateRetries(state, []persistence.PendingRetry{
+	PopulateRetries(state, []storage.PendingRetry{
 		{
-			Entry: persistence.RetryEntry{
+			Entry: storage.RetryEntry{
 				IssueID:    "STARTUP-1",
 				Identifier: "STARTUP-1-ident",
 				Attempt:    2,
@@ -3231,10 +3236,10 @@ func TestReconcileOverdueRetries_LargeStartupBatchFiresNothing(t *testing.T) {
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
-	entries := make([]persistence.PendingRetry, 0, 200)
+	entries := make([]storage.PendingRetry, 0, 200)
 	for i := range 200 {
-		entries = append(entries, persistence.PendingRetry{
-			Entry: persistence.RetryEntry{
+		entries = append(entries, storage.PendingRetry{
+			Entry: storage.RetryEntry{
 				IssueID:    fmt.Sprintf("STARTUP-BATCH-%d", i),
 				Identifier: fmt.Sprintf("STARTUP-BATCH-%d-ident", i),
 				Attempt:    1,

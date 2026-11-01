@@ -58,7 +58,7 @@ func (src statsSource) report(ctx context.Context, since, until *time.Time, gene
 // passes the stage funnels count.
 type statsStore interface {
 	storage.RunHistoryStore
-	ListLivePasses(ctx context.Context) ([]persistence.LivePass, error)
+	storage.LivePassStore
 }
 
 func (src statsSource) aggregate(ctx context.Context, store statsStore, since, until *time.Time, generatedAt time.Time) (runstats.Report, error) {
@@ -99,14 +99,14 @@ func dispatchStages(d config.DispatchConfig) runstats.Stages {
 
 // livePasses maps the persisted live passes to the stage pass records
 // chain_funnels counts.
-func livePasses(passes []persistence.LivePass) []runstats.LivePass {
+func livePasses(passes []storage.LivePass) []runstats.LivePass {
 	live := make([]runstats.LivePass, len(passes))
 	for i, pass := range passes {
 		live[i] = runstats.LivePass{
 			ChainID:      pass.ChainID,
 			RuleName:     pass.RuleName,
 			PreviousRule: pass.StagePrevious,
-			BudgetHeld:   pass.Kind == persistence.LivePassBudget,
+			BudgetHeld:   pass.Kind == storage.LivePassBudget,
 		}
 	}
 	return live

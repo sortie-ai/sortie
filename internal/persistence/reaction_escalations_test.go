@@ -5,9 +5,11 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-func sameEscalation(a, b ReactionEscalation) bool {
+func sameEscalation(a, b storage.ReactionEscalation) bool {
 	if (a.EscalatedAt == nil) != (b.EscalatedAt == nil) {
 		return false
 	}
@@ -35,7 +37,7 @@ func TestReactionEscalationLifecycle(t *testing.T) {
 	t.Parallel()
 
 	escalatedAt := time.Date(2026, 3, 1, 14, 0, 5, 123456789, time.FixedZone("UTC+2", 2*60*60))
-	saved := ReactionEscalation{
+	saved := storage.ReactionEscalation{
 		IssueID: "ISS-1", Kind: "ci", Subject: "head-abc", EscalatedAt: &escalatedAt,
 		Trigger: "budget", Attempts: 3, PRNumber: 42, PROwner: "acme", PRRepo: "widgets", PRBranch: "feat/x",
 	}
@@ -45,7 +47,7 @@ func TestReactionEscalationLifecycle(t *testing.T) {
 	tests := []struct {
 		name         string
 		act          func(ctx context.Context, s *Store) error
-		wantRec      *ReactionEscalation
+		wantRec      *storage.ReactionEscalation
 		wantStanding []string
 	}{
 		{
@@ -74,7 +76,7 @@ func TestReactionEscalationLifecycle(t *testing.T) {
 			s := mustOpenStore(t)
 			ctx := context.Background()
 			other := time.Date(2026, 3, 2, 8, 0, 0, 0, time.UTC)
-			for _, rec := range []ReactionEscalation{
+			for _, rec := range []storage.ReactionEscalation{
 				{IssueID: "ISS-2", Kind: "ci", Subject: "head-z", EscalatedAt: &other},
 				{IssueID: "ISS-1", Kind: "review", Subject: "set-1", EscalatedAt: &other},
 				saved,

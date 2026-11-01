@@ -112,23 +112,23 @@ func TestSaveAndLoadRetryEntry(t *testing.T) {
 	t.Parallel()
 
 	sessionID := "sess-abc"
-	base := RetryEntry{
+	base := storage.RetryEntry{
 		IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000,
 		ConfiguredModel: "provider/cheap", IssueType: "Bug", IssueState: "In Progress", DispatchedAt: "2026-03-19T10:00:00Z",
 	}
-	withLabels := func(labels []string) RetryEntry { e := base; e.IssueLabels = labels; return e }
+	withLabels := func(labels []string) storage.RetryEntry { e := base; e.IssueLabels = labels; return e }
 	withSession := base
 	withSession.SessionID = &sessionID
 	withNotified := base
 	withNotified.UsageLimitNotified = true
-	stale := RetryEntry{
+	stale := storage.RetryEntry{
 		IssueID: "ISS-1", Identifier: "stale", ConfiguredModel: "stale", IssueType: "stale",
 		IssueLabels: []string{"stale"}, IssueState: "stale", DispatchedAt: "stale",
 	}
 
 	tests := []struct {
 		name  string
-		entry RetryEntry
+		entry storage.RetryEntry
 	}{
 		{"nil labels", withLabels(nil)},
 		{"empty labels", withLabels([]string{})},
@@ -144,7 +144,7 @@ func TestSaveAndLoadRetryEntry(t *testing.T) {
 			s := openTestStore(t)
 			migrateOrFatal(t, s)
 			ctx := context.Background()
-			for _, entry := range []RetryEntry{stale, tt.entry} {
+			for _, entry := range []storage.RetryEntry{stale, tt.entry} {
 				if err := s.SaveRetryEntry(ctx, entry); err != nil {
 					t.Fatalf("SaveRetryEntry(%+v): %v", entry, err)
 				}
@@ -166,7 +166,7 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entry1 := RetryEntry{
+	entry1 := storage.RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    1,
@@ -178,7 +178,7 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 		t.Fatalf("SaveRetryEntry (first): %v", err)
 	}
 
-	entry2 := RetryEntry{
+	entry2 := storage.RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    2,
@@ -221,7 +221,7 @@ func TestRecordStageHop_ChainFollowsLatestHop(t *testing.T) {
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
-	first := StageHop{
+	first := storage.StageHop{
 		IssueID: "ISS-1", Identifier: "PROJ-1", HopCount: 1, SourceRule: "specify", TargetRule: "plan", SourceDispatchID: "d1", ChainID: "chain-1",
 		DisplayID: "owner/repo#1", IssueTitle: "Old title", IssueURL: "https://example.test/old", DispatchedAt: "2026-03-19T10:00:00Z",
 		IssueType: "Bug", IssueLabels: []string{"stage-specify"}, IssueState: "To Do",
@@ -235,7 +235,7 @@ func TestRecordStageHop_ChainFollowsLatestHop(t *testing.T) {
 	other.IssueID, other.IssueLabels = "ISS-2", []string{}
 	recorded := other
 	recorded.IssueID, recorded.IssueLabels, recorded.RunDispatched = "ISS-3", nil, true
-	for _, hop := range []StageHop{first, latest, other, recorded} {
+	for _, hop := range []storage.StageHop{first, latest, other, recorded} {
 		if err := s.RecordStageHop(ctx, hop); err != nil {
 			t.Fatalf("RecordStageHop(%+v): %v", hop, err)
 		}
@@ -249,7 +249,7 @@ func TestRecordStageHop_ChainFollowsLatestHop(t *testing.T) {
 	latest.RunDispatched = true
 
 	hops, err := s.ListStageHops(ctx)
-	if err != nil || !reflect.DeepEqual(hops, []StageHop{latest, other, recorded}) {
+	if err != nil || !reflect.DeepEqual(hops, []storage.StageHop{latest, other, recorded}) {
 		t.Errorf("ListStageHops = %+v, %v, want [%+v %+v %+v], nil", hops, err, latest, other, recorded)
 	}
 }
@@ -261,7 +261,7 @@ func TestSaveRetryEntry_UpsertClearsError(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entry1 := RetryEntry{
+	entry1 := storage.RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    1,
@@ -272,7 +272,7 @@ func TestSaveRetryEntry_UpsertClearsError(t *testing.T) {
 		t.Fatalf("SaveRetryEntry (with error): %v", err)
 	}
 
-	entry2 := RetryEntry{
+	entry2 := storage.RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    2,
@@ -306,8 +306,8 @@ func TestDeleteRetryEntry(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	e1 := RetryEntry{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000}
-	e2 := RetryEntry{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 1, DueAtMs: 2000}
+	e1 := storage.RetryEntry{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000}
+	e2 := storage.RetryEntry{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 1, DueAtMs: 2000}
 	if err := s.SaveRetryEntry(ctx, e1); err != nil {
 		t.Fatalf("SaveRetryEntry (ISS-1): %v", err)
 	}
@@ -369,7 +369,7 @@ func TestLoadRetryEntries_OrderByDueAtMs(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	for _, e := range []RetryEntry{
+	for _, e := range []storage.RetryEntry{
 		{IssueID: "ISS-3", Identifier: "PROJ-3", Attempt: 1, DueAtMs: 3000},
 		{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000},
 		{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 1, DueAtMs: 2000},
@@ -407,7 +407,7 @@ func TestSaveRetryEntry_DBError(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	err := s.SaveRetryEntry(ctx, RetryEntry{
+	err := s.SaveRetryEntry(ctx, storage.RetryEntry{
 		IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000,
 	})
 	if err == nil {
@@ -481,7 +481,7 @@ func TestLoadRetryEntries_DeterministicTieBreak(t *testing.T) {
 	ctx := context.Background()
 
 	// All entries share the same due_at_ms; order must be deterministic by issue_id.
-	for _, e := range []RetryEntry{
+	for _, e := range []storage.RetryEntry{
 		{IssueID: "C", Identifier: "PROJ-3", Attempt: 1, DueAtMs: 5000},
 		{IssueID: "A", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 5000},
 		{IssueID: "B", Identifier: "PROJ-2", Attempt: 1, DueAtMs: 5000},
@@ -514,7 +514,7 @@ func TestSaveRetryEntry_Upsert_SessionID(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entry1 := RetryEntry{
+	entry1 := storage.RetryEntry{
 		IssueID:    "ISS-UPS",
 		Identifier: "PROJ-UPS",
 		Attempt:    1,
@@ -526,7 +526,7 @@ func TestSaveRetryEntry_Upsert_SessionID(t *testing.T) {
 	}
 
 	sessID := "sess-updated"
-	entry2 := RetryEntry{
+	entry2 := storage.RetryEntry{
 		IssueID:    "ISS-UPS",
 		Identifier: "PROJ-UPS",
 		Attempt:    2,
@@ -1092,7 +1092,7 @@ func TestUpsertSessionMetadata(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta := SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-abc",
 		AgentPID:     new("12345"),
@@ -1145,7 +1145,7 @@ func TestUpsertSessionMetadata_Update(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta1 := SessionMetadata{
+	meta1 := storage.SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-1",
 		AgentPID:     new("111"),
@@ -1158,7 +1158,7 @@ func TestUpsertSessionMetadata_Update(t *testing.T) {
 		t.Fatalf("UpsertSessionMetadata (first): %v", err)
 	}
 
-	meta2 := SessionMetadata{
+	meta2 := storage.SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-2",
 		AgentPID:     new("222"),
@@ -1205,7 +1205,7 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta := SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-abc",
 		AgentPID:     nil,
@@ -1257,7 +1257,7 @@ func TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip(t *testing.T) {
 			migrateOrFatal(t, s)
 			ctx := context.Background()
 
-			meta := SessionMetadata{
+			meta := storage.SessionMetadata{
 				IssueID:             "ISS-REQV",
 				SessionID:           "sess-reqv",
 				APIRequestCount:     tt.apiRequestCount,
@@ -1296,7 +1296,7 @@ func TestUpsertSessionMetadata_DispatchIDRoundTrip(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta := SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:    "ISS-DISPATCH",
 		SessionID:  "sess-abc",
 		DispatchID: "dispatch-abc",
@@ -1360,8 +1360,8 @@ func TestLoadSessionMetadata_NotFound(t *testing.T) {
 	if found {
 		t.Fatal("expected found=false, got true")
 	}
-	if got != (SessionMetadata{}) {
-		t.Errorf("expected zero-value SessionMetadata, got %+v", got)
+	if got != (storage.SessionMetadata{}) {
+		t.Errorf("expected zero-value storage.SessionMetadata, got %+v", got)
 	}
 }
 
@@ -1372,7 +1372,7 @@ func TestLoadAllSessionMetadata(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entries := []SessionMetadata{
+	entries := []storage.SessionMetadata{
 		{IssueID: "ISS-1", SessionID: "s1", UpdatedAt: "2026-03-19T10:01:00Z"},
 		{IssueID: "ISS-2", SessionID: "s2", UpdatedAt: "2026-03-19T10:03:00Z"},
 		{IssueID: "ISS-3", SessionID: "s3", UpdatedAt: "2026-03-19T10:02:00Z"},
@@ -1429,7 +1429,7 @@ func TestLoadAllSessionMetadata_NonNilAgentPID(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta := SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:   "ISS-1",
 		SessionID: "sess-abc",
 		AgentPID:  new("54321"),
@@ -1461,8 +1461,8 @@ func TestDeleteSessionMetadata(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	e1 := SessionMetadata{IssueID: "ISS-1", SessionID: "s1", UpdatedAt: "2026-03-19T10:00:00Z"}
-	e2 := SessionMetadata{IssueID: "ISS-2", SessionID: "s2", UpdatedAt: "2026-03-19T10:01:00Z"}
+	e1 := storage.SessionMetadata{IssueID: "ISS-1", SessionID: "s1", UpdatedAt: "2026-03-19T10:00:00Z"}
+	e2 := storage.SessionMetadata{IssueID: "ISS-2", SessionID: "s2", UpdatedAt: "2026-03-19T10:01:00Z"}
 	if err := s.UpsertSessionMetadata(ctx, e1); err != nil {
 		t.Fatalf("UpsertSessionMetadata(ISS-1): %v", err)
 	}
@@ -1505,7 +1505,7 @@ func TestUpsertAggregateMetrics(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	metrics := AggregateMetrics{
+	metrics := storage.AggregateMetrics{
 		Key:            "agent_totals",
 		InputTokens:    5000,
 		OutputTokens:   2400,
@@ -1551,7 +1551,7 @@ func TestUpsertAggregateMetrics_Update(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	m1 := AggregateMetrics{
+	m1 := storage.AggregateMetrics{
 		Key:            "agent_totals",
 		InputTokens:    100,
 		OutputTokens:   50,
@@ -1563,7 +1563,7 @@ func TestUpsertAggregateMetrics_Update(t *testing.T) {
 		t.Fatalf("UpsertAggregateMetrics (first): %v", err)
 	}
 
-	m2 := AggregateMetrics{
+	m2 := storage.AggregateMetrics{
 		Key:            "agent_totals",
 		InputTokens:    5000,
 		OutputTokens:   2400,
@@ -1613,8 +1613,8 @@ func TestLoadAggregateMetrics_NotFound(t *testing.T) {
 	if found {
 		t.Fatal("expected found=false, got true")
 	}
-	if got != (AggregateMetrics{}) {
-		t.Errorf("expected zero-value AggregateMetrics, got %+v", got)
+	if got != (storage.AggregateMetrics{}) {
+		t.Errorf("expected zero-value storage.AggregateMetrics, got %+v", got)
 	}
 }
 
@@ -1626,7 +1626,7 @@ func TestUpsertAggregateMetrics_SecondsRunningPrecision(t *testing.T) {
 	ctx := context.Background()
 
 	want := 1834.567
-	metrics := AggregateMetrics{
+	metrics := storage.AggregateMetrics{
 		Key:            "agent_totals",
 		SecondsRunning: want,
 		UpdatedAt:      "2026-03-19T10:00:00Z",
@@ -1673,7 +1673,7 @@ func TestLoadRetryEntriesForRecovery_FutureDueAt(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	for _, e := range []RetryEntry{
+	for _, e := range []storage.RetryEntry{
 		{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 5000},
 		{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 2, DueAtMs: 8000},
 	} {
@@ -1704,7 +1704,7 @@ func TestLoadRetryEntriesForRecovery_PastDueAt(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	for _, e := range []RetryEntry{
+	for _, e := range []storage.RetryEntry{
 		{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000},
 		{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 2, DueAtMs: 2000},
 	} {
@@ -1734,7 +1734,7 @@ func TestLoadRetryEntriesForRecovery_Mixed(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	for _, e := range []RetryEntry{
+	for _, e := range []storage.RetryEntry{
 		{IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, DueAtMs: 1000},
 		{IssueID: "ISS-2", Identifier: "PROJ-2", Attempt: 2, DueAtMs: 5000},
 		{IssueID: "ISS-3", Identifier: "PROJ-3", Attempt: 3, DueAtMs: 9000},
@@ -1781,7 +1781,7 @@ func TestLoadRetryEntriesForRecovery_PreservesEntryFields(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entry := RetryEntry{
+	entry := storage.RetryEntry{
 		IssueID:    "ISS-42",
 		Identifier: "PROJ-42",
 		Attempt:    3,
@@ -2180,7 +2180,7 @@ func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	meta := SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:         "EXT-1",
 		SessionID:       "sess-ext",
 		AgentPID:        new("9876"),
@@ -2233,7 +2233,7 @@ func TestUpsertSessionMetadata_ExtendedFieldsUpdate(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	m1 := SessionMetadata{
+	m1 := storage.SessionMetadata{
 		IssueID:         "EXT-UPD",
 		SessionID:       "sess-1",
 		CacheReadTokens: 100,
@@ -2245,7 +2245,7 @@ func TestUpsertSessionMetadata_ExtendedFieldsUpdate(t *testing.T) {
 		t.Fatalf("UpsertSessionMetadata (first): %v", err)
 	}
 
-	m2 := SessionMetadata{
+	m2 := storage.SessionMetadata{
 		IssueID:         "EXT-UPD",
 		SessionID:       "sess-2",
 		CacheReadTokens: 5000,
@@ -2284,7 +2284,7 @@ func TestLoadAllSessionMetadata_ExtendedFields(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	if err := s.UpsertSessionMetadata(ctx, SessionMetadata{
+	if err := s.UpsertSessionMetadata(ctx, storage.SessionMetadata{
 		IssueID:         "ALL-1",
 		SessionID:       "s1",
 		CacheReadTokens: 111,
@@ -2325,7 +2325,7 @@ func TestUpsertAggregateMetrics_CacheReadTokens(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	metrics := AggregateMetrics{
+	metrics := storage.AggregateMetrics{
 		Key:             "agent_totals",
 		InputTokens:     1000,
 		OutputTokens:    500,
@@ -2359,12 +2359,12 @@ func TestUpsertAggregateMetrics_CacheReadTokensUpdate(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	m1 := AggregateMetrics{Key: "agent_totals", CacheReadTokens: 100, UpdatedAt: "2026-04-01T10:00:00Z"}
+	m1 := storage.AggregateMetrics{Key: "agent_totals", CacheReadTokens: 100, UpdatedAt: "2026-04-01T10:00:00Z"}
 	if err := s.UpsertAggregateMetrics(ctx, m1); err != nil {
 		t.Fatalf("UpsertAggregateMetrics (first): %v", err)
 	}
 
-	m2 := AggregateMetrics{Key: "agent_totals", CacheReadTokens: 9999, UpdatedAt: "2026-04-01T11:00:00Z"}
+	m2 := storage.AggregateMetrics{Key: "agent_totals", CacheReadTokens: 9999, UpdatedAt: "2026-04-01T11:00:00Z"}
 	if err := s.UpsertAggregateMetrics(ctx, m2); err != nil {
 		t.Fatalf("UpsertAggregateMetrics (second): %v", err)
 	}
@@ -2386,7 +2386,7 @@ func TestUpsertAggregateMetrics_UnmeasuredSessions(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	metrics := AggregateMetrics{
+	metrics := storage.AggregateMetrics{
 		Key:                "agent_totals",
 		InputTokens:        1000,
 		UnmeasuredSessions: 42,
@@ -2416,12 +2416,12 @@ func TestUpsertAggregateMetrics_UnmeasuredSessionsUpdate(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	m1 := AggregateMetrics{Key: "agent_totals", UnmeasuredSessions: 3, UpdatedAt: "2026-04-01T10:00:00Z"}
+	m1 := storage.AggregateMetrics{Key: "agent_totals", UnmeasuredSessions: 3, UpdatedAt: "2026-04-01T10:00:00Z"}
 	if err := s.UpsertAggregateMetrics(ctx, m1); err != nil {
 		t.Fatalf("UpsertAggregateMetrics (first): %v", err)
 	}
 
-	m2 := AggregateMetrics{Key: "agent_totals", UnmeasuredSessions: 7, UpdatedAt: "2026-04-01T11:00:00Z"}
+	m2 := storage.AggregateMetrics{Key: "agent_totals", UnmeasuredSessions: 7, UpdatedAt: "2026-04-01T11:00:00Z"}
 	if err := s.UpsertAggregateMetrics(ctx, m2); err != nil {
 		t.Fatalf("UpsertAggregateMetrics (second): %v", err)
 	}
@@ -2895,7 +2895,7 @@ func TestSaveRetryEntry_DispatchColumnsRoundTrip(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	entry := RetryEntry{
+	entry := storage.RetryEntry{
 		IssueID:    "ISS-99",
 		Identifier: "PROJ-99",
 		Attempt:    2,

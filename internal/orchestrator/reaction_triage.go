@@ -13,7 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -602,14 +602,7 @@ func recordTriageAction(ctx context.Context, params ReconcileParams, pending *Pe
 		now = params.NowFunc().UTC()
 	}
 	recordReactionActivity(ctx, params.Store, pending.IssueID, pending.StageLineage,
-		persistence.ReactionActivityAction, []string{pending.Kind}, now, log)
-}
-
-// reactionTriageOutcomeStore is the pair of store methods the recorded triage
-// answers need. Satisfied by [persistence.Store].
-type reactionTriageOutcomeStore interface {
-	RecordReactionTriageOutcome(ctx context.Context, outcome persistence.ReactionTriageOutcome) error
-	LatestReactionTriageDisposition(ctx context.Context, issueID, kind, fingerprint string) (disposition string, found bool, err error)
+		storage.ReactionActivityAction, []string{pending.Kind}, now, log)
 }
 
 // recordTriageOutcome appends the answer a pass just applied. A failed write
@@ -629,7 +622,7 @@ func recordTriageOutcome(
 	if params.NowFunc != nil {
 		now = params.NowFunc().UTC()
 	}
-	if err := params.Store.RecordReactionTriageOutcome(ctx, persistence.ReactionTriageOutcome{
+	if err := params.Store.RecordReactionTriageOutcome(ctx, storage.ReactionTriageOutcome{
 		IssueID:     pending.IssueID,
 		Kind:        req.Kind,
 		Fingerprint: req.Fingerprint,
@@ -653,7 +646,7 @@ func recordTriageOutcome(
 // failed read reads as not handled.
 func triageHandledFor(
 	ctx context.Context,
-	store reactionTriageOutcomeStore,
+	store storage.ReactionTriageOutcomeStore,
 	pending *PendingReaction,
 	fingerprint string,
 	log *slog.Logger,

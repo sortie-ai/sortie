@@ -18,6 +18,7 @@ type tokenStoreResponse struct {
 }
 
 type fakeTokenStore struct {
+	storage.RunHistoryStore
 	responses []tokenStoreResponse
 	calls     []string
 }
@@ -35,6 +36,7 @@ func (f *fakeTokenStore) TokenUsageByIssue(_ context.Context, issueID string) (s
 }
 
 type failingIssueTokenStore struct {
+	storage.RunHistoryStore
 	t *testing.T
 }
 
@@ -216,7 +218,7 @@ func TestFreezeIssueTokenBaselineRecordsOnePerDispatch(t *testing.T) {
 
 // driveEvent mirrors the agentEventCh case: HandleAgentEvent applies the
 // usage delta before enforceInFlightTokenCeiling evaluates it.
-func driveEvent(state *State, issueID string, usage domain.TokenUsage, store issueTokenStore, metrics domain.Metrics, log *slog.Logger) {
+func driveEvent(state *State, issueID string, usage domain.TokenUsage, store storage.RunHistoryStore, metrics domain.Metrics, log *slog.Logger) {
 	event := domain.AgentEvent{Type: domain.EventTokenUsage, Usage: usage}
 	HandleAgentEvent(state, issueID, event, log, metrics)
 	enforceInFlightTokenCeiling(context.Background(), state, issueID, event, store, log)

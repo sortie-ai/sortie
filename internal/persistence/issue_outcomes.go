@@ -4,35 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// Issue outcome kinds.
-const (
-	IssueOutcomeHandedOff = "handed_off"
-	IssueOutcomeMerged    = "merged"
-	IssueOutcomeTerminal  = "terminal"
-)
-
-// IssueOutcome is how an issue's latest work ended, as the orchestrator
-// observed it. ObservedAt is RFC 3339 in UTC. State is empty for a merged
-// outcome; MergeReactionKind, PRNumber, and PRRepository are set only for a
-// merged outcome.
-type IssueOutcome struct {
-	IssueID           string
-	Kind              string
-	ObservedAt        string
-	State             string
-	MergeReactionKind string
-	PRNumber          int
-	PRRepository      string
-}
+var _ storage.IssueOutcomeStore = (*Store)(nil)
 
 // RecordIssueOutcome stores o as the issue's outcome in one statement. An
 // existing row is replaced only when o is a handoff, when the stored row is a
 // handoff, or when a stored terminal outcome meets a merged one; in every
 // other pair the stored row stays, so a merge is never replaced by a terminal
 // read and a first observation keeps its time.
-func (s *Store) RecordIssueOutcome(ctx context.Context, o IssueOutcome) error {
+func (s *Store) RecordIssueOutcome(ctx context.Context, o storage.IssueOutcome) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO issue_outcomes (issue_id, kind, observed_at, state, merge_reaction_kind, pr_number, pr_repository)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -68,8 +51,8 @@ func (s *Store) DeleteIssueOutcome(ctx context.Context, issueID string) error {
 // IssueOutcomes returns the stored outcome of each listed issue that has one,
 // keyed by issue ID. An empty list reads nothing and returns an empty,
 // non-nil map.
-func (s *Store) IssueOutcomes(ctx context.Context, issueIDs []string) (map[string]IssueOutcome, error) {
-	outcomes := make(map[string]IssueOutcome, len(issueIDs))
+func (s *Store) IssueOutcomes(ctx context.Context, issueIDs []string) (map[string]storage.IssueOutcome, error) {
+	outcomes := make(map[string]storage.IssueOutcome, len(issueIDs))
 	if len(issueIDs) == 0 {
 		return outcomes, nil
 	}
@@ -96,7 +79,7 @@ func (s *Store) IssueOutcomes(ctx context.Context, issueIDs []string) (map[strin
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
 	for rows.Next() {
-		var o IssueOutcome
+		var o storage.IssueOutcome
 		if err := rows.Scan(&o.IssueID, &o.Kind, &o.ObservedAt, &o.State, &o.MergeReactionKind, &o.PRNumber, &o.PRRepository); err != nil {
 			return nil, fmt.Errorf("scan issue outcome: %w", err)
 		}

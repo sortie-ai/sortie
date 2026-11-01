@@ -6,15 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// ReactionObservation is a persisted first-seen observation. Dispatched
-// records whether the one-shot action associated with the observation has
-// already been performed.
-type ReactionObservation struct {
-	FirstObservedAt time.Time
-	Dispatched      bool
-}
+var _ storage.ReactionFingerprintStore = (*Store)(nil)
 
 // UpsertReactionFingerprint inserts or updates a reaction fingerprint.
 // If the fingerprint value changes, dispatched is reset to 0.
@@ -48,7 +44,7 @@ func (s *Store) UpsertReactionObservation(
 	ctx context.Context,
 	issueID, kind, fingerprint string,
 	observedAt time.Time,
-) (ReactionObservation, error) {
+) (storage.ReactionObservation, error) {
 	observedAtText := observedAt.UTC().Format(time.RFC3339Nano)
 	var (
 		firstObservedAtText string
@@ -73,14 +69,14 @@ func (s *Store) UpsertReactionObservation(
 		issueID, kind, fingerprint, observedAtText,
 	).Scan(&firstObservedAtText, &dispatchedInt)
 	if err != nil {
-		return ReactionObservation{}, err
+		return storage.ReactionObservation{}, err
 	}
 
 	firstObservedAt, err := time.Parse(time.RFC3339Nano, firstObservedAtText)
 	if err != nil {
-		return ReactionObservation{}, fmt.Errorf("parse reaction observation timestamp: %w", err)
+		return storage.ReactionObservation{}, fmt.Errorf("parse reaction observation timestamp: %w", err)
 	}
-	return ReactionObservation{
+	return storage.ReactionObservation{
 		FirstObservedAt: firstObservedAt,
 		Dispatched:      dispatchedInt != 0,
 	}, nil

@@ -3,7 +3,11 @@ package persistence
 import (
 	"context"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
+
+var _ storage.ReactionHandoffStore = (*Store)(nil)
 
 // AddReactionHandedOffComments records commentIDs in the handed-off set of
 // the issue and kind in one transaction. IDs already stored are ignored and

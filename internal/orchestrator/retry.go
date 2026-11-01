@@ -12,7 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/storage"
@@ -27,23 +26,14 @@ const pausedRetryMaxDwell = 30 * time.Minute
 // RetryTimerStore is the persistence interface required by
 // [HandleRetryTimer].
 type RetryTimerStore interface {
-	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	UpsertLivePass(ctx context.Context, pass persistence.LivePass) error
-	DeleteLivePass(ctx context.Context, issueID, kind string) error
-	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
-	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
-	LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]storage.RunHistory, error)
-	TokenUsageByIssue(ctx context.Context, issueID string) (storage.IssueTokenUsage, error)
-	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
-	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
-	DeleteParkedIssue(ctx context.Context, issueID string) error
-	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
-	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
-	MarkStageHopDispatched(ctx context.Context, issueID string) error
-	DeleteStageHop(ctx context.Context, issueID string) error
-	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-	UsageCompletedBetween(ctx context.Context, since, until time.Time) (storage.IssueTokenUsage, error)
+	storage.RetryEntryStore
+	storage.LivePassStore
+	storage.RunHistoryStore
+	storage.ReactionFingerprintStore
+	storage.ParkedIssueStore
+	storage.BudgetHoldNoticeStore
+	storage.StageHopStore
+	storage.IssueOutcomeStore
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -990,8 +980,8 @@ func isStaleRetryTimer(entry *RetryEntry) bool {
 
 // retryEntryRow returns the persisted form of entry. Labels are copied and
 // a nil Labels stays nil.
-func retryEntryRow(entry *RetryEntry) persistence.RetryEntry {
-	return persistence.RetryEntry{
+func retryEntryRow(entry *RetryEntry) storage.RetryEntry {
+	return storage.RetryEntry{
 		IssueID:     entry.IssueID,
 		Identifier:  entry.Identifier,
 		DisplayID:   entry.DisplayID,

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // AcknowledgeStatus is what a request to acknowledge an attention item did.
@@ -70,7 +70,7 @@ func (o *Orchestrator) acknowledgeOnLoop(ctx context.Context, itemID string) Ack
 	}
 
 	log := attentionLogger(o.logger, cause)
-	err := o.store.SaveAttentionAcknowledgement(ctx, persistence.AttentionAcknowledgement{ItemID: itemID, AcknowledgedAt: now})
+	err := o.store.SaveAttentionAcknowledgement(ctx, storage.AttentionAcknowledgement{ItemID: itemID, AcknowledgedAt: now})
 	if err != nil {
 		log.Error("failed to persist attention acknowledgement",
 			slog.String("item_id", itemID),
@@ -145,7 +145,7 @@ func (o *Orchestrator) pruneAttentionAcknowledgements(ctx context.Context) {
 // event loop starts, beside [PopulateBudgetHoldNotices]. A row with an empty
 // ID or a zero time, which is how the store reports a time it could not
 // parse, is skipped.
-func PopulateAttentionAcknowledgements(state *State, rows []persistence.AttentionAcknowledgement, log *slog.Logger) {
+func PopulateAttentionAcknowledgements(state *State, rows []storage.AttentionAcknowledgement, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}

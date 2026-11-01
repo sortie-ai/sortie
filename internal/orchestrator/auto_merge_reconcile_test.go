@@ -11,7 +11,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // controlledSCMAdapter is a full SCMAdapter where each method is individually
@@ -472,8 +472,8 @@ func TestReconcileAutoMerge_MergedActions(t *testing.T) {
 					store.markDispatchedCalls, store.deleteFingerprintCalls)
 			}
 
-			if len(store.outcomes) != 1 || store.outcomes[0].Kind != persistence.IssueOutcomeMerged || store.outcomes[0].IssueID != issueID {
-				t.Errorf("RecordIssueOutcome calls = %+v, want one %q outcome for %q", store.outcomes, persistence.IssueOutcomeMerged, issueID)
+			if len(store.outcomes) != 1 || store.outcomes[0].Kind != storage.IssueOutcomeMerged || store.outcomes[0].IssueID != issueID {
+				t.Errorf("RecordIssueOutcome calls = %+v, want one %q outcome for %q", store.outcomes, storage.IssueOutcomeMerged, issueID)
 			}
 
 			sent := slack.notifications()

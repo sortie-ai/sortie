@@ -6,21 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// ReactionTriageOutcome is one triage answer a reaction applied to one
-// subject of one issue.
-type ReactionTriageOutcome struct {
-	IssueID, Kind, Fingerprint string
-	Disposition, Fallback      string
-	Elapsed                    time.Duration
-	ChainID                    string
-	RecordedAt                 time.Time
-}
+var _ storage.ReactionTriageOutcomeStore = (*Store)(nil)
 
 // RecordReactionTriageOutcome appends one triage answer. Rows are never
 // updated or removed.
-func (s *Store) RecordReactionTriageOutcome(ctx context.Context, outcome ReactionTriageOutcome) error {
+func (s *Store) RecordReactionTriageOutcome(ctx context.Context, outcome storage.ReactionTriageOutcome) error {
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO reaction_triage_outcomes
 			(issue_id, kind, fingerprint, disposition, fallback, elapsed_ms, chain_id, recorded_at)

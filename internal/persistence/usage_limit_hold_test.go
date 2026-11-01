@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestUsageLimitHolds(t *testing.T) {
@@ -14,40 +16,40 @@ func TestUsageLimitHolds(t *testing.T) {
 		modelOnly bool
 		model     string
 	}
-	kindWide := UsageLimitHold{AgentKind: "claude", ResetsAtMs: 100, HeldSinceMs: 10}
-	modelOnlyDefault := UsageLimitHold{AgentKind: "claude", ModelOnly: true, ResetsAtMs: 200, HeldSinceMs: 20}
-	modelOnlyNamed := UsageLimitHold{AgentKind: "claude", ModelOnly: true, Model: "opus", ResetsAtMs: 300, HeldSinceMs: 30}
-	otherKind := UsageLimitHold{AgentKind: "codex", ModelOnly: true, Model: "gpt", ResetsAtMs: 400, HeldSinceMs: 40}
+	kindWide := storage.UsageLimitHold{AgentKind: "claude", ResetsAtMs: 100, HeldSinceMs: 10}
+	modelOnlyDefault := storage.UsageLimitHold{AgentKind: "claude", ModelOnly: true, ResetsAtMs: 200, HeldSinceMs: 20}
+	modelOnlyNamed := storage.UsageLimitHold{AgentKind: "claude", ModelOnly: true, Model: "opus", ResetsAtMs: 300, HeldSinceMs: 30}
+	otherKind := storage.UsageLimitHold{AgentKind: "codex", ModelOnly: true, Model: "gpt", ResetsAtMs: 400, HeldSinceMs: 40}
 	replaced := kindWide
 	replaced.ResetsAtMs, replaced.HeldSinceMs = 900, 90
 
 	tests := []struct {
 		name   string
-		save   []UsageLimitHold
+		save   []storage.UsageLimitHold
 		delete []holdKey
-		want   []UsageLimitHold
+		want   []storage.UsageLimitHold
 	}{
 		{
 			name: "load in key order field for field",
-			save: []UsageLimitHold{otherKind, modelOnlyNamed, modelOnlyDefault, kindWide},
-			want: []UsageLimitHold{kindWide, modelOnlyDefault, modelOnlyNamed, otherKind},
+			save: []storage.UsageLimitHold{otherKind, modelOnlyNamed, modelOnlyDefault, kindWide},
+			want: []storage.UsageLimitHold{kindWide, modelOnlyDefault, modelOnlyNamed, otherKind},
 		},
 		{
 			name: "second save of a key replaces its row",
-			save: []UsageLimitHold{kindWide, replaced},
-			want: []UsageLimitHold{replaced},
+			save: []storage.UsageLimitHold{kindWide, replaced},
+			want: []storage.UsageLimitHold{replaced},
 		},
 		{
 			name:   "delete removes only its key",
-			save:   []UsageLimitHold{kindWide, modelOnlyDefault, modelOnlyNamed},
+			save:   []storage.UsageLimitHold{kindWide, modelOnlyDefault, modelOnlyNamed},
 			delete: []holdKey{{"claude", true, ""}},
-			want:   []UsageLimitHold{kindWide, modelOnlyNamed},
+			want:   []storage.UsageLimitHold{kindWide, modelOnlyNamed},
 		},
 		{
 			name:   "delete of an absent key changes nothing",
-			save:   []UsageLimitHold{kindWide},
+			save:   []storage.UsageLimitHold{kindWide},
 			delete: []holdKey{{"claude", true, "opus"}, {"codex", false, ""}},
-			want:   []UsageLimitHold{kindWide},
+			want:   []storage.UsageLimitHold{kindWide},
 		},
 	}
 

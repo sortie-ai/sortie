@@ -274,7 +274,7 @@ type Harness struct {
 	tracker       domain.TrackerAdapter
 	agent         *AdapterObserver
 	manager       *workflowManager
-	store         *persistence.Store
+	store         storage.RunHistoryStore
 	orchestrator  *orchestrator.Orchestrator
 }
 

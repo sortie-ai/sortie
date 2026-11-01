@@ -3,20 +3,15 @@ package persistence
 import (
 	"context"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// UsageLimitHold is one persisted usage-limit hold.
-type UsageLimitHold struct {
-	AgentKind   string
-	ModelOnly   bool   // Stored as 0 or 1.
-	Model       string // Empty for a kind-wide hold and for the runtime's default model.
-	ResetsAtMs  int64  // Unix epoch milliseconds.
-	HeldSinceMs int64  // Unix epoch milliseconds.
-}
+var _ storage.UsageLimitHoldStore = (*Store)(nil)
 
 // SaveUsageLimitHold persists a hold using upsert semantics. A hold with
 // the same agent kind, model scope, and model is replaced entirely.
-func (s *Store) SaveUsageLimitHold(ctx context.Context, hold UsageLimitHold) error {
+func (s *Store) SaveUsageLimitHold(ctx context.Context, hold storage.UsageLimitHold) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_limit_holds (agent_kind, model_only, model, resets_at_ms, held_since_ms)
 		VALUES (?, ?, ?, ?, ?)
@@ -33,7 +28,7 @@ func (s *Store) SaveUsageLimitHold(ctx context.Context, hold UsageLimitHold) err
 
 // LoadUsageLimitHolds returns every persisted hold ordered by agent kind,
 // model scope, and model. Returns an empty slice (not nil) when none exist.
-func (s *Store) LoadUsageLimitHolds(ctx context.Context) ([]UsageLimitHold, error) {
+func (s *Store) LoadUsageLimitHolds(ctx context.Context) ([]storage.UsageLimitHold, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT agent_kind, model_only, model, resets_at_ms, held_since_ms
 		FROM usage_limit_holds
@@ -43,9 +38,9 @@ func (s *Store) LoadUsageLimitHolds(ctx context.Context) ([]UsageLimitHold, erro
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	holds := []UsageLimitHold{}
+	holds := []storage.UsageLimitHold{}
 	for rows.Next() {
-		var h UsageLimitHold
+		var h storage.UsageLimitHold
 		if err := rows.Scan(&h.AgentKind, &h.ModelOnly, &h.Model, &h.ResetsAtMs, &h.HeldSinceMs); err != nil {
 			return nil, fmt.Errorf("scan usage limit hold: %w", err)
 		}

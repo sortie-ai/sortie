@@ -19,20 +19,23 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/render"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
 type mockRetryStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
+	storage.ParkedIssueStore
+	storage.BudgetHoldNoticeStore
 	reactionActivityLog
 	livePassLog
 	noopOutcomeRecorder
 	noEscalationRecords
 	unsupportedReactionObservationStore
 
-	savedEntries   []persistence.RetryEntry
+	savedEntries   []storage.RetryEntry
 	deletedIssueID []string
 
 	upsertedAtRetryDelete int
@@ -69,20 +72,20 @@ type mockRetryStore struct {
 	latestRuns    map[string]storage.RunHistory
 	latestRunsErr error
 
-	parkedIssues     []persistence.ParkedIssue
+	parkedIssues     []storage.ParkedIssue
 	deletedParkedIDs []string
 	absenceResetOf   []string
 	upsertParkedErr  error
 	deleteParkedErr  error
 	absenceResetErr  error
 
-	budgetHoldNotices         []persistence.BudgetHoldNotice
+	budgetHoldNotices         []storage.BudgetHoldNotice
 	upsertBudgetHoldNoticeErr error
 }
 
 var _ RetryTimerStore = (*mockRetryStore)(nil)
 
-func (m *mockRetryStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (m *mockRetryStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	m.savedEntries = append(m.savedEntries, entry)
 	return m.saveRetryEntryErr
 }
@@ -157,7 +160,7 @@ func (m *mockRetryStore) DeleteReactionFingerprint(_ context.Context, _, _ strin
 	return nil
 }
 
-func (m *mockRetryStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+func (m *mockRetryStore) UpsertParkedIssue(_ context.Context, entry storage.ParkedIssue) error {
 	m.parkedIssues = append(m.parkedIssues, entry)
 	return m.upsertParkedErr
 }
@@ -172,7 +175,7 @@ func (m *mockRetryStore) ResetHandoffAbsenceSequence(_ context.Context, issueID 
 	return m.absenceResetErr
 }
 
-func (m *mockRetryStore) UpsertBudgetHoldNotice(_ context.Context, notice persistence.BudgetHoldNotice) error {
+func (m *mockRetryStore) UpsertBudgetHoldNotice(_ context.Context, notice storage.BudgetHoldNotice) error {
 	m.budgetHoldNotices = append(m.budgetHoldNotices, notice)
 	return m.upsertBudgetHoldNoticeErr
 }
@@ -2217,7 +2220,7 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 		t.Error("ShouldDispatch() = true after budget exhaustion, want false")
 	}
 
-	requireLivePasses(t, "UpsertLivePass", store.upserted, []persistence.LivePass{{IssueID: id, Kind: persistence.LivePassBudget, ChainID: "chain-1", RuleName: "plan", StagePrevious: "specify"}})
+	requireLivePasses(t, "UpsertLivePass", store.upserted, []storage.LivePass{{IssueID: id, Kind: storage.LivePassBudget, ChainID: "chain-1", RuleName: "plan", StagePrevious: "specify"}})
 }
 
 func TestHandleRetryTimer_BudgetMetrics(t *testing.T) {
@@ -3653,7 +3656,7 @@ func TestHandleRetryTimer_StageLineage(t *testing.T) {
 			if got != want {
 				t.Errorf("RunningEntry.StageLineage = %+v, want %+v (a fresh chain differs from %q, an unset pass time is the run's start %v)", got, want, tt.lineage.ChainID, running.StartedAt)
 			}
-			requireLivePasses(t, "UpsertLivePass", store.upserted, []persistence.LivePass{{IssueID: id, Kind: persistence.LivePassRunning, ChainID: running.StageLineage.ChainID, RuleName: cmp.Or(tt.resolveRule, "plan"), StagePrevious: tt.want.PreviousRule}})
+			requireLivePasses(t, "UpsertLivePass", store.upserted, []storage.LivePass{{IssueID: id, Kind: storage.LivePassRunning, ChainID: running.StageLineage.ChainID, RuleName: cmp.Or(tt.resolveRule, "plan"), StagePrevious: tt.want.PreviousRule}})
 			if store.upsertedAtRetryDelete != 1 {
 				t.Errorf("live passes stored before DeleteRetryEntry = %d, want 1", store.upsertedAtRetryDelete)
 			}

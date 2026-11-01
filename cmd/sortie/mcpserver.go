@@ -18,7 +18,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -271,7 +270,7 @@ func resolveNotificationCap(backends []config.NotificationBackend) int {
 // running session's stored usage.
 type budgetSource interface {
 	storage.RunHistoryStore
-	LoadSessionMetadata(ctx context.Context, issueID string) (persistence.SessionMetadata, bool, error)
+	storage.SessionMetadataStore
 }
 
 func buildBudgetQuery(store budgetSource) budget.BudgetQueryFunc {
@@ -327,7 +326,7 @@ func recordedOf(usage storage.IssueTokenUsage) pricing.RecordedCost {
 
 // sessionCostOf reads the running session's stored estimate; a row recorded
 // without a status reads as unmeasured.
-func sessionCostOf(meta persistence.SessionMetadata) pricing.SessionCost {
+func sessionCostOf(meta storage.SessionMetadata) pricing.SessionCost {
 	status := pricing.CostStatus(meta.CostStatus)
 	if status == "" {
 		status = pricing.CostUnmeasured

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // maxUsageLimitWait caps how far past now a reported reset can hold a kind.
@@ -33,12 +33,6 @@ type UsageLimitHoldKey struct {
 type UsageLimitHold struct {
 	ResetsAt time.Time // UTC, already capped
 	Since    time.Time // UTC; when the hold began
-}
-
-// usageLimitHoldStore is the part of the exit store that persists holds.
-type usageLimitHoldStore interface {
-	SaveUsageLimitHold(ctx context.Context, hold persistence.UsageLimitHold) error
-	DeleteUsageLimitHold(ctx context.Context, agentKind string, modelOnly bool, model string) error
 }
 
 // isUsageLimitRefusal reports whether err unwraps to an agent error of kind
@@ -110,12 +104,12 @@ func usageLimitGate(state *State, kind, model string, ownRetry bool, grace time.
 }
 
 // holdUsageLimit records and persists the hold a refusal gives key.
-func holdUsageLimit(ctx context.Context, log *slog.Logger, store usageLimitHoldStore, state *State, key UsageLimitHoldKey, reset, now time.Time) UsageLimitHold {
+func holdUsageLimit(ctx context.Context, log *slog.Logger, store storage.UsageLimitHoldStore, state *State, key UsageLimitHoldKey, reset, now time.Time) UsageLimitHold {
 	hold, changed := recordUsageLimitHold(state, key, reset, now)
 	if !changed {
 		return hold
 	}
-	row := persistence.UsageLimitHold{
+	row := storage.UsageLimitHold{
 		AgentKind:   key.AgentKind,
 		ModelOnly:   key.ModelOnly,
 		Model:       key.Model,
@@ -140,7 +134,7 @@ func holdUsageLimit(ctx context.Context, log *slog.Logger, store usageLimitHoldS
 // the hold on its kind and the hold on its kind's configured model, each only
 // when the run started after the hold began. A run started earlier proves
 // nothing about the window after it.
-func clearUsageLimitHolds(ctx context.Context, log *slog.Logger, store usageLimitHoldStore, state *State, entry *RunningEntry) {
+func clearUsageLimitHolds(ctx context.Context, log *slog.Logger, store storage.UsageLimitHoldStore, state *State, entry *RunningEntry) {
 	for _, key := range [...]UsageLimitHoldKey{
 		{AgentKind: entry.AgentKind},
 		{AgentKind: entry.AgentKind, ModelOnly: true, Model: entry.ConfiguredModel},
@@ -223,9 +217,7 @@ func usageLimitRetryDue(hold UsageLimitHold, now time.Time, backoffMS int64) tim
 // carryRefusalEpisode gives the retry an exit deferred to the exit's place in
 // the refusal episode, and persists it when that changes the flag. A known
 // reaction retry has no persisted row.
-func carryRefusalEpisode(ctx context.Context, log *slog.Logger, store interface {
-	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
-}, state *State, issueID string, refused bool) {
+func carryRefusalEpisode(ctx context.Context, log *slog.Logger, store storage.RetryEntryStore, state *State, issueID string, refused bool) {
 	incumbent, ok := state.RetryAttempts[issueID]
 	if !ok || incumbent.UsageLimitNotified == refused {
 		return

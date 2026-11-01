@@ -3,29 +3,14 @@ package persistence
 import (
 	"context"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// Live pass kinds. A running stage session and a budget hold are stored; a
-// queued retry is reported by [Store.ListLivePasses] from retry_entries.
-const (
-	LivePassRunning = "running" // a running stage session
-	LivePassBudget  = "budget"  // a budget hold
-	LivePassRetry   = "retry"   // a retry_entries row; ListLivePasses reports it, nothing stores it
-)
-
-// LivePass is a stage pass the orchestrator holds outside finished runs: the
-// issue's chain and rule, and the rule whose hop reached it (empty when none
-// did).
-type LivePass struct {
-	IssueID       string
-	Kind          string
-	ChainID       string
-	RuleName      string
-	StagePrevious string
-}
+var _ storage.LivePassStore = (*Store)(nil)
 
 // UpsertLivePass stores pass, replacing the row of its issue and kind.
-func (s *Store) UpsertLivePass(ctx context.Context, pass LivePass) error {
+func (s *Store) UpsertLivePass(ctx context.Context, pass storage.LivePass) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO live_passes (issue_id, kind, chain_id, rule_name, stage_previous)
 		VALUES (?, ?, ?, ?, ?)
@@ -59,26 +44,26 @@ func (s *Store) DeleteAllLivePasses(ctx context.Context) error {
 	return nil
 }
 
-// ListLivePasses returns every live_passes row and, as kind [LivePassRetry],
+// ListLivePasses returns every live_passes row and, as kind [storage.LivePassRetry],
 // every retry_entries row, ordered by issue ID then kind. Both tables are
 // read in one statement so the list is a single instant. It selects only the
 // columns named here, so a read-only open of a database that a later
 // migration extends still answers. Returns an empty slice (not nil) when none
 // exist.
-func (s *Store) ListLivePasses(ctx context.Context) ([]LivePass, error) {
+func (s *Store) ListLivePasses(ctx context.Context) ([]storage.LivePass, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, kind, chain_id, rule_name, stage_previous FROM live_passes
 		UNION ALL
 		SELECT issue_id, ?, chain_id, rule_name, stage_previous FROM retry_entries
-		ORDER BY 1, 2`, LivePassRetry)
+		ORDER BY 1, 2`, storage.LivePassRetry)
 	if err != nil {
 		return nil, fmt.Errorf("list live passes: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	passes := []LivePass{}
+	passes := []storage.LivePass{}
 	for rows.Next() {
-		var p LivePass
+		var p storage.LivePass
 		if err := rows.Scan(&p.IssueID, &p.Kind, &p.ChainID, &p.RuleName, &p.StagePrevious); err != nil {
 			return nil, fmt.Errorf("scan live pass: %w", err)
 		}

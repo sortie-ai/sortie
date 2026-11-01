@@ -3,6 +3,8 @@ package persistence
 import (
 	"context"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestUpsertBudgetHoldNotice_RoundTrip(t *testing.T) {
@@ -11,7 +13,7 @@ func TestUpsertBudgetHoldNotice_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := mustOpenStore(t)
 
-	notice := BudgetHoldNotice{
+	notice := storage.BudgetHoldNotice{
 		IssueID:   "ISS-1",
 		Reason:    "session_budget",
 		NoticedAt: "2026-08-17T00:00:00Z",
@@ -39,13 +41,13 @@ func TestUpsertBudgetHoldNotice_RewritesExistingRow(t *testing.T) {
 	s := mustOpenStore(t)
 	const issueID = "ISS-2"
 
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: issueID, Reason: "session_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice (initial): %v", err)
 	}
 
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: issueID, Reason: "token_budget", NoticedAt: "2026-08-17T01:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice (rewrite): %v", err)
@@ -70,7 +72,7 @@ func TestDeleteBudgetHoldNotice_RemovesRow(t *testing.T) {
 	s := mustOpenStore(t)
 	const issueID = "ISS-3"
 
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: issueID, Reason: "session_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice: %v", err)
@@ -106,12 +108,12 @@ func TestDeleteAllBudgetHoldNotices_EmptiesPopulatedTable(t *testing.T) {
 	ctx := context.Background()
 	s := mustOpenStore(t)
 
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: "ISS-4", Reason: "session_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice(ISS-4): %v", err)
 	}
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: "ISS-5", Reason: "token_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice(ISS-5): %v", err)
@@ -165,12 +167,12 @@ func TestListBudgetHoldNotices_MultipleRowsIndependent(t *testing.T) {
 	ctx := context.Background()
 	s := mustOpenStore(t)
 
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: "ISS-6", Reason: "session_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice(ISS-6): %v", err)
 	}
-	if err := s.UpsertBudgetHoldNotice(ctx, BudgetHoldNotice{
+	if err := s.UpsertBudgetHoldNotice(ctx, storage.BudgetHoldNotice{
 		IssueID: "ISS-7", Reason: "token_budget", NoticedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertBudgetHoldNotice(ISS-7): %v", err)

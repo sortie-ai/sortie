@@ -9,7 +9,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -84,6 +83,8 @@ func (m *mergeabilitySCM) RemoveLabel(_ context.Context, _ int, _, _, _ string) 
 // than canned values. Only the fingerprint methods carry behavior; the rest
 // satisfy the interface.
 type statefulFingerprintStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -114,7 +115,7 @@ func newStatefulFingerprintStore() *statefulFingerprintStore {
 	return &statefulFingerprintStore{fingerprints: make(map[string]fingerprintRecord)}
 }
 
-func (s *statefulFingerprintStore) SaveRetryEntry(_ context.Context, _ persistence.RetryEntry) error {
+func (s *statefulFingerprintStore) SaveRetryEntry(_ context.Context, _ storage.RetryEntry) error {
 	return nil
 }
 

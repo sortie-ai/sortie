@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -27,9 +26,9 @@ func TestPopulateRetries(t *testing.T) {
 
 		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
-		entries := []persistence.PendingRetry{
+		entries := []storage.PendingRetry{
 			{
-				Entry: persistence.RetryEntry{
+				Entry: storage.RetryEntry{
 					IssueID:    "id-1",
 					Identifier: "PROJ-1",
 					Attempt:    2,
@@ -41,7 +40,7 @@ func TestPopulateRetries(t *testing.T) {
 				RemainingMs: 5000,
 			},
 			{
-				Entry: persistence.RetryEntry{
+				Entry: storage.RetryEntry{
 					IssueID:    "id-2",
 					Identifier: "PROJ-2",
 					Attempt:    1,
@@ -51,7 +50,7 @@ func TestPopulateRetries(t *testing.T) {
 				RemainingMs: 0,
 			},
 			{
-				Entry: persistence.RetryEntry{
+				Entry: storage.RetryEntry{
 					IssueID:    "id-3",
 					Identifier: "PROJ-3",
 					Attempt:    3,
@@ -563,8 +562,8 @@ func TestPopulateRetries_SessionID(t *testing.T) {
 			t.Parallel()
 
 			state := NewState(5000, 4, 0, nil, AgentTotals{})
-			entries := []persistence.PendingRetry{{
-				Entry:       persistence.RetryEntry{IssueID: "id-sess", Identifier: "PROJ-SESS", Attempt: 1, DueAtMs: 10000, SessionID: tt.sessionID},
+			entries := []storage.PendingRetry{{
+				Entry:       storage.RetryEntry{IssueID: "id-sess", Identifier: "PROJ-SESS", Attempt: 1, DueAtMs: 10000, SessionID: tt.sessionID},
 				RemainingMs: 5000,
 			}}
 
@@ -585,8 +584,8 @@ func TestPopulateRetries_RestoredClaimStartsWithoutTheRuleSettingsFlag(t *testin
 	t.Parallel()
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	entries := []persistence.PendingRetry{{
-		Entry:       persistence.RetryEntry{IssueID: "id-flag", Identifier: "PROJ-FLAG", Attempt: 1, DueAtMs: 10000, RuleName: "cheap", AgentKind: "kind-b"},
+	entries := []storage.PendingRetry{{
+		Entry:       storage.RetryEntry{IssueID: "id-flag", Identifier: "PROJ-FLAG", Attempt: 1, DueAtMs: 10000, RuleName: "cheap", AgentKind: "kind-b"},
 		RemainingMs: 5000,
 	}}
 

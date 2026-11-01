@@ -3,20 +3,16 @@ package persistence
 import (
 	"context"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// BudgetHoldNotice is one row of the budget_hold_notices table: the
-// tracker notice already posted for the current budget hold on one issue.
-type BudgetHoldNotice struct {
-	IssueID   string
-	Reason    string // "session_budget", "token_budget", or "money_budget"
-	NoticedAt string // RFC 3339
-}
+var _ storage.BudgetHoldNoticeStore = (*Store)(nil)
 
 // UpsertBudgetHoldNotice persists a budget hold notice record using upsert
 // semantics. If a record for notice.IssueID already exists, it is replaced
 // entirely, so a reason change overwrites in place.
-func (s *Store) UpsertBudgetHoldNotice(ctx context.Context, notice BudgetHoldNotice) error {
+func (s *Store) UpsertBudgetHoldNotice(ctx context.Context, notice storage.BudgetHoldNotice) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO budget_hold_notices (issue_id, reason, noticed_at)
 		VALUES (?, ?, ?)
@@ -56,7 +52,7 @@ func (s *Store) DeleteAllBudgetHoldNotices(ctx context.Context) error {
 // ListBudgetHoldNotices returns every persisted budget hold notice record.
 // Ordering is unspecified. Returns an empty slice (not nil) when no records
 // exist.
-func (s *Store) ListBudgetHoldNotices(ctx context.Context) ([]BudgetHoldNotice, error) {
+func (s *Store) ListBudgetHoldNotices(ctx context.Context) ([]storage.BudgetHoldNotice, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, reason, noticed_at FROM budget_hold_notices`)
 	if err != nil {
@@ -64,9 +60,9 @@ func (s *Store) ListBudgetHoldNotices(ctx context.Context) ([]BudgetHoldNotice, 
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	notices := []BudgetHoldNotice{}
+	notices := []storage.BudgetHoldNotice{}
 	for rows.Next() {
-		var n BudgetHoldNotice
+		var n storage.BudgetHoldNotice
 		if err := rows.Scan(&n.IssueID, &n.Reason, &n.NoticedAt); err != nil {
 			return nil, fmt.Errorf("scan budget hold notice: %w", err)
 		}

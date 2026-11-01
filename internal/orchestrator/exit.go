@@ -16,7 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/storage"
@@ -37,26 +36,19 @@ const continuationDelayMS int64 = 1_000
 // WorkerExitStore is the persistence interface required by
 // [HandleWorkerExit].
 type WorkerExitStore interface {
-	AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error)
-	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
-	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
-	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	DeleteLivePass(ctx context.Context, issueID, kind string) error
-	DeleteReactionEscalations(ctx context.Context, issueID string) error
-	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
-	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
-	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
-	DeleteParkedIssue(ctx context.Context, issueID string) error
-	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
-	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
-	RecordStageHop(ctx context.Context, hop persistence.StageHop) error
-	DeleteStageHop(ctx context.Context, issueID string) error
-	RecordRunStageResult(ctx context.Context, runID int64, targetRule, result string) error
-	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-	RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error
-	SaveUsageLimitHold(ctx context.Context, hold persistence.UsageLimitHold) error
-	DeleteUsageLimitHold(ctx context.Context, agentKind string, modelOnly bool, model string) error
+	storage.RunHistoryStore
+	storage.RunEventStore
+	storage.AggregateMetricsStore
+	storage.SessionMetadataStore
+	storage.RetryEntryStore
+	storage.LivePassStore
+	storage.ReactionEscalationStore
+	storage.ParkedIssueStore
+	storage.ReactionHandoffStore
+	storage.StageHopStore
+	storage.IssueOutcomeStore
+	storage.ReactionActivityStore
+	storage.UsageLimitHoldStore
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -555,7 +547,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if requestsMeasured {
 		requestCount = entry.APIRequestCount
 	}
-	sessionMeta := persistence.SessionMetadata{
+	sessionMeta := storage.SessionMetadata{
 		IssueID:   workerResult.IssueID,
 		SessionID: sessionID,
 		// The dispatch's row is cleared here, ahead of the run_history write
@@ -587,7 +579,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	retainStartupFailure(entry, workerResult, now)
-	var eventRows []persistence.RunEvent
+	var eventRows []storage.RunEvent
 	if entry.events != nil {
 		eventRows = entry.events.storeRows()
 	}
@@ -596,7 +588,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	runHistoryPersisted := true
 	var runID int64
 	row, appendErr := params.Store.AppendRunHistoryWithEvents(ctx, runHistory, eventRows, runEventStoreLimits)
-	var eventsErr *persistence.RunEventsError
+	var eventsErr *storage.RunEventsError
 	switch {
 	case errors.As(appendErr, &eventsErr):
 		log.Warn("failed to persist run events",
@@ -704,7 +696,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 	}
 
-	aggMetrics := persistence.AggregateMetrics{
+	aggMetrics := storage.AggregateMetrics{
 		Key:                "agent_totals",
 		InputTokens:        state.AgentTotals.InputTokens,
 		OutputTokens:       state.AgentTotals.OutputTokens,
@@ -1453,7 +1445,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 
 		recordReactionActivity(ctx, params.Store, workerResult.IssueID, entry.StageLineage,
-			persistence.ReactionActivityWatch, seededKinds, now, log)
+			storage.ReactionActivityWatch, seededKinds, now, log)
 
 	case WorkerExitCancelled:
 		// Release the claim only if reconciliation stall detection has not
@@ -1565,7 +1557,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 	}
 
-	deleteLivePass(ctx, params.Store, workerResult.IssueID, persistence.LivePassRunning, log)
+	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)
 
 	runDuration := max(now.Sub(entry.StartedAt), 0)
 

@@ -9,28 +9,22 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// escalationRecordStore is the persistence contract of the shared
-// escalation mechanism. Satisfied by [persistence.Store].
+// escalationRecordStore is the persistence contract of the shared escalation
+// mechanism.
 type escalationRecordStore interface {
-	GetReactionEscalation(ctx context.Context, issueID, kind string) (persistence.ReactionEscalation, bool, error)
-	SaveReactionEscalation(ctx context.Context, rec persistence.ReactionEscalation) error
-	EndReactionEscalation(ctx context.Context, issueID, kind string) error
-	RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error
+	storage.ReactionEscalationStore
+	storage.ReactionActivityStore
 }
 
 // ReactionEscalationRestoreStore is the persistence contract of
-// [RestoreReactionEscalations]. Satisfied by [persistence.Store].
+// [RestoreReactionEscalations].
 type ReactionEscalationRestoreStore interface {
-	ListStandingReactionEscalations(ctx context.Context) ([]persistence.ReactionEscalation, error)
-	LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs []string) ([]storage.RunHistory, error)
-	EndReactionEscalation(ctx context.Context, issueID, kind string) error
+	storage.ReactionEscalationStore
+	storage.RunHistoryStore
 }
-
-var _ ReactionEscalationRestoreStore = (*persistence.Store)(nil)
 
 // ReactionEscalationRestoreResult reports outcome counts from a single
 // [RestoreReactionEscalations] call.
@@ -68,7 +62,7 @@ func beginEscalation(
 	}
 
 	recordReactionActivity(ctx, store, pending.IssueID, pending.StageLineage,
-		persistence.ReactionActivityEscalation, []string{pending.Kind}, now, log)
+		storage.ReactionActivityEscalation, []string{pending.Kind}, now, log)
 
 	stored, found, err := store.GetReactionEscalation(ctx, pending.IssueID, pending.Kind)
 	if err != nil {
@@ -98,7 +92,7 @@ func retryEscalationSave(ctx context.Context, state *State, store escalationReco
 func saveEscalationRecord(ctx context.Context, state *State, store escalationRecordStore, pending *PendingReaction, log *slog.Logger) {
 	pr := pullRequestOf(pending)
 	escalatedAt := pending.EscalatedAt
-	err := store.SaveReactionEscalation(ctx, persistence.ReactionEscalation{
+	err := store.SaveReactionEscalation(ctx, storage.ReactionEscalation{
 		IssueID:     pending.IssueID,
 		Kind:        pending.Kind,
 		Subject:     pending.EscalationSubject,
@@ -474,7 +468,7 @@ func RestoreReactionEscalations(
 	return result, nil
 }
 
-func endRestoredRecord(ctx context.Context, store ReactionEscalationRestoreStore, rec persistence.ReactionEscalation, log *slog.Logger) {
+func endRestoredRecord(ctx context.Context, store ReactionEscalationRestoreStore, rec storage.ReactionEscalation, log *slog.Logger) {
 	log.Warn("reaction escalation record has no configured kind or run row, ending it",
 		slog.String("issue_id", rec.IssueID),
 		slog.String("reaction_kind", rec.Kind),

@@ -4,56 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// ParkedIssue is one row of the parked_issues table: an issue held out of
-// primary dispatch until the orchestrator observes that a person acted.
-type ParkedIssue struct {
-	IssueID      string
-	Identifier   string
-	DisplayID    string // empty when the tracker needs no qualified form
-	Reason       string // "agent_blocked" or "handoff_absence"
-	ParkedState  string // tracker state observed at park time; empty when unobserved
-	Label        string // parking label the orchestrator applied
-	LabelApplied bool
-	ParkedAt     string // RFC 3339
-	IssueTitle   string // tracker title as read for the park; empty when unread
-	IssueURL     string // tracker web link as read for the park; empty when unread
-
-	// IssueType and IssueLabels are the tracker's issue type and labels as
-	// read for the park; IssueLabels is nil when the labels were never read.
-	IssueType   string
-	IssueLabels []string
-
-	// RuleName, AgentKind, ConfiguredModel, StagePrevious,
-	// StagePreviousOutcome, ChainID, and DispatchedAt describe the run the
-	// park follows. All are empty when the park records no run.
-	RuleName             string
-	AgentKind            string
-	ConfiguredModel      string
-	StagePrevious        string
-	StagePreviousOutcome string
-	ChainID              string
-	DispatchedAt         string // RFC 3339 with nanoseconds, UTC
-
-	// SessionID, TemplateID, and Statement are what the park hands to the
-	// first run after a release; each is empty when the park recorded none.
-	// TemplateID is empty for the workflow body template.
-	SessionID  string
-	TemplateID string
-	Statement  string
-
-	// ReleasedAt (RFC 3339 UTC, whole seconds) and ReleaseGesture
-	// ("label_removed" or "state_changed") record a person's release; both
-	// are empty while the park holds.
-	ReleasedAt     string
-	ReleaseGesture string
-}
+var _ storage.ParkedIssueStore = (*Store)(nil)
 
 // UpsertParkedIssue persists a park record using upsert semantics. If a
 // record for entry.IssueID already exists, it is replaced entirely, release
 // columns included.
-func (s *Store) UpsertParkedIssue(ctx context.Context, entry ParkedIssue) error {
+func (s *Store) UpsertParkedIssue(ctx context.Context, entry storage.ParkedIssue) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO parked_issues (issue_id, identifier, display_id, reason, parked_state, label, label_applied, parked_at, issue_title, issue_url,
 			rule_name, agent_kind, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at, issue_type, issue_labels,
@@ -120,7 +80,7 @@ func (s *Store) DeleteParkedIssue(ctx context.Context, issueID string) error {
 
 // ListParkedIssues returns every persisted park record. Ordering is
 // unspecified. Returns an empty slice (not nil) when no records exist.
-func (s *Store) ListParkedIssues(ctx context.Context) ([]ParkedIssue, error) {
+func (s *Store) ListParkedIssues(ctx context.Context) ([]storage.ParkedIssue, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, identifier, display_id, reason, parked_state, label, label_applied, parked_at, issue_title, issue_url,
 			rule_name, agent_kind, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at, issue_type, issue_labels,
@@ -131,9 +91,9 @@ func (s *Store) ListParkedIssues(ctx context.Context) ([]ParkedIssue, error) {
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	entries := []ParkedIssue{}
+	entries := []storage.ParkedIssue{}
 	for rows.Next() {
-		var e ParkedIssue
+		var e storage.ParkedIssue
 		var displayID sql.NullString
 		var labels string
 		if err := rows.Scan(&e.IssueID, &e.Identifier, &displayID, &e.Reason, &e.ParkedState,

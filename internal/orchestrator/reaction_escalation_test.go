@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 const (
@@ -58,11 +58,11 @@ func (t *escTracker) actions() int {
 }
 
 type escActivitySpy struct {
-	*persistence.Store
+	OrchestratorStore
 	log reactionActivityLog
 }
 
-func (s *escActivitySpy) RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error {
+func (s *escActivitySpy) RecordReactionActivity(ctx context.Context, records []storage.ReactionActivity) error {
 	return s.log.RecordReactionActivity(ctx, records)
 }
 
@@ -70,7 +70,7 @@ type escWorld struct {
 	t       *testing.T
 	state   *State
 	params  ReconcileParams
-	store   *persistence.Store
+	store   OrchestratorStore
 	scm     *escSCM
 	ci      *mockCIProvider
 	tracker *escTracker
@@ -131,7 +131,7 @@ func newEscWorld(t *testing.T, kind string, rig escRig, trigger ReactionEscalati
 		EscalatedAt: w.at, EscalationTrigger: trigger, EscalationSubject: rig.subjects[trigger],
 	}
 	w.state.ReactionAttempts[w.key] = rig.counters[trigger]
-	rec := persistence.ReactionEscalation{
+	rec := storage.ReactionEscalation{
 		IssueID: escIssue, Kind: kind, Subject: rig.subjects[trigger], EscalatedAt: &w.at,
 		Trigger: string(trigger), Attempts: rig.counters[trigger], PRNumber: 99, PROwner: "acme", PRRepo: "widgets",
 	}
@@ -408,7 +408,7 @@ func TestBeginEscalation_RecordsWhenItBegins(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	spy := &escActivitySpy{Store: openInMemoryStore(t)}
+	spy := &escActivitySpy{OrchestratorStore: openInMemoryStore(t)}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	lineage := StageLineage{ChainID: "chain-esc", DispatchedAt: escBase}
 	pending := &PendingReaction{IssueID: escIssue, Identifier: "PROJ-1", Kind: ReactionKindCI, StageLineage: lineage}
@@ -420,7 +420,7 @@ func TestBeginEscalation_RecordsWhenItBegins(t *testing.T) {
 		t.Fatal("beginEscalation() = false, want true for the first escalation on a subject")
 	}
 	begin()
-	got := spy.log.activities(persistence.ReactionActivityEscalation)
+	got := spy.log.activities(storage.ReactionActivityEscalation)
 	if len(got) != 1 || got[0].IssueID != escIssue || got[0].ChainID != lineage.ChainID || got[0].Kind != ReactionKindCI {
 		t.Fatalf("escalation records after begin and a call while it stands = %+v, want one for %q kind %q chain %q", got, escIssue, ReactionKindCI, lineage.ChainID)
 	}
@@ -429,7 +429,7 @@ func TestBeginEscalation_RecordsWhenItBegins(t *testing.T) {
 	if begin() {
 		t.Error("beginEscalation() = true, want false: the subject is latched")
 	}
-	if got := spy.log.activities(persistence.ReactionActivityEscalation); len(got) != 2 {
+	if got := spy.log.activities(storage.ReactionActivityEscalation); len(got) != 2 {
 		t.Errorf("escalation records after a latched subject begins again = %d, want 2", len(got))
 	}
 }
@@ -475,7 +475,7 @@ func TestReactionEscalation_EndsOutsideHandoff(t *testing.T) {
 				at := escBase
 				state.PendingReactions[key] = &PendingReaction{IssueID: escIssue, Identifier: "PROJ-1", Kind: kind, EscalatedAt: at}
 				state.ReactionAttempts[key] = 2
-				rec := persistence.ReactionEscalation{IssueID: escIssue, Kind: kind, Subject: "subject", EscalatedAt: &at, Trigger: string(EscalationTriggerBudget)}
+				rec := storage.ReactionEscalation{IssueID: escIssue, Kind: kind, Subject: "subject", EscalatedAt: &at, Trigger: string(EscalationTriggerBudget)}
 				if err := store.SaveReactionEscalation(ctx, rec); err != nil {
 					t.Fatalf("SaveReactionEscalation: %v", err)
 				}

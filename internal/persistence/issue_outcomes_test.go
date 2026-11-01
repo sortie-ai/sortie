@@ -1,19 +1,23 @@
 package persistence
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
+)
 
 func TestRecordIssueOutcome_Rule(t *testing.T) {
 	t.Parallel()
 
 	const first, second = "2026-02-24T21:00:00Z", "2026-02-24T21:05:00Z"
-	outcome := func(kind, observedAt string) IssueOutcome {
-		o := IssueOutcome{IssueID: "id-1", Kind: kind, ObservedAt: observedAt}
+	outcome := func(kind, observedAt string) storage.IssueOutcome {
+		o := storage.IssueOutcome{IssueID: "id-1", Kind: kind, ObservedAt: observedAt}
 		switch kind {
-		case IssueOutcomeMerged:
+		case storage.IssueOutcomeMerged:
 			o.MergeReactionKind, o.PRNumber, o.PRRepository = "merge", 88, "acme/api"
-		case IssueOutcomeHandedOff:
+		case storage.IssueOutcomeHandedOff:
 			o.State = "In Review"
-		case IssueOutcomeTerminal:
+		case storage.IssueOutcomeTerminal:
 			o.State = "Done"
 		}
 		return o
@@ -23,18 +27,18 @@ func TestRecordIssueOutcome_Rule(t *testing.T) {
 		name, stored, incoming string
 		wantIncoming           bool
 	}{
-		{"none then handed off", "", IssueOutcomeHandedOff, true},
-		{"none then merged", "", IssueOutcomeMerged, true},
-		{"none then terminal", "", IssueOutcomeTerminal, true},
-		{"handed off then handed off", IssueOutcomeHandedOff, IssueOutcomeHandedOff, true},
-		{"handed off then merged", IssueOutcomeHandedOff, IssueOutcomeMerged, true},
-		{"handed off then terminal", IssueOutcomeHandedOff, IssueOutcomeTerminal, true},
-		{"merged then handed off", IssueOutcomeMerged, IssueOutcomeHandedOff, true},
-		{"merged then merged", IssueOutcomeMerged, IssueOutcomeMerged, false},
-		{"merged then terminal", IssueOutcomeMerged, IssueOutcomeTerminal, false},
-		{"terminal then handed off", IssueOutcomeTerminal, IssueOutcomeHandedOff, true},
-		{"terminal then merged", IssueOutcomeTerminal, IssueOutcomeMerged, true},
-		{"terminal then terminal", IssueOutcomeTerminal, IssueOutcomeTerminal, false},
+		{"none then handed off", "", storage.IssueOutcomeHandedOff, true},
+		{"none then merged", "", storage.IssueOutcomeMerged, true},
+		{"none then terminal", "", storage.IssueOutcomeTerminal, true},
+		{"handed off then handed off", storage.IssueOutcomeHandedOff, storage.IssueOutcomeHandedOff, true},
+		{"handed off then merged", storage.IssueOutcomeHandedOff, storage.IssueOutcomeMerged, true},
+		{"handed off then terminal", storage.IssueOutcomeHandedOff, storage.IssueOutcomeTerminal, true},
+		{"merged then handed off", storage.IssueOutcomeMerged, storage.IssueOutcomeHandedOff, true},
+		{"merged then merged", storage.IssueOutcomeMerged, storage.IssueOutcomeMerged, false},
+		{"merged then terminal", storage.IssueOutcomeMerged, storage.IssueOutcomeTerminal, false},
+		{"terminal then handed off", storage.IssueOutcomeTerminal, storage.IssueOutcomeHandedOff, true},
+		{"terminal then merged", storage.IssueOutcomeTerminal, storage.IssueOutcomeMerged, true},
+		{"terminal then terminal", storage.IssueOutcomeTerminal, storage.IssueOutcomeTerminal, false},
 	}
 
 	for _, tt := range tests {

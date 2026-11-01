@@ -670,7 +670,7 @@ type parkTickStep struct {
 	wantHold  SkipReason
 }
 
-func parkBlockedRun(t *testing.T, store *persistence.Store, issueID string) *State {
+func parkBlockedRun(t *testing.T, store OrchestratorStore, issueID string) *State {
 	t.Helper()
 	state := exitStateWithIssue(t, issueID, "In Progress")
 	running := state.Running[issueID]

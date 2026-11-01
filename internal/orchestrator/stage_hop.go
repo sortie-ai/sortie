@@ -12,7 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // Values of the trigger attribute on the stage hop count reset record.
@@ -56,17 +56,6 @@ type stageHopDecision struct {
 // made reports whether the decision added the target's stage label.
 func (d stageHopDecision) made() bool {
 	return d.Result == stageResultAdvanced || d.Result == stageResultPartial
-}
-
-// stageHopDeleter is the one store method [resetStageHop] needs.
-type stageHopDeleter interface {
-	DeleteStageHop(ctx context.Context, issueID string) error
-}
-
-// stageHopDispatchMarker is the one store method [markStageHopDispatched]
-// needs.
-type stageHopDispatchMarker interface {
-	MarkStageHopDispatched(ctx context.Context, issueID string) error
 }
 
 // hopRouteOf returns the rule and stage label of the issue's latest hop,
@@ -121,7 +110,7 @@ func stageCurrent(dispatch config.DispatchConfig, ruleName string) string {
 // resetStageHop drops the issue's hop record, in memory and in the store,
 // and logs the reset with trigger. It does nothing when the issue has no
 // record. log must already carry issue_id and issue_identifier.
-func resetStageHop(ctx context.Context, state *State, store stageHopDeleter, issueID, trigger string, log *slog.Logger) {
+func resetStageHop(ctx context.Context, state *State, store storage.StageHopStore, issueID, trigger string, log *slog.Logger) {
 	hop, ok := state.StageHops[issueID]
 	if !ok {
 		return
@@ -141,7 +130,7 @@ func resetStageHop(ctx context.Context, state *State, store stageHopDeleter, iss
 // its hop, in memory and in the store, and does nothing when the issue has no
 // record or the record already says so. A failed write leaves the runtime
 // value standing. log must already carry issue_id and issue_identifier.
-func markStageHopDispatched(ctx context.Context, state *State, store stageHopDispatchMarker, issueID string, log *slog.Logger) {
+func markStageHopDispatched(ctx context.Context, state *State, store storage.StageHopStore, issueID string, log *slog.Logger) {
 	hop := state.StageHops[issueID]
 	if hop == nil || hop.RunDispatched {
 		return
@@ -239,7 +228,7 @@ func advanceStage(ctx context.Context, state *State, entry *RunningEntry, result
 		IssueIdentity:    identity,
 		DispatchedAt:     entry.StageLineage.DispatchedAt,
 	}
-	row := persistence.StageHop{
+	row := storage.StageHop{
 		IssueID:          issueID,
 		Identifier:       result.Identifier,
 		HopCount:         count + 1,
@@ -459,7 +448,7 @@ func (o *Orchestrator) markObserved(ctx context.Context, issueID string, hop *St
 // PopulateStageHops loads persisted hop records into state.StageHops.
 // Called during startup recovery, before the event loop starts, after
 // [PopulateParked].
-func PopulateStageHops(state *State, rows []persistence.StageHop, log *slog.Logger) {
+func PopulateStageHops(state *State, rows []storage.StageHop, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}

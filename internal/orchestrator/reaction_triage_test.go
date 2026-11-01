@@ -17,7 +17,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -233,6 +232,8 @@ func inFlightTriageRun(fingerprint string, cancel func()) *ReactionTriageRun {
 }
 
 type triageGateStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -244,7 +245,7 @@ type triageGateStore struct {
 
 var _ ReconcileStore = (*triageGateStore)(nil)
 
-func (s *triageGateStore) SaveRetryEntry(context.Context, persistence.RetryEntry) error {
+func (s *triageGateStore) SaveRetryEntry(context.Context, storage.RetryEntry) error {
 	return nil
 }
 
@@ -860,7 +861,7 @@ func TestReactionTriageGate(t *testing.T) {
 		if store.markCalls != 1 {
 			t.Errorf("MarkReactionDispatched called %d times, want 1", store.markCalls)
 		}
-		actions := store.activities(persistence.ReactionActivityAction)
+		actions := store.activities(storage.ReactionActivityAction)
 		if len(actions) != 1 || actions[0].IssueID != "ISS-8" || actions[0].ChainID != gateLineage.ChainID || actions[0].Kind != ReactionKindCI {
 			t.Errorf("RecordReactionActivity action records over three passes = %+v, want one for ISS-8 kind %q chain %q", actions, ReactionKindCI, gateLineage.ChainID)
 		}

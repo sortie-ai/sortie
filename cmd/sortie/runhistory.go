@@ -7,7 +7,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
@@ -16,9 +15,9 @@ import (
 // plus the run events, issue outcomes and pass activity recorded beside it.
 type runHistorySource interface {
 	storage.RunHistoryStore
-	RunEvents(ctx context.Context, dispatchID string, newest int) ([]persistence.RunEvent, error)
-	IssueOutcomes(ctx context.Context, issueIDs []string) (map[string]persistence.IssueOutcome, error)
-	PassActivities(ctx context.Context, passes []persistence.PassRef) (map[persistence.PassKey]persistence.PassActivity, error)
+	storage.RunEventStore
+	storage.IssueOutcomeStore
+	storage.ReactionActivityStore
 }
 
 // runHistoryReader serves the HTTP server's run history from the store, so
@@ -181,9 +180,9 @@ func (r runHistoryReader) IssueOutcomes(ctx context.Context, issueIDs []string) 
 
 // PassActivities returns what the reactions recorded in each listed pass.
 func (r runHistoryReader) PassActivities(ctx context.Context, passes []server.PassRef) (map[server.PassKey]server.PassActivity, error) {
-	refs := make([]persistence.PassRef, len(passes))
+	refs := make([]storage.PassRef, len(passes))
 	for i, p := range passes {
-		refs[i] = persistence.PassRef{IssueID: p.IssueID, ChainID: p.ChainID, DispatchedAt: p.DispatchedAt}
+		refs[i] = storage.PassRef{IssueID: p.IssueID, ChainID: p.ChainID, DispatchedAt: p.DispatchedAt}
 	}
 	stored, err := r.store.PassActivities(ctx, refs)
 	if err != nil {

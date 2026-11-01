@@ -16,7 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/storage"
@@ -36,60 +35,27 @@ type WorkflowManager interface {
 }
 
 // OrchestratorStore is the persistence interface required by the event
-// loop. Satisfied by [persistence.Store].
+// loop.
 type OrchestratorStore interface {
+	storage.Pinger
 	storage.RunHistoryStore
-	Ping(ctx context.Context) error
-	AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error)
-	AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []persistence.RunEvent, limits persistence.RunEventLimits) error
-	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
-	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
-	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	SaveUsageLimitHold(ctx context.Context, hold persistence.UsageLimitHold) error
-	DeleteUsageLimitHold(ctx context.Context, agentKind string, modelOnly bool, model string) error
-	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
-	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
-	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
-	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
-	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
-	ListReactionHandedOffComments(ctx context.Context, issueID, kind string) ([]string, error)
-	UpsertReactionObservation(
-		ctx context.Context,
-		issueID, kind, fingerprint string,
-		observedAt time.Time,
-	) (persistence.ReactionObservation, error)
-	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
-	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
-	DeleteParkedIssue(ctx context.Context, issueID string) error
-	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
-	ListParkedIssues(ctx context.Context) ([]persistence.ParkedIssue, error)
-	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
-	DeleteBudgetHoldNotice(ctx context.Context, issueID string) error
-	DeleteAllBudgetHoldNotices(ctx context.Context) error
-	ListBudgetHoldNotices(ctx context.Context) ([]persistence.BudgetHoldNotice, error)
-	RecordStageHop(ctx context.Context, hop persistence.StageHop) error
-	MarkStageHopObserved(ctx context.Context, issueID string) error
-	MarkStageHopDispatched(ctx context.Context, issueID string) error
-	DeleteStageHop(ctx context.Context, issueID string) error
-	ListStageHops(ctx context.Context) ([]persistence.StageHop, error)
-	UpsertLivePass(ctx context.Context, pass persistence.LivePass) error
-	DeleteLivePass(ctx context.Context, issueID, kind string) error
-	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-	DeleteIssueOutcome(ctx context.Context, issueID string) error
-	GetReactionEscalation(ctx context.Context, issueID, kind string) (persistence.ReactionEscalation, bool, error)
-	SaveReactionEscalation(ctx context.Context, rec persistence.ReactionEscalation) error
-	EndReactionEscalation(ctx context.Context, issueID, kind string) error
-	RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error
-	RecordReactionTriageOutcome(ctx context.Context, outcome persistence.ReactionTriageOutcome) error
-	LatestReactionTriageDisposition(ctx context.Context, issueID, kind, fingerprint string) (disposition string, found bool, err error)
-	DeleteReactionEscalations(ctx context.Context, issueID string) error
-	SaveAttentionAcknowledgement(ctx context.Context, ack persistence.AttentionAcknowledgement) error
-	DeleteAttentionAcknowledgements(ctx context.Context, itemIDs []string) error
+	storage.RunEventStore
+	storage.SessionMetadataStore
+	storage.AggregateMetricsStore
+	storage.RetryEntryStore
+	storage.UsageLimitHoldStore
+	storage.ReactionFingerprintStore
+	storage.ReactionHandoffStore
+	storage.ReactionEscalationStore
+	storage.ReactionActivityStore
+	storage.ReactionTriageOutcomeStore
+	storage.ParkedIssueStore
+	storage.BudgetHoldNoticeStore
+	storage.StageHopStore
+	storage.LivePassStore
+	storage.IssueOutcomeStore
+	storage.AttentionAcknowledgementStore
 }
-
-var _ OrchestratorStore = (*persistence.Store)(nil)
-var _ RunEventStore = (*persistence.Store)(nil)
 
 // Observer receives notifications when orchestrator state changes.
 // Implementations must not block and must not mutate state.
@@ -1731,7 +1697,7 @@ func (o *Orchestrator) writeIncrementalMetadata(ctx context.Context, issueID str
 	if requestsMeasured {
 		requestCount = entry.APIRequestCount
 	}
-	meta := persistence.SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:             issueID,
 		SessionID:           entry.SessionID,
 		DispatchID:          entry.DispatchID,

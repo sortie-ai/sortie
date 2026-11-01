@@ -11,7 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // mergeCompletionPendingBackoffBase is the floor for the merge-completion
@@ -281,7 +281,7 @@ func processMergeCompletionEntry(
 	transitionErr := params.TrackerAdapter.TransitionIssue(ctx, pending.IssueID, params.MergeCompletionConfig.TargetState)
 	state.ReactionAttempts[rkey]++
 	recordReactionActivity(ctx, params.Store, pending.IssueID, pending.StageLineage,
-		persistence.ReactionActivityAction, []string{ReactionKindMergeCompletion}, now, entryLog)
+		storage.ReactionActivityAction, []string{ReactionKindMergeCompletion}, now, entryLog)
 
 	if transitionErr != nil {
 		routeTransitionFailure(state, params, key, pending, data, status.MergeCommitSHA, transitionErr, now, pollInterval, entryLog, ctx)
