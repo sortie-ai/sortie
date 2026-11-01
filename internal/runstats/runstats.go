@@ -2,9 +2,9 @@
 // that computes it from persisted run history.
 //
 // [New] constructs an [Aggregator] for the capabilities of the database being
-// read. [Aggregator.Add] folds one [persistence.RunStatsRow] at a time, and
+// read. [Aggregator.Add] folds one [storage.RunStatsRow] at a time, and
 // [Aggregator.Report] returns the finished [Report]. The package imports only
-// the domain and persistence layers, so any caller above them can serve the
+// the domain and storage layers, so any caller above them can serve the
 // same figures.
 package runstats
 
@@ -12,7 +12,7 @@ package runstats
 // field, by_trigger, by_origin, by_provenance, and chain_funnels included, is
 // never nil; every pointer field is null when the figure it carries is
 // unavailable. Spend is nil unless
-// [persistence.RunHistoryCapabilities.RecordedCost] reports true.
+// [storage.RunHistoryCapabilities.RecordedCost] reports true.
 type Report struct {
 	GeneratedAt  string           `json:"generated_at"`
 	WorkflowPath string           `json:"workflow_path"`
@@ -77,7 +77,7 @@ type Summary struct {
 }
 
 // Spend is the recorded cost of the report's runs per UTC calendar period.
-// Report.Spend is nil unless [persistence.RunHistoryCapabilities.RecordedCost]
+// Report.Spend is nil unless [storage.RunHistoryCapabilities.RecordedCost]
 // reports true.
 type Spend struct {
 	Period  string        `json:"period"`  // "day" or "month"

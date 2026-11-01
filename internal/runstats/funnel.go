@@ -4,7 +4,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 const (
@@ -56,7 +56,7 @@ type passAccum struct {
 // foldPass folds row into the pass of its chain and rule. A reaction run
 // takes part only with a hop result; without one it counts in by_rule alone.
 // Rows arrive in ascending id order, so the last folded run decides.
-func (a *Aggregator) foldPass(row persistence.RunStatsRow) {
+func (a *Aggregator) foldPass(row storage.RunStatsRow) {
 	if row.ChainID == "" || row.RuleName == "" {
 		return
 	}

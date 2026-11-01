@@ -28,6 +28,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
 
@@ -118,6 +119,7 @@ func stateChangeSignal() (Observer, <-chan struct{}) {
 }
 
 type stubStore struct {
+	storage.RunHistoryStore
 	reactionActivityLog
 	livePassLog
 	noopOutcomeRecorder
@@ -126,7 +128,7 @@ type stubStore struct {
 	unsupportedReactionObservationStore
 
 	mu              sync.Mutex
-	runHistories    []persistence.RunHistory
+	runHistories    []storage.RunHistory
 	aggregates      []persistence.AggregateMetrics
 	sessions        []persistence.SessionMetadata
 	savedRetries    []persistence.RetryEntry
@@ -156,11 +158,11 @@ type stubStore struct {
 	// is zero.
 	tokenUnaccountedIDs []string
 
-	tokenExhaustedUsage map[string]persistence.IssueTokenUsage
+	tokenExhaustedUsage map[string]storage.IssueTokenUsage
 
 	upsertSessionMetadataErr error
 
-	windowUsage persistence.IssueTokenUsage
+	windowUsage storage.IssueTokenUsage
 
 	parkedIssues       []persistence.ParkedIssue
 	deletedParkedIDs   []string
@@ -168,7 +170,7 @@ type stubStore struct {
 	listParkedIssues   []persistence.ParkedIssue
 	listParkedIssueErr error
 
-	latestRuns      map[string]persistence.RunHistory
+	latestRuns      map[string]storage.RunHistory
 	latestRunsErr   error
 	latestRunsCalls [][]string
 
@@ -198,13 +200,13 @@ type stubStore struct {
 	// onAppendRunHistory and onUpsertSessionMetadata, when set, run
 	// synchronously after the write so a test can capture single-writer
 	// state at the moment a record is persisted rather than by polling.
-	onAppendRunHistory      func(persistence.RunHistory)
+	onAppendRunHistory      func(storage.RunHistory)
 	onUpsertSessionMetadata func(persistence.SessionMetadata)
 }
 
 var _ OrchestratorStore = (*stubStore)(nil)
 
-func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *stubStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	s.mu.Lock()
 	run.ID = int64(len(s.runHistories) + 1)
 	s.runHistories = append(s.runHistories, run)
@@ -216,7 +218,7 @@ func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHisto
 	return run, nil
 }
 
-func (s *stubStore) AppendRunHistoryWithEvents(ctx context.Context, run persistence.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (persistence.RunHistory, error) {
+func (s *stubStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
 	return s.AppendRunHistory(ctx, run)
 }
 
@@ -274,16 +276,20 @@ func (s *stubStore) DeleteRetryEntry(_ context.Context, issueID string) error {
 
 func (s *stubStore) Ping(_ context.Context) error { return nil }
 
+func (s *stubStore) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
+	return s.unsupportedReactionObservationStore.CountWorkerRunsCompletedSince(ctx, issueID, since)
+}
+
 func (s *stubStore) ListReportedModels(context.Context) ([]string, error) { return nil, nil }
 
 func (s *stubStore) CountRunHistoryByIssue(_ context.Context, _ string) (int, error) {
 	return 0, nil
 }
 
-func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (persistence.IssueTokenUsage, error) {
+func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (storage.IssueTokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return persistence.IssueTokenUsage{
+	return storage.IssueTokenUsage{
 		TotalTokens:        s.tokenSum,
 		UncachedTokens:     s.tokenSum,
 		Sessions:           s.tokenSessionCount,
@@ -292,7 +298,7 @@ func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (persistence.
 	}, nil
 }
 
-func (s *stubStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (persistence.IssueTokenUsage, error) {
+func (s *stubStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (storage.IssueTokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.windowUsage, nil
@@ -334,13 +340,13 @@ func (s *stubStore) ResetHandoffAbsenceSequence(_ context.Context, issueID strin
 	return nil
 }
 
-func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error) {
+func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []string) (map[string]storage.IssueTokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tokenExhaustedErr != nil {
 		return nil, s.tokenExhaustedErr
 	}
-	usage := make(map[string]persistence.IssueTokenUsage, len(candidateIDs))
+	usage := make(map[string]storage.IssueTokenUsage, len(candidateIDs))
 	for _, id := range candidateIDs {
 		if custom, ok := s.tokenExhaustedUsage[id]; ok {
 			usage[id] = custom
@@ -348,11 +354,11 @@ func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []stri
 		}
 		switch {
 		case slices.Contains(s.tokenExhaustedIDs, id):
-			usage[id] = persistence.IssueTokenUsage{TotalTokens: 1000, UncachedTokens: 1000}
+			usage[id] = storage.IssueTokenUsage{TotalTokens: 1000, UncachedTokens: 1000}
 		case slices.Contains(s.tokenIncompleteIDs, id):
-			usage[id] = persistence.IssueTokenUsage{TotalTokens: 0, UnmeasuredSessions: 1}
+			usage[id] = storage.IssueTokenUsage{TotalTokens: 0, UnmeasuredSessions: 1}
 		case slices.Contains(s.tokenUnaccountedIDs, id):
-			usage[id] = persistence.IssueTokenUsage{TotalTokens: 500, UncachedTokens: 500, Sessions: 1, UnaccountedTurns: 1}
+			usage[id] = storage.IssueTokenUsage{TotalTokens: 500, UncachedTokens: 500, Sessions: 1, UnaccountedTurns: 1}
 		}
 	}
 	return usage, nil
@@ -1632,7 +1638,7 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 				stoppedByBudget int
 			}
 			captured := make(chan observedRow, 1)
-			store.onAppendRunHistory = func(persistence.RunHistory) {
+			store.onAppendRunHistory = func(storage.RunHistory) {
 				select {
 				case captured <- observedRow{
 					yCancels:        yCancels.Load(),
@@ -3160,7 +3166,7 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	<-done
 
 	store.mu.Lock()
-	runs := append([]persistence.RunHistory(nil), store.runHistories...)
+	runs := append([]storage.RunHistory(nil), store.runHistories...)
 	store.mu.Unlock()
 	if len(runs) != 1 {
 		t.Fatalf("run history count = %d, want 1", len(runs))
@@ -3453,7 +3459,7 @@ func TestHandleTick_Held(t *testing.T) {
 	ctx := context.Background()
 	oneSlot := func(cfg *config.ServiceConfig) { cfg.Agent.MaxConcurrentAgents = 1 }
 	spendHeld := func(h *runHarness) {
-		h.store.windowUsage = persistence.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}
+		h.store.windowUsage = storage.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}
 	}
 	dailyCeiling := func(cfg *config.ServiceConfig) { cfg.Agent.MaxDailyCostUSD = 5 }
 	dailyResetsAt := func(h *runHarness) time.Time {
@@ -5800,7 +5806,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		fromRun := holdContext{"plan", "kind-b", "model-run", StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-run", DispatchedAt: passAt}}
 		fromHop := holdContext{"plan", "kind-b", "model-plan", StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-hop", DispatchedAt: passAt}}
 		held := holdContext{"implement", "kind-c", "model-held", StageLineage{ChainID: "chain-held", DispatchedAt: passAt.Add(-time.Hour)}}
-		latest := map[string]persistence.RunHistory{issue.ID: {
+		latest := map[string]storage.RunHistory{issue.ID: {
 			RuleName: "plan", AgentAdapter: "kind-b", ConfiguredModel: "model-run", StagePrevious: "specify", StagePreviousOutcome: "succeeded",
 			ChainID: "chain-run", DispatchedAt: "2026-03-19T09:00:00Z",
 		}}
@@ -5932,7 +5938,7 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		store := &stubStore{
 			tokenExhaustedIDs: []string{issueA.ID, issueB.ID},
-			tokenExhaustedUsage: map[string]persistence.IssueTokenUsage{
+			tokenExhaustedUsage: map[string]storage.IssueTokenUsage{
 				issueA.ID: {TotalTokens: 1600, UncachedTokens: 600},
 				issueB.ID: {TotalTokens: 2500, UncachedTokens: 1100},
 			},
@@ -6293,13 +6299,13 @@ func TestHandleTick_MoneyBudgetRebuild(t *testing.T) {
 
 	issue := domain.Issue{ID: "iss-usd", Identifier: "TEST-USD", Title: "title", State: "To Do"}
 	first, second := 0.7, 0.1
-	atCeiling := persistence.IssueTokenUsage{RecordedCostUSD: first + second, PricedSessions: 2, Sessions: 2}
+	atCeiling := storage.IssueTokenUsage{RecordedCostUSD: first + second, PricedSessions: 2, Sessions: 2}
 
 	tests := []struct {
 		name            string
 		maxTokens       int
 		maxCostUSD      float64
-		usage           persistence.IssueTokenUsage
+		usage           storage.IssueTokenUsage
 		queryErr        error
 		priorHold       *BudgetExhaustedEntry
 		priorIncomplete bool
@@ -6315,19 +6321,19 @@ func TestHandleTick_MoneyBudgetRebuild(t *testing.T) {
 		{
 			name:       "recorded costs one cent below the ceiling hold nothing",
 			maxCostUSD: 0.8,
-			usage:      persistence.IssueTokenUsage{RecordedCostUSD: 0.79, PricedSessions: 2, Sessions: 2},
+			usage:      storage.IssueTokenUsage{RecordedCostUSD: 0.79, PricedSessions: 2, Sessions: 2},
 		},
 		{
 			name:       "past the money and token ceilings the reason is money",
 			maxTokens:  1000,
 			maxCostUSD: 0.8,
-			usage:      persistence.IssueTokenUsage{TotalTokens: 1500, UncachedTokens: 1500, RecordedCostUSD: first + second, PricedSessions: 2, Sessions: 2},
+			usage:      storage.IssueTokenUsage{TotalTokens: 1500, UncachedTokens: 1500, RecordedCostUSD: first + second, PricedSessions: 2, Sessions: 2},
 			wantReason: budgetReasonMoney,
 		},
 		{
 			name:           "an unpriced run beside a priced run below the ceiling holds nothing and is flagged incomplete",
 			maxCostUSD:     0.8,
-			usage:          persistence.IssueTokenUsage{RecordedCostUSD: 0.5, PricedSessions: 1, UnpricedSessions: 1, Sessions: 2},
+			usage:          storage.IssueTokenUsage{RecordedCostUSD: 0.5, PricedSessions: 1, UnpricedSessions: 1, Sessions: 2},
 			wantIncomplete: true,
 		},
 		{
@@ -6357,7 +6363,7 @@ func TestHandleTick_MoneyBudgetRebuild(t *testing.T) {
 			wm := budgetTickConfigTokens(0, tt.maxTokens)
 			wm.config.Agent.MaxCostUSD = tt.maxCostUSD
 			store := &stubStore{
-				tokenExhaustedUsage: map[string]persistence.IssueTokenUsage{issue.ID: tt.usage},
+				tokenExhaustedUsage: map[string]storage.IssueTokenUsage{issue.ID: tt.usage},
 				tokenExhaustedErr:   tt.queryErr,
 			}
 			state := NewState(60000, 10, 0, nil, AgentTotals{})
@@ -8863,7 +8869,7 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	<-done
 
 	store.mu.Lock()
-	rows := make(map[string]persistence.RunHistory, len(store.runHistories))
+	rows := make(map[string]storage.RunHistory, len(store.runHistories))
 	for _, rh := range store.runHistories {
 		rows[rh.IssueID] = rh
 	}
@@ -9678,7 +9684,7 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 	}
 
 	for range 3 {
-		if _, err := store1.AppendRunHistory(ctx, persistence.RunHistory{
+		if _, err := store1.AppendRunHistory(ctx, storage.RunHistory{
 			IssueID:      issueID,
 			Identifier:   "PROJ-RESTART",
 			Attempt:      1,
@@ -11052,9 +11058,9 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 	}
 }
 
-func (h *runHarness) waitForRunHistories(n int) []persistence.RunHistory {
+func (h *runHarness) waitForRunHistories(n int) []storage.RunHistory {
 	h.t.Helper()
-	var rows []persistence.RunHistory
+	var rows []storage.RunHistory
 	waittest.Until(h.t, func() error {
 		h.store.mu.Lock()
 		rows = slices.Clone(h.store.runHistories)
@@ -11134,7 +11140,7 @@ func TestRun_TwoRulesOnOneKindDispatchWithTheirOwnSettings(t *testing.T) {
 	}
 }
 
-func rowOfIdentifier(t *testing.T, rows []persistence.RunHistory, identifier string) persistence.RunHistory {
+func rowOfIdentifier(t *testing.T, rows []storage.RunHistory, identifier string) storage.RunHistory {
 	t.Helper()
 	for _, row := range rows {
 		if row.Identifier == identifier {
@@ -11142,7 +11148,7 @@ func rowOfIdentifier(t *testing.T, rows []persistence.RunHistory, identifier str
 		}
 	}
 	t.Fatalf("no run_history row for %s; rows: %+v", identifier, rows)
-	return persistence.RunHistory{}
+	return storage.RunHistory{}
 }
 
 func interactiveModeRaw(withBadBlock bool) map[string]any {
@@ -11358,14 +11364,14 @@ func (s *stubStore) MarkStageHopDispatched(_ context.Context, issueID string) er
 	return s.markDispatchedErr
 }
 
-func (s *stubStore) LatestAgentRuns(_ context.Context, issueIDs []string) (map[string]persistence.RunHistory, error) {
+func (s *stubStore) LatestAgentRuns(_ context.Context, issueIDs []string) (map[string]storage.RunHistory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.latestRunsCalls = append(s.latestRunsCalls, slices.Clone(issueIDs))
 	if s.latestRunsErr != nil {
 		return nil, s.latestRunsErr
 	}
-	runs := make(map[string]persistence.RunHistory)
+	runs := make(map[string]storage.RunHistory)
 	for _, id := range issueIDs {
 		if run, ok := s.latestRuns[id]; ok {
 			runs[id] = run

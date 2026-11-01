@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -207,7 +208,7 @@ func (s *mgcStoreFake) DeleteRetryEntry(context.Context, string) error {
 	s.deleteRetryCalls++
 	return nil
 }
-func (s *mgcStoreFake) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *mgcStoreFake) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 
@@ -548,7 +549,7 @@ func TestReconcileMergeCompletion_RecoveryOverDispatchedFingerprintNoTransition(
 		NowFunc:                           func() time.Time { return recoveryNow },
 		Logger:                            discardLogger(),
 	}
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, recoverParams)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, recoverParams)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -680,8 +681,8 @@ func freshSCMTime(daysAgo int) string {
 	return recoveryNow.Add(-time.Duration(daysAgo) * 24 * time.Hour).UTC().Format(time.RFC3339)
 }
 
-func freshRun(issueID, identifier, displayID string, attempt int) persistence.RunHistory {
-	return persistence.RunHistory{
+func freshRun(issueID, identifier, displayID string, attempt int) storage.RunHistory {
+	return storage.RunHistory{
 		IssueID:      issueID,
 		Identifier:   identifier,
 		DisplayID:    displayID,
@@ -888,7 +889,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	run.StagePrevious, run.StagePreviousOutcome, run.ChainID = "specify", "no_change", "chain-1"
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -960,7 +961,7 @@ func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.ReviewReactionConfigured = false
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1050,7 +1051,7 @@ func TestRecoverPendingReactions_CIMissingPRIdentity_NoPendingReaction(t *testin
 			run := freshRun("ISS-CINOPR", "PROJ-CINOPR", "", 1)
 			params := defaultRecoveryParams(wsRoot, tracker)
 
-			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 			if err != nil {
 				t.Fatalf("RecoverPendingReactions: %v", err)
 			}
@@ -1074,7 +1075,7 @@ func TestRecoverPendingReactions_SkipsWhenHandoffStateEmpty(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.HandoffState = ""
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1101,7 +1102,7 @@ func TestRecoverPendingReactions_SkipsWhenProvidersNil(t *testing.T) {
 	params.SCMAdapter = nil
 	params.CIProvider = nil
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1132,7 +1133,7 @@ func TestRecoverPendingReactions_SkipsNonHandoffState(t *testing.T) {
 	run := freshRun("ISS-5", "PROJ-5", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1162,7 +1163,7 @@ func TestRecoverPendingReactions_SkipsTerminalState(t *testing.T) {
 	run := freshRun("ISS-6", "PROJ-6", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1196,7 +1197,7 @@ func TestRecoverPendingReactions_SkipsClaimedOrRetryingIssue(t *testing.T) {
 	state.Claimed["ISS-RETRY"] = struct{}{}
 	state.Running["ISS-RUNNING"] = &RunningEntry{}
 
-	runs := []persistence.RunHistory{
+	runs := []storage.RunHistory{
 		freshRun("ISS-CLAIMED", "PROJ-7", "", 1),
 		freshRun("ISS-RETRY", "PROJ-8", "", 1),
 		freshRun("ISS-RUNNING", "PROJ-9", "", 1),
@@ -1224,7 +1225,7 @@ func TestRecoverPendingReactions_LimitsTrackerFetchCandidates(t *testing.T) {
 	wsRoot := t.TempDir()
 	// Generate 250 runs; recovery should cap at PendingReactionRecoveryMaxCandidates (200).
 	const total = 250
-	runs := make([]persistence.RunHistory, total)
+	runs := make([]storage.RunHistory, total)
 	stateMap := make(map[string]string, total)
 	for i := range total {
 		issueID := fmt.Sprintf("ISS-%04d", i)
@@ -1294,7 +1295,7 @@ func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
 		"ISS-STALE-COMPLETED": "In Review",
 	}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	runs := []persistence.RunHistory{
+	runs := []storage.RunHistory{
 		freshRun("ISS-STALE", "PROJ-STALE", "", 1),
 		freshRun("ISS-MALFORMED", "PROJ-MALFORMED", "", 1),
 		runStaleCompleted,
@@ -1337,7 +1338,7 @@ func TestRecoverPendingReactions_DoesNotOverwriteExistingReview(t *testing.T) {
 	run := freshRun("ISS-EXISTING", "PROJ-EXISTING", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1377,7 +1378,7 @@ func TestRecoverPendingReactions_ProviderFetchesNotCalled(t *testing.T) {
 	params.CIProvider = &panicCIProvider{}
 
 	// Must not panic; FetchPendingReviews / FetchCIStatus are not called.
-	_, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	_, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1394,7 +1395,7 @@ func TestRecoverPendingReactions_InvalidSCMMetadataSkips(t *testing.T) {
 	run := freshRun("ISS-NOMETA", "PROJ-NOMETA", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1425,7 +1426,7 @@ func TestRecoverPendingReactions_TrackerFetchError(t *testing.T) {
 	run := freshRun("ISS-FETCHERR", "PROJ-FETCHERR", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err == nil {
 		t.Fatal("RecoverPendingReactions tracker fetch error = nil, want error")
 	}
@@ -1459,7 +1460,7 @@ func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) 
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	// Recover the review reaction.
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1513,7 +1514,7 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	// Recover.
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1580,7 +1581,7 @@ func TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured(t *testing.
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1635,7 +1636,7 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = false // not configured
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1670,7 +1671,7 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata(t *testing.
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1708,7 +1709,7 @@ func TestRecoverPendingReactions_RecreatesBotReviewAfterRestart(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1777,7 +1778,7 @@ func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = false // not configured
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1817,7 +1818,7 @@ func TestRecoverPendingReactions_BotReviewMissingPRIdentity(t *testing.T) {
 			params := defaultRecoveryParams(wsRoot, tracker)
 			params.BotReviewReactionConfigured = true
 
-			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 
 			if err != nil {
 				t.Fatalf("RecoverPendingReactions: %v", err)
@@ -1848,7 +1849,7 @@ func TestRecoverPendingReactions_MergeConflict(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeConflictReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1914,7 +1915,7 @@ func TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse(t *testi
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeConflictReactionConfigured = false // not configured
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -1959,7 +1960,7 @@ func TestRecoverPendingReactions_LabelReview(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelReviewReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2021,7 +2022,7 @@ func TestRecoverPendingReactions_LabelReviewNotRecoveredWhenFlagFalse(t *testing
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelReviewReactionConfigured = false
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2080,7 +2081,7 @@ func TestRecoverPendingReactions_LabelReviewMissingPRMetadata(t *testing.T) {
 			params := defaultRecoveryParams(wsRoot, tracker)
 			params.LabelReviewReactionConfigured = true
 
-			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 			if err != nil {
 				t.Fatalf("RecoverPendingReactions: %v", err)
 			}
@@ -2114,7 +2115,7 @@ func TestRecoverPendingReactions_LabelFix(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelFixReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2179,7 +2180,7 @@ func TestRecoverPendingReactions_LabelFixNotRecoveredWhenFlagFalse(t *testing.T)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelFixReactionConfigured = false
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2247,7 +2248,7 @@ func TestRecoverPendingReactions_LabelFixMissingPRMetadata(t *testing.T) {
 			params := defaultRecoveryParams(wsRoot, tracker)
 			params.LabelFixReactionConfigured = true
 
-			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 			if err != nil {
 				t.Fatalf("RecoverPendingReactions: %v", err)
 			}
@@ -2286,7 +2287,7 @@ func TestRecoverPendingReactions_MergeCompletion(t *testing.T) {
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeCompletionReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2348,7 +2349,7 @@ func TestRecoverPendingReactions_MergeCompletionNotRecoveredWhenFlagFalse(t *tes
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeCompletionReactionConfigured = false
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2387,7 +2388,7 @@ func TestRecoverPendingReactions_MergeCompletionSkipsWhenHandoffStateUnset(t *te
 	params.HandoffState = ""
 	params.MergeCompletionReactionConfigured = true
 
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	result, err := RecoverPendingReactions(context.Background(), state, []storage.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
 	}
@@ -2513,7 +2514,7 @@ func TestRestoreReactionEscalations(t *testing.T) {
 				writeRecoverySCM(t, wsRoot, "PROJ-1", domain.SCMMetadata{
 					Branch: "feat", SHA: "head-1", PushedAt: w.now.Add(-time.Hour).Format(time.RFC3339), PRNumber: 99, Owner: "acme", Repo: "widgets",
 				})
-				if _, err := RecoverPendingReactions(ctx, w.state, []persistence.RunHistory{run}, params); err != nil {
+				if _, err := RecoverPendingReactions(ctx, w.state, []storage.RunHistory{run}, params); err != nil {
 					t.Fatalf("RecoverPendingReactions: %v", err)
 				}
 			}

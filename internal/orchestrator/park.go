@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // Park reason and unpark trigger values, shared by both parking triggers
@@ -54,7 +55,7 @@ type parkHandOver struct {
 // over only from a run with no reaction kind that ended normally, because a
 // retry policy starts a new session after any other run, so resuming one of
 // those sessions would resume a suspect conversation.
-func parkHandOverOf(run persistence.RunHistory) parkHandOver {
+func parkHandOverOf(run storage.RunHistory) parkHandOver {
 	handOver := parkHandOver{Statement: run.AgentText}
 	if run.ReactionKind != "" || !endedNormally(run) {
 		return handOver
@@ -66,12 +67,12 @@ func parkHandOverOf(run persistence.RunHistory) parkHandOver {
 
 // endedNormally reports whether run succeeded or failed only because its
 // handoff was withheld for lack of observed work.
-func endedNormally(run persistence.RunHistory) bool {
+func endedNormally(run storage.RunHistory) bool {
 	switch run.Status {
 	case "succeeded":
 		return true
 	case "failed":
-		return run.Error != nil && strings.HasPrefix(*run.Error, persistence.HandoffAbsenceErrorPrefix)
+		return run.Error != nil && strings.HasPrefix(*run.Error, storage.HandoffAbsenceErrorPrefix)
 	default:
 		return false
 	}
@@ -91,7 +92,7 @@ type parkedRun struct {
 
 // parkedRunOf returns the run row describes: AgentKind from AgentAdapter,
 // StageLineage through [stageLineageOf], HandOver through [parkHandOverOf].
-func parkedRunOf(row persistence.RunHistory) parkedRun {
+func parkedRunOf(row storage.RunHistory) parkedRun {
 	return parkedRun{
 		RuleName:        row.RuleName,
 		StageLineage:    stageLineageOf(row),

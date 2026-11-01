@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -119,7 +120,7 @@ type ciReconcileStore struct {
 
 	savedEntries    []persistence.RetryEntry
 	deletedIssueIDs []string
-	runHistories    []persistence.RunHistory
+	runHistories    []storage.RunHistory
 
 	saveRetryEntryErr   error
 	deleteRetryEntryErr error
@@ -162,7 +163,7 @@ func (s *ciReconcileStore) DeleteRetryEntry(_ context.Context, issueID string) e
 	return s.deleteRetryEntryErr
 }
 
-func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	s.runHistories = append(s.runHistories, run)
 	return run, s.appendRunHistoryErr
 }

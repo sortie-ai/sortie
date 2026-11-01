@@ -27,6 +27,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/tracker/file"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
@@ -765,7 +766,7 @@ func readCeilingSample(harness *Harness) (ceilingSample, error) {
 func ObserveCeilingStop(t *testing.T, harness *Harness) CeilingCondition {
 	t.Helper()
 
-	var rows []persistence.RunHistory
+	var rows []storage.RunHistory
 	err := waittest.UntilWithin(harness.Observation(), 20*time.Millisecond, func() error {
 		var err error
 		rows, err = harness.store.QueryRunHistoryByIssue(context.Background(), issueID)

@@ -18,6 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
@@ -248,7 +249,7 @@ func TestMCPServerBudget(t *testing.T) {
 	const identifier = "BUDGET-E2E-1"
 	const budgetTokens = 1000
 
-	if _, err := rw.AppendRunHistory(ctx, persistence.RunHistory{
+	if _, err := rw.AppendRunHistory(ctx, storage.RunHistory{
 		IssueID:         issueID,
 		Identifier:      identifier,
 		Attempt:         1,

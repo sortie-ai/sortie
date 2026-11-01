@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -594,21 +595,21 @@ func TestRefreshParkedIssuesIdentityBackfill(t *testing.T) {
 func TestParkedRunOfHandOver(t *testing.T) {
 	t.Parallel()
 
-	run := func(status, reaction string, errText *string) persistence.RunHistory {
-		return persistence.RunHistory{Status: status, ReactionKind: reaction, Error: errText, SessionID: "sess-1", TemplateID: "tpl", AgentText: "stopped"}
+	run := func(status, reaction string, errText *string) storage.RunHistory {
+		return storage.RunHistory{Status: status, ReactionKind: reaction, Error: errText, SessionID: "sess-1", TemplateID: "tpl", AgentText: "stopped"}
 	}
 	statementOnly := parkHandOver{Statement: "stopped"}
 	all := parkHandOver{SessionID: "sess-1", TemplateID: "tpl", Statement: "stopped"}
 
 	tests := []struct {
 		name string
-		row  persistence.RunHistory
+		row  storage.RunHistory
 		want parkHandOver
 	}{
 		{"reaction run keeps the statement only", run("succeeded", "review", nil), statementOnly},
 		{"error exit keeps the statement only", run("failed", "", new("agent crashed")), statementOnly},
 		{"run that succeeded hands over session and template", run("succeeded", "", nil), all},
-		{"run whose handoff was withheld hands over session and template", run("failed", "", new(persistence.HandoffAbsenceErrorPrefix+"no work")), all},
+		{"run whose handoff was withheld hands over session and template", run("failed", "", new(storage.HandoffAbsenceErrorPrefix+"no work")), all},
 	}
 
 	for _, tt := range tests {

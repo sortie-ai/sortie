@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 type handoffLabelCall struct {
@@ -52,10 +53,10 @@ func (t *recordingHandoffTracker) labels() []handoffLabelCall {
 
 func seedMockHandoffAbsences(store *mockExitStore, issueID string, count int) {
 	for range count {
-		store.runHistories = append(store.runHistories, persistence.RunHistory{
+		store.runHistories = append(store.runHistories, storage.RunHistory{
 			IssueID: issueID,
 			Status:  "failed",
-			Error:   new(persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
+			Error:   new(storage.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
 		})
 	}
 }
@@ -354,7 +355,7 @@ func TestParkExhaustedAbsencesRecordsFollowedRun(t *testing.T) {
 
 	const issueID = "TICK-RUN"
 	dispatchedAt := time.Date(2026, 3, 15, 11, 0, 0, 0, time.UTC)
-	latest := map[string]persistence.RunHistory{issueID: {
+	latest := map[string]storage.RunHistory{issueID: {
 		IssueID: issueID, AgentAdapter: "claude-code", RuleName: "implement", ConfiguredModel: "sonnet",
 		StagePrevious: "triage", StagePreviousOutcome: "succeeded", ChainID: "chain-1", DispatchedAt: "2026-03-15T11:00:00Z",
 	}}
@@ -958,7 +959,7 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 	}
 
 	for range 3 {
-		if _, err := store.AppendRunHistory(ctx, persistence.RunHistory{
+		if _, err := store.AppendRunHistory(ctx, storage.RunHistory{
 			IssueID:      issueID,
 			Identifier:   "PROJ-ORD",
 			Attempt:      1,
@@ -967,7 +968,7 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 			StartedAt:    "2026-08-17T00:00:00Z",
 			CompletedAt:  "2026-08-17T00:01:00Z",
 			Status:       "failed",
-			Error:        new(persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
+			Error:        new(storage.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
 		}); err != nil {
 			t.Fatalf("AppendRunHistory: %v", err)
 		}

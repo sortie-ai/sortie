@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func createLegacyRunHistoryTable(t *testing.T, s *Store) {
@@ -163,66 +165,8 @@ func TestRunHistoryCapabilities(t *testing.T) {
 	})
 }
 
-func TestRunHistoryCapabilities_Breakdowns(t *testing.T) {
-	t.Parallel()
-
-	full := RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true, HasTokens: true, HasTokenMeasurement: true}
-	withSettings := full
-	withSettings.HasConfiguredSettings = true
-	withChains := withSettings
-	withChains.HasStageChains = true
-	withTrigger := withChains
-	withTrigger.HasTrigger = true
-	chainsWithoutSettings := full
-	chainsWithoutSettings.HasStageChains = true
-	recorded := withTrigger
-	recorded.HasFirstAfterHop, recorded.HasAgentBlocked, recorded.HasRecordedCost = true, true, true
-	withSkills := recorded
-	withSkills.HasSkills = true
-	skillsWithoutCost := withTrigger
-	skillsWithoutCost.HasSkills = true
-	tests := []struct {
-		name        string
-		caps        RunHistoryCapabilities
-		wantModel   bool
-		wantChain   bool
-		wantTrigger bool
-		wantSkills  bool
-	}{
-		{"recorded cost and the skills column", withSkills, true, true, true, true},
-		{"recorded cost without the skills column", recorded, true, true, true, false},
-		{"skills column without recorded cost", skillsWithoutCost, true, true, true, false},
-		{"full tier with settings, stage chains and trigger", withTrigger, true, true, true, false},
-		{"full tier with configured settings and stage chains", withChains, true, true, false, false},
-		{"full tier with configured settings", withSettings, true, false, false, false},
-		{"full tier without configured settings", full, false, false, false, false},
-		{"stage chains without configured settings", chainsWithoutSettings, false, false, false, false},
-		{"trigger without stage chains", RunHistoryCapabilities{HasTrigger: true}, false, false, false, false},
-		{"configured settings without the full tier", RunHistoryCapabilities{HasConfiguredSettings: true, HasStageChains: true, HasTrigger: true}, false, false, false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := tt.caps.ModelBreakdown(); got != tt.wantModel {
-				t.Errorf("%+v.ModelBreakdown() = %v, want %v", tt.caps, got, tt.wantModel)
-			}
-			if got := tt.caps.ChainBreakdown(); got != tt.wantChain {
-				t.Errorf("%+v.ChainBreakdown() = %v, want %v", tt.caps, got, tt.wantChain)
-			}
-			if got := tt.caps.TriggerBreakdown(); got != tt.wantTrigger {
-				t.Errorf("%+v.TriggerBreakdown() = %v, want %v", tt.caps, got, tt.wantTrigger)
-			}
-			if got := tt.caps.SkillBreakdown(); got != tt.wantSkills {
-				t.Errorf("%+v.SkillBreakdown() = %v, want %v", tt.caps, got, tt.wantSkills)
-			}
-		})
-	}
-}
-
-func runAt(id, completedAt string) RunHistory {
-	return RunHistory{
+func runAt(id, completedAt string) storage.RunHistory {
+	return storage.RunHistory{
 		IssueID:      id,
 		Identifier:   id,
 		Attempt:      1,
@@ -264,7 +208,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 		}
 
 		var visited []string
-		if err := s.ScanRunHistoryRange(ctx, caps, &since, &until, func(row RunStatsRow) error {
+		if err := s.ScanRunHistoryRange(ctx, caps, &since, &until, func(row storage.RunStatsRow) error {
 			visited = append(visited, row.CompletedAt)
 			return nil
 		}); err != nil {
@@ -295,7 +239,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 		}
 
 		var count int
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(RunStatsRow) error {
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(storage.RunStatsRow) error {
 			count++
 			return nil
 		}); err != nil {
@@ -314,7 +258,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 		ctx := context.Background()
 
 		for _, tag := range []string{"order-1", "order-2", "order-3"} {
-			appendOrFatal(t, s, RunHistory{
+			appendOrFatal(t, s, storage.RunHistory{
 				IssueID: tag, Identifier: tag, Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z", Status: tag,
 			})
@@ -327,7 +271,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 
 		sentinelErr := errors.New("stop at second row")
 		var visited []string
-		err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			visited = append(visited, row.Status)
 			if row.Status == "order-2" {
 				return sentinelErr
@@ -370,7 +314,7 @@ func TestScanRunHistoryRange(t *testing.T) {
 		}
 
 		got := make(map[string]bool)
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			got[row.Status] = row.TokensMeasured
 			return nil
 		}); err != nil {
@@ -404,8 +348,8 @@ func TestScanRunHistoryRange(t *testing.T) {
 			t.Fatalf("caps.Full() = false, want true for a fully migrated store")
 		}
 
-		var rows []RunStatsRow
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		var rows []storage.RunStatsRow
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			rows = append(rows, row)
 			return nil
 		}); err != nil {
@@ -441,8 +385,8 @@ func TestScanRunHistoryRange(t *testing.T) {
 			t.Fatalf("caps.Full() = true, want false for the legacy table")
 		}
 
-		var rows []RunStatsRow
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		var rows []storage.RunStatsRow
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			rows = append(rows, row)
 			return nil
 		}); err != nil {
@@ -500,8 +444,8 @@ func TestScanRunHistoryRange(t *testing.T) {
 			t.Fatalf("caps.Full() = false, want true (HasCacheWriteTokens is not part of the schema-tier decision)")
 		}
 
-		var got []RunStatsRow
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		var got []storage.RunStatsRow
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			got = append(got, row)
 			return nil
 		}); err != nil {
@@ -525,17 +469,17 @@ func TestScanRunHistoryRange(t *testing.T) {
 		withParts := runAt("with-parts", "2026-01-01T00:00:00Z")
 		withParts.DispatchID, withParts.UnaccountedTurns = new("dispatch-1"), 3
 		withParts.TotalTokens, withParts.TokensMeasured = 330, true
-		withParts.UsageCompleteness, withParts.UsageProvenance = UsageLowerBound, "journal:records,output:live"
-		withParts.ReportedAmounts = []ReportedAmount{
+		withParts.UsageCompleteness, withParts.UsageProvenance = storage.UsageLowerBound, "journal:records,output:live"
+		withParts.ReportedAmounts = []storage.ReportedAmount{
 			{Unit: "credits", Model: "model-b", Amount: 2},
 			{Unit: "USD", Model: "model-a", Amount: 1},
 			{Unit: "credits", Model: "model-a", Amount: 3},
 		}
-		withParts.ModelUsage = map[string]ModelTokens{
+		withParts.ModelUsage = map[string]storage.ModelTokens{
 			"model-b": {InputTokens: 200, OutputTokens: 20},
 			"model-a": {InputTokens: 100, OutputTokens: 10, CacheReadTokens: 50, CacheWriteTokens: 5},
 		}
-		withParts.ModelCosts = map[string]ModelCost{
+		withParts.ModelCosts = map[string]storage.ModelCost{
 			"model-b": {CostStatus: "unpriced"},
 			"model-a": {EstimatedCostUSD: new(1.5), CostStatus: "estimated"},
 		}
@@ -548,8 +492,8 @@ func TestScanRunHistoryRange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunHistoryCapabilities: %v", err)
 		}
-		var got []RunStatsRow
-		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+		var got []storage.RunStatsRow
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 			got = append(got, row)
 			return nil
 		}); err != nil {
@@ -559,9 +503,9 @@ func TestScanRunHistoryRange(t *testing.T) {
 		if len(got) != 2 || got[0].IssueID != "with-parts" || got[1].IssueID != "no-parts" {
 			t.Fatalf("ScanRunHistoryRange visited %+v, want with-parts then no-parts, once each", got)
 		}
-		wantParts := []RunModelPart{
-			{Model: "model-a", Tokens: ModelTokens{InputTokens: 100, OutputTokens: 10, CacheReadTokens: 50, CacheWriteTokens: 5}, EstimatedCostUSD: new(1.5), CostStatus: "estimated"},
-			{Model: "model-b", Tokens: ModelTokens{InputTokens: 200, OutputTokens: 20}, CostStatus: "unpriced"},
+		wantParts := []storage.RunModelPart{
+			{Model: "model-a", Tokens: storage.ModelTokens{InputTokens: 100, OutputTokens: 10, CacheReadTokens: 50, CacheWriteTokens: 5}, EstimatedCostUSD: new(1.5), CostStatus: "estimated"},
+			{Model: "model-b", Tokens: storage.ModelTokens{InputTokens: 200, OutputTokens: 20}, CostStatus: "unpriced"},
 		}
 		if !reflect.DeepEqual(got[0].Parts, wantParts) {
 			t.Errorf("RunStatsRow{with-parts}.Parts = %+v, want %+v", got[0].Parts, wantParts)
@@ -569,9 +513,9 @@ func TestScanRunHistoryRange(t *testing.T) {
 		if got[0].UnaccountedTurns != 3 || got[0].TotalTokens != 330 {
 			t.Errorf("RunStatsRow{with-parts} UnaccountedTurns, TotalTokens = %d, %d, want 3, 330", got[0].UnaccountedTurns, got[0].TotalTokens)
 		}
-		if got[0].UsageCompleteness != UsageLowerBound || got[0].UsageProvenance != "journal:records,output:live" || !slices.Equal(got[0].ReportedUnits, []string{"USD", "credits"}) {
+		if got[0].UsageCompleteness != storage.UsageLowerBound || got[0].UsageProvenance != "journal:records,output:live" || !slices.Equal(got[0].ReportedUnits, []string{"USD", "credits"}) {
 			t.Errorf("RunStatsRow{with-parts} UsageCompleteness, UsageProvenance, ReportedUnits = %q, %q, %q, want %q, %q, %q",
-				got[0].UsageCompleteness, got[0].UsageProvenance, got[0].ReportedUnits, UsageLowerBound, "journal:records,output:live", []string{"USD", "credits"})
+				got[0].UsageCompleteness, got[0].UsageProvenance, got[0].ReportedUnits, storage.UsageLowerBound, "journal:records,output:live", []string{"USD", "credits"})
 		}
 		if got[1].Parts != nil || got[1].UnaccountedTurns != 0 || got[1].ReportedUnits != nil {
 			t.Errorf("RunStatsRow{no-parts} Parts, UnaccountedTurns, ReportedUnits = %+v, %d, %q, want nil, 0, nil", got[1].Parts, got[1].UnaccountedTurns, got[1].ReportedUnits)
@@ -602,8 +546,8 @@ func TestScanRunHistoryRange(t *testing.T) {
 				t.Fatalf("RunHistoryCapabilities: %v", err)
 			}
 
-			var got []RunStatsRow
-			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+			var got []storage.RunStatsRow
+			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 				got = append(got, row)
 				return nil
 			})
@@ -678,7 +622,7 @@ func TestScanRunHistoryRange_OptionalColumns(t *testing.T) {
 		}, []string{"pre-037||MT-1|||||<nil>||false|false|false|true"}},
 		{"blocked run and handoff-withheld failure flagged by status and error prefix", func(t *testing.T, s *Store) {
 			migrateOrFatal(t, s)
-			withError := func(id, completedAt, status string, errText *string) RunHistory {
+			withError := func(id, completedAt, status string, errText *string) storage.RunHistory {
 				row := runAt(id, completedAt)
 				row.Status, row.Error = status, errText
 				return row
@@ -686,10 +630,10 @@ func TestScanRunHistoryRange_OptionalColumns(t *testing.T) {
 			blocked := runAt("blocked", "2026-01-01T00:00:00Z")
 			blocked.AgentBlocked = true
 			appendOrFatal(t, s, blocked)
-			appendOrFatal(t, s, withError("withheld", "2026-01-02T00:00:00Z", "failed", new(HandoffAbsenceErrorPrefix+"no label")))
+			appendOrFatal(t, s, withError("withheld", "2026-01-02T00:00:00Z", "failed", new(storage.HandoffAbsenceErrorPrefix+"no label")))
 			appendOrFatal(t, s, withError("other-error", "2026-01-03T00:00:00Z", "failed", new("agent crashed")))
 			appendOrFatal(t, s, withError("no-error", "2026-01-04T00:00:00Z", "failed", nil))
-			appendOrFatal(t, s, withError("not-failed", "2026-01-05T00:00:00Z", "succeeded", new(HandoffAbsenceErrorPrefix+"no label")))
+			appendOrFatal(t, s, withError("not-failed", "2026-01-05T00:00:00Z", "succeeded", new(storage.HandoffAbsenceErrorPrefix+"no label")))
 		}, []string{
 			"blocked||blocked|||||<nil>||false|true|false|true",
 			"withheld||withheld|||||<nil>||false|false|true|true",
@@ -725,7 +669,7 @@ func TestScanRunHistoryRange_OptionalColumns(t *testing.T) {
 			}
 
 			var got []string
-			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row storage.RunStatsRow) error {
 				trigger := "<nil>"
 				if row.Trigger != nil {
 					trigger = strconv.Quote(*row.Trigger)

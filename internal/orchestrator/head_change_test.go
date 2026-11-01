@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // headChangeStore is a minimal ReconcileStore double for classifyHeadChange
@@ -29,7 +30,7 @@ var _ ReconcileStore = (*headChangeStore)(nil)
 
 func (s *headChangeStore) SaveRetryEntry(context.Context, persistence.RetryEntry) error { return nil }
 func (s *headChangeStore) DeleteRetryEntry(context.Context, string) error               { return nil }
-func (s *headChangeStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *headChangeStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 func (s *headChangeStore) UpsertReactionFingerprint(context.Context, string, string, string) error {

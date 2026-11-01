@@ -9,7 +9,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 const (
@@ -111,14 +111,14 @@ func orchestratorStopText(stored string) (string, bool) {
 }
 
 func withheldHandoffText(stored string) (string, bool) {
-	rest, withheld := strings.CutPrefix(stored, persistence.HandoffAbsenceErrorPrefix)
+	rest, withheld := strings.CutPrefix(stored, storage.HandoffAbsenceErrorPrefix)
 	if !withheld {
 		return "", false
 	}
 	switch {
-	case strings.HasPrefix(rest, persistence.HandoffVerdictAbsence):
+	case strings.HasPrefix(rest, storage.HandoffVerdictAbsence):
 		return render("run_error_absence", "text", nil), true
-	case strings.HasPrefix(rest, persistence.HandoffVerdictUndetermined):
+	case strings.HasPrefix(rest, storage.HandoffVerdictUndetermined):
 		return render("run_error_undetermined", "text", nil), true
 	}
 	return renderRunError("run_error_withheld", map[string]any{"Detail": detailOf(rest)}), true

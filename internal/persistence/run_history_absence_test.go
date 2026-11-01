@@ -3,6 +3,8 @@ package persistence
 import (
 	"context"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func appendAbsenceSequenceRun(t *testing.T, store *Store, issueID, status, errorText string) {
@@ -11,7 +13,7 @@ func appendAbsenceSequenceRun(t *testing.T, store *Store, issueID, status, error
 	if errorText != "" {
 		runErr = &errorText
 	}
-	appendOrFatal(t, store, RunHistory{
+	appendOrFatal(t, store, storage.RunHistory{
 		IssueID:      issueID,
 		Identifier:   issueID,
 		Attempt:      1,
@@ -41,7 +43,7 @@ func absenceCountOrFatal(t *testing.T, store *Store, issueID string) int {
 }
 
 func handoffAbsenceError() string {
-	return HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"
+	return storage.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"
 }
 
 func TestQueryConsecutiveHandoffAbsenceCounts(t *testing.T) {

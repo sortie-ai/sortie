@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestRunError(t *testing.T) {
@@ -17,17 +17,17 @@ func TestRunError(t *testing.T) {
 	}{
 		{
 			name:   "absence of work",
-			stored: persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy",
+			stored: storage.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy",
 			want:   "The agent finished without changing anything, so Sortie did not hand the issue off.",
 		},
 		{
 			name:   "evidence not determinable",
-			stored: persistence.HandoffAbsenceErrorPrefix + "evidence not determinable under strict policy",
+			stored: storage.HandoffAbsenceErrorPrefix + "evidence not determinable under strict policy",
 			want:   "Sortie could not tell whether the agent changed anything, so it did not hand the issue off.",
 		},
 		{
 			name:   "worker exit wrapper",
-			stored: orchestrator.WorkerExitedErrorPrefix + persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy",
+			stored: orchestrator.WorkerExitedErrorPrefix + storage.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy",
 			want:   "The agent finished without changing anything, so Sortie did not hand the issue off.",
 		},
 		{
@@ -57,7 +57,7 @@ func TestRunError(t *testing.T) {
 		},
 		{
 			name:   "legacy reason",
-			stored: persistence.HandoffAbsenceErrorPrefix + "no output",
+			stored: storage.HandoffAbsenceErrorPrefix + "no output",
 			want:   "Sortie did not hand the issue off: no output.",
 		},
 		{name: "failed CI checks", stored: "CI checks failed on ref 3f9a2c1", want: "The CI checks failed on commit 3f9a2c1."},

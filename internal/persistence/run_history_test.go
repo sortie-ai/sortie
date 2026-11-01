@@ -9,18 +9,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-func tokenRun(i int, issueID string, totalTokens int64) RunHistory {
+func tokenRun(i int, issueID string, totalTokens int64) storage.RunHistory {
 	run := newTestRun(i)
 	run.IssueID = issueID
 	run.TotalTokens = totalTokens
 	return run
 }
 
-func queryAllRuns(t *testing.T, s *Store, limit int) []RunHistory {
+func queryAllRuns(t *testing.T, s *Store, limit int) []storage.RunHistory {
 	t.Helper()
-	rows, err := s.QueryRunHistory(context.Background(), RunHistoryFilter{Limit: limit})
+	rows, err := s.QueryRunHistory(context.Background(), storage.RunHistoryFilter{Limit: limit})
 	if err != nil {
 		t.Fatalf("QueryRunHistory(limit=%d): %v", limit, err)
 	}
@@ -34,7 +36,7 @@ func triggerText(trigger *string) string {
 	return fmt.Sprintf("%q", *trigger)
 }
 
-func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, wantOut, wantTotal, wantCache int64, wantMeasured bool) {
+func assertTokenFields(t *testing.T, reader string, got storage.RunHistory, wantIn, wantOut, wantTotal, wantCache int64, wantMeasured bool) {
 	t.Helper()
 	if got.InputTokens != wantIn {
 		t.Errorf("%s InputTokens = %d, want %d", reader, got.InputTokens, wantIn)
@@ -53,7 +55,7 @@ func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, want
 	}
 }
 
-func appendWithPartsOrFatal(t *testing.T, s *Store, run RunHistory) RunHistory {
+func appendWithPartsOrFatal(t *testing.T, s *Store, run storage.RunHistory) storage.RunHistory {
 	t.Helper()
 	dispatchID := "dispatch-" + run.IssueID
 	run.DispatchID = &dispatchID
@@ -64,14 +66,14 @@ func appendWithPartsOrFatal(t *testing.T, s *Store, run RunHistory) RunHistory {
 	return got
 }
 
-func queryModelUsage(t *testing.T, s *Store, runID int64) map[string]ModelTokens {
+func queryModelUsage(t *testing.T, s *Store, runID int64) map[string]storage.ModelTokens {
 	t.Helper()
 	got, err := s.QueryRunModelUsage(context.Background(), []int64{runID})
 	if err != nil {
 		t.Fatalf("QueryRunModelUsage(%d): %v", runID, err)
 	}
 
-	parts := map[string]ModelTokens{}
+	parts := map[string]storage.ModelTokens{}
 	for _, part := range got[runID] {
 		parts[part.Model] = part.Tokens
 	}
@@ -81,23 +83,23 @@ func queryModelUsage(t *testing.T, s *Store, runID int64) map[string]ModelTokens
 func TestQueryRunModelUsage(t *testing.T) {
 	t.Parallel()
 
-	usage := map[string]ModelTokens{"m": {InputTokens: 10, OutputTokens: 5}}
-	part := RunModelPart{Model: "m", Tokens: usage["m"]}
+	usage := map[string]storage.ModelTokens{"m": {InputTokens: 10, OutputTokens: 5}}
+	part := storage.RunModelPart{Model: "m", Tokens: usage["m"]}
 	classes := []string{"output", "cache_write"}
 
 	tests := []struct {
 		name  string
-		usage map[string]ModelTokens
-		costs map[string]ModelCost
-		want  []RunModelPart
+		usage map[string]storage.ModelTokens
+		costs map[string]storage.ModelCost
+		want  []storage.RunModelPart
 	}{
-		{"classes read back in order", usage, map[string]ModelCost{"m": {CostStatus: "partial", UnratedClasses: classes}},
-			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "partial", UnratedClasses: classes, UnratedRecorded: true}}},
-		{"status without classes reads recorded-empty", usage, map[string]ModelCost{"m": {CostStatus: "estimated"}},
-			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true}}},
-		{"agent price source reads back and a part with none reads empty", usage, map[string]ModelCost{"m": {CostStatus: "estimated", PriceSource: "agent"}},
-			[]RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true, PriceSource: "agent"}}},
-		{"no status reads not recorded", usage, map[string]ModelCost{"m": {UnratedClasses: classes}}, []RunModelPart{part}},
+		{"classes read back in order", usage, map[string]storage.ModelCost{"m": {CostStatus: "partial", UnratedClasses: classes}},
+			[]storage.RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "partial", UnratedClasses: classes, UnratedRecorded: true}}},
+		{"status without classes reads recorded-empty", usage, map[string]storage.ModelCost{"m": {CostStatus: "estimated"}},
+			[]storage.RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true}}},
+		{"agent price source reads back and a part with none reads empty", usage, map[string]storage.ModelCost{"m": {CostStatus: "estimated", PriceSource: "agent"}},
+			[]storage.RunModelPart{{Model: "m", Tokens: usage["m"], CostStatus: "estimated", UnratedRecorded: true, PriceSource: "agent"}}},
+		{"no status reads not recorded", usage, map[string]storage.ModelCost{"m": {UnratedClasses: classes}}, []storage.RunModelPart{part}},
 		{"run without parts has no key", nil, nil, nil},
 	}
 
@@ -110,7 +112,7 @@ func TestQueryRunModelUsage(t *testing.T) {
 			run := newTestRun(1)
 			run.ModelUsage, run.ModelCosts = tt.usage, tt.costs
 			inserted := appendWithPartsOrFatal(t, s, run)
-			want := map[int64][]RunModelPart{}
+			want := map[int64][]storage.RunModelPart{}
 			if tt.want != nil {
 				want[inserted.ID] = tt.want
 			}
@@ -132,7 +134,7 @@ func TestQueryRunModelUsage(t *testing.T) {
 func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	t.Parallel()
 
-	twoModels := map[string]ModelTokens{
+	twoModels := map[string]storage.ModelTokens{
 		"model-a": {InputTokens: 600, OutputTokens: 1200, CacheReadTokens: 200, CacheWriteTokens: 30},
 		"model-b": {InputTokens: 500, OutputTokens: 1000, CacheReadTokens: 240},
 	}
@@ -141,8 +143,8 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 		name                  string
 		in, out, total, cache int64
 		measured              bool
-		parts                 map[string]ModelTokens
-		wantParts             map[string]ModelTokens
+		parts                 map[string]storage.ModelTokens
+		wantParts             map[string]storage.ModelTokens
 	}{
 		{name: "measured", in: 1100, out: 2200, total: 3300, cache: 440, measured: true},
 		{name: "unmeasured"},
@@ -175,7 +177,7 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
 			}
-			readers := map[string][]RunHistory{
+			readers := map[string][]storage.RunHistory{
 				"AppendRunHistory":                            {inserted},
 				"QueryRunHistoryByIssue":                      byIssue,
 				"QueryRunHistory":                             queryAllRuns(t, s, 1),
@@ -209,14 +211,16 @@ func TestRunHistoryConfiguredSettingsColumns_RoundTrip(t *testing.T) {
 	run.Trigger, run.ReactionKind, run.SessionID, run.SSHHost = new("ci_fix"), "ci", "s-1", "worker-1"
 	inserted := appendOrFatal(t, s, run)
 
-	readers := map[string]func() ([]RunHistory, error){
-		"QueryRunHistoryByIssue": func() ([]RunHistory, error) { return s.QueryRunHistoryByIssue(ctx, run.IssueID) },
-		"QueryRunHistory":        func() ([]RunHistory, error) { return s.QueryRunHistory(ctx, RunHistoryFilter{Limit: 1}) },
-		"LoadLatestSuccessfulRunsForReactionRecovery": func() ([]RunHistory, error) {
+	readers := map[string]func() ([]storage.RunHistory, error){
+		"QueryRunHistoryByIssue": func() ([]storage.RunHistory, error) { return s.QueryRunHistoryByIssue(ctx, run.IssueID) },
+		"QueryRunHistory": func() ([]storage.RunHistory, error) {
+			return s.QueryRunHistory(ctx, storage.RunHistoryFilter{Limit: 1})
+		},
+		"LoadLatestSuccessfulRunsForReactionRecovery": func() ([]storage.RunHistory, error) {
 			return s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, time.Time{}, 10)
 		},
 	}
-	got := map[string][]RunHistory{"AppendRunHistory": {inserted}}
+	got := map[string][]storage.RunHistory{"AppendRunHistory": {inserted}}
 	for name, read := range readers {
 		rows, err := read()
 		if err != nil {
@@ -266,7 +270,7 @@ func TestListReportedModels(t *testing.T) {
 		appendOrFatal(t, s, run)
 	}
 	spent := newTestRun(5)
-	spent.ModelUsage = map[string]ModelTokens{"model-a": {}, "model-c": {}, "": {}}
+	spent.ModelUsage = map[string]storage.ModelTokens{"model-a": {}, "model-c": {}, "": {}}
 	appendWithPartsOrFatal(t, s, spent)
 
 	got, err := s.ListReportedModels(context.Background())
@@ -295,7 +299,7 @@ func TestListModelUse(t *testing.T) {
 	for i, r := range runs {
 		run := newTestRun(i + 1)
 		run.AgentAdapter, run.CompletedAt = r.kind, r.completedAt
-		run.ModelUsage = map[string]ModelTokens{"shared-model": {}}
+		run.ModelUsage = map[string]storage.ModelTokens{"shared-model": {}}
 		appendWithPartsOrFatal(t, s, run)
 	}
 
@@ -304,8 +308,8 @@ func TestListModelUse(t *testing.T) {
 		t.Fatalf("ListModelUse: %v", err)
 	}
 
-	slices.SortFunc(got, func(a, b ModelUse) int { return strings.Compare(a.AgentKind, b.AgentKind) })
-	want := []ModelUse{
+	slices.SortFunc(got, func(a, b storage.ModelUse) int { return strings.Compare(a.AgentKind, b.AgentKind) })
+	want := []storage.ModelUse{
 		{AgentKind: "kind-a", Model: "shared-model", Runs: 2, LastUsedAt: time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)},
 		{AgentKind: "kind-b", Model: "shared-model", Runs: 1, LastUsedAt: time.Date(2026, 3, 19, 9, 0, 0, 0, time.UTC)},
 	}
@@ -388,7 +392,7 @@ func TestRunHistoryErrorAndReviewMetadata_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryRunHistoryByIssue(ISS-1): %v", err)
 	}
-	for name, rows := range map[string][]RunHistory{
+	for name, rows := range map[string][]storage.RunHistory{
 		"QueryRunHistory":                             recent,
 		"QueryRunHistoryByIssue":                      byIssue,
 		"LoadLatestSuccessfulRunsForReactionRecovery": recovery,
@@ -440,7 +444,7 @@ func TestTokenUsageByIssue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TokenUsageByIssue(ISS-NONE) unexpected error: %v", err)
 		}
-		if usage != (IssueTokenUsage{}) {
+		if usage != (storage.IssueTokenUsage{}) {
 			t.Errorf("TokenUsageByIssue(ISS-NONE) = %+v, want zero value", usage)
 		}
 	})
@@ -505,7 +509,7 @@ func TestTokenUsageByIssue(t *testing.T) {
 		migrateOrFatal(t, s)
 
 		const issueID = "ISS-CLASSES"
-		rows := []RunHistory{
+		rows := []storage.RunHistory{
 			{InputTokens: 100, CacheReadTokens: 30, CacheWriteTokens: 20, OutputTokens: 10, TotalTokens: 160, TokensMeasured: true},
 			{InputTokens: 10, CacheReadTokens: 40, OutputTokens: 5, TotalTokens: 55, TokensMeasured: true},
 			{InputTokens: 500, CacheReadTokens: 7, CacheWriteTokens: 3, OutputTokens: 50},
@@ -524,7 +528,7 @@ func TestTokenUsageByIssue(t *testing.T) {
 			t.Fatalf("TokenUsageByIssue(%s) unexpected error: %v", issueID, err)
 		}
 
-		wantTotals := IssueTokenUsage{
+		wantTotals := storage.IssueTokenUsage{
 			TotalTokens: 215, UncachedTokens: 145, Sessions: 4, UnmeasuredSessions: 1,
 			InputTokens: 110, OutputTokens: 15, CacheReadTokens: 70, CacheWriteTokens: 20,
 			UnpricedSessions: 3,
@@ -766,7 +770,7 @@ func TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity(t *testin
 		t.Fatalf("QueryTokenBudgetUsage result = %v, want an entry for %s", byBudget, issueID)
 	}
 
-	want := IssueTokenUsage{
+	want := storage.IssueTokenUsage{
 		TotalTokens:        4100,
 		UncachedTokens:     1700,
 		Sessions:           4,
@@ -787,7 +791,7 @@ func TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity(t *testin
 	}
 }
 
-func completionRun(i int, identifier, completedAt string) RunHistory {
+func completionRun(i int, identifier, completedAt string) storage.RunHistory {
 	run := newTestRun(i)
 	run.Identifier = identifier
 	run.IssueID = identifier
@@ -878,7 +882,7 @@ func TestLatestRunCompletionByIdentifier(t *testing.T) {
 	})
 }
 
-func countRun(i int, issueID, status, completedAt string) RunHistory {
+func countRun(i int, issueID, status, completedAt string) storage.RunHistory {
 	run := newTestRun(i)
 	run.IssueID = issueID
 	run.Status = status
@@ -961,7 +965,7 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson(t *test
 	ctx := context.Background()
 	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
 
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-NEEDS-PERSON", Identifier: "PROJ-NP", Attempt: 1,
 		AgentAdapter: "mock", Workspace: "/ws/PROJ-NP",
 		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
@@ -981,8 +985,8 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson(t *test
 	}
 }
 
-func dispatchRun(i int, issueID, adapter string) RunHistory {
-	run := RunHistory{
+func dispatchRun(i int, issueID, adapter string) storage.RunHistory {
+	run := storage.RunHistory{
 		IssueID: issueID, AgentAdapter: adapter, RuleName: fmt.Sprintf("rule-%d", i), ConfiguredModel: fmt.Sprintf("model-%d", i),
 		StagePrevious: fmt.Sprintf("previous-%d", i), StagePreviousOutcome: fmt.Sprintf("outcome-%d", i),
 		ChainID: fmt.Sprintf("chain-%d", i), DispatchedAt: fmt.Sprintf("2026-03-19T09:%02d:00Z", i),
@@ -998,13 +1002,13 @@ func TestLatestAgentRuns(t *testing.T) {
 
 	tests := []struct {
 		name string
-		seed []RunHistory
+		seed []storage.RunHistory
 		ask  []string
 		want []int
 	}{
 		{
 			name: "newest agent run per issue, skipping ci_failed, agentless, and unasked issues",
-			seed: []RunHistory{
+			seed: []storage.RunHistory{
 				dispatchRun(1, "ISS-A", "mock"),
 				dispatchRun(2, "ISS-A", "mock"),
 				dispatchRun(3, "ISS-A", ""),
@@ -1017,7 +1021,7 @@ func TestLatestAgentRuns(t *testing.T) {
 		},
 		{
 			name: "empty ask",
-			seed: []RunHistory{dispatchRun(1, "ISS-A", "mock")},
+			seed: []storage.RunHistory{dispatchRun(1, "ISS-A", "mock")},
 		},
 	}
 
@@ -1027,11 +1031,11 @@ func TestLatestAgentRuns(t *testing.T) {
 
 			s := openTestStore(t)
 			migrateOrFatal(t, s)
-			appended := make([]RunHistory, len(tt.seed))
+			appended := make([]storage.RunHistory, len(tt.seed))
 			for i, run := range tt.seed {
 				appended[i] = appendOrFatal(t, s, run)
 			}
-			want := map[string]RunHistory{}
+			want := map[string]storage.RunHistory{}
 			for _, i := range tt.want {
 				want[appended[i].IssueID] = appended[i]
 			}
@@ -1055,12 +1059,12 @@ func TestLoadLatestSuccessfulRunsForIssues(t *testing.T) {
 	old := appendRecoveryRun(t, s, "ISS-OLD", "PROJ-1", 1, recentCompletedAt(400))
 	appendRecoveryRun(t, s, "ISS-LATER", "PROJ-2", 1, recentCompletedAt(5))
 	latest := appendRecoveryRun(t, s, "ISS-LATER", "PROJ-2", 2, recentCompletedAt(4))
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-LATER", Identifier: "PROJ-2", Attempt: 3,
 		AgentAdapter: "mock", Workspace: "/ws/PROJ-2",
 		StartedAt: recentCompletedAt(3), CompletedAt: recentCompletedAt(3), Status: "failed",
 	})
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-NOPATH", Identifier: "PROJ-3", Attempt: 1,
 		AgentAdapter: "mock", StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2), Status: "succeeded",
 	})
@@ -1109,16 +1113,16 @@ func TestUsageCompletedBetween(t *testing.T) {
 		run.TokensMeasured, run.EstimatedCostUSD, run.CostStatus, run.CompletedAt = true, new(float64(int(1)<<i)), "estimated", completedAt
 		appendOrFatal(t, s, run)
 	}
-	inWindow := IssueTokenUsage{TotalTokens: 200, UncachedTokens: 200, Sessions: 2, RecordedCostUSD: 6, PricedSessions: 2}
+	inWindow := storage.IssueTokenUsage{TotalTokens: 200, UncachedTokens: 200, Sessions: 2, RecordedCostUSD: 6, PricedSessions: 2}
 
 	tests := []struct {
 		name         string
 		since, until time.Time
-		want         IssueTokenUsage
+		want         storage.IssueTokenUsage
 	}{
 		{"includes since and excludes until", since, until, inWindow},
 		{"binds bounds given in another zone as UTC", since.In(time.FixedZone("UTC+2", 2*60*60)), until.In(time.FixedZone("UTC+2", 2*60*60)), inWindow},
-		{"empty window returns zero usage", until.Add(time.Hour), until.Add(2 * time.Hour), IssueTokenUsage{}},
+		{"empty window returns zero usage", until.Add(time.Hour), until.Add(2 * time.Hour), storage.IssueTokenUsage{}},
 	}
 
 	for _, tt := range tests {
@@ -1170,9 +1174,9 @@ func TestRunHistoryUsageProvenance_RowBeforeMigrationReadsNull(t *testing.T) {
 		t.Errorf("usage record of a row written before the migration = %q, %q, want %q, %q", columns, amounts, "NULL,NULL", "")
 	}
 	wantCompleteness := map[string]string{
-		"ISS-OLD":            UsageComplete,
-		"ISS-OLD-UNCOUNTED":  UsageLowerBound,
-		"ISS-OLD-UNMEASURED": UsageUnmeasured,
+		"ISS-OLD":            storage.UsageComplete,
+		"ISS-OLD-UNCOUNTED":  storage.UsageLowerBound,
+		"ISS-OLD-UNMEASURED": storage.UsageUnmeasured,
 	}
 	for _, run := range queryAllRuns(t, s, 10) {
 		if run.UsageCompleteness != "" || run.UsageProvenance != "" {
@@ -1187,18 +1191,18 @@ func TestRunHistoryUsageProvenance_RowBeforeMigrationReadsNull(t *testing.T) {
 func TestAppendRunHistoryWithEvents_WritesProvenanceAndReportedAmounts(t *testing.T) {
 	t.Parallel()
 
-	recorded := []ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1.5, LowerBound: true}, {Unit: "credits", Amount: 2}}
+	recorded := []storage.ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1.5, LowerBound: true}, {Unit: "credits", Amount: 2}}
 	const recordedRows = "USD/m1/1.5/1;credits//2.0/0"
 	tests := []struct {
 		name, completeness, provenance, wantColumns, wantAmounts string
-		amounts                                                  []ReportedAmount
+		amounts                                                  []storage.ReportedAmount
 	}{
 		{
-			name: "recorded run", completeness: UsageLowerBound, provenance: "journal:records,output:live", amounts: recorded,
+			name: "recorded run", completeness: storage.UsageLowerBound, provenance: "journal:records,output:live", amounts: recorded,
 			wantColumns: "'journal:records,output:live','lower_bound'", wantAmounts: recordedRows,
 		},
 		{
-			name: "unmeasured run keeps its amounts and an empty provenance", completeness: UsageUnmeasured, amounts: recorded,
+			name: "unmeasured run keeps its amounts and an empty provenance", completeness: storage.UsageUnmeasured, amounts: recorded,
 			wantColumns: "'','unmeasured'", wantAmounts: recordedRows,
 		},
 		{name: "writer that sets neither field writes NULL", wantColumns: "NULL,NULL"},
@@ -1233,8 +1237,8 @@ func TestAppendRunHistoryWithEvents_FailedReportedAmountInsertLeavesNoRun(t *tes
 	migrateOrFatal(t, s)
 	run := newTestRun(1)
 	run.DispatchID = new("dispatch-1")
-	run.UsageCompleteness = UsageComplete
-	run.ReportedAmounts = []ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1}, {Unit: "USD", Model: "m1", Amount: 2}}
+	run.UsageCompleteness = storage.UsageComplete
+	run.ReportedAmounts = []storage.ReportedAmount{{Unit: "USD", Model: "m1", Amount: 1}, {Unit: "USD", Model: "m1", Amount: 2}}
 
 	_, err := s.AppendRunHistoryWithEvents(context.Background(), run, nil, unboundedRunEvents)
 

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func mustParseRFC3339(t *testing.T, value string) time.Time {
@@ -170,7 +170,7 @@ func TestBuildBudgetHoldComment_CrossLaneParity(t *testing.T) {
 	issue := domain.Issue{ID: issueID, Identifier: "PROJ-PARITY", Title: "t", State: "To Do"}
 	rebuildStore := &stubStore{
 		tokenExhaustedIDs: []string{issueID},
-		tokenExhaustedUsage: map[string]persistence.IssueTokenUsage{
+		tokenExhaustedUsage: map[string]storage.IssueTokenUsage{
 			issueID: {TotalTokens: 128400, UncachedTokens: 128400, Sessions: 5, StoppedInFlight: 2},
 		},
 	}

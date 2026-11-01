@@ -6,244 +6,18 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 const reactionRecoveryMaxCandidates = 200
 
-// HandoffAbsenceErrorPrefix marks a run_history error where a handoff was
-// withheld because no work was observed. Keeping it stable lets the retry
-// and polling paths reconstruct the consecutive-absence sequence without a
-// verdict column.
-const HandoffAbsenceErrorPrefix = "handoff withheld: "
-
-// The verdicts that follow [HandoffAbsenceErrorPrefix] in a run_history error.
-// Whoever words the stored error for a person matches on them, so they are
-// shared rather than repeated.
-const (
-	HandoffVerdictAbsence      = "absence of work observed"
-	HandoffVerdictUndetermined = "evidence not determinable"
-)
-
-// ModelTokens is one model's token counts.
-type ModelTokens struct {
-	// InputTokens includes cache reads and writes, as run_history.input_tokens does.
-	InputTokens      int64 `json:"input_tokens"`
-	OutputTokens     int64 `json:"output_tokens"`
-	CacheReadTokens  int64 `json:"cache_read_tokens"`
-	CacheWriteTokens int64 `json:"cache_write_tokens"`
-}
-
-// ModelCost is the recorded price of one run_model_usage part. A nil
-// EstimatedCostUSD and an empty CostStatus write NULL.
-type ModelCost struct {
-	EstimatedCostUSD  *float64
-	CostStatus        string
-	PriceSource       string
-	PriceTableVersion string
-
-	// UnratedClasses names the token classes that had no rate. An empty
-	// CostStatus writes NULL for it whatever it holds, so an unpriced part
-	// reads as not recorded.
-	UnratedClasses []string
-}
-
-// RunModelPart is one run_model_usage row as read.
-type RunModelPart struct {
-	Model            string
-	Tokens           ModelTokens
-	EstimatedCostUSD *float64 // nil when NULL
-	CostStatus       string   // "" when NULL
-
-	// UnratedRecorded is false when unrated_classes is NULL; UnratedClasses
-	// is nil when it is NULL or empty.
-	UnratedClasses  []string
-	UnratedRecorded bool
-
-	// PriceSource is the layer that priced the part; empty when none is
-	// recorded.
-	PriceSource string
-}
-
-// Values of [RunHistory.UsageCompleteness].
-const (
-	// UsageComplete means the run's token figure covers every turn.
-	UsageComplete = "complete"
-
-	// UsageLowerBound means a turn spent tokens no figure covers, so the
-	// run's token total is a lower bound.
-	UsageLowerBound = "lower_bound"
-
-	// UsageUnmeasured means the agent reported no usage, so spend is unknown
-	// rather than zero.
-	UsageUnmeasured = "unmeasured"
-)
-
-// ReportedAmount is one amount the agent reported for a run, in the unit it
-// reported it in.
-type ReportedAmount struct {
-	Unit       string
-	Model      string // Empty when the source attributes the amount to no model.
-	Amount     float64
-	LowerBound bool // True when the run may have spent more in Unit than Amount.
-}
-
-// RunHistory is a single completed run attempt in the run_history table.
-// ID is assigned by the database on insert; leave it zero when calling
-// [Store.AppendRunHistory].
-type RunHistory struct {
-	ID             int64
-	IssueID        string
-	Identifier     string
-	DisplayID      string // Qualified form (e.g. "owner/repo#9"); empty when Identifier suffices.
-	Attempt        int
-	AgentAdapter   string
-	Workspace      string
-	StartedAt      string
-	CompletedAt    string
-	Status         string // "succeeded", "failed", "cancelled", "ci_failed", "needs_person", "budget_stopped", or "usage_limited".
-	Error          *string
-	WorkflowFile   string // Base filename; empty for pre-migration rows.
-	TurnsCompleted int
-	ReviewMetadata *string // JSON ReviewMetadata; nil when self-review did not run.
-	Skills         *string // JSON array of the run's skill calls, [] when it called none; nil only when the row records no skill calls.
-	RuleName       string  // Empty for legacy rows and fallback dispatches.
-	TemplateID     string  // Empty for legacy rows and the workflow body template.
-
-	// ConfiguredModel and ConfiguredEffort are what the attempt was
-	// configured with; ReportedModel is what the runtime reported running.
-	// Each is empty when unset, and for pre-migration rows.
-	ConfiguredModel  string
-	ConfiguredEffort string
-	ReportedModel    string
-
-	InputTokens      int64 // 0 for pre-migration rows.
-	OutputTokens     int64 // 0 for pre-migration rows.
-	TotalTokens      int64 // 0 for pre-migration rows.
-	CacheReadTokens  int64 // 0 for pre-migration rows.
-	CacheWriteTokens int64 // 0 for pre-migration rows.
-
-	// TokensMeasured is true when the token columns carry a runtime-reported
-	// figure and false when spend is unknown rather than zero. Every writer
-	// must set it explicitly: the column's SQL default is 1, so an omitted
-	// field records an unmeasured run rather than inheriting the default.
-	TokensMeasured bool
-
-	// UnaccountedTurns counts turns that spent tokens no figure was proven
-	// to cover; that overspend reaches none of the token columns, so a
-	// non-zero count makes this row's total a lower bound. Orthogonal to
-	// TokensMeasured.
-	UnaccountedTurns int
-
-	// StagePrevious and StagePreviousOutcome are the frozen stage.previous
-	// pair the attempt rendered with; both are empty when no hop led to the
-	// dispatch and for pre-migration rows.
-	StagePrevious        string
-	StagePreviousOutcome string
-
-	// ChainID groups the runs of one pass through a chain of stages; it is
-	// empty only for rows written before migration 024.
-	ChainID string
-
-	// StageTarget and StageResult record the hop decision the attempt's
-	// exit reached; both are empty when it reached none. StageResult is
-	// "advanced", "partial", "failed", or "ceiling".
-	StageTarget string
-	StageResult string
-
-	// IssueTitle and IssueURL are the tracker's title and web link as read
-	// when the attempt was dispatched; both are empty for rows written
-	// before migration 025.
-	IssueTitle string
-	IssueURL   string
-
-	// DispatchedAt is the RFC 3339 start of the first run of the pass
-	// ChainID names; empty when the pass could not be dated.
-	DispatchedAt string
-
-	// Trigger is the sortie_retries_total label of the schedule that
-	// started the retry whose fire dispatched the run; empty for a poll-tick
-	// dispatch and for a retry a reaction other than the CI fix started. Nil
-	// reads and writes NULL: the retry never stored what started it, or the
-	// row predates migration 028.
-	Trigger *string
-
-	// ReactionKind is the dispatching retry's reaction kind; empty when none.
-	ReactionKind string
-
-	// SessionID is the agent session the run used; empty when the run
-	// started none.
-	SessionID string
-
-	// SSHHost is the SSH worker the run executed on; empty for a local run.
-	SSHHost string
-
-	// OriginRecorded is false when session_id is NULL, which only a row
-	// written before migration 028 holds. It is ignored on write.
-	OriginRecorded bool
-
-	// FirstAfterHop is true on the first run dispatched after the stage hop
-	// StagePrevious names, and false on every other run.
-	FirstAfterHop bool
-
-	// DispatchID keys the run's retained events: the agent run's dispatch
-	// ID, and "" on a row no agent run produced. Nil reads and writes NULL:
-	// only rows written before the column existed.
-	DispatchID *string
-
-	// AgentBlocked is true when the run's agent ended it with a blocked soft
-	// stop. Only the appends write it; the run-history reads do not select it.
-	AgentBlocked bool
-
-	// DeclaredOutcome is the recognized status token the run's agent ended
-	// it with, and AgentText the masked statement written after it. Both
-	// appends write them and only [Store.QueryRunHistory] reads them; each
-	// is empty when the run ended on no declaration or predates the columns.
-	DeclaredOutcome string
-	AgentText       string
-
-	// ModelUsage is the run's per-model token counts. Only
-	// [Store.AppendRunHistoryWithEvents] writes it; the run-history reads
-	// do not select it.
-	ModelUsage map[string]ModelTokens
-
-	// EstimatedCostUSD and CostStatus are the run's recorded cost. Nil and ""
-	// write NULL. Only [Store.QueryRunHistory] reads them.
-	EstimatedCostUSD *float64
-	CostStatus       string
-
-	// ModelCosts prices the parts of ModelUsage, keyed like it. Only
-	// [Store.AppendRunHistoryWithEvents] writes it.
-	ModelCosts map[string]ModelCost
-
-	// UsageProvenance is the sorted, comma-joined source and strategy pairs
-	// that settled the run's token figure; empty when none settled one. It
-	// is written only when UsageCompleteness is set.
-	UsageProvenance string
-
-	// UsageCompleteness is [UsageComplete], [UsageLowerBound], or
-	// [UsageUnmeasured]; empty writes NULL here and in UsageProvenance, which
-	// reads as not recorded.
-	UsageCompleteness string
-
-	// ReportedAmounts is every amount the agent reported for the run. Only
-	// [Store.AppendRunHistoryWithEvents] writes it.
-	ReportedAmounts []ReportedAmount
-}
-
-// Completeness returns the run's stored completeness, or derives it from
-// TokensMeasured and UnaccountedTurns for a row recorded before provenance
-// was kept.
-func (h RunHistory) Completeness() string {
-	if h.UsageCompleteness != "" {
-		return h.UsageCompleteness
-	}
-	return UsageCompletenessOf(h.TokensMeasured, h.UnaccountedTurns)
-}
+var _ storage.RunHistoryStore = (*Store)(nil)
 
 // AppendRunHistory inserts a completed run attempt. The input ID is
 // ignored; the returned record has the database-assigned ID. It does not
-// write [RunHistory.ModelUsage] or [RunHistory.ReportedAmounts].
-func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistory, error) {
+// write [storage.RunHistory.ModelUsage] or [storage.RunHistory.ReportedAmounts].
+func (s *Store) AppendRunHistory(ctx context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return insertRunHistory(ctx, s.db, run)
 }
 
@@ -264,7 +38,7 @@ func nullIfEmpty(v string) sql.NullString {
 }
 
 // unratedColumn encodes cost's unrated classes for the unrated_classes column.
-func unratedColumn(cost ModelCost) sql.NullString {
+func unratedColumn(cost storage.ModelCost) sql.NullString {
 	if cost.CostStatus == "" {
 		return sql.NullString{}
 	}
@@ -272,7 +46,7 @@ func unratedColumn(cost ModelCost) sql.NullString {
 }
 
 // insertRunModelUsage inserts one run_model_usage row per part for runID.
-func insertRunModelUsage(ctx context.Context, ex statementExecer, runID int64, parts map[string]ModelTokens, costs map[string]ModelCost) error {
+func insertRunModelUsage(ctx context.Context, ex statementExecer, runID int64, parts map[string]storage.ModelTokens, costs map[string]storage.ModelCost) error {
 	for model, tokens := range parts {
 		cost := costs[model]
 		if _, err := ex.ExecContext(ctx,
@@ -294,8 +68,8 @@ func insertRunModelUsage(ctx context.Context, ex statementExecer, runID int64, p
 // ID, each run's rows ordered by model; a run without rows has no key. It
 // holds one statement and closes it before returning, so callers pass one
 // page of IDs after their own read has closed.
-func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int64][]RunModelPart, error) {
-	parts := make(map[int64][]RunModelPart)
+func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int64][]storage.RunModelPart, error) {
+	parts := make(map[int64][]storage.RunModelPart)
 	if len(runIDs) == 0 {
 		return parts, nil
 	}
@@ -319,7 +93,7 @@ func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int
 
 	for rows.Next() {
 		var runID int64
-		var part RunModelPart
+		var part storage.RunModelPart
 		var cost sql.NullFloat64
 		var status, unrated sql.NullString
 		if err := rows.Scan(&runID, &part.Model, &part.Tokens.InputTokens, &part.Tokens.OutputTokens,
@@ -344,7 +118,7 @@ func (s *Store) QueryRunModelUsage(ctx context.Context, runIDs []int64) (map[int
 
 // insertRunHistory inserts run through ex, so the plain append and the
 // append that stores events in the same transaction share one column list.
-func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (RunHistory, error) {
+func insertRunHistory(ctx context.Context, ex statementExecer, run storage.RunHistory) (storage.RunHistory, error) {
 	errVal := sql.NullString{}
 	if run.Error != nil {
 		errVal = sql.NullString{String: *run.Error, Valid: true}
@@ -404,12 +178,12 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 		usageProvenanceVal, usageCompletenessVal,
 	)
 	if err != nil {
-		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
+		return storage.RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
-		return RunHistory{}, fmt.Errorf("append run history last insert id: %w", err)
+		return storage.RunHistory{}, fmt.Errorf("append run history last insert id: %w", err)
 	}
 	run.ID = id
 	return run, nil
@@ -417,7 +191,7 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run RunHistory) (
 
 // QueryRunHistoryByIssue returns all entries for the issue, ordered by id
 // descending. Returns an empty non-nil slice when none exist.
-func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
+func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]storage.RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
@@ -431,9 +205,9 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	entries := []RunHistory{}
+	entries := []storage.RunHistory{}
 	for rows.Next() {
-		var r RunHistory
+		var r storage.RunHistory
 		var errVal, wfVal, dispIDVal, reviewMetaVal, skillsVal sql.NullString
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
@@ -478,8 +252,8 @@ const reactionRecoveryRunColumns = `r.id, r.issue_id, r.identifier, r.display_id
 			r.issue_title, r.issue_url, r.dispatched_at, r.skills`
 
 // scanRecoveryRun reads one row selected with [reactionRecoveryRunColumns].
-func scanRecoveryRun(rows *sql.Rows) (RunHistory, error) {
-	var run RunHistory
+func scanRecoveryRun(rows *sql.Rows) (storage.RunHistory, error) {
+	var run storage.RunHistory
 	var errVal, wfVal, dispIDVal, reviewMetaVal, skillsVal sql.NullString
 	if err := rows.Scan(
 		&run.ID, &run.IssueID, &run.Identifier, &dispIDVal, &run.Attempt, &run.AgentAdapter,
@@ -490,7 +264,7 @@ func scanRecoveryRun(rows *sql.Rows) (RunHistory, error) {
 		&run.StagePrevious, &run.StagePreviousOutcome, &run.ChainID,
 		&run.IssueTitle, &run.IssueURL, &run.DispatchedAt, &skillsVal,
 	); err != nil {
-		return RunHistory{}, err
+		return storage.RunHistory{}, err
 	}
 	if errVal.Valid {
 		run.Error = new(errVal.String)
@@ -515,7 +289,7 @@ func scanRecoveryRun(rows *sql.Rows) (RunHistory, error) {
 // completed_at >= completedAfter, ordered by descending id. limit is
 // clamped to the recovery maximum. Returns an empty non-nil slice when
 // none qualify.
-func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context, completedAfter time.Time, limit int) ([]RunHistory, error) {
+func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context, completedAfter time.Time, limit int) ([]storage.RunHistory, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -551,9 +325,9 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 // latest successful row with a non-empty workspace, whatever its age,
 // ordered by descending id. Returns an empty non-nil slice, without a
 // query, when issueIDs is empty.
-func (s *Store) LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs []string) ([]RunHistory, error) {
+func (s *Store) LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs []string) ([]storage.RunHistory, error) {
 	if len(issueIDs) == 0 {
-		return []RunHistory{}, nil
+		return []storage.RunHistory{}, nil
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(issueIDs)), ",")
@@ -587,10 +361,10 @@ func (s *Store) LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs 
 
 // collectRecoveryRuns drains rows selected with [reactionRecoveryRunColumns]
 // and closes them.
-func collectRecoveryRuns(rows *sql.Rows) ([]RunHistory, error) {
+func collectRecoveryRuns(rows *sql.Rows) ([]storage.RunHistory, error) {
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	entries := []RunHistory{}
+	entries := []storage.RunHistory{}
 	for rows.Next() {
 		run, err := scanRecoveryRun(rows)
 		if err != nil {
@@ -604,45 +378,12 @@ func collectRecoveryRuns(rows *sql.Rows) ([]RunHistory, error) {
 	return entries, nil
 }
 
-// RunHistoryFilter selects run_history rows; a zero field matches every row.
-type RunHistoryFilter struct {
-	IssueID    string
-	Identifier string
-
-	// RuleName nil matches every row; a pointer to "" selects the rows whose
-	// rule_name is empty.
-	RuleName    *string
-	Status      string
-	StageTarget string
-
-	// CompletedSince keeps rows completed at or after it and CompletedBefore
-	// rows completed before it, both compared as instants.
-	CompletedSince  *time.Time
-	CompletedBefore *time.Time
-
-	// EndedSince keeps rows whose issue's outcome was observed at or after it
-	// and EndedBefore rows whose issue's outcome was observed before it, both
-	// compared as instants the way CompletedSince compares completed_at. A
-	// row whose issue has no outcome matches no ending bound.
-	EndedSince  *time.Time
-	EndedBefore *time.Time
-
-	// HasDispatchID keeps rows whose dispatch_id is a non-empty string.
-	HasDispatchID bool
-
-	// BeforeID keeps rows with an id below it; 0 starts at the newest row.
-	BeforeID int64
-
-	// Limit is the most rows returned; below 1 reads as 1.
-	Limit int
-}
-
 // QueryRunHistory returns the rows matching every non-zero field of f,
 // ordered by id descending, or an empty non-nil slice when none match. A row
 // whose completed_at does not parse as a timestamp never matches a completion
 // bound, and an outcome whose observed_at does not parse never matches an
 // ending bound.
-func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunHistory, error) {
+func (s *Store) QueryRunHistory(ctx context.Context, f storage.RunHistoryFilter) ([]storage.RunHistory, error) {
 	var conds []string
 	var args []any
 	if f.IssueID != "" {
@@ -711,9 +452,9 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	entries := []RunHistory{}
+	entries := []storage.RunHistory{}
 	for rows.Next() {
-		var r RunHistory
+		var r storage.RunHistory
 		var errVal, wfVal, dispIDVal, reviewMetaVal, skillsVal, triggerVal, reactionVal, sessionVal, hostVal, dispatchIDVal, costStatusVal sql.NullString
 		var completenessVal, provenanceVal sql.NullString
 		var costVal sql.NullFloat64
@@ -770,38 +511,6 @@ func (s *Store) QueryRunHistory(ctx context.Context, f RunHistoryFilter) ([]RunH
 	return entries, nil
 }
 
-// IssueGroupFilter selects the issues [Store.QueryIssueGroups] groups; a zero
-// field matches every run.
-type IssueGroupFilter struct {
-	// IssueKey keeps the issues with a run whose identifier or
-	// display_identifier equals it.
-	IssueKey string
-
-	// Search keeps the issues with a run whose identifier,
-	// display_identifier, or issue_title contains it, ignoring ASCII case.
-	Search string
-
-	// RuleName nil matches every run; a pointer to "" selects the runs whose
-	// rule_name is empty.
-	RuleName    *string
-	Status      string
-	StageTarget string
-
-	// BeforeID continues after the group whose newest matching run has this
-	// id; 0 starts at the newest group.
-	BeforeID int64
-
-	// Limit is the most groups returned; below 1 reads as 1.
-	Limit int
-}
-
-// IssueGroup is one issue with a run the filter matched, and the id of its
-// newest such run.
-type IssueGroup struct {
-	IssueID     string
-	NewestRunID int64
-}
-
 // QueryIssueGroups returns the issues whose runs match f, each with the id of
 // its newest matching run, newest first, or an empty non-nil slice when none
 // match. With BeforeID set it skips every issue that has a matching run at or
@@ -810,7 +519,7 @@ type IssueGroup struct {
 // The selection is one streamed statement that stops once it holds the page,
 // and no other read runs while it is open: the store holds one connection, so
 // a nested read would wait on it forever.
-func (s *Store) QueryIssueGroups(ctx context.Context, f IssueGroupFilter) ([]IssueGroup, error) {
+func (s *Store) QueryIssueGroups(ctx context.Context, f storage.IssueGroupFilter) ([]storage.IssueGroup, error) {
 	var keyed []string
 	if f.IssueKey != "" {
 		ids, err := s.issueIDsByKey(ctx, f.IssueKey)
@@ -820,7 +529,7 @@ func (s *Store) QueryIssueGroups(ctx context.Context, f IssueGroupFilter) ([]Iss
 		keyed = ids
 	}
 	if f.IssueKey != "" && len(keyed) == 0 {
-		return []IssueGroup{}, nil
+		return []storage.IssueGroup{}, nil
 	}
 	return s.streamIssueGroups(ctx, f, keyed)
 }
@@ -856,7 +565,7 @@ func (s *Store) issueIDsByKey(ctx context.Context, key string) ([]string, error)
 // issueGroupRunPredicates returns the fixed predicates of f's rule, status,
 // stage, and search on the run_history table aliased as alias, with their bound
 // values.
-func issueGroupRunPredicates(alias string, f IssueGroupFilter) ([]string, []any) {
+func issueGroupRunPredicates(alias string, f storage.IssueGroupFilter) ([]string, []any) {
 	var conds []string
 	var args []any
 	if f.RuleName != nil {
@@ -885,7 +594,7 @@ func issueGroupRunPredicates(alias string, f IssueGroupFilter) ([]string, []any)
 // streamIssueGroups reads matching runs newest first and stops, closing its
 // statement, once it holds the page of distinct issues. keyed, when non-nil,
 // limits the runs to those issues.
-func (s *Store) streamIssueGroups(ctx context.Context, f IssueGroupFilter, keyed []string) ([]IssueGroup, error) {
+func (s *Store) streamIssueGroups(ctx context.Context, f storage.IssueGroupFilter, keyed []string) ([]storage.IssueGroup, error) {
 	conds, args := issueGroupRunPredicates("r", f)
 	if keyed != nil {
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keyed)), ",")
@@ -920,10 +629,10 @@ func (s *Store) streamIssueGroups(ctx context.Context, f IssueGroupFilter, keyed
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
 	limit := max(f.Limit, 1)
-	groups := []IssueGroup{}
+	groups := []storage.IssueGroup{}
 	served := make(map[string]struct{}, limit)
 	for len(groups) < limit && rows.Next() {
-		var g IssueGroup
+		var g storage.IssueGroup
 		if err := rows.Scan(&g.NewestRunID, &g.IssueID); err != nil {
 			return nil, fmt.Errorf("query issue groups: scan: %w", err)
 		}
@@ -1006,7 +715,7 @@ func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueI
 	for _, id := range issueIDs {
 		args = append(args, id)
 	}
-	args = append(args, len(HandoffAbsenceErrorPrefix), HandoffAbsenceErrorPrefix)
+	args = append(args, len(storage.HandoffAbsenceErrorPrefix), storage.HandoffAbsenceErrorPrefix)
 
 	query := fmt.Sprintf( //nolint:gosec // placeholders is built only from len(issueIDs); values remain bound parameters
 		`SELECT r.issue_id, COUNT(*)
@@ -1116,8 +825,8 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 // columns that describe the dispatch and the run's outcome are filled: Status,
 // Error, ReactionKind, SessionID, TemplateID, and AgentText. A NULL
 // reaction_kind or session_id reads as empty and a NULL error as nil.
-func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]RunHistory, error) {
-	runs := map[string]RunHistory{}
+func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]storage.RunHistory, error) {
+	runs := map[string]storage.RunHistory{}
 	if len(issueIDs) == 0 {
 		return runs, nil
 	}
@@ -1149,7 +858,7 @@ func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[str
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
 	for rows.Next() {
-		var run RunHistory
+		var run storage.RunHistory
 		var runError, reactionKind, sessionID sql.NullString
 		if err := rows.Scan(&run.ID, &run.IssueID, &run.RuleName, &run.AgentAdapter, &run.ConfiguredModel,
 			&run.StagePrevious, &run.StagePreviousOutcome, &run.ChainID, &run.DispatchedAt,
@@ -1189,61 +898,14 @@ const costAggregates = `COALESCE(SUM(CASE WHEN cost_status IN ('estimated', 'par
 const usageAggregates = `COALESCE(SUM(total_tokens), 0), COALESCE(SUM(MAX(total_tokens - cache_read_tokens, 0)), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END),
 		SUM(CASE WHEN status = 'budget_stopped' THEN 1 ELSE 0 END), COALESCE(SUM(unaccounted_turns), 0)`
 
-// IssueTokenUsage is the token and cost spend of a set of run_history rows:
-// one issue's, or those completed in a window.
-type IssueTokenUsage struct {
-	// TotalTokens sums total_tokens, prompt-cache reads included. It is not
-	// the figure the token ceiling compares; see UncachedTokens.
-	TotalTokens int64
-
-	// UncachedTokens sums, per row, total_tokens less cache_read_tokens
-	// floored at zero. Flooring each row keeps one row's excess cache reads
-	// from cancelling another row's spend. Cache writes stay counted.
-	UncachedTokens int64
-
-	Sessions           int
-	UnmeasuredSessions int
-
-	// StoppedInFlight counts rows recording a session a budget ceiling
-	// stopped while running.
-	StoppedInFlight int
-
-	// UnaccountedTurns is the summed count of turns that spent tokens no
-	// figure was proven to cover, so a non-zero value makes UncachedTokens a
-	// lower bound even when every row is measured.
-	UnaccountedTurns int
-
-	// InputTokens, OutputTokens, CacheReadTokens, and CacheWriteTokens sum
-	// each raw class over the measured rows. Only [Store.TokenUsageByIssue]
-	// fills them.
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-
-	// RecordedCostUSD and the session counts aggregate the recorded cost. A
-	// row that spent nothing is in neither priced nor unpriced.
-	RecordedCostUSD  float64
-	PricedSessions   int
-	PartialSessions  int
-	UnpricedSessions int
-}
-
-// SpendIncomplete reports whether UncachedTokens is a lower bound rather than
-// the whole of the issue's spend. Either count that leaves spend out of the
-// sum answers true.
-func (u IssueTokenUsage) SpendIncomplete() bool {
-	return u.UnmeasuredSessions > 0 || u.UnaccountedTurns > 0
-}
-
 // TokenUsageByIssue returns the summed total_tokens and uncached tokens, row
 // count, unmeasured row count, and in-flight-stopped count across all rows
-// for the issue, or the zero [IssueTokenUsage] when the issue has no rows. An
+// for the issue, or the zero [storage.IssueTokenUsage] when the issue has no rows. An
 // unmeasured row's token columns are zero, so a non-zero UnmeasuredSessions
 // makes the totals a lower bound. The totals and the recorded cost aggregates
 // come from one statement and describe the same rows.
-func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTokenUsage, error) {
-	var usage IssueTokenUsage
+func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (storage.IssueTokenUsage, error) {
+	var usage storage.IssueTokenUsage
 	var unmeasured, stoppedInFlight, unaccounted sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(total_tokens), 0),
@@ -1262,7 +924,7 @@ func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTok
 		&usage.CacheReadTokens, &usage.CacheWriteTokens, &usage.OutputTokens, &usage.InputTokens,
 		&usage.RecordedCostUSD, &usage.PricedSessions, &usage.PartialSessions, &usage.UnpricedSessions)
 	if err != nil {
-		return IssueTokenUsage{}, fmt.Errorf("token usage by issue %q: %w", issueID, err)
+		return storage.IssueTokenUsage{}, fmt.Errorf("token usage by issue %q: %w", issueID, err)
 	}
 	usage.UnmeasuredSessions = int(unmeasured.Int64)
 	usage.StoppedInFlight = int(stoppedInFlight.Int64)
@@ -1327,12 +989,12 @@ func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers
 	return result, nil
 }
 
-// QueryTokenBudgetUsage returns one [IssueTokenUsage] per candidate with at
+// QueryTokenBudgetUsage returns one [storage.IssueTokenUsage] per candidate with at
 // least one row; a candidate with no rows is absent, which the caller reads
 // as zero on every count. An empty candidateIDs returns an empty non-nil map
 // without querying. Comparing against a ceiling is the caller's job.
-func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]IssueTokenUsage, error) {
-	usage := map[string]IssueTokenUsage{}
+func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]storage.IssueTokenUsage, error) {
+	usage := map[string]storage.IssueTokenUsage{}
 	if len(candidateIDs) == 0 {
 		return usage, nil
 	}
@@ -1360,7 +1022,7 @@ func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string
 
 	for rows.Next() {
 		var issueID string
-		var issueUsage IssueTokenUsage
+		var issueUsage storage.IssueTokenUsage
 		var unmeasured, stoppedInFlight, unaccounted sql.NullInt64
 		if err := rows.Scan(&issueID, &issueUsage.TotalTokens, &issueUsage.UncachedTokens, &issueUsage.Sessions, &unmeasured, &stoppedInFlight, &unaccounted,
 			&issueUsage.RecordedCostUSD, &issueUsage.PricedSessions, &issueUsage.PartialSessions, &issueUsage.UnpricedSessions); err != nil {
@@ -1379,9 +1041,9 @@ func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string
 
 // UsageCompletedBetween returns the usage and recorded cost aggregates of the
 // run_history rows whose completed_at lies in [since, until), or the zero
-// [IssueTokenUsage] when no row does.
-func (s *Store) UsageCompletedBetween(ctx context.Context, since, until time.Time) (IssueTokenUsage, error) {
-	var usage IssueTokenUsage
+// [storage.IssueTokenUsage] when no row does.
+func (s *Store) UsageCompletedBetween(ctx context.Context, since, until time.Time) (storage.IssueTokenUsage, error) {
+	var usage storage.IssueTokenUsage
 	var unmeasured, stoppedInFlight, unaccounted sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT `+usageAggregates+`,
@@ -1391,7 +1053,7 @@ func (s *Store) UsageCompletedBetween(ctx context.Context, since, until time.Tim
 	).Scan(&usage.TotalTokens, &usage.UncachedTokens, &usage.Sessions, &unmeasured, &stoppedInFlight, &unaccounted,
 		&usage.RecordedCostUSD, &usage.PricedSessions, &usage.PartialSessions, &usage.UnpricedSessions)
 	if err != nil {
-		return IssueTokenUsage{}, fmt.Errorf("usage completed between %s and %s: %w",
+		return storage.IssueTokenUsage{}, fmt.Errorf("usage completed between %s and %s: %w",
 			since.UTC().Format(time.RFC3339), until.UTC().Format(time.RFC3339), err)
 	}
 	usage.UnmeasuredSessions = int(unmeasured.Int64)
@@ -1400,23 +1062,12 @@ func (s *Store) UsageCompletedBetween(ctx context.Context, since, until time.Tim
 	return usage, nil
 }
 
-// ModelUse is the use of one model under one agent kind across recorded runs.
-type ModelUse struct {
-	AgentKind string
-	// Model is possibly empty.
-	Model string
-	// LastUsedAt is the latest completed_at of the runs, zero when none parses.
-	LastUsedAt time.Time
-	// Runs counts the runs that have a run_model_usage row for the pair.
-	Runs int
-}
-
 // ListModelUse returns one element per distinct agent kind and model pair
 // over every run_model_usage row, in no defined order. LastUsedAt compares
 // completed_at as an instant, so differing UTC offsets order correctly. It
 // scans both tables, so its cost grows with history. Returns an empty slice
 // (not nil) when none exist.
-func (s *Store) ListModelUse(ctx context.Context) ([]ModelUse, error) {
+func (s *Store) ListModelUse(ctx context.Context) ([]storage.ModelUse, error) {
 	// With one max() aggregate SQLite fills the bare completed_at column from
 	// the row that holds the maximum, which keeps the stored text, and its
 	// nanoseconds, for the instant the comparison picked.
@@ -1431,9 +1082,9 @@ func (s *Store) ListModelUse(ctx context.Context) ([]ModelUse, error) {
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	uses := []ModelUse{}
+	uses := []storage.ModelUse{}
 	for rows.Next() {
-		var use ModelUse
+		var use storage.ModelUse
 		var latestEpoch sql.NullFloat64
 		var latestText string
 		if err := rows.Scan(&use.AgentKind, &use.Model, &use.Runs, &latestEpoch, &latestText); err != nil {

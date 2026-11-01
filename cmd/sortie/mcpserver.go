@@ -22,6 +22,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
@@ -266,7 +267,14 @@ func resolveNotificationCap(backends []config.NotificationBackend) int {
 	return maxCap
 }
 
-func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
+// budgetSource is what the budget query reads: the run history and the
+// running session's stored usage.
+type budgetSource interface {
+	storage.RunHistoryStore
+	LoadSessionMetadata(ctx context.Context, issueID string) (persistence.SessionMetadata, bool, error)
+}
+
+func buildBudgetQuery(store budgetSource) budget.BudgetQueryFunc {
 	return func(ctx context.Context, issueID string, runningDispatchID string) (budget.BudgetUsage, error) {
 		completed, err := store.TokenUsageByIssue(ctx, issueID)
 		if err != nil {
@@ -308,7 +316,7 @@ func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
 
 // recordedOf maps the cost aggregates of an issue's usage read onto the input
 // of [pricing.IssueCost].
-func recordedOf(usage persistence.IssueTokenUsage) pricing.RecordedCost {
+func recordedOf(usage storage.IssueTokenUsage) pricing.RecordedCost {
 	return pricing.RecordedCost{
 		USD:      usage.RecordedCostUSD,
 		Priced:   usage.PricedSessions,
@@ -332,7 +340,7 @@ func sessionCostOf(meta persistence.SessionMetadata) pricing.SessionCost {
 	}
 }
 
-func buildHistoryQuery(store *persistence.Store) history.QueryFunc {
+func buildHistoryQuery(store storage.RunHistoryStore) history.QueryFunc {
 	return func(ctx context.Context, issueID string, limit int) ([]history.Entry, error) {
 		rows, err := store.QueryRunHistoryByIssue(ctx, issueID)
 		if err != nil {

@@ -15,11 +15,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // Metric label values passed to domain.Metrics methods.
@@ -312,7 +312,7 @@ type RunningEntry struct {
 	// IssueUsage is the issue's completed-session usage as of the last
 	// successful read on this entry, written on the event loop at dispatch
 	// and by a confirming read. Nil while no read has succeeded.
-	IssueUsage *persistence.IssueTokenUsage
+	IssueUsage *storage.IssueTokenUsage
 
 	// UnaccountedTurns is the running session's count of turns that spent
 	// tokens no figure was proven to cover, as its worker last relayed it.
@@ -1030,7 +1030,7 @@ type BudgetExhaustedEntry struct {
 // setTokenUsage fills the token-axis fields from one read of the issue's
 // run history. It copies the counts, so the entry never aliases the
 // caller's usage value.
-func (e *BudgetExhaustedEntry) setTokenUsage(usage persistence.IssueTokenUsage) {
+func (e *BudgetExhaustedEntry) setTokenUsage(usage storage.IssueTokenUsage) {
 	used, unmeasured, stopped := usage.UncachedTokens, usage.UnmeasuredSessions, usage.StoppedInFlight
 	e.UsedTokens = &used
 	e.UnmeasuredSessions = &unmeasured
@@ -1050,7 +1050,7 @@ func clonePointer[T any](p *T) *T {
 // SpendIncomplete reports whether a token sum carrying the given counts
 // leaves spend out, making the sum a lower bound.
 func SpendIncomplete(unmeasuredSessions, unaccountedTurns int) bool {
-	return persistence.IssueTokenUsage{
+	return storage.IssueTokenUsage{
 		UnmeasuredSessions: unmeasuredSessions,
 		UnaccountedTurns:   unaccountedTurns,
 	}.SpendIncomplete()
@@ -2091,7 +2091,7 @@ func turnHasEnded(turnCount int, lastEvent domain.AgentEventType) bool {
 // SnapshotIssueUsageOf copies a running entry's usage read into the shape the
 // snapshot serves. A nil read stays nil so the absence of a successful read is
 // not served as zero usage.
-func SnapshotIssueUsageOf(usage *persistence.IssueTokenUsage) *SnapshotIssueUsage {
+func SnapshotIssueUsageOf(usage *storage.IssueTokenUsage) *SnapshotIssueUsage {
 	if usage == nil {
 		return nil
 	}

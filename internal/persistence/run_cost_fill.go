@@ -4,48 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // unrecordedRunsPageSize bounds how many run_history rows one page holds in
 // memory, so a long history is priced without being loaded whole.
 const unrecordedRunsPageSize = 500
 
-// UnrecordedRun is a run_history row whose cost was not recorded.
-type UnrecordedRun struct {
-	ID               int64
-	AgentAdapter     string
-	TokensMeasured   bool
-	InputTokens      int64
-	OutputTokens     int64
-	TotalTokens      int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	UnaccountedTurns int
-	ConfiguredModel  string
-	ReportedModel    string
-
-	// Parts holds the row's run_model_usage rows; nil when it has none.
-	Parts map[string]ModelTokens
-}
-
-// RunCostRecord is the cost to record for one [UnrecordedRun]. CostStatus is
-// stored as given, so an empty value leaves the row unrecorded.
-type RunCostRecord struct {
-	EstimatedCostUSD *float64
-	CostStatus       string
-
-	// NewParts are run_model_usage rows to insert, nil when the row has its own.
-	NewParts map[string]ModelTokens
-
-	PartCosts map[string]ModelCost
-}
-
 // RecordUnrecordedRunCosts records the cost of every run_history row whose
 // cost_status is NULL, in one transaction, and returns how many rows it
 // recorded. price is called once per such row in ascending id order and must
 // not perform I/O: the store's single connection is held for the whole fill.
 // Any error rolls the whole fill back and returns 0.
-func (s *Store) RecordUnrecordedRunCosts(ctx context.Context, price func(UnrecordedRun) RunCostRecord) (int, error) {
+func (s *Store) RecordUnrecordedRunCosts(ctx context.Context, price func(storage.UnrecordedRun) storage.RunCostRecord) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin record run costs: %w", err)
@@ -82,7 +54,7 @@ func (s *Store) RecordUnrecordedRunCosts(ctx context.Context, price func(Unrecor
 
 // loadUnrecordedRuns returns the next page of unrecorded rows after afterID
 // with their parts, and closes its statements so the caller may write.
-func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]UnrecordedRun, error) {
+func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]storage.UnrecordedRun, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, agent_adapter, tokens_measured, input_tokens, output_tokens, total_tokens,
 			cache_read_tokens, cache_write_tokens, unaccounted_turns, configured_model, reported_model
@@ -95,10 +67,10 @@ func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]Unrec
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	var page []UnrecordedRun
-	byID := map[int64]*UnrecordedRun{}
+	var page []storage.UnrecordedRun
+	byID := map[int64]*storage.UnrecordedRun{}
 	for rows.Next() {
-		var run UnrecordedRun
+		var run storage.UnrecordedRun
 		if err := rows.Scan(&run.ID, &run.AgentAdapter, &run.TokensMeasured, &run.InputTokens, &run.OutputTokens,
 			&run.TotalTokens, &run.CacheReadTokens, &run.CacheWriteTokens, &run.UnaccountedTurns,
 			&run.ConfiguredModel, &run.ReportedModel); err != nil {
@@ -129,7 +101,7 @@ func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]Unrec
 	for parts.Next() {
 		var runID int64
 		var model string
-		var tokens ModelTokens
+		var tokens storage.ModelTokens
 		if err := parts.Scan(&runID, &model, &tokens.InputTokens, &tokens.OutputTokens,
 			&tokens.CacheReadTokens, &tokens.CacheWriteTokens); err != nil {
 			return nil, fmt.Errorf("scan unrecorded run part: %w", err)
@@ -139,7 +111,7 @@ func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]Unrec
 			continue
 		}
 		if run.Parts == nil {
-			run.Parts = map[string]ModelTokens{}
+			run.Parts = map[string]storage.ModelTokens{}
 		}
 		run.Parts[model] = tokens
 	}
@@ -151,7 +123,7 @@ func loadUnrecordedRuns(ctx context.Context, tx *sql.Tx, afterID int64) ([]Unrec
 
 // recordRunCost writes record onto run runID and its parts, and reports false
 // when the row no longer has a NULL cost_status.
-func recordRunCost(ctx context.Context, tx *sql.Tx, runID int64, record RunCostRecord) (bool, error) {
+func recordRunCost(ctx context.Context, tx *sql.Tx, runID int64, record storage.RunCostRecord) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE run_history SET estimated_cost_usd = ?, cost_status = ? WHERE id = ? AND cost_status IS NULL`,
 		nullFloat(record.EstimatedCostUSD), nullIfEmpty(record.CostStatus), runID)

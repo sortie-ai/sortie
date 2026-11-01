@@ -10,7 +10,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -91,7 +91,7 @@ func failFirstAttempt(h *runHarness, issue domain.Issue, afterFailure func()) {
 func setWindowUsage(h *runHarness, usd float64) {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
-	h.store.windowUsage = persistence.IssueTokenUsage{RecordedCostUSD: usd, PricedSessions: 1, Sessions: 1}
+	h.store.windowUsage = storage.IssueTokenUsage{RecordedCostUSD: usd, PricedSessions: 1, Sessions: 1}
 }
 
 func TestOnce_RunReturnsWhenTheWorkSettles(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestRecordedCostOf(t *testing.T) {
@@ -28,23 +28,23 @@ func TestRecordedCostOf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pricing.LoadRates: %v", err)
 	}
-	estimated := func(usd float64) persistence.ModelCost {
-		return persistence.ModelCost{EstimatedCostUSD: &usd, CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: pricing.TokenRates{"k": kindEntry}.Version()}
+	estimated := func(usd float64) storage.ModelCost {
+		return storage.ModelCost{EstimatedCostUSD: &usd, CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: pricing.TokenRates{"k": kindEntry}.Version()}
 	}
-	spent := persistence.ModelTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000}
-	spentRun := func(kind, reported string) persistence.UnrecordedRun {
-		return persistence.UnrecordedRun{
+	spent := storage.ModelTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	spentRun := func(kind, reported string) storage.UnrecordedRun {
+		return storage.UnrecordedRun{
 			AgentAdapter: kind, TokensMeasured: true, InputTokens: 1_000_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000,
 			ConfiguredModel: "m0", ReportedModel: reported,
 		}
 	}
-	measured := persistence.UnrecordedRun{AgentAdapter: "k", TokensMeasured: true}
+	measured := storage.UnrecordedRun{AgentAdapter: "k", TokensMeasured: true}
 	totalOnly := measured
 	totalOnly.TotalTokens = 5
-	withParts := persistence.UnrecordedRun{
+	withParts := storage.UnrecordedRun{
 		AgentAdapter: "k", TokensMeasured: true,
 		InputTokens: 4_000_000, OutputTokens: 1_000_000, TotalTokens: 5_000_000, CacheReadTokens: 2_000_000,
-		Parts: map[string]persistence.ModelTokens{
+		Parts: map[string]storage.ModelTokens{
 			"a": {InputTokens: 1_000_000, CacheReadTokens: 2_000_000},
 			"b": {InputTokens: 3_000_000, OutputTokens: 1_000_000},
 		},
@@ -52,29 +52,29 @@ func TestRecordedCostOf(t *testing.T) {
 
 	tests := []struct {
 		name string
-		run  persistence.UnrecordedRun
-		want persistence.RunCostRecord
+		run  storage.UnrecordedRun
+		want storage.RunCostRecord
 	}{
-		{"part named for the reported model", spentRun("k", "m1"), persistence.RunCostRecord{
+		{"part named for the reported model", spentRun("k", "m1"), storage.RunCostRecord{
 			EstimatedCostUSD: new(12.0), CostStatus: "estimated",
-			NewParts:  map[string]persistence.ModelTokens{"m1": spent},
-			PartCosts: map[string]persistence.ModelCost{"m1": estimated(12)},
+			NewParts:  map[string]storage.ModelTokens{"m1": spent},
+			PartCosts: map[string]storage.ModelCost{"m1": estimated(12)},
 		}},
-		{"part named for the configured model without a reported one", spentRun("k", ""), persistence.RunCostRecord{
+		{"part named for the configured model without a reported one", spentRun("k", ""), storage.RunCostRecord{
 			EstimatedCostUSD: new(12.0), CostStatus: "estimated",
-			NewParts:  map[string]persistence.ModelTokens{"m0": spent},
-			PartCosts: map[string]persistence.ModelCost{"m0": estimated(12)},
+			NewParts:  map[string]storage.ModelTokens{"m0": spent},
+			PartCosts: map[string]storage.ModelCost{"m0": estimated(12)},
 		}},
-		{"kind without an entry records unpriced run and part", spentRun("u", "m1"), persistence.RunCostRecord{
+		{"kind without an entry records unpriced run and part", spentRun("u", "m1"), storage.RunCostRecord{
 			CostStatus: "unpriced",
-			NewParts:   map[string]persistence.ModelTokens{"m1": spent},
-			PartCosts:  map[string]persistence.ModelCost{"m1": {CostStatus: "unpriced", UnratedClasses: []string{"input", "output"}}},
+			NewParts:   map[string]storage.ModelTokens{"m1": spent},
+			PartCosts:  map[string]storage.ModelCost{"m1": {CostStatus: "unpriced", UnratedClasses: []string{"input", "output"}}},
 		}},
-		{"spent nothing gets no part", measured, persistence.RunCostRecord{EstimatedCostUSD: new(0.0), CostStatus: "estimated"}},
-		{"only total_tokens gets no part", totalOnly, persistence.RunCostRecord{CostStatus: "unpriced"}},
-		{"parts price the run on its summed tokens and insert nothing", withParts, persistence.RunCostRecord{
+		{"spent nothing gets no part", measured, storage.RunCostRecord{EstimatedCostUSD: new(0.0), CostStatus: "estimated"}},
+		{"only total_tokens gets no part", totalOnly, storage.RunCostRecord{CostStatus: "unpriced"}},
+		{"parts price the run on its summed tokens and insert nothing", withParts, storage.RunCostRecord{
 			EstimatedCostUSD: new(15.0), CostStatus: "estimated",
-			PartCosts: map[string]persistence.ModelCost{"a": estimated(1), "b": estimated(16)},
+			PartCosts: map[string]storage.ModelCost{"a": estimated(1), "b": estimated(16)},
 		}},
 	}
 
@@ -91,7 +91,7 @@ func TestRecordedCostOf(t *testing.T) {
 	}
 }
 
-func recordJSON(record persistence.RunCostRecord) string {
+func recordJSON(record storage.RunCostRecord) string {
 	b, _ := json.Marshal(record)
 	return string(b)
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 var threeStageChain = Stages{
@@ -16,31 +16,31 @@ var threeStageChain = Stages{
 	LabelRules: []string{"plan"},
 }
 
-func passRow(rule, previous, result, status string) persistence.RunStatsRow {
+func passRow(rule, previous, result, status string) storage.RunStatsRow {
 	return chainRow("c1", rule, previous, result, status)
 }
 
-func blocked(row persistence.RunStatsRow) persistence.RunStatsRow {
+func blocked(row storage.RunStatsRow) storage.RunStatsRow {
 	row.AgentBlocked = true
 	return row
 }
 
-func withheld(row persistence.RunStatsRow) persistence.RunStatsRow {
+func withheld(row storage.RunStatsRow) storage.RunStatsRow {
 	row.HandoffWithheld = true
 	return row
 }
 
-func reaction(row persistence.RunStatsRow) persistence.RunStatsRow {
+func reaction(row storage.RunStatsRow) storage.RunStatsRow {
 	row.ReactionKind = "ci"
 	return row
 }
 
-func lasting(row persistence.RunStatsRow, seconds int) persistence.RunStatsRow {
+func lasting(row storage.RunStatsRow, seconds int) storage.RunStatsRow {
 	row.CompletedAt = time.Date(2026, 1, 1, 0, 0, seconds, 0, time.UTC).Format(time.RFC3339)
 	return row
 }
 
-func untimed(row persistence.RunStatsRow) persistence.RunStatsRow {
+func untimed(row storage.RunStatsRow) storage.RunStatsRow {
 	row.CompletedAt = ""
 	return row
 }
@@ -49,7 +49,7 @@ func livePass(rule, previous string, budget bool) LivePass {
 	return LivePass{ChainID: "c1", RuleName: rule, PreviousRule: previous, BudgetHeld: budget}
 }
 
-func funnelsOf(t *testing.T, stages Stages, until *time.Time, rows ...persistence.RunStatsRow) Report {
+func funnelsOf(t *testing.T, stages Stages, until *time.Time, rows ...storage.RunStatsRow) Report {
 	t.Helper()
 	agg := New(withTriggerBreakdown(fullCaps))
 	agg.SetStages(stages)
@@ -128,37 +128,37 @@ func TestChainFunnels_PassOutcomes(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		rows    []persistence.RunStatsRow
+		rows    []storage.RunStatsRow
 		live    []LivePass
 		rule    string
 		arrival string
 		outcome string
 		reason  string
 	}{
-		{name: "latest run decides over a failed first run", rows: []persistence.RunStatsRow{passRow("plan", "specify", "", "failed"), passRow("plan", "specify", "advanced", "succeeded")}, rule: "plan", arrival: "hop", outcome: "advanced"},
-		{name: "partial counts as advanced", rows: []persistence.RunStatsRow{passRow("specify", "", "partial", "succeeded")}, rule: "specify", arrival: "match", outcome: "advanced"},
-		{name: "advanced on the last stage is handed off", rows: []persistence.RunStatsRow{passRow("implement", "plan", "advanced", "succeeded")}, rule: "implement", arrival: "hop", outcome: "handed_off"},
-		{name: "ceiling", rows: []persistence.RunStatsRow{passRow("specify", "", "ceiling", "failed")}, rule: "specify", arrival: "match", outcome: "ceiling"},
-		{name: "hop failed beats the run status", rows: []persistence.RunStatsRow{passRow("specify", "", "failed", "succeeded")}, rule: "specify", arrival: "match", outcome: "hop_failed"},
-		{name: "label arrival", rows: []persistence.RunStatsRow{passRow("plan", "", "advanced", "succeeded")}, rule: "plan", arrival: "label", outcome: "advanced"},
-		{name: "blocked beats handoff on the last stage", rows: []persistence.RunStatsRow{blocked(passRow("implement", "plan", "", "succeeded"))}, rule: "implement", arrival: "hop", outcome: "no_hop", reason: "needs_person"},
-		{name: "succeeded on the last stage is handed off", rows: []persistence.RunStatsRow{passRow("implement", "plan", "", "succeeded")}, rule: "implement", arrival: "hop", outcome: "handed_off"},
-		{name: "budget hold after a handoff stays handed off", rows: []persistence.RunStatsRow{passRow("implement", "plan", "", "succeeded")}, live: []LivePass{livePass("implement", "plan", true)}, rule: "implement", arrival: "hop", outcome: "handed_off"},
-		{name: "blocked beats a budget hold", rows: []persistence.RunStatsRow{blocked(passRow("plan", "specify", "", "succeeded"))}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "needs_person"},
-		{name: "budget hold beats succeeded on a non-last stage", rows: []persistence.RunStatsRow{passRow("plan", "specify", "", "succeeded")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "budget_held"},
-		{name: "budget hold beats a failed run", rows: []persistence.RunStatsRow{passRow("plan", "specify", "", "failed")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "budget_held"},
-		{name: "budget hold never overrides a hop decision", rows: []persistence.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "advanced"},
-		{name: "succeeded without a hop on a non-last stage", rows: []persistence.RunStatsRow{passRow("specify", "", "", "succeeded")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "operator_stopped"},
-		{name: "withheld verdict", rows: []persistence.RunStatsRow{withheld(passRow("specify", "", "", "failed"))}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "verdict_withheld"},
-		{name: "needs_person status", rows: []persistence.RunStatsRow{passRow("specify", "", "", "needs_person")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "needs_person"},
-		{name: "budget_stopped status", rows: []persistence.RunStatsRow{passRow("specify", "", "", "budget_stopped")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "budget_held"},
-		{name: "cancelled status", rows: []persistence.RunStatsRow{passRow("specify", "", "", "cancelled")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "operator_stopped"},
-		{name: "failed status without a withheld verdict", rows: []persistence.RunStatsRow{passRow("specify", "", "", "failed")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "run_failed"},
-		{name: "live pass beats the finished hop decision", rows: []persistence.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded")}, live: []LivePass{livePass("plan", "specify", false)}, rule: "plan", arrival: "hop", outcome: "in_stage"},
+		{name: "latest run decides over a failed first run", rows: []storage.RunStatsRow{passRow("plan", "specify", "", "failed"), passRow("plan", "specify", "advanced", "succeeded")}, rule: "plan", arrival: "hop", outcome: "advanced"},
+		{name: "partial counts as advanced", rows: []storage.RunStatsRow{passRow("specify", "", "partial", "succeeded")}, rule: "specify", arrival: "match", outcome: "advanced"},
+		{name: "advanced on the last stage is handed off", rows: []storage.RunStatsRow{passRow("implement", "plan", "advanced", "succeeded")}, rule: "implement", arrival: "hop", outcome: "handed_off"},
+		{name: "ceiling", rows: []storage.RunStatsRow{passRow("specify", "", "ceiling", "failed")}, rule: "specify", arrival: "match", outcome: "ceiling"},
+		{name: "hop failed beats the run status", rows: []storage.RunStatsRow{passRow("specify", "", "failed", "succeeded")}, rule: "specify", arrival: "match", outcome: "hop_failed"},
+		{name: "label arrival", rows: []storage.RunStatsRow{passRow("plan", "", "advanced", "succeeded")}, rule: "plan", arrival: "label", outcome: "advanced"},
+		{name: "blocked beats handoff on the last stage", rows: []storage.RunStatsRow{blocked(passRow("implement", "plan", "", "succeeded"))}, rule: "implement", arrival: "hop", outcome: "no_hop", reason: "needs_person"},
+		{name: "succeeded on the last stage is handed off", rows: []storage.RunStatsRow{passRow("implement", "plan", "", "succeeded")}, rule: "implement", arrival: "hop", outcome: "handed_off"},
+		{name: "budget hold after a handoff stays handed off", rows: []storage.RunStatsRow{passRow("implement", "plan", "", "succeeded")}, live: []LivePass{livePass("implement", "plan", true)}, rule: "implement", arrival: "hop", outcome: "handed_off"},
+		{name: "blocked beats a budget hold", rows: []storage.RunStatsRow{blocked(passRow("plan", "specify", "", "succeeded"))}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "needs_person"},
+		{name: "budget hold beats succeeded on a non-last stage", rows: []storage.RunStatsRow{passRow("plan", "specify", "", "succeeded")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "budget_held"},
+		{name: "budget hold beats a failed run", rows: []storage.RunStatsRow{passRow("plan", "specify", "", "failed")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "no_hop", reason: "budget_held"},
+		{name: "budget hold never overrides a hop decision", rows: []storage.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded")}, live: []LivePass{livePass("plan", "specify", true)}, rule: "plan", arrival: "hop", outcome: "advanced"},
+		{name: "succeeded without a hop on a non-last stage", rows: []storage.RunStatsRow{passRow("specify", "", "", "succeeded")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "operator_stopped"},
+		{name: "withheld verdict", rows: []storage.RunStatsRow{withheld(passRow("specify", "", "", "failed"))}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "verdict_withheld"},
+		{name: "needs_person status", rows: []storage.RunStatsRow{passRow("specify", "", "", "needs_person")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "needs_person"},
+		{name: "budget_stopped status", rows: []storage.RunStatsRow{passRow("specify", "", "", "budget_stopped")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "budget_held"},
+		{name: "cancelled status", rows: []storage.RunStatsRow{passRow("specify", "", "", "cancelled")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "operator_stopped"},
+		{name: "failed status without a withheld verdict", rows: []storage.RunStatsRow{passRow("specify", "", "", "failed")}, rule: "specify", arrival: "match", outcome: "no_hop", reason: "run_failed"},
+		{name: "live pass beats the finished hop decision", rows: []storage.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded")}, live: []LivePass{livePass("plan", "specify", false)}, rule: "plan", arrival: "hop", outcome: "in_stage"},
 		{name: "live-only pass takes its arrival from the previous rule", live: []LivePass{livePass("plan", "specify", false)}, rule: "plan", arrival: "hop", outcome: "in_stage"},
-		{name: "reaction run without a hop result changes only runs", rows: []persistence.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded"), reaction(passRow("plan", "", "", "failed"))}, rule: "plan", arrival: "hop", outcome: "advanced"},
-		{name: "reaction run with a hop result decides the pass", rows: []persistence.RunStatsRow{passRow("plan", "specify", "", "succeeded"), reaction(passRow("plan", "", "ceiling", "failed"))}, rule: "plan", arrival: "hop", outcome: "ceiling"},
-		{name: "run without a chain identifier forms no pass", rows: []persistence.RunStatsRow{chainRow("", "plan", "specify", "advanced", "succeeded")}, rule: "plan"},
+		{name: "reaction run without a hop result changes only runs", rows: []storage.RunStatsRow{passRow("plan", "specify", "advanced", "succeeded"), reaction(passRow("plan", "", "", "failed"))}, rule: "plan", arrival: "hop", outcome: "advanced"},
+		{name: "reaction run with a hop result decides the pass", rows: []storage.RunStatsRow{passRow("plan", "specify", "", "succeeded"), reaction(passRow("plan", "", "ceiling", "failed"))}, rule: "plan", arrival: "hop", outcome: "ceiling"},
+		{name: "run without a chain identifier forms no pass", rows: []storage.RunStatsRow{chainRow("", "plan", "specify", "advanced", "succeeded")}, rule: "plan"},
 	}
 
 	for _, tt := range tests {

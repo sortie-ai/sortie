@@ -39,6 +39,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/server"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workspace"
 
@@ -260,7 +261,7 @@ func labelFixCommandActive(cfg config.ServiceConfig) bool {
 
 // modelUseSource serves the HTTP server's model usage from the store, so the
 // server needs no persistence import.
-func modelUseSource(store *persistence.Store) server.ModelUseFunc {
+func modelUseSource(store storage.RunHistoryStore) server.ModelUseFunc {
 	return func(ctx context.Context) ([]server.ModelUse, error) {
 		uses, err := store.ListModelUse(ctx)
 		if err != nil {
@@ -381,7 +382,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	startupRates := br.mgr.Rates()
 	// A failed fill must not stop the start: the earlier rows read unpriced
 	// and the next start fills them again.
-	if recorded, err := store.RecordUnrecordedRunCosts(ctx, func(run persistence.UnrecordedRun) persistence.RunCostRecord {
+	if recorded, err := store.RecordUnrecordedRunCosts(ctx, func(run storage.UnrecordedRun) storage.RunCostRecord {
 		return recordedCostOf(run, startupRates)
 	}); err != nil {
 		br.logger.Error("failed to record costs of earlier runs", slog.Any("error", err))
@@ -808,7 +809,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if recoveryEnabled {
 		recoveryCutoff := recoveryNow.Add(-recoveryLookback)
-		var recoveryRuns []persistence.RunHistory
+		var recoveryRuns []storage.RunHistory
 		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
 		if recoveryErr == nil {
 			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, recoveryParams)

@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
@@ -37,9 +38,9 @@ type WorkflowManager interface {
 // OrchestratorStore is the persistence interface required by the event
 // loop. Satisfied by [persistence.Store].
 type OrchestratorStore interface {
+	storage.RunHistoryStore
 	Ping(ctx context.Context) error
-	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
-	AppendRunHistoryWithEvents(ctx context.Context, run persistence.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (persistence.RunHistory, error)
+	AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error)
 	AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []persistence.RunEvent, limits persistence.RunEventLimits) error
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
 	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
@@ -47,15 +48,6 @@ type OrchestratorStore interface {
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	SaveUsageLimitHold(ctx context.Context, hold persistence.UsageLimitHold) error
 	DeleteUsageLimitHold(ctx context.Context, agentKind string, modelOnly bool, model string) error
-	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
-	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
-	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
-	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
-	ListReportedModels(ctx context.Context) ([]string, error)
-	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) (map[string]int, error)
-	QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error)
-	UsageCompletedBetween(ctx context.Context, since, until time.Time) (persistence.IssueTokenUsage, error)
-	LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]persistence.RunHistory, error)
 	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
@@ -68,8 +60,6 @@ type OrchestratorStore interface {
 		observedAt time.Time,
 	) (persistence.ReactionObservation, error)
 	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
-	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
-	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
@@ -85,7 +75,6 @@ type OrchestratorStore interface {
 	ListStageHops(ctx context.Context) ([]persistence.StageHop, error)
 	UpsertLivePass(ctx context.Context, pass persistence.LivePass) error
 	DeleteLivePass(ctx context.Context, issueID, kind string) error
-	RecordRunStageResult(ctx context.Context, runID int64, targetRule, result string) error
 	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
 	DeleteIssueOutcome(ctx context.Context, issueID string) error
 	GetReactionEscalation(ctx context.Context, issueID, kind string) (persistence.ReactionEscalation, bool, error)
@@ -1989,7 +1978,7 @@ func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.Ser
 // A failed read yields no runs: the caller parks every issue regardless, so
 // a store fault never lets an issue whose runs produce no work keep
 // dispatching.
-func (o *Orchestrator) latestRunsOfExhausted(ctx context.Context, issues []domain.Issue) map[string]persistence.RunHistory {
+func (o *Orchestrator) latestRunsOfExhausted(ctx context.Context, issues []domain.Issue) map[string]storage.RunHistory {
 	ids := make([]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID

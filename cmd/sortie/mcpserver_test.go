@@ -23,6 +23,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
@@ -264,7 +265,7 @@ func seedBudgetStore(t *testing.T, dispatchID string) *persistence.Store {
 	}
 
 	for i, total := range []int64{400, 200} {
-		run := persistence.RunHistory{
+		run := storage.RunHistory{
 			IssueID:      "iss-1",
 			Identifier:   "PROJ-1",
 			Attempt:      i + 1,
@@ -420,7 +421,7 @@ func seedBudgetMeasurementStore(t *testing.T) *persistence.Store {
 		t.Fatalf("Migrate: %v", err)
 	}
 
-	runs := []persistence.RunHistory{
+	runs := []storage.RunHistory{
 		{
 			IssueID: "iss-mixed", Identifier: "PROJ-MIXED", Attempt: 1, AgentAdapter: "mock",
 			Workspace: "/tmp/ws/PROJ-MIXED", StartedAt: "2026-03-19T10:00:00Z", CompletedAt: "2026-03-19T10:00:30Z",

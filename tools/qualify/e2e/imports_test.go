@@ -25,6 +25,7 @@ var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/pricing":                    "the rates type the harness's workflow manager double returns",
 	"github.com/sortie-ai/sortie/internal/prompt":                     "parsing the fixture's workflow prompt template",
 	"github.com/sortie-ai/sortie/internal/registry":                   "registering the fixture agent kind the orchestrator's preflight resolves",
+	"github.com/sortie-ai/sortie/internal/storage":                    "the run-history row type the harness reads back through the store",
 	"github.com/sortie-ai/sortie/internal/tracker/file":               "the file tracker adapter the harness's fixture drives",
 	"github.com/sortie-ai/sortie/internal/waittest":                   "the bounded waits on the harness's run history, ceiling stop and shutdown",
 	"github.com/sortie-ai/sortie/internal/workflow":                   "the load-status type the harness's workflow manager double returns",

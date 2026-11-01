@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -773,7 +775,7 @@ func TestMigrate_Migration028_OlderRowsKeepNoOrigin(t *testing.T) {
 	migrateOrFatal(t, s)
 	appendOrFatal(t, s, newTestRun(1))
 
-	runs := map[string]RunHistory{}
+	runs := map[string]storage.RunHistory{}
 	for _, r := range queryAllRuns(t, s, 10) {
 		runs[r.IssueID] = r
 	}

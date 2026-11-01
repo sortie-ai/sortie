@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/redact"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -36,7 +37,7 @@ const continuationDelayMS int64 = 1_000
 // WorkerExitStore is the persistence interface required by
 // [HandleWorkerExit].
 type WorkerExitStore interface {
-	AppendRunHistoryWithEvents(ctx context.Context, run persistence.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (persistence.RunHistory, error)
+	AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error)
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
 	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
@@ -458,7 +459,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	// RunHistory.Attempt is 1-based for display; normalizeAttempt returns the
 	// 0-based retry counter, so add 1.
-	runHistory := persistence.RunHistory{
+	runHistory := storage.RunHistory{
 		IssueID:          workerResult.IssueID,
 		Identifier:       workerResult.Identifier,
 		DisplayID:        entry.Issue.DisplayID,
@@ -484,7 +485,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TokensMeasured:   measured,
 		UnaccountedTurns: workerResult.UnaccountedTurns,
 
-		UsageCompleteness: persistence.UsageCompletenessOf(measured, workerResult.UnaccountedTurns),
+		UsageCompleteness: storage.UsageCompletenessOf(measured, workerResult.UnaccountedTurns),
 		ReportedAmounts:   runReportedAmounts(usage.MergeAmounts(entry.ReportedAmounts, workerResult.ReportedAmounts)),
 
 		IssueTitle: issueIdentity.Title,
@@ -1705,16 +1706,16 @@ func classifyWorkerError(err error) domain.RetryClassification {
 
 // runModelUsage maps per-model usage to stored parts, dropping models zero
 // in every token class; nil when none remain.
-func runModelUsage(totals map[string]domain.TokenUsage) map[string]persistence.ModelTokens {
-	var parts map[string]persistence.ModelTokens
+func runModelUsage(totals map[string]domain.TokenUsage) map[string]storage.ModelTokens {
+	var parts map[string]storage.ModelTokens
 	for model, tokens := range totals {
 		if !hasTokenClasses(tokens) {
 			continue
 		}
 		if parts == nil {
-			parts = make(map[string]persistence.ModelTokens, len(totals))
+			parts = make(map[string]storage.ModelTokens, len(totals))
 		}
-		parts[model] = persistence.ModelTokens{
+		parts[model] = storage.ModelTokens{
 			InputTokens:      tokens.InputTokens,
 			OutputTokens:     tokens.OutputTokens,
 			CacheReadTokens:  tokens.CacheReadTokens,
@@ -1725,13 +1726,13 @@ func runModelUsage(totals map[string]domain.TokenUsage) map[string]persistence.M
 }
 
 // runReportedAmounts maps reported amounts to stored rows; nil when none.
-func runReportedAmounts(amounts []domain.ReportedAmount) []persistence.ReportedAmount {
+func runReportedAmounts(amounts []domain.ReportedAmount) []storage.ReportedAmount {
 	if len(amounts) == 0 {
 		return nil
 	}
-	rows := make([]persistence.ReportedAmount, len(amounts))
+	rows := make([]storage.ReportedAmount, len(amounts))
 	for i, amount := range amounts {
-		rows[i] = persistence.ReportedAmount{
+		rows[i] = storage.ReportedAmount{
 			Unit:       amount.Unit,
 			Model:      amount.Model,
 			Amount:     amount.Amount,
@@ -1744,7 +1745,7 @@ func runReportedAmounts(amounts []domain.ReportedAmount) []persistence.ReportedA
 // recordRunCost prices a run under rates and stores the result on its row.
 // The row's token columns and ModelUsage must be final, because the price is
 // fixed when the row is written.
-func recordRunCost(row *persistence.RunHistory, rates *pricing.Rates) {
+func recordRunCost(row *storage.RunHistory, rates *pricing.Rates) {
 	var parts map[string]domain.TokenUsage
 	if len(row.ModelUsage) > 0 {
 		parts = make(map[string]domain.TokenUsage, len(row.ModelUsage))
@@ -1786,9 +1787,9 @@ func recordRunCost(row *persistence.RunHistory, rates *pricing.Rates) {
 	if len(price.Parts) == 0 {
 		return
 	}
-	row.ModelCosts = make(map[string]persistence.ModelCost, len(price.Parts))
+	row.ModelCosts = make(map[string]storage.ModelCost, len(price.Parts))
 	for model, part := range price.Parts {
-		row.ModelCosts[model] = persistence.ModelCost{
+		row.ModelCosts[model] = storage.ModelCost{
 			EstimatedCostUSD:  part.CostUSD,
 			CostStatus:        string(part.Status),
 			PriceSource:       string(part.Source),

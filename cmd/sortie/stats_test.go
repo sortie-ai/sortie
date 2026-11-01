@@ -15,9 +15,10 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/runstats"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-var fullCaps = persistence.RunHistoryCapabilities{
+var fullCaps = storage.RunHistoryCapabilities{
 	HasTurnsCompleted:   true,
 	HasReviewMetadata:   true,
 	HasRuleRouting:      true,
@@ -27,7 +28,7 @@ var fullCaps = persistence.RunHistoryCapabilities{
 
 var fixedNow = time.Date(2026, 8, 7, 9, 15, 0, 0, time.UTC)
 
-func addRows(t *testing.T, agg *runstats.Aggregator, rows ...persistence.RunStatsRow) {
+func addRows(t *testing.T, agg *runstats.Aggregator, rows ...storage.RunStatsRow) {
 	t.Helper()
 	for _, r := range rows {
 		if err := agg.Add(r); err != nil {
@@ -63,7 +64,7 @@ Do {{ .issue.title }}.
 }
 
 // createStatsDB closes the store so a later read-only open sees committed data.
-func createStatsDB(t *testing.T, dbPath string, runs ...persistence.RunHistory) {
+func createStatsDB(t *testing.T, dbPath string, runs ...storage.RunHistory) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := persistence.Open(ctx, dbPath)
@@ -212,7 +213,7 @@ func TestStatsCostDerivation(t *testing.T) {
 	t.Parallel()
 
 	wfPath := newStatsWorkspace(t, func(t *testing.T, dbPath string) {
-		createStatsDB(t, dbPath, persistence.RunHistory{
+		createStatsDB(t, dbPath, storage.RunHistory{
 			IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "claude-code", Workspace: "/tmp/ws",
 			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
 			TurnsCompleted: 1, InputTokens: 1_000_000, TotalTokens: 1_000_000, TokensMeasured: true, CostStatus: "unpriced",
@@ -242,7 +243,7 @@ func TestStatsTokenReporting(t *testing.T) {
 		t.Parallel()
 
 		agg := runstats.New(fullCaps)
-		addRows(t, agg, persistence.RunStatsRow{
+		addRows(t, agg, storage.RunStatsRow{
 			Status: "succeeded", AgentAdapter: "mock",
 			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
 			InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10,
@@ -261,8 +262,8 @@ func TestStatsTokenReporting(t *testing.T) {
 		}
 	})
 
-	measuredUnmeasuredRows := func() []persistence.RunStatsRow {
-		return []persistence.RunStatsRow{
+	measuredUnmeasuredRows := func() []storage.RunStatsRow {
+		return []storage.RunStatsRow{
 			{
 				Status: "succeeded", AgentAdapter: "claude-code",
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
@@ -376,9 +377,9 @@ func TestStatsTokenReporting(t *testing.T) {
 	t.Run("base tier reports zero unmeasured runs", func(t *testing.T) {
 		t.Parallel()
 
-		baseCaps := persistence.RunHistoryCapabilities{}
+		baseCaps := storage.RunHistoryCapabilities{}
 		agg := runstats.New(baseCaps)
-		addRows(t, agg, persistence.RunStatsRow{
+		addRows(t, agg, storage.RunStatsRow{
 			Status: "succeeded", AgentAdapter: "kiro",
 			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
 		})
@@ -397,7 +398,7 @@ func TestRunStatsEmptyRange(t *testing.T) {
 	newWorkspace := func(t *testing.T) string {
 		t.Helper()
 		return newStatsWorkspace(t, func(t *testing.T, dbPath string) {
-			createStatsDB(t, dbPath, persistence.RunHistory{
+			createStatsDB(t, dbPath, storage.RunHistory{
 				IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
 			})
@@ -538,7 +539,7 @@ func TestRunStatsAgainstLiveWriter(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if _, err := store.AppendRunHistory(ctx, persistence.RunHistory{
+	if _, err := store.AppendRunHistory(ctx, storage.RunHistory{
 		IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
 		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
 	}); err != nil {
@@ -741,7 +742,7 @@ func TestRunStats_MissingCacheWriteTokensColumnReadsAsZero(t *testing.T) {
 
 	migratedDir := t.TempDir()
 	migratedWfPath := writeCustomWorkflowFile(t, migratedDir, statsWorkflow(""))
-	createStatsDB(t, filepath.Join(migratedDir, ".sortie.db"), persistence.RunHistory{
+	createStatsDB(t, filepath.Join(migratedDir, ".sortie.db"), storage.RunHistory{
 		IssueID: "ISS-CW", Identifier: "PROJ-CW", Attempt: 1, AgentAdapter: "claude-code", Workspace: "/tmp/ws",
 		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
 		TurnsCompleted: 1, InputTokens: inputTokens, OutputTokens: outputTokens,
@@ -772,9 +773,9 @@ func TestRunStatsDBPathResolution(t *testing.T) {
 	// No t.Parallel: the SORTIE_DB_PATH subtest uses t.Setenv, which
 	// requires the calling test and every ancestor to be non-parallel.
 
-	oneRun := func(t *testing.T) []persistence.RunHistory {
+	oneRun := func(t *testing.T) []storage.RunHistory {
 		t.Helper()
-		return []persistence.RunHistory{{
+		return []storage.RunHistory{{
 			IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
 			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
 		}}
@@ -853,13 +854,13 @@ func TestRunStatsDBPathResolution(t *testing.T) {
 	})
 }
 
-func withModelBreakdown(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+func withModelBreakdown(caps storage.RunHistoryCapabilities) storage.RunHistoryCapabilities {
 	caps.HasConfiguredSettings = true
 	return caps
 }
 
-func modelRow(adapter, model, status string, input int64) persistence.RunStatsRow {
-	return persistence.RunStatsRow{
+func modelRow(adapter, model, status string, input int64) storage.RunStatsRow {
+	return storage.RunStatsRow{
 		Status: status, AgentAdapter: adapter, ConfiguredModel: model,
 		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
 		InputTokens: input, TokensMeasured: true,
@@ -899,7 +900,7 @@ func TestStatsByModel_WithoutTheBreakdown(t *testing.T) {
 	}
 }
 
-func chainRow(chain, rule, previous, result, status string) persistence.RunStatsRow {
+func chainRow(chain, rule, previous, result, status string) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", status, 1_000)
 	row.Identifier, row.ChainID, row.RuleName, row.StagePrevious, row.StageResult = "PROJ-"+chain, chain, rule, previous, result
 	row.TurnsCompleted = 2
@@ -928,8 +929,8 @@ func TestRunStatsByModelAgainstDatabases(t *testing.T) {
 	t.Parallel()
 
 	const warningStart = "this database was written before sortie recorded the model of each run"
-	runOf := func(adapter, model, status string) persistence.RunHistory {
-		return persistence.RunHistory{IssueID: "I-" + status, Identifier: "P-" + status, Attempt: 1, AgentAdapter: adapter, Workspace: "/tmp/ws", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: status, ConfiguredModel: model}
+	runOf := func(adapter, model, status string) storage.RunHistory {
+		return storage.RunHistory{IssueID: "I-" + status, Identifier: "P-" + status, Attempt: 1, AgentAdapter: adapter, Workspace: "/tmp/ws", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: status, ConfiguredModel: model}
 	}
 	tests := []struct {
 		name        string
@@ -980,10 +981,10 @@ const funnelDispatch = `dispatch:
       stage: implement
 `
 
-func funnelRuns() []persistence.RunHistory {
-	var runs []persistence.RunHistory
+func funnelRuns() []storage.RunHistory {
+	var runs []storage.RunHistory
 	add := func(chain, rule, previous, status, result string) {
-		runs = append(runs, persistence.RunHistory{
+		runs = append(runs, storage.RunHistory{
 			IssueID: "ISS-" + chain, Identifier: "PROJ-" + chain, Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
 			StartedAt: "2026-01-10T10:00:00Z", CompletedAt: "2026-01-10T10:10:00Z",
 			Status: status, RuleName: rule, ChainID: chain, StagePrevious: previous, StageResult: result,

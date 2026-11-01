@@ -17,6 +17,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -135,7 +136,7 @@ func (s *reviewReconcileStore) RecordIssueOutcome(_ context.Context, outcome per
 	return nil
 }
 
-func (s *reviewReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *reviewReconcileStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 
@@ -390,7 +391,7 @@ func (s *fingerprintModelStore) storedIDs(issueID, kind string) []string {
 	return slices.Sorted(maps.Keys(s.rows[ReactionKey(issueID, kind)]))
 }
 
-func (s *fingerprintModelStore) AppendRunHistoryWithEvents(_ context.Context, run persistence.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (persistence.RunHistory, error) {
+func (s *fingerprintModelStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
 	return run, nil
 }
 
@@ -402,16 +403,16 @@ func (s *fingerprintModelStore) QueryConsecutiveHandoffAbsenceCounts(_ context.C
 	return make(map[string]int, len(issueIDs)), nil
 }
 
-func (s *fingerprintModelStore) LatestAgentRuns(context.Context, []string) (map[string]persistence.RunHistory, error) {
+func (s *fingerprintModelStore) LatestAgentRuns(context.Context, []string) (map[string]storage.RunHistory, error) {
 	return nil, nil
 }
 
-func (s *fingerprintModelStore) TokenUsageByIssue(context.Context, string) (persistence.IssueTokenUsage, error) {
-	return persistence.IssueTokenUsage{}, nil
+func (s *fingerprintModelStore) TokenUsageByIssue(context.Context, string) (storage.IssueTokenUsage, error) {
+	return storage.IssueTokenUsage{}, nil
 }
 
-func (s *fingerprintModelStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (persistence.IssueTokenUsage, error) {
-	return persistence.IssueTokenUsage{}, nil
+func (s *fingerprintModelStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (storage.IssueTokenUsage, error) {
+	return storage.IssueTokenUsage{}, nil
 }
 
 func (s *fingerprintModelStore) UpsertParkedIssue(context.Context, persistence.ParkedIssue) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // labelReviewSCMFake is a controllable domain.SCMAdapter for label-review
@@ -161,7 +162,7 @@ func (s *labelReviewFingerprintStore) DeleteRetryEntry(_ context.Context, _ stri
 	return nil
 }
 
-func (s *labelReviewFingerprintStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *labelReviewFingerprintStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 

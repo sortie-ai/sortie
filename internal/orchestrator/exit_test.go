@@ -26,6 +26,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -36,7 +37,7 @@ type mockExitStore struct {
 	noopOutcomeRecorder
 	noEscalationRecords
 	noUsageLimitHolds
-	runHistories    []persistence.RunHistory
+	runHistories    []storage.RunHistory
 	metrics         []persistence.AggregateMetrics
 	sessionMetadata []persistence.SessionMetadata
 	retryEntries    []persistence.RetryEntry
@@ -75,10 +76,10 @@ type recordedStageResult struct {
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
 
-func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run persistence.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (persistence.RunHistory, error) {
+func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
 	m.runHistories = append(m.runHistories, run)
 	if m.appendRunHistoryErr != nil {
-		return persistence.RunHistory{}, m.appendRunHistoryErr
+		return storage.RunHistory{}, m.appendRunHistoryErr
 	}
 	run.ID = int64(len(m.runHistories))
 	return run, nil
@@ -117,7 +118,7 @@ func (m *mockExitStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, 
 			if run.IssueID != issueID {
 				continue
 			}
-			if run.Status == "failed" && run.Error != nil && strings.HasPrefix(*run.Error, persistence.HandoffAbsenceErrorPrefix) {
+			if run.Status == "failed" && run.Error != nil && strings.HasPrefix(*run.Error, storage.HandoffAbsenceErrorPrefix) {
 				counts[issueID]++
 			}
 		}
@@ -454,19 +455,19 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 		name      string
 		events    []domain.AgentEvent
 		worker    WorkerResult
-		wantParts map[string]persistence.ModelTokens
+		wantParts map[string]storage.ModelTokens
 	}{
 		{
 			name:      "one model",
 			events:    []domain.AgentEvent{tokenEvent("model-a", domain.TokenUsage{InputTokens: 100, OutputTokens: 200, TotalTokens: 300, CacheReadTokens: 40, CacheWriteTokens: 25}, nil)},
-			wantParts: map[string]persistence.ModelTokens{"model-a": {InputTokens: 100, OutputTokens: 200, CacheReadTokens: 40, CacheWriteTokens: 25}},
+			wantParts: map[string]storage.ModelTokens{"model-a": {InputTokens: 100, OutputTokens: 200, CacheReadTokens: 40, CacheWriteTokens: 25}},
 		},
 		{
 			name: "two models, the carrier takes what the split does not name",
 			events: []domain.AgentEvent{tokenEvent("model-a",
 				domain.TokenUsage{InputTokens: 300, OutputTokens: 60, TotalTokens: 360, CacheReadTokens: 30},
 				map[string]domain.TokenUsage{"model-b": {InputTokens: 200, OutputTokens: 50, TotalTokens: 250, CacheReadTokens: 30}})},
-			wantParts: map[string]persistence.ModelTokens{
+			wantParts: map[string]storage.ModelTokens{
 				"model-a": {InputTokens: 100, OutputTokens: 10},
 				"model-b": {InputTokens: 200, OutputTokens: 50, CacheReadTokens: 30},
 			},
@@ -482,7 +483,7 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 					"model-b": {InputTokens: 80, OutputTokens: 20, TotalTokens: 100},
 				},
 			},
-			wantParts: map[string]persistence.ModelTokens{
+			wantParts: map[string]storage.ModelTokens{
 				"model-a": {InputTokens: 100, OutputTokens: 10},
 				"model-b": {InputTokens: 80, OutputTokens: 20},
 			},
@@ -513,14 +514,14 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 			if !maps.Equal(run.ModelUsage, tt.wantParts) {
 				t.Errorf("RunHistory.ModelUsage = %+v, want %+v", run.ModelUsage, tt.wantParts)
 			}
-			var gotSum persistence.ModelTokens
+			var gotSum storage.ModelTokens
 			for _, part := range run.ModelUsage {
 				gotSum.InputTokens += part.InputTokens
 				gotSum.OutputTokens += part.OutputTokens
 				gotSum.CacheReadTokens += part.CacheReadTokens
 				gotSum.CacheWriteTokens += part.CacheWriteTokens
 			}
-			wantSum := persistence.ModelTokens{
+			wantSum := storage.ModelTokens{
 				InputTokens:      run.InputTokens,
 				OutputTokens:     run.OutputTokens,
 				CacheReadTokens:  run.CacheReadTokens,
@@ -983,7 +984,7 @@ func TestHandleWorkerExit_RequestCountReconciliation(t *testing.T) {
 func TestHandleWorkerExit_ReconciliationNoOpWhenResultMatchesEntry(t *testing.T) {
 	t.Parallel()
 
-	buildRecords := func(t *testing.T, result WorkerResult) (persistence.RunHistory, persistence.AggregateMetrics, persistence.SessionMetadata) {
+	buildRecords := func(t *testing.T, result WorkerResult) (storage.RunHistory, persistence.AggregateMetrics, persistence.SessionMetadata) {
 		t.Helper()
 
 		store := &mockExitStore{}
@@ -2456,7 +2457,7 @@ func (s *orderRecordingExitStore) UpsertSessionMetadata(ctx context.Context, met
 	return s.mockExitStore.UpsertSessionMetadata(ctx, meta)
 }
 
-func (s *orderRecordingExitStore) AppendRunHistoryWithEvents(ctx context.Context, run persistence.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (persistence.RunHistory, error) {
+func (s *orderRecordingExitStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error) {
 	s.callOrder = append(s.callOrder, "AppendRunHistory")
 	return s.mockExitStore.AppendRunHistoryWithEvents(ctx, run, events, limits)
 }
@@ -3190,8 +3191,8 @@ func TestHandleWorkerExit_WithheldReadGating(t *testing.T) {
 		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
 			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
 		}
-		if store.runHistories[0].Error == nil || !strings.HasPrefix(*store.runHistories[0].Error, persistence.HandoffAbsenceErrorPrefix) {
-			t.Errorf("RunHistory.Error = %v, want the %q prefix", store.runHistories[0].Error, persistence.HandoffAbsenceErrorPrefix)
+		if store.runHistories[0].Error == nil || !strings.HasPrefix(*store.runHistories[0].Error, storage.HandoffAbsenceErrorPrefix) {
+			t.Errorf("RunHistory.Error = %v, want the %q prefix", store.runHistories[0].Error, storage.HandoffAbsenceErrorPrefix)
 		}
 		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
 			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
@@ -10646,10 +10647,10 @@ var usageS = domain.TokenUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000, 
 
 type appendCapturingStore struct {
 	*persistence.Store
-	appended persistence.RunHistory
+	appended storage.RunHistory
 }
 
-func (s *appendCapturingStore) AppendRunHistoryWithEvents(ctx context.Context, run persistence.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (persistence.RunHistory, error) {
+func (s *appendCapturingStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error) {
 	s.appended = run
 	return s.Store.AppendRunHistoryWithEvents(ctx, run, events, limits)
 }
@@ -10680,8 +10681,8 @@ func TestHandleWorkerExit_PricesUnderReloadedRatesAndClearsLiveEstimate(t *testi
 	}, params)
 
 	run := store.appended
-	wantPart := persistence.ModelCost{EstimatedCostUSD: new(14.0), CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: fixtureRatesVersion(t, 4)}
-	if !reflect.DeepEqual(run.ModelCosts, map[string]persistence.ModelCost{"m1": wantPart}) {
+	wantPart := storage.ModelCost{EstimatedCostUSD: new(14.0), CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: fixtureRatesVersion(t, 4)}
+	if !reflect.DeepEqual(run.ModelCosts, map[string]storage.ModelCost{"m1": wantPart}) {
 		t.Errorf("appended run ModelCosts = %+v, want m1 = %+v", run.ModelCosts, wantPart)
 	}
 	if !reflect.DeepEqual(run.EstimatedCostUSD, new(14.0)) || run.CostStatus != "estimated" {
@@ -10701,7 +10702,7 @@ func TestHandleWorkerExit_PricesUnderReloadedRatesAndClearsLiveEstimate(t *testi
 
 const amountIssue = "ISS-AMT"
 
-func exitRow(t *testing.T, state *State, worker WorkerResult) persistence.RunHistory {
+func exitRow(t *testing.T, state *State, worker WorkerResult) storage.RunHistory {
 	t.Helper()
 	store := &mockExitStore{}
 	worker.IssueID, worker.Identifier, worker.ExitKind, worker.AgentAdapter = amountIssue, amountIssue+"-ident", WorkerExitNormal, "mock"
@@ -10738,9 +10739,9 @@ func TestHandleWorkerExit_UsageProvenanceAndCompleteness(t *testing.T) {
 		wantProvenance   string
 		wantCompleteness string
 	}{
-		{name: "measured run lists the sorted union", measured: true, wantProvenance: "journal:records,output:live", wantCompleteness: persistence.UsageComplete},
-		{name: "an unaccounted turn makes it a lower bound", measured: true, unaccountedTurns: 2, wantProvenance: "journal:records,output:live", wantCompleteness: persistence.UsageLowerBound},
-		{name: "unmeasured run lists none whatever the worker held", unaccountedTurns: 2, wantProvenance: "", wantCompleteness: persistence.UsageUnmeasured},
+		{name: "measured run lists the sorted union", measured: true, wantProvenance: "journal:records,output:live", wantCompleteness: storage.UsageComplete},
+		{name: "an unaccounted turn makes it a lower bound", measured: true, unaccountedTurns: 2, wantProvenance: "journal:records,output:live", wantCompleteness: storage.UsageLowerBound},
+		{name: "unmeasured run lists none whatever the worker held", unaccountedTurns: 2, wantProvenance: "", wantCompleteness: storage.UsageUnmeasured},
 	}
 
 	for _, tt := range tests {
@@ -10779,7 +10780,7 @@ func TestHandleWorkerExit_ReportedAmountsMergeMonotonicallyWhenUnmeasured(t *tes
 		{Unit: "credits", Amount: 3},
 	}})
 
-	want := []persistence.ReportedAmount{
+	want := []storage.ReportedAmount{
 		{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.5, LowerBound: true},
 		{Unit: "credits", Amount: 3},
 	}
@@ -10797,22 +10798,22 @@ func TestHandleWorkerExit_PricesUnpricedModelAtAgentAmount(t *testing.T) {
 	tests := []struct {
 		name     string
 		amount   domain.ReportedAmount
-		wantPart persistence.ModelCost
+		wantPart storage.ModelCost
 	}{
 		{
 			name:     "a US-dollar amount prices the model under source agent",
 			amount:   domain.ReportedAmount{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75},
-			wantPart: persistence.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "estimated", PriceSource: "agent"},
+			wantPart: storage.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "estimated", PriceSource: "agent"},
 		},
 		{
 			name:     "a lower-bound US-dollar amount prices it partial",
 			amount:   domain.ReportedAmount{Unit: domain.UnitUSD, Model: "model-x", Amount: 0.75, LowerBound: true},
-			wantPart: persistence.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "partial", PriceSource: "agent"},
+			wantPart: storage.ModelCost{EstimatedCostUSD: new(0.75), CostStatus: "partial", PriceSource: "agent"},
 		},
 		{
 			name:     "an amount in credits leaves the model unpriced",
 			amount:   domain.ReportedAmount{Unit: "credits", Model: "model-x", Amount: 3},
-			wantPart: persistence.ModelCost{CostStatus: "unpriced", UnratedClasses: []string{"input", "output"}},
+			wantPart: storage.ModelCost{CostStatus: "unpriced", UnratedClasses: []string{"input", "output"}},
 		},
 	}
 
@@ -10825,7 +10826,7 @@ func TestHandleWorkerExit_PricesUnpricedModelAtAgentAmount(t *testing.T) {
 
 			run := exitRow(t, state, WorkerResult{})
 
-			if !reflect.DeepEqual(run.ModelCosts, map[string]persistence.ModelCost{"model-x": tt.wantPart}) {
+			if !reflect.DeepEqual(run.ModelCosts, map[string]storage.ModelCost{"model-x": tt.wantPart}) {
 				t.Errorf("RunHistory.ModelCosts = %+v, want model-x = %+v", run.ModelCosts, tt.wantPart)
 			}
 			if !reflect.DeepEqual(run.EstimatedCostUSD, tt.wantPart.EstimatedCostUSD) || run.CostStatus != tt.wantPart.CostStatus {
@@ -10850,8 +10851,8 @@ func TestReconcileCIStatus_CIFailedRowRecordsCompleteAndNoProvenance(t *testing.
 		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
 	}
 	row := store.runHistories[0]
-	if row.UsageCompleteness != persistence.UsageComplete || row.UsageProvenance != "" {
-		t.Errorf("ci_failed row (UsageCompleteness, UsageProvenance) = (%q, %q), want (%q, %q)", row.UsageCompleteness, row.UsageProvenance, persistence.UsageComplete, "")
+	if row.UsageCompleteness != storage.UsageComplete || row.UsageProvenance != "" {
+		t.Errorf("ci_failed row (UsageCompleteness, UsageProvenance) = (%q, %q), want (%q, %q)", row.UsageCompleteness, row.UsageProvenance, storage.UsageComplete, "")
 	}
 }
 
