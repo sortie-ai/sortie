@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // labelFixDispatchedFlagStore returns a fixed mark and a hardcoded
@@ -50,7 +51,7 @@ func (s *labelFixDispatchedFlagStore) DeleteRetryEntry(_ context.Context, _ stri
 	return nil
 }
 
-func (s *labelFixDispatchedFlagStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *labelFixDispatchedFlagStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 

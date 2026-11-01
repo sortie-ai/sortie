@@ -7,16 +7,18 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 type costState struct {
-	Runs  map[int64]ModelCost
-	Parts map[int64]map[string]ModelCost
+	Runs  map[int64]storage.ModelCost
+	Parts map[int64]map[string]storage.ModelCost
 }
 
 func readCostState(t *testing.T, s *Store) costState {
 	t.Helper()
-	state := costState{Runs: map[int64]ModelCost{}, Parts: map[int64]map[string]ModelCost{}}
+	state := costState{Runs: map[int64]storage.ModelCost{}, Parts: map[int64]map[string]storage.ModelCost{}}
 
 	runs, err := s.db.QueryContext(context.Background(), `SELECT id, estimated_cost_usd, cost_status FROM run_history`)
 	if err != nil {
@@ -30,7 +32,7 @@ func readCostState(t *testing.T, s *Store) costState {
 		if err := runs.Scan(&id, &cost, &status); err != nil {
 			t.Fatalf("scan run cost: %v", err)
 		}
-		state.Runs[id] = ModelCost{EstimatedCostUSD: floatPtr(cost), CostStatus: status.String}
+		state.Runs[id] = storage.ModelCost{EstimatedCostUSD: floatPtr(cost), CostStatus: status.String}
 	}
 	if err := runs.Err(); err != nil {
 		t.Fatalf("iterate run costs: %v", err)
@@ -51,9 +53,9 @@ func readCostState(t *testing.T, s *Store) costState {
 			t.Fatalf("scan part cost: %v", err)
 		}
 		if state.Parts[id] == nil {
-			state.Parts[id] = map[string]ModelCost{}
+			state.Parts[id] = map[string]storage.ModelCost{}
 		}
-		part := ModelCost{EstimatedCostUSD: floatPtr(cost), CostStatus: status.String, PriceSource: source, PriceTableVersion: version}
+		part := storage.ModelCost{EstimatedCostUSD: floatPtr(cost), CostStatus: status.String, PriceSource: source, PriceTableVersion: version}
 		if unrated.Valid {
 			part.UnratedClasses = []string{}
 			if unrated.String != "" {
@@ -75,17 +77,17 @@ func floatPtr(v sql.NullFloat64) *float64 {
 	return &v.Float64
 }
 
-func operatorCost(v float64) ModelCost {
-	return ModelCost{EstimatedCostUSD: &v, CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: "v1", UnratedClasses: []string{}}
+func operatorCost(v float64) storage.ModelCost {
+	return storage.ModelCost{EstimatedCostUSD: &v, CostStatus: "estimated", PriceSource: "operator", PriceTableVersion: "v1", UnratedClasses: []string{}}
 }
 
 func TestRecordUnrecordedRunCosts(t *testing.T) {
 	t.Parallel()
 
-	partsA := map[string]ModelTokens{"a": {InputTokens: 1_000_000, CacheReadTokens: 2_000_000}, "b": {InputTokens: 3_000_000, OutputTokens: 1_000_000}}
-	partS := map[string]ModelTokens{"m1": {InputTokens: 1_000_000, OutputTokens: 1_000_000}}
-	recordedPart := ModelCost{EstimatedCostUSD: new(5.0), CostStatus: "partial", PriceSource: "operator", PriceTableVersion: "v0", UnratedClasses: []string{"input"}}
-	pricedPart := ModelCost{EstimatedCostUSD: new(16.0), CostStatus: "partial", PriceSource: "operator", PriceTableVersion: "v1", UnratedClasses: []string{"cache_read", "cache_write"}}
+	partsA := map[string]storage.ModelTokens{"a": {InputTokens: 1_000_000, CacheReadTokens: 2_000_000}, "b": {InputTokens: 3_000_000, OutputTokens: 1_000_000}}
+	partS := map[string]storage.ModelTokens{"m1": {InputTokens: 1_000_000, OutputTokens: 1_000_000}}
+	recordedPart := storage.ModelCost{EstimatedCostUSD: new(5.0), CostStatus: "partial", PriceSource: "operator", PriceTableVersion: "v0", UnratedClasses: []string{"input"}}
+	pricedPart := storage.ModelCost{EstimatedCostUSD: new(16.0), CostStatus: "partial", PriceSource: "operator", PriceTableVersion: "v1", UnratedClasses: []string{"cache_read", "cache_write"}}
 
 	t.Run("records NULL-status rows only and a second fill records none", func(t *testing.T) {
 		t.Parallel()
@@ -96,13 +98,13 @@ func TestRecordUnrecordedRunCosts(t *testing.T) {
 		recorded.TokensMeasured, recorded.TotalTokens = true, 2_000_000
 		recorded.EstimatedCostUSD, recorded.CostStatus = new(12.0), "estimated"
 		recorded.ModelUsage = partS
-		recorded.ModelCosts = map[string]ModelCost{"m1": operatorCost(12)}
+		recorded.ModelCosts = map[string]storage.ModelCost{"m1": operatorCost(12)}
 		recordedRun := appendWithPartsOrFatal(t, s, recorded)
 
 		withParts := newTestRun(2)
 		withParts.TokensMeasured, withParts.TotalTokens = true, 7_000_000
 		withParts.ModelUsage = partsA
-		withParts.ModelCosts = map[string]ModelCost{"a": recordedPart}
+		withParts.ModelCosts = map[string]storage.ModelCost{"a": recordedPart}
 		withPartsRun := appendWithPartsOrFatal(t, s, withParts)
 
 		bare := newTestRun(3)
@@ -110,19 +112,19 @@ func TestRecordUnrecordedRunCosts(t *testing.T) {
 		bareRun := appendOrFatal(t, s, bare)
 
 		before := readCostState(t, s)
-		var priced []UnrecordedRun
-		price := func(run UnrecordedRun) RunCostRecord {
+		var priced []storage.UnrecordedRun
+		price := func(run storage.UnrecordedRun) storage.RunCostRecord {
 			priced = append(priced, run)
 			switch run.ID {
 			case withPartsRun.ID:
-				return RunCostRecord{EstimatedCostUSD: new(15.0), CostStatus: "estimated", PartCosts: map[string]ModelCost{
+				return storage.RunCostRecord{EstimatedCostUSD: new(15.0), CostStatus: "estimated", PartCosts: map[string]storage.ModelCost{
 					"a": operatorCost(1), "b": pricedPart,
 				}}
 			case bareRun.ID:
-				return RunCostRecord{EstimatedCostUSD: new(12.0), CostStatus: "estimated", NewParts: partS,
-					PartCosts: map[string]ModelCost{"m1": operatorCost(12)}}
+				return storage.RunCostRecord{EstimatedCostUSD: new(12.0), CostStatus: "estimated", NewParts: partS,
+					PartCosts: map[string]storage.ModelCost{"m1": operatorCost(12)}}
 			}
-			return RunCostRecord{EstimatedCostUSD: new(99.0), CostStatus: "estimated"}
+			return storage.RunCostRecord{EstimatedCostUSD: new(99.0), CostStatus: "estimated"}
 		}
 
 		n, err := s.RecordUnrecordedRunCosts(context.Background(), price)
@@ -149,11 +151,11 @@ func TestRecordUnrecordedRunCosts(t *testing.T) {
 			t.Errorf("recorded run %d changed: got %+v %+v, want %+v %+v",
 				recordedRun.ID, after.Runs[recordedRun.ID], after.Parts[recordedRun.ID], before.Runs[recordedRun.ID], before.Parts[recordedRun.ID])
 		}
-		wantParts := map[string]ModelCost{"a": recordedPart, "b": pricedPart}
+		wantParts := map[string]storage.ModelCost{"a": recordedPart, "b": pricedPart}
 		if !reflect.DeepEqual(after.Parts[withPartsRun.ID], wantParts) {
 			t.Errorf("parts of run %d = %+v, want %+v", withPartsRun.ID, after.Parts[withPartsRun.ID], wantParts)
 		}
-		wantNew := map[string]ModelCost{"m1": operatorCost(12)}
+		wantNew := map[string]storage.ModelCost{"m1": operatorCost(12)}
 		if !reflect.DeepEqual(after.Parts[bareRun.ID], wantNew) {
 			t.Errorf("parts of run %d = %+v, want %+v", bareRun.ID, after.Parts[bareRun.ID], wantNew)
 		}
@@ -183,13 +185,13 @@ func TestRecordUnrecordedRunCosts(t *testing.T) {
 		appendWithPartsOrFatal(t, s, second)
 
 		before := readCostState(t, s)
-		price := func(run UnrecordedRun) RunCostRecord {
-			record := RunCostRecord{EstimatedCostUSD: new(12.0), CostStatus: "estimated"}
+		price := func(run storage.UnrecordedRun) storage.RunCostRecord {
+			record := storage.RunCostRecord{EstimatedCostUSD: new(12.0), CostStatus: "estimated"}
 			if run.ID == firstRun.ID {
 				return record
 			}
 			record.NewParts = partS
-			record.PartCosts = map[string]ModelCost{"m1": operatorCost(12)}
+			record.PartCosts = map[string]storage.ModelCost{"m1": operatorCost(12)}
 			return record
 		}
 

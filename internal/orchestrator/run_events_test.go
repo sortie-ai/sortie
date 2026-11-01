@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -221,7 +222,7 @@ func TestHandleWorkerExit_PersistedRunEventsReadBackEqual(t *testing.T) {
 		}
 	}
 
-	history, err := reopened.QueryRunHistory(ctx, persistence.RunHistoryFilter{Limit: 10})
+	history, err := reopened.QueryRunHistory(ctx, storage.RunHistoryFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("QueryRunHistory: %v", err)
 	}
@@ -276,7 +277,7 @@ func TestHandleAgentEvent_SkillCallsOutliveTheEventBuffer(t *testing.T) {
 
 	exitRun(state, store)
 
-	history, err := store.QueryRunHistory(context.Background(), persistence.RunHistoryFilter{Limit: 10})
+	history, err := store.QueryRunHistory(context.Background(), storage.RunHistoryFilter{Limit: 10})
 	if err != nil || len(history) != 1 || history[0].Skills == nil {
 		t.Fatalf("QueryRunHistory = %+v, %v, want one row holding skills", history, err)
 	}
@@ -296,7 +297,7 @@ func TestHandleAgentEvent_SkillCallsOutliveTheEventBuffer(t *testing.T) {
 	noCallState, _ := retainingState()
 	noCallStore := openFileStore(t, t.TempDir()+"/no-skills.db")
 	exitRun(noCallState, noCallStore)
-	noCall, err := noCallStore.QueryRunHistory(context.Background(), persistence.RunHistoryFilter{Limit: 10})
+	noCall, err := noCallStore.QueryRunHistory(context.Background(), storage.RunHistoryFilter{Limit: 10})
 	if err != nil || len(noCall) != 1 || noCall[0].Skills == nil || *noCall[0].Skills != "[]" {
 		t.Errorf("QueryRunHistory after a run without skill calls = %+v, %v, want one row storing %q", noCall, err, "[]")
 	}

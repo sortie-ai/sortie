@@ -17,6 +17,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/server"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
@@ -50,6 +51,17 @@ func (src statsSource) report(ctx context.Context, since, until *time.Time, gene
 	}
 	defer store.Close() //nolint:errcheck,gosec // read-only handle; close error is non-actionable
 
+	return src.aggregate(ctx, store, since, until, generatedAt)
+}
+
+// statsStore is what a stats report reads: the run history and the live
+// passes the stage funnels count.
+type statsStore interface {
+	storage.RunHistoryStore
+	ListLivePasses(ctx context.Context) ([]persistence.LivePass, error)
+}
+
+func (src statsSource) aggregate(ctx context.Context, store statsStore, since, until *time.Time, generatedAt time.Time) (runstats.Report, error) {
 	caps, err := store.RunHistoryCapabilities(ctx)
 	if err != nil {
 		return runstats.Report{}, err

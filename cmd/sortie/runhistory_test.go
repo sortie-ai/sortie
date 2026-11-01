@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/server"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 type runRef struct {
@@ -45,7 +46,7 @@ func newRunsHarness(t *testing.T, snap orchestrator.RuntimeSnapshotResult) *runs
 	return &runsHarness{store: store, url: ts.URL}
 }
 
-func (h *runsHarness) append(t *testing.T, run persistence.RunHistory) int64 {
+func (h *runsHarness) append(t *testing.T, run storage.RunHistory) int64 {
 	t.Helper()
 	got, err := h.store.AppendRunHistory(t.Context(), run)
 	if err != nil {
@@ -54,7 +55,7 @@ func (h *runsHarness) append(t *testing.T, run persistence.RunHistory) int64 {
 	return got.ID
 }
 
-func (h *runsHarness) appendWithUsage(t *testing.T, run persistence.RunHistory, dispatchID string) {
+func (h *runsHarness) appendWithUsage(t *testing.T, run storage.RunHistory, dispatchID string) {
 	t.Helper()
 	run.DispatchID = &dispatchID
 	if _, err := h.store.AppendRunHistoryWithEvents(t.Context(), run, nil, persistence.RunEventLimits{}); err != nil {
@@ -117,8 +118,8 @@ func issueOutcomeMember(t *testing.T, where string, row map[string]any) any {
 	return member
 }
 
-func runRow(issueID, identifier string) persistence.RunHistory {
-	return persistence.RunHistory{IssueID: issueID, Identifier: identifier, AgentAdapter: "claude-code", Status: "succeeded", RuleName: "implement", CompletedAt: "2026-03-01T09:00:00Z", TokensMeasured: true}
+func runRow(issueID, identifier string) storage.RunHistory {
+	return storage.RunHistory{IssueID: issueID, Identifier: identifier, AgentAdapter: "claude-code", Status: "succeeded", RuleName: "implement", CompletedAt: "2026-03-01T09:00:00Z", TokensMeasured: true}
 }
 
 func TestRunHistoryPagesWithoutGapsOrRepeats(t *testing.T) {
@@ -286,14 +287,14 @@ func TestRunHistoryServesCostAndOrigin(t *testing.T) {
 	measured.EstimatedCostUSD, measured.CostStatus = new(0.010035), "estimated"
 	measured.Trigger, measured.ReactionKind, measured.InputTokens, measured.OutputTokens, measured.TotalTokens, measured.CacheReadTokens, measured.CacheWriteTokens = new("ci_fix"), "ci", 1000, 500, 1500, 200, 100
 	measured.DeclaredOutcome, measured.AgentText = "blocked", "Which one should the API expose?"
-	measured.ModelUsage = map[string]persistence.ModelTokens{"m-a": {InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 200, CacheWriteTokens: 100}}
-	measured.ModelCosts = map[string]persistence.ModelCost{"m-a": {EstimatedCostUSD: new(0.010035), CostStatus: "partial", PriceSource: "agent", UnratedClasses: []string{"cache_write"}}}
+	measured.ModelUsage = map[string]storage.ModelTokens{"m-a": {InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 200, CacheWriteTokens: 100}}
+	measured.ModelCosts = map[string]storage.ModelCost{"m-a": {EstimatedCostUSD: new(0.010035), CostStatus: "partial", PriceSource: "agent", UnratedClasses: []string{"cache_write"}}}
 	measured.UnaccountedTurns = 2
 	unmeasured := runRow("i-0", "OTHER-0")
 	unmeasured.TokensMeasured, unmeasured.CostStatus = false, "unmeasured"
 	creditsOnly := unmeasured
-	creditsOnly.UsageCompleteness = persistence.UsageUnmeasured
-	creditsOnly.ReportedAmounts = []persistence.ReportedAmount{
+	creditsOnly.UsageCompleteness = storage.UsageUnmeasured
+	creditsOnly.ReportedAmounts = []storage.ReportedAmount{
 		{Unit: "credits", Model: "m-b", Amount: 1.5, LowerBound: true},
 		{Unit: "credits", Amount: 3},
 		{Unit: "USD", Amount: 0.2},

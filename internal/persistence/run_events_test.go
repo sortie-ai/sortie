@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 var unboundedRunEvents = RunEventLimits{MaxAge: 100 * 365 * 24 * time.Hour, MaxBytes: math.MaxInt64, MaxExpiredRuns: 4}
@@ -18,7 +20,7 @@ func twoEvents() []RunEvent {
 	}
 }
 
-func runWithDispatch(dispatchID, completedAt string) RunHistory {
+func runWithDispatch(dispatchID, completedAt string) storage.RunHistory {
 	run := newTestRun(1)
 	run.DispatchID = &dispatchID
 	run.CompletedAt = completedAt

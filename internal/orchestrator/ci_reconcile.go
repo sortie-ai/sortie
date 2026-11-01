@@ -9,8 +9,8 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // ciPendingBackoffBaseDefault is the fallback base interval for CI-pending
@@ -472,7 +472,7 @@ func handleCIFailure(
 	// A standing escalation never reaches this function, so every call
 	// dispatches a fix or begins an escalation, and each row counts against
 	// agent.max_sessions.
-	ciRunHistory := persistence.RunHistory{
+	ciRunHistory := storage.RunHistory{
 		IssueID:        pending.IssueID,
 		Identifier:     pending.Identifier,
 		DisplayID:      pending.DisplayID,
@@ -490,7 +490,7 @@ func handleCIFailure(
 		DispatchID:     new(""),
 		Skills:         new("[]"),
 
-		UsageCompleteness: persistence.UsageComplete,
+		UsageCompleteness: storage.UsageComplete,
 	}
 	recordRunCost(&ciRunHistory, state.Rates)
 	if _, err := params.Store.AppendRunHistory(ctx, ciRunHistory); err != nil {

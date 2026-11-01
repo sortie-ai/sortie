@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // SpendWindow names a calendar window of the instance spend ceiling.
@@ -137,7 +137,7 @@ type SpendCeilingStatus struct {
 
 // spendStore is the read evaluateSpendCeiling needs.
 type spendStore interface {
-	UsageCompletedBetween(ctx context.Context, since, until time.Time) (persistence.IssueTokenUsage, error)
+	UsageCompletedBetween(ctx context.Context, since, until time.Time) (storage.IssueTokenUsage, error)
 }
 
 // spendCeilingParams carries the inputs of one evaluateSpendCeiling call.
@@ -184,7 +184,7 @@ func monthBounds(now time.Time) (start, end time.Time) {
 // finished runs. A session that has reported nothing yet adds no cost and
 // keeps the spend complete; a session that can carry no token figure makes it
 // a lower bound.
-func windowUsage(rows persistence.IssueTokenUsage, running map[string]*RunningEntry, rates *pricing.Rates) persistence.IssueTokenUsage {
+func windowUsage(rows storage.IssueTokenUsage, running map[string]*RunningEntry, rates *pricing.Rates) storage.IssueTokenUsage {
 	u := rows
 	for _, entry := range running {
 		u.UnaccountedTurns += entry.UnaccountedTurns
@@ -248,7 +248,7 @@ func evaluateSpendCeiling(state *State, p spendCeilingParams) SkipReason {
 
 	prev := state.SpendCeilings
 	var next []SpendCeilingStatus
-	var usages []persistence.IssueTokenUsage
+	var usages []storage.IssueTokenUsage
 
 	for _, def := range spendWindowDefs {
 		ceiling := p.Ceilings[def.window]
@@ -270,7 +270,7 @@ func evaluateSpendCeiling(state *State, p spendCeilingParams) SkipReason {
 				status = old
 			}
 			next = append(next, status)
-			usages = append(usages, persistence.IssueTokenUsage{})
+			usages = append(usages, storage.IssueTokenUsage{})
 			continue
 		}
 

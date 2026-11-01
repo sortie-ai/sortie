@@ -13,8 +13,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 
 	"github.com/sortie-ai/sortie/tools/qualify/evidence"
@@ -91,10 +91,10 @@ func ceilingHarness(t *testing.T) (*Harness, *spendingAgent) {
 	return harness, agent
 }
 
-func awaitRunHistory(t *testing.T, harness *Harness) []persistence.RunHistory {
+func awaitRunHistory(t *testing.T, harness *Harness) []storage.RunHistory {
 	t.Helper()
 
-	var rows []persistence.RunHistory
+	var rows []storage.RunHistory
 	waittest.Until(t, func() error {
 		var err error
 		rows, err = harness.store.QueryRunHistoryByIssue(context.Background(), issueID)

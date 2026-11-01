@@ -9,19 +9,29 @@ import (
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/server"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
+
+// runHistorySource is what the run-history reader reads: the run history
+// plus the run events, issue outcomes and pass activity recorded beside it.
+type runHistorySource interface {
+	storage.RunHistoryStore
+	RunEvents(ctx context.Context, dispatchID string, newest int) ([]persistence.RunEvent, error)
+	IssueOutcomes(ctx context.Context, issueIDs []string) (map[string]persistence.IssueOutcome, error)
+	PassActivities(ctx context.Context, passes []persistence.PassRef) (map[persistence.PassKey]persistence.PassActivity, error)
+}
 
 // runHistoryReader serves the HTTP server's run history from the store, so
 // the server never names a persistence type.
 type runHistoryReader struct {
-	store *persistence.Store
+	store runHistorySource
 }
 
 var _ server.RunHistoryReader = runHistoryReader{}
 
 // QueryRuns returns the runs matching q, newest first.
 func (r runHistoryReader) QueryRuns(ctx context.Context, q server.RunHistoryQuery) ([]server.RunHistoryEntry, error) {
-	runs, err := r.store.QueryRunHistory(ctx, persistence.RunHistoryFilter{
+	runs, err := r.store.QueryRunHistory(ctx, storage.RunHistoryFilter{
 		IssueID:         q.IssueID,
 		Identifier:      q.Identifier,
 		RuleName:        q.RuleName,
@@ -57,7 +67,7 @@ func (r runHistoryReader) QueryRuns(ctx context.Context, q server.RunHistoryQuer
 	return out, nil
 }
 
-func runModelUsage(parts []persistence.RunModelPart) []server.RunModelUsage {
+func runModelUsage(parts []storage.RunModelPart) []server.RunModelUsage {
 	out := make([]server.RunModelUsage, len(parts))
 	for i, p := range parts {
 		out[i] = server.RunModelUsage{
@@ -81,7 +91,7 @@ func runModelUsage(parts []persistence.RunModelPart) []server.RunModelUsage {
 
 // QueryIssueGroups returns the issues whose runs match q, newest first.
 func (r runHistoryReader) QueryIssueGroups(ctx context.Context, q server.IssueGroupQuery) ([]server.IssueGroupKey, error) {
-	groups, err := r.store.QueryIssueGroups(ctx, persistence.IssueGroupFilter{
+	groups, err := r.store.QueryIssueGroups(ctx, storage.IssueGroupFilter{
 		IssueKey:    q.IssueKey,
 		Search:      q.Search,
 		RuleName:    q.RuleName,
@@ -125,7 +135,7 @@ func (r runHistoryReader) IssueTotals(ctx context.Context, issueID string) (serv
 
 // issueProvenance maps what an issue's recorded runs say about the origin of
 // their figures to the server reader type.
-func issueProvenance(p persistence.IssueSpendProvenance) server.IssueProvenance {
+func issueProvenance(p storage.IssueSpendProvenance) server.IssueProvenance {
 	amounts := make([]server.UnitAmount, len(p.VendorAmounts))
 	for i, a := range p.VendorAmounts {
 		amounts[i] = server.UnitAmount{Unit: a.Unit, Amount: a.Amount, LowerBound: a.LowerBound}
@@ -195,7 +205,7 @@ func (r runHistoryReader) PassActivities(ctx context.Context, passes []server.Pa
 	return out, nil
 }
 
-func runHistoryEntry(r persistence.RunHistory, parts []persistence.RunModelPart, amounts []persistence.ReportedAmount) server.RunHistoryEntry {
+func runHistoryEntry(r storage.RunHistory, parts []storage.RunModelPart, amounts []storage.ReportedAmount) server.RunHistoryEntry {
 	entry := server.RunHistoryEntry{
 		Identifier:       r.Identifier,
 		DisplayID:        r.DisplayID,
@@ -250,12 +260,12 @@ func runHistoryEntry(r persistence.RunHistory, parts []persistence.RunModelPart,
 		entry.UsageProvenance = usagePairs(r.UsageProvenance)
 		entry.VendorAmounts = vendorAmounts(amounts)
 	}
-	if entry.UsageCompleteness == persistence.UsageUnmeasured {
+	if entry.UsageCompleteness == storage.UsageUnmeasured {
 		units := reportedUnits(amounts)
-		cause := persistence.UnmeasuredCauseOf(r.Status, r.UsageCompleteness, units)
+		cause := storage.UnmeasuredCauseOf(r.Status, r.UsageCompleteness, units)
 		entry.UnmeasuredCause = string(cause)
 		entry.UnmeasuredUnits = []string{}
-		if cause == persistence.UnmeasuredAmountsOnly {
+		if cause == storage.UnmeasuredAmountsOnly {
 			entry.UnmeasuredUnits = units
 		}
 	}
@@ -263,7 +273,7 @@ func runHistoryEntry(r persistence.RunHistory, parts []persistence.RunModelPart,
 }
 
 func usagePairs(text string) []server.UsagePair {
-	parsed := persistence.ParseUsageProvenance(text)
+	parsed := storage.ParseUsageProvenance(text)
 	pairs := make([]server.UsagePair, len(parsed))
 	for i, p := range parsed {
 		pairs[i] = server.UsagePair{Source: p.Source, Strategy: p.Strategy}
@@ -274,7 +284,7 @@ func usagePairs(text string) []server.UsagePair {
 // vendorAmounts keeps the amounts in a unit other than US dollars, in the
 // order the store returned them. US dollars are already priced into the
 // run's cost.
-func vendorAmounts(amounts []persistence.ReportedAmount) []server.VendorAmount {
+func vendorAmounts(amounts []storage.ReportedAmount) []server.VendorAmount {
 	out := make([]server.VendorAmount, 0, len(amounts))
 	for _, a := range amounts {
 		if a.Unit == domain.UnitUSD {
@@ -287,7 +297,7 @@ func vendorAmounts(amounts []persistence.ReportedAmount) []server.VendorAmount {
 
 // reportedUnits lists the distinct units of amounts in ascending order, US
 // dollars included.
-func reportedUnits(amounts []persistence.ReportedAmount) []string {
+func reportedUnits(amounts []storage.ReportedAmount) []string {
 	units := make([]string, len(amounts))
 	for i, a := range amounts {
 		units[i] = a.Unit

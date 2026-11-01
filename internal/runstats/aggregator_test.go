@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-var fullCaps = persistence.RunHistoryCapabilities{
+var fullCaps = storage.RunHistoryCapabilities{
 	HasTurnsCompleted:   true,
 	HasReviewMetadata:   true,
 	HasRuleRouting:      true,
@@ -28,7 +28,7 @@ var recordedCaps = withTriggerBreakdown(fullCaps)
 
 var fixedNow = time.Date(2026, 8, 7, 9, 15, 0, 0, time.UTC)
 
-func withCost(row persistence.RunStatsRow, usd *float64, costStatus string) persistence.RunStatsRow {
+func withCost(row storage.RunStatsRow, usd *float64, costStatus string) storage.RunStatsRow {
 	row.EstimatedCostUSD, row.CostStatus = usd, costStatus
 	return row
 }
@@ -41,7 +41,7 @@ func rangeFloats(lo, hi int) []float64 {
 	return out
 }
 
-func addRows(t *testing.T, agg *Aggregator, rows ...persistence.RunStatsRow) {
+func addRows(t *testing.T, agg *Aggregator, rows ...storage.RunStatsRow) {
 	t.Helper()
 	for _, r := range rows {
 		if err := agg.Add(r); err != nil {
@@ -70,12 +70,12 @@ func reviewMetaPtr(t *testing.T, m domain.ReviewMetadata) *string {
 	return new(string(b))
 }
 
-func withModelBreakdown(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+func withModelBreakdown(caps storage.RunHistoryCapabilities) storage.RunHistoryCapabilities {
 	caps.HasConfiguredSettings = true
 	return caps
 }
 
-func withTriggerBreakdown(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+func withTriggerBreakdown(caps storage.RunHistoryCapabilities) storage.RunHistoryCapabilities {
 	caps = withModelBreakdown(caps)
 	caps.HasStageChains = true
 	caps.HasTrigger = true
@@ -83,27 +83,27 @@ func withTriggerBreakdown(caps persistence.RunHistoryCapabilities) persistence.R
 	return caps
 }
 
-func triggerRow(issueID string, trigger *string) persistence.RunStatsRow {
+func triggerRow(issueID string, trigger *string) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", "succeeded", 0)
 	row.IssueID, row.Trigger = issueID, trigger
 	return row
 }
 
-func reportedModelRow(configured, reported string) persistence.RunStatsRow {
+func reportedModelRow(configured, reported string) storage.RunStatsRow {
 	row := modelRow("claude-code", configured, "succeeded", 0)
 	row.ReportedModel = reported
 	return row
 }
 
-func modelRow(adapter, model, status string, input int64) persistence.RunStatsRow {
-	return persistence.RunStatsRow{
+func modelRow(adapter, model, status string, input int64) storage.RunStatsRow {
+	return storage.RunStatsRow{
 		Status: status, AgentAdapter: adapter, ConfiguredModel: model,
 		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
 		InputTokens: input, TokensMeasured: true,
 	}
 }
 
-func chainRow(chain, rule, previous, result, status string) persistence.RunStatsRow {
+func chainRow(chain, rule, previous, result, status string) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", status, 1_000)
 	row.Identifier, row.ChainID, row.RuleName, row.StagePrevious, row.StageResult = "PROJ-"+chain, chain, rule, previous, result
 	row.TurnsCompleted = 2
@@ -125,31 +125,31 @@ func derefCost(usd *float64) any {
 	return *usd
 }
 
-func withUsageProvenance(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+func withUsageProvenance(caps storage.RunHistoryCapabilities) storage.RunHistoryCapabilities {
 	caps.HasUsageProvenance = true
 	return caps
 }
 
-func measuredRow(completeness string) persistence.RunStatsRow {
+func measuredRow(completeness string) storage.RunStatsRow {
 	row := withCost(modelRow("claude-code", "model-a", "succeeded", 1_000), new(1.0), "estimated")
 	row.UsageCompleteness = completeness
 	return row
 }
 
-func unmeasuredRow(status, completeness string, units ...string) persistence.RunStatsRow {
+func unmeasuredRow(status, completeness string, units ...string) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", status, 0)
 	row.TokensMeasured, row.UsageCompleteness, row.ReportedUnits = false, completeness, units
 	return row
 }
 
-func withParts(row persistence.RunStatsRow, parts ...persistence.RunModelPart) persistence.RunStatsRow {
+func withParts(row storage.RunStatsRow, parts ...storage.RunModelPart) storage.RunStatsRow {
 	row.Parts = parts
 	return row
 }
 
-func pricedPart(model, priceSource string, input int64, usd float64) persistence.RunModelPart {
-	return persistence.RunModelPart{
-		Model: model, Tokens: persistence.ModelTokens{InputTokens: input},
+func pricedPart(model, priceSource string, input int64, usd float64) storage.RunModelPart {
+	return storage.RunModelPart{
+		Model: model, Tokens: storage.ModelTokens{InputTokens: input},
 		EstimatedCostUSD: &usd, CostStatus: "estimated", PriceSource: priceSource,
 	}
 }
@@ -200,12 +200,12 @@ func TestStatsSummaryFormulas(t *testing.T) {
 		agg := New(recordedCaps)
 
 		addRows(t, agg,
-			withCost(persistence.RunStatsRow{
+			withCost(storage.RunStatsRow{
 				Status: "succeeded", AgentAdapter: "mock", TurnsCompleted: 4,
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
 				InputTokens: 1_000_000, TokensMeasured: true,
 			}, new(10.0), "estimated"),
-			withCost(persistence.RunStatsRow{
+			withCost(storage.RunStatsRow{
 				Status: "failed", AgentAdapter: "mock", TurnsCompleted: 8,
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T01:00:00Z",
 				InputTokens: 500_000, TokensMeasured: true,
@@ -270,21 +270,21 @@ func TestStatsSummaryFormulas(t *testing.T) {
 
 		tests := []struct {
 			name string
-			rows []persistence.RunStatsRow
+			rows []storage.RunStatsRow
 			want flags
 		}{
-			{"complete runs only", []persistence.RunStatsRow{complete}, flags{units: none}},
-			{"unaccounted turns flag tokens, not cost", []persistence.RunStatsRow{complete, unaccounted}, flags{lowerBoundRuns: 1, tokensLowerBound: true, units: none}},
-			{"an unpriced run flags cost", []persistence.RunStatsRow{complete, unpriced}, flags{costLowerBound: true, units: none}},
-			{"a partial cost flags cost", []persistence.RunStatsRow{partial}, flags{costLowerBound: true, units: none}},
-			{"reported units beat the status", []persistence.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured", "credits")},
+			{"complete runs only", []storage.RunStatsRow{complete}, flags{units: none}},
+			{"unaccounted turns flag tokens, not cost", []storage.RunStatsRow{complete, unaccounted}, flags{lowerBoundRuns: 1, tokensLowerBound: true, units: none}},
+			{"an unpriced run flags cost", []storage.RunStatsRow{complete, unpriced}, flags{costLowerBound: true, units: none}},
+			{"a partial cost flags cost", []storage.RunStatsRow{partial}, flags{costLowerBound: true, units: none}},
+			{"reported units beat the status", []storage.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured", "credits")},
 				flags{tokensLowerBound: true, costLowerBound: true, cause: new("amounts_only"), units: []string{"credits"}}},
-			{"different causes read mixed", []persistence.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured"), unmeasuredRow("succeeded", "unmeasured")},
+			{"different causes read mixed", []storage.RunStatsRow{complete, unmeasuredRow("failed", "unmeasured"), unmeasuredRow("succeeded", "unmeasured")},
 				flags{tokensLowerBound: true, costLowerBound: true, cause: new("mixed"), units: none}},
-			{"nothing measured leaves no figure to flag", []persistence.RunStatsRow{unmeasuredRow("failed", "unmeasured")}, flags{cause: new("ended_early"), units: none}},
-			{"a run recorded before provenance reads unknown", []persistence.RunStatsRow{unmeasuredRow("succeeded", "")}, flags{cause: new("unknown"), units: none}},
-			{"a two-part run counts its agent part once", []persistence.RunStatsRow{twoParts}, flags{units: none, agentPricedUSD: new(2.0)}},
-			{"a ci_failed run adds no agent part", []persistence.RunStatsRow{complete, ciFailed}, flags{units: none}},
+			{"nothing measured leaves no figure to flag", []storage.RunStatsRow{unmeasuredRow("failed", "unmeasured")}, flags{cause: new("ended_early"), units: none}},
+			{"a run recorded before provenance reads unknown", []storage.RunStatsRow{unmeasuredRow("succeeded", "")}, flags{cause: new("unknown"), units: none}},
+			{"a two-part run counts its agent part once", []storage.RunStatsRow{twoParts}, flags{units: none, agentPricedUSD: new(2.0)}},
+			{"a ci_failed run adds no agent part", []storage.RunStatsRow{complete, ciFailed}, flags{units: none}},
 		}
 
 		for _, tt := range tests {
@@ -313,14 +313,14 @@ func TestStatsGroupDisclosure(t *testing.T) {
 
 	agg := New(recordedCaps)
 
-	addRows(t, agg, persistence.RunStatsRow{
+	addRows(t, agg, storage.RunStatsRow{
 		Status:         "ci_failed",
 		StartedAt:      "2026-01-01T00:00:00Z",
 		CompletedAt:    "2026-01-01T00:00:00Z",
 		TokensMeasured: true,
 	})
-	reviewRun := func(adapter string) persistence.RunStatsRow {
-		return persistence.RunStatsRow{
+	reviewRun := func(adapter string) storage.RunStatsRow {
+		return storage.RunStatsRow{
 			Status:         "succeeded",
 			AgentAdapter:   adapter,
 			RuleName:       "review",
@@ -386,7 +386,7 @@ func TestStatsGroupDisclosure(t *testing.T) {
 	t.Run("the base tier serves empty unmeasured units", func(t *testing.T) {
 		t.Parallel()
 
-		agg := New(persistence.RunHistoryCapabilities{})
+		agg := New(storage.RunHistoryCapabilities{})
 		addRows(t, agg, modelRow("claude-code", "model-a", "succeeded", 1_000))
 
 		report := agg.Report(fixedNow, "/wf", "/db", nil, nil)
@@ -424,19 +424,19 @@ func TestStatsSelfReview(t *testing.T) {
 
 	agg := New(fullCaps)
 	addRows(t, agg,
-		persistence.RunStatsRow{
+		storage.RunStatsRow{
 			Status: "succeeded", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
 			ReviewMetadata: reviewMetaPtr(t, domain.ReviewMetadata{FinalVerdict: "pass", TotalIterations: 1}),
 		},
-		persistence.RunStatsRow{
+		storage.RunStatsRow{
 			Status: "failed", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
 			ReviewMetadata: reviewMetaPtr(t, domain.ReviewMetadata{FinalVerdict: "iterate", TotalIterations: 3, CapReached: true}),
 		},
-		persistence.RunStatsRow{
+		storage.RunStatsRow{
 			Status: "failed", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
 			ReviewMetadata: reviewMetaPtr(t, domain.ReviewMetadata{FinalVerdict: "", TotalIterations: 2}),
 		},
-		persistence.RunStatsRow{
+		storage.RunStatsRow{
 			Status: "failed", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
 			ReviewMetadata: new("{not-json"),
 		},
@@ -481,7 +481,7 @@ func TestStatsStatusOrdering(t *testing.T) {
 
 	agg := New(fullCaps)
 	for _, status := range []string{"weird_status", "succeeded", "succeeded", "failed", "cancelled"} {
-		addRows(t, agg, persistence.RunStatsRow{
+		addRows(t, agg, storage.RunStatsRow{
 			Status: status, StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
 		})
 	}
@@ -525,9 +525,9 @@ func TestStatsOutcomeCounts(t *testing.T) {
 		t.Run(tt.status, func(t *testing.T) {
 			t.Parallel()
 
-			for _, caps := range []persistence.RunHistoryCapabilities{{}, fullCaps} {
+			for _, caps := range []storage.RunHistoryCapabilities{{}, fullCaps} {
 				agg := New(caps)
-				addRows(t, agg, persistence.RunStatsRow{Status: tt.status})
+				addRows(t, agg, storage.RunStatsRow{Status: tt.status})
 
 				s := agg.Report(fixedNow, "/wf", "/db", nil, nil).Summary
 
@@ -559,13 +559,13 @@ func TestDegradedSchemaWarning(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		caps   persistence.RunHistoryCapabilities
+		caps   storage.RunHistoryCapabilities
 		want   []string
 		absent []string
 	}{
 		{
 			name: "nothing recorded names every group once",
-			caps: persistence.RunHistoryCapabilities{},
+			caps: storage.RunHistoryCapabilities{},
 			want: []string{
 				"before sortie recorded turns, self-review results, dispatch-rule routing, tokens and cost",
 				"stage chains, what started each run, the first run after each stage hop, which runs required action",
@@ -575,7 +575,7 @@ func TestDegradedSchemaWarning(t *testing.T) {
 		},
 		{
 			name: "partly migrated discloses the figures it drops anyway",
-			caps: persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true},
+			caps: storage.RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true},
 			want: []string{
 				"before sortie recorded dispatch-rule routing, tokens and cost",
 				"also leaves out turns, self-review results, which this database does carry",
@@ -583,7 +583,7 @@ func TestDegradedSchemaWarning(t *testing.T) {
 		},
 		{
 			name: "only tokens absent still discloses the other three",
-			caps: persistence.RunHistoryCapabilities{
+			caps: storage.RunHistoryCapabilities{
 				HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true,
 			},
 			want: []string{
@@ -593,7 +593,7 @@ func TestDegradedSchemaWarning(t *testing.T) {
 		},
 		{
 			name: "only the measurement record absent names it in plain language",
-			caps: persistence.RunHistoryCapabilities{
+			caps: storage.RunHistoryCapabilities{
 				HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true, HasTokens: true,
 			},
 			want: []string{
@@ -604,12 +604,12 @@ func TestDegradedSchemaWarning(t *testing.T) {
 		},
 		{
 			name: "configured model group is listed as unrecorded when absent",
-			caps: persistence.RunHistoryCapabilities{},
+			caps: storage.RunHistoryCapabilities{},
 			want: []string{"before sortie recorded", "the model each run was configured with"},
 		},
 		{
 			name:   "configured model group is listed among the carried ones when present",
-			caps:   persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasConfiguredSettings: true},
+			caps:   storage.RunHistoryCapabilities{HasTurnsCompleted: true, HasConfiguredSettings: true},
 			want:   []string{"the model each run was configured with, which this database does carry"},
 			absent: []string{"before sortie recorded turns"},
 		},
@@ -666,13 +666,13 @@ func TestStatsByModel(t *testing.T) {
 		input, output, total                           int64
 		cost, agent                                    float64
 	}
-	part := func(model string, input, output int64, usd *float64, costStatus string) persistence.RunModelPart {
-		return persistence.RunModelPart{
-			Model: model, Tokens: persistence.ModelTokens{InputTokens: input, OutputTokens: output},
+	part := func(model string, input, output int64, usd *float64, costStatus string) storage.RunModelPart {
+		return storage.RunModelPart{
+			Model: model, Tokens: storage.ModelTokens{InputTokens: input, OutputTokens: output},
 			EstimatedCostUSD: usd, CostStatus: costStatus,
 		}
 	}
-	split := func(unaccounted int, runCost *float64, runStatus string, parts ...persistence.RunModelPart) persistence.RunStatsRow {
+	split := func(unaccounted int, runCost *float64, runStatus string, parts ...storage.RunModelPart) storage.RunStatsRow {
 		row := withCost(modelRow("claude-code", "run-model", "succeeded", 0), runCost, runStatus)
 		row.Parts, row.UnaccountedTurns = parts, unaccounted
 		for _, p := range parts {
@@ -687,12 +687,12 @@ func TestStatsByModel(t *testing.T) {
 
 	tests := []struct {
 		name string
-		rows []persistence.RunStatsRow
+		rows []storage.RunStatsRow
 		want map[string]share
 	}{
 		{
 			name: "a run priced per model lands in each spent part's row; a run without parts lands once under its reported model",
-			rows: []persistence.RunStatsRow{
+			rows: []storage.RunStatsRow{
 				split(0, new(9.0), "estimated",
 					part("model-a", 600, 100, new(6.0), "estimated"),
 					part("model-b", 300, 50, new(3.0), "estimated"),
@@ -707,7 +707,7 @@ func TestStatsByModel(t *testing.T) {
 		},
 		{
 			name: "a part priced from an agent amount reaches only its own model row",
-			rows: []persistence.RunStatsRow{split(0, new(9.0), "estimated",
+			rows: []storage.RunStatsRow{split(0, new(9.0), "estimated",
 				pricedPart("model-a", "agent", 600, 6.0),
 				pricedPart("model-b", "operator", 300, 3.0))},
 			want: map[string]share{
@@ -717,7 +717,7 @@ func TestStatsByModel(t *testing.T) {
 		},
 		{
 			name: "unaccounted turns mark the priced part partial and leave the unpriced part unpriced only",
-			rows: []persistence.RunStatsRow{split(2, new(4.0), "partial",
+			rows: []storage.RunStatsRow{split(2, new(4.0), "partial",
 				part("model-a", 100, 10, new(4.0), "estimated"),
 				part("model-b", 200, 20, nil, "unpriced"))},
 			want: map[string]share{
@@ -727,7 +727,7 @@ func TestStatsByModel(t *testing.T) {
 		},
 		{
 			name: "without unaccounted turns the estimated part counts in neither shortfall",
-			rows: []persistence.RunStatsRow{split(0, new(4.0), "partial",
+			rows: []storage.RunStatsRow{split(0, new(4.0), "partial",
 				part("model-a", 100, 10, new(4.0), "estimated"),
 				part("model-b", 200, 20, nil, "unpriced"))},
 			want: map[string]share{
@@ -773,7 +773,7 @@ func TestStatsByModel(t *testing.T) {
 func TestStatsSpend(t *testing.T) {
 	t.Parallel()
 
-	run := func(completedAt string, usd *float64, costStatus string) persistence.RunStatsRow {
+	run := func(completedAt string, usd *float64, costStatus string) storage.RunStatsRow {
 		row := withCost(modelRow("claude-code", "model-a", "succeeded", 1_000), usd, costStatus)
 		row.CompletedAt = completedAt
 		return row
@@ -787,14 +787,14 @@ func TestStatsSpend(t *testing.T) {
 	tests := []struct {
 		name        string
 		since       *time.Time
-		rows        []persistence.RunStatsRow
+		rows        []storage.RunStatsRow
 		wantPeriod  string
 		wantBuckets []SpendBucket
 	}{
 		{
 			name:  "runs on several UTC days of a 168 hour range land in their own days",
 			since: sevenDays,
-			rows: []persistence.RunStatsRow{
+			rows: []storage.RunStatsRow{
 				run("2026-07-31T12:00:00Z", new(1.0), "estimated"),
 				run("2026-08-02T08:00:00Z", new(0.5), "estimated"),
 				run("2026-08-02T23:30:00Z", new(2.0), "estimated"),
@@ -814,7 +814,7 @@ func TestStatsSpend(t *testing.T) {
 		},
 		{
 			name: "an open range lists months and folds each run as the summary does",
-			rows: []persistence.RunStatsRow{
+			rows: []storage.RunStatsRow{
 				run("2026-06-15T10:00:00Z", new(4.0), "estimated"),
 				run("2026-07-20T10:00:00Z", new(3.0), "partial"),
 				run("2026-08-03T10:00:00Z", nil, "unpriced"),
@@ -830,7 +830,7 @@ func TestStatsSpend(t *testing.T) {
 		},
 		{
 			name: "an unmeasured run flags a priced month and its days sum their agent-priced parts",
-			rows: []persistence.RunStatsRow{
+			rows: []storage.RunStatsRow{
 				withParts(run("2026-08-02T10:00:00Z", new(2.0), "estimated"), pricedPart("model-a", "agent", 1_000, 1.0)),
 				withParts(run("2026-08-03T10:00:00Z", new(1.0), "estimated"), pricedPart("model-a", "agent", 1_000, 0.5)),
 				unmeasured,
@@ -842,7 +842,7 @@ func TestStatsSpend(t *testing.T) {
 		},
 		{
 			name: "an unpriced run flags a priced month",
-			rows: []persistence.RunStatsRow{
+			rows: []storage.RunStatsRow{
 				run("2026-08-02T10:00:00Z", new(1.0), "estimated"),
 				run("2026-08-03T10:00:00Z", nil, "unpriced"),
 			},
@@ -854,13 +854,13 @@ func TestStatsSpend(t *testing.T) {
 		{
 			name:       "a 2160 hour span gives days",
 			since:      new(fixedNow.Add(-2160 * time.Hour)),
-			rows:       []persistence.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
+			rows:       []storage.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
 			wantPeriod: "day",
 		},
 		{
 			name:       "a span above 2160 hours gives months",
 			since:      new(fixedNow.Add(-2160*time.Hour - time.Second)),
-			rows:       []persistence.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
+			rows:       []storage.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
 			wantPeriod: "month",
 		},
 	}
@@ -919,7 +919,7 @@ func TestStatsByTrigger(t *testing.T) {
 	noTrigger.HasTrigger = false
 	tests := []struct {
 		name string
-		caps persistence.RunHistoryCapabilities
+		caps storage.RunHistoryCapabilities
 		want []string
 	}{
 		{"recorded triggers keep unknown apart from none", withTriggerBreakdown(fullCaps), []string{"ci_fix", "<none>", "<unknown>"}},
@@ -952,7 +952,7 @@ func TestStatsByTrigger(t *testing.T) {
 	}
 }
 
-func originRow(trigger *string, reactionKind, stagePrevious string, firstAfterHop bool) persistence.RunStatsRow {
+func originRow(trigger *string, reactionKind, stagePrevious string, firstAfterHop bool) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", "succeeded", 0)
 	row.Trigger, row.ReactionKind, row.StagePrevious, row.FirstAfterHop = trigger, reactionKind, stagePrevious, firstAfterHop
 	return row
@@ -967,7 +967,7 @@ func TestStatsByOrigin(t *testing.T) {
 	errorRetry.Status = "failed"
 	tests := []struct {
 		name string
-		caps persistence.RunHistoryCapabilities
+		caps storage.RunHistoryCapabilities
 		want map[string]int
 	}{
 		{
@@ -1015,7 +1015,7 @@ func TestStatsByOrigin(t *testing.T) {
 	}
 }
 
-func skillRow(skills *string) persistence.RunStatsRow {
+func skillRow(skills *string) storage.RunStatsRow {
 	row := modelRow("claude-code", "model-a", "succeeded", 0)
 	row.Skills = skills
 	return row
@@ -1028,7 +1028,7 @@ func TestStatsBySkill(t *testing.T) {
 	skilled.HasRecordedCost, skilled.HasSkills = true, true
 	noColumn := skilled
 	noColumn.HasSkills = false
-	mixed := []persistence.RunStatsRow{
+	mixed := []storage.RunStatsRow{
 		skillRow(new(`[{"skill":"plan"},{"skill":"test","tool_error":true},{"skill":"test"}]`)),
 		skillRow(new(`[]`)),
 		skillRow(nil),
@@ -1036,16 +1036,16 @@ func TestStatsBySkill(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		caps persistence.RunHistoryCapabilities
-		rows []persistence.RunStatsRow
+		caps storage.RunHistoryCapabilities
+		rows []storage.RunStatsRow
 		want *SkillCallReport
 	}{
 		{"runs count once per skill and a NULL run is unrecorded", skilled, mixed, &SkillCallReport{UnrecordedRuns: 1, BySkill: []SkillCount{
 			{Skill: "plan", Runs: 2, Calls: 2},
 			{Skill: "test", Runs: 1, Calls: 2, FailedCalls: 1},
 		}}},
-		{"a value that does not decode is unrecorded", skilled, []persistence.RunStatsRow{skillRow(new("not json"))}, &SkillCallReport{UnrecordedRuns: 1, BySkill: []SkillCount{}}},
-		{"runs that called nothing leave an empty, non-nil list", skilled, []persistence.RunStatsRow{skillRow(new("[]"))}, &SkillCallReport{BySkill: []SkillCount{}}},
+		{"a value that does not decode is unrecorded", skilled, []storage.RunStatsRow{skillRow(new("not json"))}, &SkillCallReport{UnrecordedRuns: 1, BySkill: []SkillCount{}}},
+		{"runs that called nothing leave an empty, non-nil list", skilled, []storage.RunStatsRow{skillRow(new("[]"))}, &SkillCallReport{BySkill: []SkillCount{}}},
 		{"column absent leaves the report nil", noColumn, mixed, nil},
 	}
 
@@ -1120,7 +1120,7 @@ func TestAggregatorReport_WarningsComposition(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		caps    persistence.RunHistoryCapabilities
+		caps    storage.RunHistoryCapabilities
 		stages  Stages
 		want    []string
 		funnels bool
@@ -1131,7 +1131,7 @@ func TestAggregatorReport_WarningsComposition(t *testing.T) {
 		{name: "funnel column missing without chains", caps: unblockedCaps, want: []string{funnelMissingWithoutChains}},
 		{name: "every column after the full tier missing", caps: fullCaps, want: []string{everyLaterTierMissing}},
 		{name: "skills column missing while every earlier tier holds", caps: unskilledCaps, want: []string{skillsMissing}},
-		{name: "schema not full", caps: persistence.RunHistoryCapabilities{}, want: []string{degradedSchemaWarning(persistence.RunHistoryCapabilities{})}},
+		{name: "schema not full", caps: storage.RunHistoryCapabilities{}, want: []string{degradedSchemaWarning(storage.RunHistoryCapabilities{})}},
 	}
 
 	for _, tt := range tests {
@@ -1160,7 +1160,7 @@ func TestAggregatorReport_WarningsComposition(t *testing.T) {
 func TestStatsRecordedCost(t *testing.T) {
 	t.Parallel()
 
-	row := func(status string, input int64, usd *float64, costStatus string) persistence.RunStatsRow {
+	row := func(status string, input int64, usd *float64, costStatus string) storage.RunStatsRow {
 		return withCost(modelRow("claude-code", "model-a", status, input), usd, costStatus)
 	}
 	priced := row("succeeded", 1_000_000, new(15.0), "estimated")
@@ -1176,22 +1176,22 @@ func TestStatsRecordedCost(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		caps         persistence.RunHistoryCapabilities
-		rows         []persistence.RunStatsRow
+		caps         storage.RunHistoryCapabilities
+		rows         []storage.RunStatsRow
 		wantCost     *float64
 		wantUnpriced int
 		wantPartial  int
 	}{
-		{"priced, spent nothing, unpriced", recordedCaps, []persistence.RunStatsRow{priced, zero, unpriced}, new(15.0), 1, 0},
-		{"spent nothing and unpriced", recordedCaps, []persistence.RunStatsRow{zero, unpriced}, nil, 1, 0},
-		{"spend with a NULL status", recordedCaps, []persistence.RunStatsRow{nullStatus}, nil, 1, 0},
-		{"spend in the cache-write counter only", recordedCaps, []persistence.RunStatsRow{cacheWriteOnly}, nil, 1, 0},
-		{"ci_failed beside a priced run", recordedCaps, []persistence.RunStatsRow{priced, row("ci_failed", 1_000_000, nil, "")}, new(15.0), 0, 0},
-		{"ci_failed alone", recordedCaps, []persistence.RunStatsRow{row("ci_failed", 1_000_000, new(0.0), "estimated")}, nil, 0, 0},
-		{"partial beside a priced run", recordedCaps, []persistence.RunStatsRow{priced, partial}, new(23.0), 0, 1},
-		{"partial that spent nothing", recordedCaps, []persistence.RunStatsRow{partialSpentNothing}, nil, 0, 1},
-		{"ci_failed partial", recordedCaps, []persistence.RunStatsRow{row("ci_failed", 1_000_000, new(8.0), "partial")}, nil, 0, 0},
-		{"cost columns missing", uncosted, []persistence.RunStatsRow{priced, unpriced, partial}, nil, 0, 0},
+		{"priced, spent nothing, unpriced", recordedCaps, []storage.RunStatsRow{priced, zero, unpriced}, new(15.0), 1, 0},
+		{"spent nothing and unpriced", recordedCaps, []storage.RunStatsRow{zero, unpriced}, nil, 1, 0},
+		{"spend with a NULL status", recordedCaps, []storage.RunStatsRow{nullStatus}, nil, 1, 0},
+		{"spend in the cache-write counter only", recordedCaps, []storage.RunStatsRow{cacheWriteOnly}, nil, 1, 0},
+		{"ci_failed beside a priced run", recordedCaps, []storage.RunStatsRow{priced, row("ci_failed", 1_000_000, nil, "")}, new(15.0), 0, 0},
+		{"ci_failed alone", recordedCaps, []storage.RunStatsRow{row("ci_failed", 1_000_000, new(0.0), "estimated")}, nil, 0, 0},
+		{"partial beside a priced run", recordedCaps, []storage.RunStatsRow{priced, partial}, new(23.0), 0, 1},
+		{"partial that spent nothing", recordedCaps, []storage.RunStatsRow{partialSpentNothing}, nil, 0, 1},
+		{"ci_failed partial", recordedCaps, []storage.RunStatsRow{row("ci_failed", 1_000_000, new(8.0), "partial")}, nil, 0, 0},
+		{"cost columns missing", uncosted, []storage.RunStatsRow{priced, unpriced, partial}, nil, 0, 0},
 	}
 
 	for _, tt := range tests {

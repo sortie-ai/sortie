@@ -6,13 +6,13 @@ import (
 	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // recordedOf maps the cost aggregates of an issue's usage read onto the
 // input of [pricing.IssueCost].
-func recordedOf(usage persistence.IssueTokenUsage) pricing.RecordedCost {
+func recordedOf(usage storage.IssueTokenUsage) pricing.RecordedCost {
 	return pricing.RecordedCost{
 		USD:      usage.RecordedCostUSD,
 		Priced:   usage.PricedSessions,
@@ -54,7 +54,7 @@ func (e *RunningEntry) issueCost(rates *pricing.Rates) (usd float64, status pric
 // history, and the token-axis fields too when no ceiling has filled them, so
 // a money hold can state the sessions a budget ceiling stopped mid-run. It
 // copies the figures, so the entry never aliases the caller's usage value.
-func (e *BudgetExhaustedEntry) setMoneyUsage(usage persistence.IssueTokenUsage) {
+func (e *BudgetExhaustedEntry) setMoneyUsage(usage storage.IssueTokenUsage) {
 	used, status := pricing.IssueCost(recordedOf(usage), pricing.SessionCost{}, !usage.SpendIncomplete())
 	complete := status == pricing.CostEstimated
 	e.UsedUSD = &used
@@ -66,7 +66,7 @@ func (e *BudgetExhaustedEntry) setMoneyUsage(usage persistence.IssueTokenUsage) 
 
 // warnMoneyBudgetIncomplete records one issue whose estimated cost is below
 // the ceiling but only a lower bound, so the dispatch proceeds anyway.
-func warnMoneyBudgetIncomplete(log *slog.Logger, usage persistence.IssueTokenUsage, budgetUSD float64) {
+func warnMoneyBudgetIncomplete(log *slog.Logger, usage storage.IssueTokenUsage, budgetUSD float64) {
 	used, _ := pricing.IssueCost(recordedOf(usage), pricing.SessionCost{}, !usage.SpendIncomplete())
 	attrs := append([]any{
 		slog.Float64("used_usd", used),
@@ -143,7 +143,7 @@ func enforceInFlightMoneyCeiling(ctx context.Context, state *State, issueID stri
 
 // requestMoneyCeilingStop records the money ceiling's decision and cancels
 // the worker context with [errCeilingStop]. usage is nil without a read.
-func requestMoneyCeilingStop(entry *RunningEntry, ceiling float64, rates *pricing.Rates, usage *persistence.IssueTokenUsage, sumSource string) {
+func requestMoneyCeilingStop(entry *RunningEntry, ceiling float64, rates *pricing.Rates, usage *storage.IssueTokenUsage, sumSource string) {
 	used, status := entry.issueCost(rates)
 	var recorded pricing.RecordedCost
 	if entry.IssueUsage != nil {

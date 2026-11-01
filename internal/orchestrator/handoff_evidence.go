@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -33,8 +33,8 @@ type handoffEvidenceVerdict string
 
 const (
 	handoffWorkObserved         handoffEvidenceVerdict = "work observed"
-	handoffAbsenceObserved      handoffEvidenceVerdict = persistence.HandoffVerdictAbsence
-	handoffEvidenceUndetermined handoffEvidenceVerdict = persistence.HandoffVerdictUndetermined
+	handoffAbsenceObserved      handoffEvidenceVerdict = storage.HandoffVerdictAbsence
+	handoffEvidenceUndetermined handoffEvidenceVerdict = storage.HandoffVerdictUndetermined
 )
 
 type handoffEvidenceResult struct {
@@ -104,5 +104,5 @@ func handoffEvidenceWithholds(policy config.HandoffEvidencePolicy, result handof
 }
 
 func handoffEvidenceFailure(policy config.HandoffEvidencePolicy, result handoffEvidenceResult) error {
-	return fmt.Errorf("%s%s under %s policy", persistence.HandoffAbsenceErrorPrefix, result.Verdict, policy)
+	return fmt.Errorf("%s%s under %s policy", storage.HandoffAbsenceErrorPrefix, result.Verdict, policy)
 }

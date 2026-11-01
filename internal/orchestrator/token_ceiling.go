@@ -8,7 +8,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // errCeilingStop distinguishes a ceiling stop from other cancellation causes.
@@ -57,13 +57,13 @@ type CeilingStopRequest struct {
 	SumSource string
 
 	// Usage is the confirming read behind the decision, nil for tokenSumSessionSpendAlone.
-	Usage *persistence.IssueTokenUsage
+	Usage *storage.IssueTokenUsage
 }
 
 // issueTokenStore is the persistence contract [freezeIssueTokenBaseline]
 // and [enforceInFlightTokenCeiling] need.
 type issueTokenStore interface {
-	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
+	TokenUsageByIssue(ctx context.Context, issueID string) (storage.IssueTokenUsage, error)
 }
 
 // sessionUncachedTokens returns the running session's total tokens less its
@@ -266,7 +266,7 @@ const (
 
 // requestTokenCeilingStop records the ceiling's decision and cancels the
 // worker context with [errCeilingStop]. usage is nil without a read.
-func requestTokenCeilingStop(entry *RunningEntry, ceiling int, usage *persistence.IssueTokenUsage, sumSource string) {
+func requestTokenCeilingStop(entry *RunningEntry, ceiling int, usage *storage.IssueTokenUsage, sumSource string) {
 	entry.CeilingStopRequest = &CeilingStopRequest{
 		Reason:               budgetReasonToken,
 		BudgetTokens:         ceiling,
@@ -328,7 +328,7 @@ func reportMoneyCeilingStop(log *slog.Logger, request *CeilingStopRequest) {
 // from being an issue's whole spend: sessions whose usage was never
 // recorded and turns that spent an amount nothing reported. Both are
 // always emitted together.
-func incompleteSpendAttrs(usage persistence.IssueTokenUsage) []any {
+func incompleteSpendAttrs(usage storage.IssueTokenUsage) []any {
 	return []any{
 		slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
 		slog.Int("unaccounted_turns", usage.UnaccountedTurns),
@@ -337,7 +337,7 @@ func incompleteSpendAttrs(usage persistence.IssueTokenUsage) []any {
 
 // warnTokenBudgetIncomplete records one issue whose summed spend is below
 // the ceiling but only a lower bound, so the dispatch proceeds anyway.
-func warnTokenBudgetIncomplete(log *slog.Logger, usage persistence.IssueTokenUsage, budgetTokens int) {
+func warnTokenBudgetIncomplete(log *slog.Logger, usage storage.IssueTokenUsage, budgetTokens int) {
 	attrs := append([]any{
 		slog.Int64("used_tokens", usage.UncachedTokens),
 		slog.Int64("budget_tokens", int64(budgetTokens)),

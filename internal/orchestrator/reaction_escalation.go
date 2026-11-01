@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // escalationRecordStore is the persistence contract of the shared
@@ -25,7 +26,7 @@ type escalationRecordStore interface {
 // [RestoreReactionEscalations]. Satisfied by [persistence.Store].
 type ReactionEscalationRestoreStore interface {
 	ListStandingReactionEscalations(ctx context.Context) ([]persistence.ReactionEscalation, error)
-	LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs []string) ([]persistence.RunHistory, error)
+	LoadLatestSuccessfulRunsForIssues(ctx context.Context, issueIDs []string) ([]storage.RunHistory, error)
 	EndReactionEscalation(ctx context.Context, issueID, kind string) error
 }
 
@@ -417,7 +418,7 @@ func RestoreReactionEscalations(
 	if err != nil {
 		return ReactionEscalationRestoreResult{}, err
 	}
-	runs := make(map[string]persistence.RunHistory, len(runRows))
+	runs := make(map[string]storage.RunHistory, len(runRows))
 	for _, run := range runRows {
 		runs[run.IssueID] = run
 	}

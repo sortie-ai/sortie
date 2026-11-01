@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // tier reports the report's schema_tier label for caps.
-func tier(caps persistence.RunHistoryCapabilities) string {
+func tier(caps storage.RunHistoryCapabilities) string {
 	if caps.Full() {
 		return "full"
 	}
@@ -46,7 +46,7 @@ func triggerLabel(t *string) string {
 // retry of a reaction run lands in the same group as in by_trigger. A
 // stage_hop is decided by FirstAfterHop alone: a later dispatch into a hopped
 // stage carries the same StagePrevious.
-func originLabel(row persistence.RunStatsRow) string {
+func originLabel(row storage.RunStatsRow) string {
 	switch {
 	case row.Trigger == nil:
 		return "<unknown>"
@@ -92,7 +92,7 @@ func outcomeOf(status string) outcome {
 // duration computes row's duration in seconds from its stored RFC3339
 // timestamps. ok is false when either timestamp fails to parse or the
 // resulting difference is negative.
-func duration(row persistence.RunStatsRow) (seconds float64, ok bool) {
+func duration(row storage.RunStatsRow) (seconds float64, ok bool) {
 	started, err := time.Parse(time.RFC3339, row.StartedAt)
 	if err != nil {
 		return 0, false
@@ -119,7 +119,7 @@ func percentile(sorted []float64, p float64) float64 {
 
 // spentTokens reports whether row used any token, in any counter. A row that
 // spent nothing is neither priced nor unpriced.
-func spentTokens(row persistence.RunStatsRow) bool {
+func spentTokens(row storage.RunStatsRow) bool {
 	return row.InputTokens != 0 || row.OutputTokens != 0 || row.TotalTokens != 0 ||
 		row.CacheReadTokens != 0 || row.CacheWriteTokens != 0
 }
@@ -162,7 +162,7 @@ func classifyCost(status string, spent bool, cost *float64, costStatus string) c
 
 // agentPricedOf sums the parts priced from an agent-reported amount.
 // ok is false when no part is.
-func agentPricedOf(parts []persistence.RunModelPart) (usd float64, ok bool) {
+func agentPricedOf(parts []storage.RunModelPart) (usd float64, ok bool) {
 	for _, part := range parts {
 		if part.PriceSource != agentPriceSource {
 			continue
@@ -219,13 +219,13 @@ func (c *costAccum) agentPriced() *float64 {
 // a lower bound or missing.
 type provenanceAccum struct {
 	lowerBoundRuns int
-	causes         persistence.UnmeasuredCauses
+	causes         storage.UnmeasuredCauses
 }
 
-func (p *provenanceAccum) addRun(row persistence.RunStatsRow) {
+func (p *provenanceAccum) addRun(row storage.RunStatsRow) {
 	switch {
 	case !row.TokensMeasured:
-		p.causes.Add(persistence.UnmeasuredCauseOf(row.Status, row.UsageCompleteness, row.ReportedUnits), row.ReportedUnits)
+		p.causes.Add(storage.UnmeasuredCauseOf(row.Status, row.UsageCompleteness, row.ReportedUnits), row.ReportedUnits)
 	case row.UnaccountedTurns > 0:
 		p.lowerBoundRuns++
 	}
@@ -248,7 +248,7 @@ type modelShare struct {
 // sharesOf splits row across the models it spent tokens on, one share per
 // spent part with the part's recorded cost. A run with no spent part, whatever
 // its age, is one share under [modelOf] carrying the run's own figures.
-func sharesOf(row persistence.RunStatsRow) []modelShare {
+func sharesOf(row storage.RunStatsRow) []modelShare {
 	var shares []modelShare
 	for _, part := range row.Parts {
 		t := part.Tokens
@@ -443,7 +443,7 @@ func compareGroups(x, y Group) int {
 // groups this database does carry as well as the ones it never recorded.
 // Naming only the unrecorded groups would let a reader conclude the
 // remaining figures are present when they are not.
-func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
+func degradedSchemaWarning(caps storage.RunHistoryCapabilities) string {
 	groups := []struct {
 		recorded bool
 		name     string
@@ -486,14 +486,14 @@ func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
 // provenanceLabel names the by_provenance group of row: the sources and
 // strategies that settled its token figure, or a sentinel for a run recorded
 // before provenance was kept or one with no source.
-func provenanceLabel(row persistence.RunStatsRow) string {
+func provenanceLabel(row storage.RunStatsRow) string {
 	switch {
 	case row.UsageCompleteness == "":
 		return "<unknown>"
 	case row.UsageProvenance == "":
 		return "<none>"
 	}
-	pairs := persistence.ParseUsageProvenance(row.UsageProvenance)
+	pairs := storage.ParseUsageProvenance(row.UsageProvenance)
 	names := make([]string, len(pairs))
 	for i, pair := range pairs {
 		names[i] = pair.Source + ":" + pair.Strategy
@@ -504,7 +504,7 @@ func provenanceLabel(row persistence.RunStatsRow) string {
 // modelOf names the model a run is grouped under: the one the runtime
 // reported, else the configured one, because a run left to the runtime's
 // default configures none.
-func modelOf(row persistence.RunStatsRow) string {
+func modelOf(row storage.RunStatsRow) string {
 	return cmp.Or(row.ReportedModel, row.ConfiguredModel)
 }
 
@@ -512,25 +512,25 @@ func modelOf(row persistence.RunStatsRow) string {
 // what the report leaves out without each. The tiers are cumulative, so the
 // first missing column also takes every later part of the report with it.
 var laterTiers = []struct {
-	has      func(persistence.RunHistoryCapabilities) bool
+	has      func(storage.RunHistoryCapabilities) bool
 	recorded string
 	leftOut  string
 	// chainsOnly marks a part the report holds only for a workflow with stage
 	// chains.
 	chainsOnly bool
 }{
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasConfiguredSettings }, recorded: "the model of each run", leftOut: "the breakdown by model"},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasStageChains }, recorded: "stage chains", leftOut: "the breakdown by stage chain"},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasTrigger }, recorded: "what started each run", leftOut: "the breakdown by retry trigger"},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasFirstAfterHop }, recorded: "the first run after each stage hop", leftOut: "the breakdown by run origin"},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasAgentBlocked }, recorded: "which runs required action", leftOut: "the funnel of each stage chain", chainsOnly: true},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasRecordedCost }, recorded: "the cost of each run", leftOut: "cost"},
-	{has: func(c persistence.RunHistoryCapabilities) bool { return c.HasSkills }, recorded: "the skill calls of each run", leftOut: "the breakdown by skill"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasConfiguredSettings }, recorded: "the model of each run", leftOut: "the breakdown by model"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasStageChains }, recorded: "stage chains", leftOut: "the breakdown by stage chain"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasTrigger }, recorded: "what started each run", leftOut: "the breakdown by retry trigger"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasFirstAfterHop }, recorded: "the first run after each stage hop", leftOut: "the breakdown by run origin"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasAgentBlocked }, recorded: "which runs required action", leftOut: "the funnel of each stage chain", chainsOnly: true},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasRecordedCost }, recorded: "the cost of each run", leftOut: "cost"},
+	{has: func(c storage.RunHistoryCapabilities) bool { return c.HasSkills }, recorded: "the skill calls of each run", leftOut: "the breakdown by skill"},
 }
 
 // laterTiersWarning names every column of laterTiers the database lacks and
 // every part of the report that leaves out, or returns "" when none is missing.
-func laterTiersWarning(caps persistence.RunHistoryCapabilities, hasChains bool) string {
+func laterTiersWarning(caps storage.RunHistoryCapabilities, hasChains bool) string {
 	var unrecorded, leftOut []string
 	for _, tier := range laterTiers {
 		if !tier.has(caps) {
@@ -564,12 +564,12 @@ func englishList(items []string) string {
 	}
 }
 
-// Aggregator folds a stream of [persistence.RunStatsRow] values, via
+// Aggregator folds a stream of [storage.RunStatsRow] values, via
 // [Aggregator.Add], into the totals and per-dimension groups
 // [Aggregator.Report] renders into a [Report]. It is not safe for concurrent
 // use; a caller builds one per report.
 type Aggregator struct {
-	caps      persistence.RunHistoryCapabilities
+	caps      storage.RunHistoryCapabilities
 	tierLabel string
 
 	total totalAccum
@@ -597,7 +597,7 @@ type Aggregator struct {
 
 // New constructs an [Aggregator] for caps. It reads each run's cost as
 // recorded and prices nothing.
-func New(caps persistence.RunHistoryCapabilities) *Aggregator {
+func New(caps storage.RunHistoryCapabilities) *Aggregator {
 	return &Aggregator{
 		caps:         caps,
 		tierLabel:    tier(caps),
@@ -628,9 +628,9 @@ func (a *Aggregator) SetStages(stages Stages) {
 }
 
 // Add folds one row into the aggregator. It is the visit callback
-// [persistence.Store.ScanRunHistoryRange] calls once per row; it calls
+// [storage.RunHistoryStore.ScanRunHistoryRange] calls once per row; it calls
 // no Store method and always returns nil.
-func (a *Aggregator) Add(row persistence.RunStatsRow) error {
+func (a *Aggregator) Add(row storage.RunStatsRow) error {
 	isSucceeded := row.Status == "succeeded"
 	a.total.runs++
 	a.issueIDs[row.IssueID] = struct{}{}
@@ -762,7 +762,7 @@ func (a *Aggregator) Add(row persistence.RunStatsRow) error {
 
 // foldSkills folds the skill calls row stores into the per-skill counts. A row
 // that stores none, or a value that does not decode, counts as unrecorded.
-func (a *Aggregator) foldSkills(row persistence.RunStatsRow) {
+func (a *Aggregator) foldSkills(row storage.RunStatsRow) {
 	var calls []domain.SkillCall
 	if row.Skills == nil || json.Unmarshal([]byte(*row.Skills), &calls) != nil {
 		a.unrecordedRuns++
@@ -790,7 +790,7 @@ func (a *Aggregator) foldSkills(row persistence.RunStatsRow) {
 // foldModels folds row into the by_model group of every model share it
 // carries. Only the share's tokens and cost reach a group, never the run's
 // totals, so the rows of a multi-model run add up to the run.
-func (a *Aggregator) foldModels(row persistence.RunStatsRow, isSucceeded bool, seconds float64, hasDuration bool) {
+func (a *Aggregator) foldModels(row storage.RunStatsRow, isSucceeded bool, seconds float64, hasDuration bool) {
 	for _, share := range sharesOf(row) {
 		g := bumpGroup(a.byModel, label(share.model), isSucceeded)
 		g.turnSum += row.TurnsCompleted
@@ -837,7 +837,7 @@ func utcDay(t time.Time) time.Time {
 // foldSpend folds row into the accumulator of the UTC day it completed on. A
 // run whose completion time does not parse joins no day. cost is the zero
 // outcome for a run whose tokens were not measured.
-func (a *Aggregator) foldSpend(row persistence.RunStatsRow, cost costOutcome) {
+func (a *Aggregator) foldSpend(row storage.RunStatsRow, cost costOutcome) {
 	completed, err := time.Parse(time.RFC3339, row.CompletedAt)
 	if err != nil {
 		return
@@ -859,7 +859,7 @@ func (a *Aggregator) foldSpend(row persistence.RunStatsRow, cost costOutcome) {
 // foldChain folds row into its chain's by_chain accumulator. Rows arrive
 // in ascending id order, so the last non-empty value of a field is the
 // latest one.
-func (a *Aggregator) foldChain(row persistence.RunStatsRow) {
+func (a *Aggregator) foldChain(row storage.RunStatsRow) {
 	c, ok := a.chains[row.ChainID]
 	if !ok {
 		c = &chainAccum{}

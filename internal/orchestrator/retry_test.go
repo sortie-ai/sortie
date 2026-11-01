@@ -21,6 +21,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -58,14 +59,14 @@ type mockRetryStore struct {
 	sumTotalTokensByIssueErr error
 	summedTokenIssueIDs      []string
 
-	windowUsage persistence.IssueTokenUsage
+	windowUsage storage.IssueTokenUsage
 
 	markDispatchedCalls   int
 	markDispatchedIssueID string
 	markDispatchedKind    string
 	markDispatchedErr     error
 
-	latestRuns    map[string]persistence.RunHistory
+	latestRuns    map[string]storage.RunHistory
 	latestRunsErr error
 
 	parkedIssues     []persistence.ParkedIssue
@@ -109,13 +110,13 @@ func (m *mockRetryStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context,
 	return result, nil
 }
 
-func (m *mockRetryStore) LatestAgentRuns(_ context.Context, _ []string) (map[string]persistence.RunHistory, error) {
+func (m *mockRetryStore) LatestAgentRuns(_ context.Context, _ []string) (map[string]storage.RunHistory, error) {
 	return m.latestRuns, m.latestRunsErr
 }
 
-func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (persistence.IssueTokenUsage, error) {
+func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (storage.IssueTokenUsage, error) {
 	m.summedTokenIssueIDs = append(m.summedTokenIssueIDs, issueID)
-	return persistence.IssueTokenUsage{
+	return storage.IssueTokenUsage{
 		TotalTokens:        m.tokenSum,
 		UncachedTokens:     m.tokenSum - m.tokenCacheReads,
 		Sessions:           m.tokenSessionCount,
@@ -129,11 +130,11 @@ func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (p
 	}, m.sumTotalTokensByIssueErr
 }
 
-func (m *mockRetryStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (persistence.IssueTokenUsage, error) {
+func (m *mockRetryStore) UsageCompletedBetween(context.Context, time.Time, time.Time) (storage.IssueTokenUsage, error) {
 	return m.windowUsage, nil
 }
 
-func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (m *mockRetryStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }
 
@@ -4604,7 +4605,7 @@ func TestHandleRetryTimer_SpendCeilingKeepsTheRetry(t *testing.T) {
 			state := frozenRetryState(id, entry)
 			state.MaxConcurrentAgents = 1
 			state.Running["OTHER-1"] = &RunningEntry{Identifier: "OTHER-1", Issue: candidateIssue("OTHER-1", "OTHER-1", "In Progress")}
-			store := &mockRetryStore{windowUsage: persistence.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}}
+			store := &mockRetryStore{windowUsage: storage.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}}
 			tracker := &mockRetryTracker{fetchedIssue: candidateIssue(id, id, tt.issueState)}
 			var dispatched []dispatchedWorker
 			params := capturingRetryParams(t, store, tracker, &dispatched)

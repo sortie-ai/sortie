@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/waittest"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func closeStore(t *testing.T, s *Store) {
@@ -555,8 +557,8 @@ func TestSaveRetryEntry_Upsert_SessionID(t *testing.T) {
 }
 
 // index for uniqueness. Error is nil (successful run).
-func newTestRun(i int) RunHistory {
-	return RunHistory{
+func newTestRun(i int) storage.RunHistory {
+	return storage.RunHistory{
 		IssueID:      fmt.Sprintf("ISS-%d", i),
 		Identifier:   fmt.Sprintf("PROJ-%d", i),
 		Attempt:      i,
@@ -568,7 +570,7 @@ func newTestRun(i int) RunHistory {
 	}
 }
 
-func appendOrFatal(t *testing.T, s *Store, run RunHistory) RunHistory {
+func appendOrFatal(t *testing.T, s *Store, run storage.RunHistory) storage.RunHistory {
 	t.Helper()
 	got, err := s.AppendRunHistory(context.Background(), run)
 	if err != nil {
@@ -732,7 +734,7 @@ func TestQueryRunHistoryByIssue(t *testing.T) {
 	}
 }
 
-func readBackByEveryReader(t *testing.T, s *Store, issueID string) map[string]RunHistory {
+func readBackByEveryReader(t *testing.T, s *Store, issueID string) map[string]storage.RunHistory {
 	t.Helper()
 	ctx := context.Background()
 
@@ -740,14 +742,14 @@ func readBackByEveryReader(t *testing.T, s *Store, issueID string) map[string]Ru
 	if err != nil {
 		t.Fatalf("QueryRunHistoryByIssue(%q): %v", issueID, err)
 	}
-	filtered, err := s.QueryRunHistory(ctx, RunHistoryFilter{IssueID: issueID, Limit: 10})
+	filtered, err := s.QueryRunHistory(ctx, storage.RunHistoryFilter{IssueID: issueID, Limit: 10})
 	if err != nil {
 		t.Fatalf("QueryRunHistory(%q): %v", issueID, err)
 	}
 	if len(byIssue) != 1 || len(filtered) != 1 {
 		t.Fatalf("rows for %q = %d by issue, %d filtered, want 1 each", issueID, len(byIssue), len(filtered))
 	}
-	return map[string]RunHistory{"QueryRunHistoryByIssue": byIssue[0], "QueryRunHistory": filtered[0]}
+	return map[string]storage.RunHistory{"QueryRunHistoryByIssue": byIssue[0], "QueryRunHistory": filtered[0]}
 }
 
 func TestQueryRunHistory_Paging(t *testing.T) {
@@ -784,7 +786,7 @@ func TestQueryRunHistory_Paging(t *testing.T) {
 				beforeID = ids[tt.before-1]
 			}
 
-			got, err := s.QueryRunHistory(context.Background(), RunHistoryFilter{BeforeID: beforeID, Limit: tt.limit})
+			got, err := s.QueryRunHistory(context.Background(), storage.RunHistoryFilter{BeforeID: beforeID, Limit: tt.limit})
 			if err != nil {
 				t.Fatalf("QueryRunHistory(before=%d, limit=%d): %v", tt.before, tt.limit, err)
 			}
@@ -813,7 +815,7 @@ func TestQueryIssueGroups(t *testing.T) {
 	tests := []struct {
 		name        string
 		seeds       []issueGroupSeed
-		filter      IssueGroupFilter
+		filter      storage.IssueGroupFilter
 		between     *issueGroupSeed
 		wantPages   [][]string
 		wantRestart []string
@@ -821,13 +823,13 @@ func TestQueryIssueGroups(t *testing.T) {
 		{
 			name:      "an issue holding most runs is served once",
 			seeds:     []issueGroupSeed{{issue: "A"}, {issue: "B"}, {issue: "A"}, {issue: "C"}, {issue: "A"}, {issue: "D"}, {issue: "A"}, {issue: "A"}},
-			filter:    IssueGroupFilter{Limit: 2},
+			filter:    storage.IssueGroupFilter{Limit: 2},
 			wantPages: [][]string{{"A:8", "D:6"}, {"C:4", "B:2"}},
 		},
 		{
 			name:        "a run appended between pages moves its issue to the first page only",
 			seeds:       []issueGroupSeed{{issue: "A"}, {issue: "B"}, {issue: "C"}, {issue: "D"}},
-			filter:      IssueGroupFilter{Limit: 2},
+			filter:      storage.IssueGroupFilter{Limit: 2},
 			between:     &issueGroupSeed{issue: "B"},
 			wantPages:   [][]string{{"D:4", "C:3"}, {"A:1"}},
 			wantRestart: []string{"B:5", "D:4"},
@@ -835,37 +837,37 @@ func TestQueryIssueGroups(t *testing.T) {
 		{
 			name:      "a status filter keys a group on its newest matching run",
 			seeds:     []issueGroupSeed{{issue: "A", status: "failed"}, {issue: "B", status: "failed"}, {issue: "A", status: "succeeded"}},
-			filter:    IssueGroupFilter{Status: "failed", Limit: 10},
+			filter:    storage.IssueGroupFilter{Status: "failed", Limit: 10},
 			wantPages: [][]string{{"B:2", "A:1"}},
 		},
 		{
 			name:      "an identifier selects its issue",
 			seeds:     []issueGroupSeed{{issue: "A", identifier: "9", display: "o/r#9"}, {issue: "B", identifier: "10", display: "o/r#10"}},
-			filter:    IssueGroupFilter{IssueKey: "9", Limit: 10},
+			filter:    storage.IssueGroupFilter{IssueKey: "9", Limit: 10},
 			wantPages: [][]string{{"A:1"}},
 		},
 		{
 			name:      "a display identifier selects its issue",
 			seeds:     []issueGroupSeed{{issue: "A", identifier: "9", display: "o/r#9"}, {issue: "B", identifier: "10", display: "o/r#10"}},
-			filter:    IssueGroupFilter{IssueKey: "o/r#10", Limit: 10},
+			filter:    storage.IssueGroupFilter{IssueKey: "o/r#10", Limit: 10},
 			wantPages: [][]string{{"B:2"}},
 		},
 		{
 			name:      "a key recorded on an older run still keys the group on the newest run",
 			seeds:     []issueGroupSeed{{issue: "A", identifier: "OLD-1"}, {issue: "B", identifier: "OTHER"}, {issue: "A", identifier: "NEW-1"}},
-			filter:    IssueGroupFilter{IssueKey: "OLD-1", Limit: 10},
+			filter:    storage.IssueGroupFilter{IssueKey: "OLD-1", Limit: 10},
 			wantPages: [][]string{{"A:3"}},
 		},
 		{
 			name:      "search text matches part of a key or a title in any case",
 			seeds:     []issueGroupSeed{{issue: "A", identifier: "BP-701"}, {issue: "B", identifier: "BP-810", title: "Fix the Retry banner"}, {issue: "C", identifier: "BP-702"}},
-			filter:    IssueGroupFilter{Search: "retry", Limit: 10},
+			filter:    storage.IssueGroupFilter{Search: "retry", Limit: 10},
 			wantPages: [][]string{{"B:2"}},
 		},
 		{
 			name:      "search text treats a percent sign as a literal",
 			seeds:     []issueGroupSeed{{issue: "A", identifier: "BP-1", title: "Cut cost 50%"}, {issue: "B", identifier: "BP-2", title: "Cut cost 50 times"}},
-			filter:    IssueGroupFilter{Search: "50%", Limit: 10},
+			filter:    storage.IssueGroupFilter{Search: "50%", Limit: 10},
 			wantPages: [][]string{{"A:1"}},
 		},
 	}
@@ -887,7 +889,7 @@ func TestQueryIssueGroups(t *testing.T) {
 				run.Status = cmp.Or(seed.status, "succeeded")
 				ids = append(ids, appendOrFatal(t, s, run).ID)
 			}
-			readPage := func(f IssueGroupFilter) []IssueGroup {
+			readPage := func(f storage.IssueGroupFilter) []storage.IssueGroup {
 				page, err := s.QueryIssueGroups(ctx, f)
 				if err != nil {
 					t.Fatalf("QueryIssueGroups(%+v): %v", f, err)
@@ -897,7 +899,7 @@ func TestQueryIssueGroups(t *testing.T) {
 				}
 				return page
 			}
-			labels := func(page []IssueGroup) []string {
+			labels := func(page []storage.IssueGroup) []string {
 				out := []string{}
 				for _, g := range page {
 					out = append(out, fmt.Sprintf("%s:%d", g.IssueID, slices.Index(ids, g.NewestRunID)+1))
@@ -2610,9 +2612,9 @@ func recentCompletedAt(daysAgo int) string {
 }
 
 // appendRecoveryRun inserts a recovery-eligible (succeeded, non-empty workspace) run and returns it.
-func appendRecoveryRun(t *testing.T, s *Store, issueID, identifier string, attempt int, completedAt string) RunHistory {
+func appendRecoveryRun(t *testing.T, s *Store, issueID, identifier string, attempt int, completedAt string) storage.RunHistory {
 	t.Helper()
-	run := RunHistory{
+	run := storage.RunHistory{
 		IssueID:      issueID,
 		Identifier:   identifier,
 		Attempt:      attempt,
@@ -2728,21 +2730,21 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_IgnoresFailedAndEmptyWorksp
 	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
 
 	// Excluded: failed run.
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-FAIL", Identifier: "PROJ-F", Attempt: 1,
 		AgentAdapter: "mock", Workspace: "/ws/PROJ-F",
 		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
 		Status: "failed",
 	})
 	// Excluded: cancelled run.
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-CANCEL", Identifier: "PROJ-C", Attempt: 1,
 		AgentAdapter: "mock", Workspace: "/ws/PROJ-C",
 		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
 		Status: "cancelled",
 	})
 	// Excluded: succeeded but empty workspace.
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID: "ISS-NOPATH", Identifier: "PROJ-NP", Attempt: 1,
 		AgentAdapter: "mock", Workspace: "",
 		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
@@ -2772,7 +2774,7 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_PrefersProducingRunOverLate
 	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
 
 	producing := appendRecoveryRun(t, s, "ISS-EVIDENCE", "PROJ-E", 1, recentCompletedAt(2))
-	appendOrFatal(t, s, RunHistory{
+	appendOrFatal(t, s, storage.RunHistory{
 		IssueID:      "ISS-EVIDENCE",
 		Identifier:   "PROJ-E",
 		Attempt:      2,
@@ -2838,7 +2840,7 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_DisplayIDRoundTrip(t *testi
 	ctx := context.Background()
 	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
 
-	run := RunHistory{
+	run := storage.RunHistory{
 		IssueID:      "ISS-DISP",
 		Identifier:   "PROJ-100",
 		DisplayID:    "owner/repo#42",
@@ -2967,7 +2969,7 @@ func TestAppendRunHistory_RuleNameRoundTrip(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	run := RunHistory{
+	run := storage.RunHistory{
 		IssueID:      "ISS-77",
 		Identifier:   "PROJ-77",
 		Attempt:      1,

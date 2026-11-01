@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestEnforceInFlightMoneyCeiling_StopAndExit(t *testing.T) {
@@ -15,12 +15,12 @@ func TestEnforceInFlightMoneyCeiling_StopAndExit(t *testing.T) {
 	const issueID = "MONEY-1"
 	// fixtureRates(t, 10) prices kind "k" at $10 per million input tokens, so
 	// 250_000 input tokens estimate $2.50 of session cost.
-	recorded3 := persistence.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 1}
-	recorded1 := persistence.IssueTokenUsage{RecordedCostUSD: 1, PricedSessions: 1, Sessions: 1}
+	recorded3 := storage.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 1}
+	recorded1 := storage.IssueTokenUsage{RecordedCostUSD: 1, PricedSessions: 1, Sessions: 1}
 
 	tests := []struct {
 		name        string
-		baseline    *persistence.IssueTokenUsage
+		baseline    *storage.IssueTokenUsage
 		read        tokenStoreResponse
 		inputTokens int64
 		wantSource  string

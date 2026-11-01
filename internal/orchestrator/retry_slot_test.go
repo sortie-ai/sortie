@@ -9,6 +9,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // retrySlotCI is a controllable CIStatusProvider for the cross-pass
@@ -93,7 +94,7 @@ type retrySlotStore struct {
 	marks      map[string]string
 	dispatched map[string]bool
 
-	runHistories []persistence.RunHistory
+	runHistories []storage.RunHistory
 	savedEntries []persistence.RetryEntry
 	deletedIDs   []string
 
@@ -122,7 +123,7 @@ func (s *retrySlotStore) DeleteRetryEntry(_ context.Context, issueID string) err
 	return nil
 }
 
-func (s *retrySlotStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+func (s *retrySlotStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	s.runHistories = append(s.runHistories, run)
 	return run, nil
 }

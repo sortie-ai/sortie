@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // pausedRetryMaxDwell bounds how long a known-reaction retry may be
@@ -32,8 +33,8 @@ type RetryTimerStore interface {
 	DeleteLivePass(ctx context.Context, issueID, kind string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
 	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
-	LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]persistence.RunHistory, error)
-	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
+	LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]storage.RunHistory, error)
+	TokenUsageByIssue(ctx context.Context, issueID string) (storage.IssueTokenUsage, error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
@@ -42,7 +43,7 @@ type RetryTimerStore interface {
 	MarkStageHopDispatched(ctx context.Context, issueID string) error
 	DeleteStageHop(ctx context.Context, issueID string) error
 	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-	UsageCompletedBetween(ctx context.Context, since, until time.Time) (persistence.IssueTokenUsage, error)
+	UsageCompletedBetween(ctx context.Context, since, until time.Time) (storage.IssueTokenUsage, error)
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -365,7 +366,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// announcement memory when it already knows this issue under the same
 	// reason, so a hold surviving a gap in candidacy keeps its onset time.
 	blocked := false
-	blockBudget := func(reason string, usedSessions int, usage *persistence.IssueTokenUsage) {
+	blockBudget := func(reason string, usedSessions int, usage *storage.IssueTokenUsage) {
 		at := time.Now().UTC()
 		if told, wasTold := state.BudgetAnnounced[issueID]; wasTold && told.Reason == reason {
 			at = told.At

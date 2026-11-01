@@ -14,15 +14,16 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 type fakeSpendStore struct {
-	byStart map[int64]persistence.IssueTokenUsage
+	byStart map[int64]storage.IssueTokenUsage
 	err     error
 	calls   int
 }
 
-func (f *fakeSpendStore) UsageCompletedBetween(_ context.Context, since, _ time.Time) (persistence.IssueTokenUsage, error) {
+func (f *fakeSpendStore) UsageCompletedBetween(_ context.Context, since, _ time.Time) (storage.IssueTokenUsage, error) {
 	f.calls++
 	return f.byStart[since.Unix()], f.err
 }
@@ -81,8 +82,8 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 	defaultNow := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	floatSum := 0.7
 	floatSum += 0.1
-	recorded := func(usd float64) persistence.IssueTokenUsage {
-		return persistence.IssueTokenUsage{RecordedCostUSD: usd, PricedSessions: 1, Sessions: 1}
+	recorded := func(usd float64) storage.IssueTokenUsage {
+		return storage.IssueTokenUsage{RecordedCostUSD: usd, PricedSessions: 1, Sessions: 1}
 	}
 	live := func(inputTokens int64, measured bool) *RunningEntry {
 		return &RunningEntry{AgentKind: "k", UsageArrival: registry.UsageArrivalIncremental, CarriesTokenFigure: true, UsageMeasured: measured, AgentInputTokens: inputTokens, AgentTotalTokens: inputTokens}
@@ -95,7 +96,7 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 		daily        float64
 		weekly       float64
 		monthly      float64
-		rows         persistence.IssueTokenUsage
+		rows         storage.IssueTokenUsage
 		running      *RunningEntry
 		then         func(*spendCeilingParams)
 		wantSkip     SkipReason
@@ -110,8 +111,8 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 		{name: "setting the ceiling to zero releases", daily: 5, rows: recorded(5), then: func(p *spendCeilingParams) { p.Ceilings[SpendWindowDaily] = 0 }},
 		{name: "a now in the next window releases", daily: 5, rows: recorded(5), then: func(p *spendCeilingParams) { p.Now = p.Now.Add(24 * time.Hour) }, wantComplete: true},
 		{name: "a failed read keeps the last result", daily: 5, rows: recorded(5), then: func(p *spendCeilingParams) { p.Store.(*fakeSpendStore).err = errors.New("db down") }, wantSkip: SkipDailySpendCeiling, wantUsed: 5, wantComplete: true},
-		{name: "an unpriced row leaves the spend unchanged and incomplete", daily: 5, rows: persistence.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnpricedSessions: 1}, wantUsed: 3},
-		{name: "an unmeasured row leaves the spend unchanged and incomplete", daily: 5, rows: persistence.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnmeasuredSessions: 1}, wantUsed: 3},
+		{name: "an unpriced row leaves the spend unchanged and incomplete", daily: 5, rows: storage.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnpricedSessions: 1}, wantUsed: 3},
+		{name: "an unmeasured row leaves the spend unchanged and incomplete", daily: 5, rows: storage.IssueTokenUsage{RecordedCostUSD: 3, PricedSessions: 1, Sessions: 2, UnmeasuredSessions: 1}, wantUsed: 3},
 		{name: "a running session that reported nothing keeps the spend complete", daily: 5, rows: recorded(3), running: live(0, false), wantUsed: 3, wantComplete: true},
 		{name: "a running session that carries no token figure leaves the spend incomplete", daily: 5, rows: recorded(3), running: &RunningEntry{AgentKind: "k", UsageArrival: registry.UsageArrivalTurnEnd}, wantUsed: 3},
 		{name: "no setting reads nothing", rows: recorded(5)},
@@ -141,7 +142,7 @@ func TestEvaluateSpendCeiling(t *testing.T) {
 			if tt.running != nil {
 				state.Running["R-1"] = tt.running
 			}
-			store := &fakeSpendStore{byStart: map[int64]persistence.IssueTokenUsage{}}
+			store := &fakeSpendStore{byStart: map[int64]storage.IssueTokenUsage{}}
 			for w, ceiling := range ceilings {
 				if start, _ := spendWindowBounds(w, now); ceiling > 0 {
 					store.byStart[start.Unix()] = tt.rows
@@ -235,7 +236,7 @@ func TestEvaluateSpendCeiling_IndependentOfRatesAndRestart(t *testing.T) {
 		return state.SpendCeilings[0]
 	}
 	first := openStore()
-	_, err := first.AppendRunHistory(context.Background(), persistence.RunHistory{
+	_, err := first.AppendRunHistory(context.Background(), storage.RunHistory{
 		IssueID: "I-1", Identifier: "I-1", Attempt: 1, AgentAdapter: "k", Workspace: "/tmp/ws/I-1",
 		StartedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), CompletedAt: now.Add(-time.Hour).Format(time.RFC3339),
 		Status: "succeeded", TotalTokens: 100, TokensMeasured: true, EstimatedCostUSD: new(3.0), CostStatus: "estimated",
@@ -270,7 +271,7 @@ func TestHandleTick_SpendCeilingHoldsOnlyWhatIsOtherwiseStartable(t *testing.T) 
 	spy := &spyMetrics{}
 	h := newRunHarness(t, cfg, "kind-a")
 	h.metrics = spy
-	h.store.windowUsage = persistence.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}
+	h.store.windowUsage = storage.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}
 	blocked := candidate("id-2", "A-2")
 	blocked.BlockedBy = []domain.BlockerRef{{ID: "b", State: "To Do"}}
 	h.tracker.candidates = []domain.Issue{candidate("id-1", "A-1"), blocked}
@@ -316,7 +317,7 @@ func TestHandleRetryTimer_ReleaseHeld(t *testing.T) {
 
 			const id = "ISS-SPEND"
 			state := frozenRetryState(id, RetryEntry{Attempt: 3, Error: "agent exited"})
-			store := &mockRetryStore{windowUsage: persistence.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}}
+			store := &mockRetryStore{windowUsage: storage.IssueTokenUsage{RecordedCostUSD: 5, PricedSessions: 1, Sessions: 1}}
 			params := defaultRetryParams(t, store, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")})
 			params.SpendCeilings = map[SpendWindow]float64{SpendWindowDaily: 5}
 			params.PollIntervalMS = 60_000
