@@ -7,22 +7,8 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
-
-// budgetHoldNoticeStore is the persistence contract [postBudgetHoldNotice]
-// needs. Both the rebuild and the retry lane call it.
-type budgetHoldNoticeStore interface {
-	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
-}
-
-// budgetHoldNoticeReleaseStore is the persistence contract the rebuild's
-// release paths need. Only the rebuild ever releases a notice; the retry
-// lane posts notices and never releases one.
-type budgetHoldNoticeReleaseStore interface {
-	DeleteBudgetHoldNotice(ctx context.Context, issueID string) error
-	DeleteAllBudgetHoldNotices(ctx context.Context) error
-}
 
 // budgetHoldNoticeParams carries the inputs of one notice, in the shape
 // parkIssueParams uses for one park.
@@ -30,7 +16,7 @@ type budgetHoldNoticeParams struct {
 	IssueID string
 	Entry   *BudgetExhaustedEntry
 
-	Store    budgetHoldNoticeStore
+	Store    storage.BudgetHoldNoticeStore
 	Delivery route.Delivery // non-empty: the caller routed the event and found a destination
 	Metrics  domain.Metrics
 	Logger   *slog.Logger
@@ -77,7 +63,7 @@ func postBudgetHoldNotice(state *State, params budgetHoldNoticeParams) {
 		log = slog.Default()
 	}
 
-	row := persistence.BudgetHoldNotice{
+	row := storage.BudgetHoldNotice{
 		IssueID:   params.IssueID,
 		Reason:    params.Entry.Reason,
 		NoticedAt: params.Entry.ExhaustedAt.Format(time.RFC3339),
@@ -110,7 +96,7 @@ func postBudgetHoldNotice(state *State, params budgetHoldNoticeParams) {
 // reason for the issue. The memory entry is dropped only once the durable
 // delete succeeds, so a failed delete leaves the entry in place and the
 // next release pass retries it rather than stranding the row.
-func releaseBudgetHoldNotice(ctx context.Context, state *State, store budgetHoldNoticeReleaseStore, issueID string, log *slog.Logger) {
+func releaseBudgetHoldNotice(ctx context.Context, state *State, store storage.BudgetHoldNoticeStore, issueID string, log *slog.Logger) {
 	if _, ok := state.BudgetHoldNoticed[issueID]; !ok {
 		return
 	}
@@ -126,7 +112,7 @@ func releaseBudgetHoldNotice(ctx context.Context, state *State, store budgetHold
 // memory is already empty. The memory is cleared only once the durable
 // delete succeeds, so a failed delete leaves the entries in place and the
 // next release pass retries it rather than stranding the rows.
-func releaseAllBudgetHoldNotices(ctx context.Context, state *State, store budgetHoldNoticeReleaseStore, log *slog.Logger) {
+func releaseAllBudgetHoldNotices(ctx context.Context, state *State, store storage.BudgetHoldNoticeStore, log *slog.Logger) {
 	if len(state.BudgetHoldNoticed) == 0 {
 		return
 	}
@@ -140,7 +126,7 @@ func releaseAllBudgetHoldNotices(ctx context.Context, state *State, store budget
 // PopulateBudgetHoldNotices loads persisted budget hold notice records
 // into state.BudgetHoldNoticed. Called during startup recovery, before the
 // event loop starts, beside [PopulateParked].
-func PopulateBudgetHoldNotices(state *State, rows []persistence.BudgetHoldNotice, log *slog.Logger) {
+func PopulateBudgetHoldNotices(state *State, rows []storage.BudgetHoldNotice, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}

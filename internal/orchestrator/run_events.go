@@ -14,8 +14,8 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 )
 
 // runEventStoreLimits bounds the stored events of every run together.
-var runEventStoreLimits = persistence.RunEventLimits{
+var runEventStoreLimits = storage.RunEventLimits{
 	MaxAge:         365 * 24 * time.Hour,
 	MaxBytes:       2 << 30,
 	MaxExpiredRuns: 4,
@@ -165,8 +165,8 @@ func (e RunEvent) withSize() RunEvent {
 }
 
 // storeRow returns the stored form of e.
-func (e RunEvent) storeRow() persistence.RunEvent {
-	return persistence.RunEvent{
+func (e RunEvent) storeRow() storage.RunEvent {
+	return storage.RunEvent{
 		Seq:     e.Seq,
 		At:      e.atText(),
 		Event:   string(e.Event),
@@ -178,7 +178,7 @@ func (e RunEvent) storeRow() persistence.RunEvent {
 // RunEventsFromRows decodes stored events, oldest first, and returns an
 // error for a row that does not decode. It returns an empty non-nil slice
 // for no rows.
-func RunEventsFromRows(rows []persistence.RunEvent) ([]RunEvent, error) {
+func RunEventsFromRows(rows []storage.RunEvent) ([]RunEvent, error) {
 	events := make([]RunEvent, 0, len(rows))
 	for _, row := range rows {
 		at, err := time.Parse(time.RFC3339Nano, row.At)
@@ -321,9 +321,9 @@ func (b *runEventBuffer) hasStartupFailed() bool {
 }
 
 // storeRows returns the buffer's events in stored form, oldest first.
-func (b *runEventBuffer) storeRows() []persistence.RunEvent {
+func (b *runEventBuffer) storeRows() []storage.RunEvent {
 	events := b.snapshot()
-	rows := make([]persistence.RunEvent, len(events))
+	rows := make([]storage.RunEvent, len(events))
 	for i, e := range events {
 		rows[i] = e.storeRow()
 	}
@@ -415,18 +415,13 @@ func retainEvent(entry *RunningEntry, event domain.AgentEvent) {
 	entry.events.retain(retained.withSize())
 }
 
-// RunEventStore is the persistence interface [RunEventRetry] writes through.
-type RunEventStore interface {
-	AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []persistence.RunEvent, limits persistence.RunEventLimits) error
-}
-
 // HeldRunEvents is one run's events awaiting a retry.
 type HeldRunEvents struct {
 	IssueID     string
 	Identifier  string
 	DispatchID  string
 	CompletedAt string // The run's run_history.completed_at.
-	Events      []persistence.RunEvent
+	Events      []storage.RunEvent
 }
 
 func (h HeldRunEvents) size() int64 {
@@ -450,7 +445,7 @@ type heldRun struct {
 // RunEventRetry holds the events of runs whose events part failed and retries
 // writing them off the event loop. It is safe for concurrent use.
 type RunEventRetry struct {
-	store  RunEventStore
+	store  storage.RunEventStore
 	logger *slog.Logger
 	delays []time.Duration
 	ctx    context.Context
@@ -464,7 +459,7 @@ type RunEventRetry struct {
 
 // NewRunEventRetry returns a retry component that writes through store and
 // logs to logger, which nil defaults to [slog.Default].
-func NewRunEventRetry(store RunEventStore, logger *slog.Logger) *RunEventRetry {
+func NewRunEventRetry(store storage.RunEventStore, logger *slog.Logger) *RunEventRetry {
 	if logger == nil {
 		logger = slog.Default()
 	}

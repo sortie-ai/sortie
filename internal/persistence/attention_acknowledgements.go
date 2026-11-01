@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// AttentionAcknowledgement is one row of attention_acknowledgements: when a
-// person acknowledged one attention item.
-type AttentionAcknowledgement struct {
-	ItemID         string
-	AcknowledgedAt time.Time // stored as RFC 3339 with nanoseconds, UTC
-}
+var _ storage.AttentionAcknowledgementStore = (*Store)(nil)
 
 // SaveAttentionAcknowledgement persists an acknowledgement, replacing the row
 // with the same item ID.
-func (s *Store) SaveAttentionAcknowledgement(ctx context.Context, ack AttentionAcknowledgement) error {
+func (s *Store) SaveAttentionAcknowledgement(ctx context.Context, ack storage.AttentionAcknowledgement) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO attention_acknowledgements (item_id, acknowledged_at)
 		VALUES (?, ?)
@@ -55,7 +52,7 @@ func (s *Store) DeleteAttentionAcknowledgements(ctx context.Context, itemIDs []s
 // Ordering is unspecified. Returns an empty slice (not nil) when none exist. A
 // row whose stored time does not parse is returned with a zero AcknowledgedAt,
 // so one bad row does not fail the load of the others.
-func (s *Store) ListAttentionAcknowledgements(ctx context.Context) ([]AttentionAcknowledgement, error) {
+func (s *Store) ListAttentionAcknowledgements(ctx context.Context) ([]storage.AttentionAcknowledgement, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT item_id, acknowledged_at FROM attention_acknowledgements`)
 	if err != nil {
@@ -63,9 +60,9 @@ func (s *Store) ListAttentionAcknowledgements(ctx context.Context) ([]AttentionA
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	acknowledgements := []AttentionAcknowledgement{}
+	acknowledgements := []storage.AttentionAcknowledgement{}
 	for rows.Next() {
-		var ack AttentionAcknowledgement
+		var ack storage.AttentionAcknowledgement
 		var acknowledgedAt string
 		if err := rows.Scan(&ack.ItemID, &acknowledgedAt); err != nil {
 			return nil, fmt.Errorf("scan attention acknowledgement: %w", err)

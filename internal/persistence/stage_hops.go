@@ -3,50 +3,17 @@ package persistence
 import (
 	"context"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// StageHop is one row of the stage_hops table: an issue's consecutive
-// automatic stage hops since the last reset, and the latest hop.
-type StageHop struct {
-	IssueID          string
-	Identifier       string
-	HopCount         int
-	SourceRule       string
-	TargetRule       string
-	TargetLabel      string
-	PreviousOutcome  string // "succeeded" or "no_change"
-	SourceDispatchID string // dispatch of the run whose exit made the hop
-	TargetObserved   bool   // a read has shown TargetLabel on the issue
-	HoppedAt         string // RFC 3339
-	ChainID          string // chain of the run whose exit made the hop; empty for rows written before migration 024
-
-	// DisplayID, IssueTitle, and IssueURL name the issue to a person; each
-	// is empty when the hop was recorded without a read of the issue.
-	DisplayID  string
-	IssueTitle string
-	IssueURL   string
-
-	// IssueType, IssueLabels, and IssueState are the facts about the issue
-	// the hop leaves; IssueLabels is nil when the hop was recorded without a
-	// read of the labels.
-	IssueType   string
-	IssueLabels []string
-	IssueState  string
-
-	// DispatchedAt is the RFC 3339 start of the first run of the pass
-	// ChainID names; empty when the pass could not be dated.
-	DispatchedAt string
-
-	// RunDispatched is true once a run of the issue was dispatched after
-	// the hop.
-	RunDispatched bool
-}
+var _ storage.StageHopStore = (*Store)(nil)
 
 // RecordStageHop upserts the hop record for hop.IssueID and deletes the
 // issue's retry entry in one transaction. When the stored row carries the
 // same SourceDispatchID, its HopCount is kept so one source run is counted
 // once.
-func (s *Store) RecordStageHop(ctx context.Context, hop StageHop) error {
+func (s *Store) RecordStageHop(ctx context.Context, hop storage.StageHop) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin record stage hop %q: %w", hop.IssueID, err)
@@ -130,7 +97,7 @@ func (s *Store) DeleteStageHop(ctx context.Context, issueID string) error {
 
 // ListStageHops returns every persisted hop record ordered by issue_id.
 // Returns an empty slice (not nil) when no records exist.
-func (s *Store) ListStageHops(ctx context.Context) ([]StageHop, error) {
+func (s *Store) ListStageHops(ctx context.Context) ([]storage.StageHop, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, identifier, hop_count, source_rule, target_rule, target_label, previous_outcome, source_dispatch_id, target_observed, hopped_at, chain_id,
 			display_identifier, issue_title, issue_url, dispatched_at, run_dispatched, issue_type, issue_labels, issue_state
@@ -141,9 +108,9 @@ func (s *Store) ListStageHops(ctx context.Context) ([]StageHop, error) {
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	hops := []StageHop{}
+	hops := []storage.StageHop{}
 	for rows.Next() {
-		var h StageHop
+		var h storage.StageHop
 		var labels string
 		if err := rows.Scan(&h.IssueID, &h.Identifier, &h.HopCount, &h.SourceRule, &h.TargetRule,
 			&h.TargetLabel, &h.PreviousOutcome, &h.SourceDispatchID, &h.TargetObserved, &h.HoppedAt, &h.ChainID,

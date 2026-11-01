@@ -12,6 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -545,16 +546,6 @@ func buildReviewFingerprint(comments []domain.ReviewComment) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// handedOffCommentWriter persists the comment IDs a run was given.
-type handedOffCommentWriter interface {
-	AddReactionHandedOffComments(ctx context.Context, issueID, kind string, commentIDs []string) error
-}
-
-// handedOffCommentReader loads the comment IDs an issue's runs were given.
-type handedOffCommentReader interface {
-	ListReactionHandedOffComments(ctx context.Context, issueID, kind string) ([]string, error)
-}
-
 // commentTemplateKey returns the prompt variable that carries the comments
 // of a review-family reaction kind, or "" for any other kind.
 func commentTemplateKey(kind string) string {
@@ -601,7 +592,7 @@ func countCurrentComments(comments []domain.ReviewComment) int {
 // loadHandedOffComments caches the stored handed-off set of the issue and
 // kind unless the key is already cached. A key with no rows is cached as
 // empty.
-func loadHandedOffComments(ctx context.Context, state *State, store handedOffCommentReader, issueID, kind string) error {
+func loadHandedOffComments(ctx context.Context, state *State, store storage.ReactionHandoffStore, issueID, kind string) error {
 	rkey := ReactionKey(issueID, kind)
 	if _, loaded := state.ReactionHandedOffComments[rkey]; loaded {
 		return nil
@@ -757,7 +748,7 @@ func countCommentsOutsideRuns(state *State, issueID, kind string, comments []dom
 // key gains the absent IDs and only those are stored. For an uncached key
 // every ID is stored and the key stays uncached, because a partial key
 // would read as authoritative. A store error keeps the cache.
-func recordHandedOffComments(ctx context.Context, state *State, store handedOffCommentWriter, issueID, kind string, commentIDs []string, log *slog.Logger) {
+func recordHandedOffComments(ctx context.Context, state *State, store storage.ReactionHandoffStore, issueID, kind string, commentIDs []string, log *slog.Logger) {
 	toStore := commentIDs
 	if cached, loaded := state.ReactionHandedOffComments[ReactionKey(issueID, kind)]; loaded {
 		toStore = nil

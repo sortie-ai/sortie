@@ -6,18 +6,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
-
-// issueOutcomeRecorder is the one store method [recordIssueOutcome] needs.
-type issueOutcomeRecorder interface {
-	RecordIssueOutcome(ctx context.Context, outcome persistence.IssueOutcome) error
-}
-
-// issueOutcomeClearer is the one store method [clearIssueOutcome] needs.
-type issueOutcomeClearer interface {
-	DeleteIssueOutcome(ctx context.Context, issueID string) error
-}
 
 // mergeWatch is the pull request a pending merge-completion or auto-merge
 // entry watches, with that entry's reaction kind.
@@ -29,7 +19,7 @@ type mergeWatch struct {
 
 // recordIssueOutcome stores outcome under the store's record rule. A failed
 // write is logged and changes nothing else; log must carry the issue.
-func recordIssueOutcome(ctx context.Context, store issueOutcomeRecorder, outcome persistence.IssueOutcome, log *slog.Logger) {
+func recordIssueOutcome(ctx context.Context, store storage.IssueOutcomeStore, outcome storage.IssueOutcome, log *slog.Logger) {
 	if err := store.RecordIssueOutcome(ctx, outcome); err != nil {
 		log.Error("failed to persist issue outcome",
 			slog.Any("error", err),
@@ -40,7 +30,7 @@ func recordIssueOutcome(ctx context.Context, store issueOutcomeRecorder, outcome
 
 // clearIssueOutcome deletes the issue's outcome when the poll tick picks the
 // issue up again. A failed delete is logged.
-func clearIssueOutcome(ctx context.Context, store issueOutcomeClearer, issueID string, log *slog.Logger) {
+func clearIssueOutcome(ctx context.Context, store storage.IssueOutcomeStore, issueID string, log *slog.Logger) {
 	if err := store.DeleteIssueOutcome(ctx, issueID); err != nil {
 		log.Error("failed to clear issue outcome",
 			slog.Any("error", err),
@@ -51,12 +41,12 @@ func clearIssueOutcome(ctx context.Context, store issueOutcomeClearer, issueID s
 // handoffOutcome builds the outcome of a successful handoff transition. A
 // target that is itself a terminal state records a terminal outcome, because
 // no person takes that issue over.
-func handoffOutcome(issueID, target string, terminalStates []string, at time.Time) persistence.IssueOutcome {
-	kind := persistence.IssueOutcomeHandedOff
+func handoffOutcome(issueID, target string, terminalStates []string, at time.Time) storage.IssueOutcome {
+	kind := storage.IssueOutcomeHandedOff
 	if isTerminalState(target, terminalStates) {
-		kind = persistence.IssueOutcomeTerminal
+		kind = storage.IssueOutcomeTerminal
 	}
-	return persistence.IssueOutcome{
+	return storage.IssueOutcome{
 		IssueID:    issueID,
 		Kind:       kind,
 		ObservedAt: at.UTC().Format(time.RFC3339),
@@ -66,10 +56,10 @@ func handoffOutcome(issueID, target string, terminalStates []string, at time.Tim
 
 // mergedOutcome builds the outcome of a pull request observed merged by the
 // reaction of kind reactionKind.
-func mergedOutcome(issueID, reactionKind string, prNumber int, owner, repo string, at time.Time) persistence.IssueOutcome {
-	return persistence.IssueOutcome{
+func mergedOutcome(issueID, reactionKind string, prNumber int, owner, repo string, at time.Time) storage.IssueOutcome {
+	return storage.IssueOutcome{
 		IssueID:           issueID,
-		Kind:              persistence.IssueOutcomeMerged,
+		Kind:              storage.IssueOutcomeMerged,
 		ObservedAt:        at.UTC().Format(time.RFC3339),
 		MergeReactionKind: reactionKind,
 		PRNumber:          prNumber,
@@ -78,10 +68,10 @@ func mergedOutcome(issueID, reactionKind string, prNumber int, owner, repo strin
 }
 
 // terminalOutcome builds the outcome of a terminal tracker state read.
-func terminalOutcome(issueID, state string, at time.Time) persistence.IssueOutcome {
-	return persistence.IssueOutcome{
+func terminalOutcome(issueID, state string, at time.Time) storage.IssueOutcome {
+	return storage.IssueOutcome{
 		IssueID:    issueID,
-		Kind:       persistence.IssueOutcomeTerminal,
+		Kind:       storage.IssueOutcomeTerminal,
 		ObservedAt: at.UTC().Format(time.RFC3339),
 		State:      state,
 	}
@@ -112,7 +102,7 @@ func pendingMergeWatch(state *State, issueID string) (mergeWatch, bool) {
 // A forge that closes the issue on merge makes the tracker report terminal
 // before any reaction observes the merge; the read keeps the pull request
 // from being lost when the release deletes the entry that would have seen it.
-func releaseReadOutcome(ctx context.Context, scm domain.SCMAdapter, watch mergeWatch, issueID, stateName string, at time.Time, log *slog.Logger) persistence.IssueOutcome {
+func releaseReadOutcome(ctx context.Context, scm domain.SCMAdapter, watch mergeWatch, issueID, stateName string, at time.Time, log *slog.Logger) storage.IssueOutcome {
 	if scm == nil || watch.ReactionKind == "" {
 		return terminalOutcome(issueID, stateName, at)
 	}

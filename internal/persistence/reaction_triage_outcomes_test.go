@@ -3,15 +3,17 @@ package persistence
 import (
 	"context"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestLatestReactionTriageDisposition(t *testing.T) {
 	t.Parallel()
 
-	out := func(issue, kind, fingerprint, disposition string) ReactionTriageOutcome {
-		return ReactionTriageOutcome{IssueID: issue, Kind: kind, Fingerprint: fingerprint, Disposition: disposition}
+	out := func(issue, kind, fingerprint, disposition string) storage.ReactionTriageOutcome {
+		return storage.ReactionTriageOutcome{IssueID: issue, Kind: kind, Fingerprint: fingerprint, Disposition: disposition}
 	}
-	recorded := []ReactionTriageOutcome{
+	recorded := []storage.ReactionTriageOutcome{
 		out("ISS-1", "bot-review", "fp-a", "actionable"),
 		out("ISS-1", "bot-review", "fp-a", "handled"),
 		out("ISS-1", "bot-review", "fp-b", "actionable"),
@@ -20,7 +22,7 @@ func TestLatestReactionTriageDisposition(t *testing.T) {
 
 	tests := []struct {
 		name                     string
-		records                  []ReactionTriageOutcome
+		records                  []storage.ReactionTriageOutcome
 		issue, kind, fingerprint string
 		want                     string
 		wantFound                bool

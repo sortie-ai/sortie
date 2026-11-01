@@ -120,6 +120,10 @@ func stateChangeSignal() (Observer, <-chan struct{}) {
 
 type stubStore struct {
 	storage.RunHistoryStore
+	storage.RunEventStore
+	storage.SessionMetadataStore
+	storage.AggregateMetricsStore
+	storage.RetryEntryStore
 	reactionActivityLog
 	livePassLog
 	noopOutcomeRecorder
@@ -129,9 +133,9 @@ type stubStore struct {
 
 	mu              sync.Mutex
 	runHistories    []storage.RunHistory
-	aggregates      []persistence.AggregateMetrics
-	sessions        []persistence.SessionMetadata
-	savedRetries    []persistence.RetryEntry
+	aggregates      []storage.AggregateMetrics
+	sessions        []storage.SessionMetadata
+	savedRetries    []storage.RetryEntry
 	deletedRetryIDs []string
 	// budgetExhaustedIDs maps an issue to its run-history session count.
 	budgetExhaustedIDs map[string]int
@@ -164,10 +168,10 @@ type stubStore struct {
 
 	windowUsage storage.IssueTokenUsage
 
-	parkedIssues       []persistence.ParkedIssue
+	parkedIssues       []storage.ParkedIssue
 	deletedParkedIDs   []string
 	labelAppliedIDs    []string
-	listParkedIssues   []persistence.ParkedIssue
+	listParkedIssues   []storage.ParkedIssue
 	listParkedIssueErr error
 
 	latestRuns      map[string]storage.RunHistory
@@ -178,30 +182,30 @@ type stubStore struct {
 	clearedOutcomeIDs []string
 	markDispatchedErr error
 
-	budgetHoldNotices         []persistence.BudgetHoldNotice
+	budgetHoldNotices         []storage.BudgetHoldNotice
 	upsertBudgetHoldNoticeErr error
 	deletedBudgetHoldIDs      []string
 	deleteBudgetHoldNoticeErr error
 	deleteAllBudgetHoldCalls  int
 	deleteAllBudgetHoldErr    error
-	listBudgetHoldNotices     []persistence.BudgetHoldNotice
+	listBudgetHoldNotices     []storage.BudgetHoldNotice
 	listBudgetHoldNoticesErr  error
 
-	storedAcknowledgements    map[string]persistence.AttentionAcknowledgement
-	savedAcknowledgements     []persistence.AttentionAcknowledgement
+	storedAcknowledgements    map[string]storage.AttentionAcknowledgement
+	savedAcknowledgements     []storage.AttentionAcknowledgement
 	deletedAcknowledgementIDs []string
 	saveAcknowledgementErr    error
 	deleteAcknowledgementsErr error
 
 	// scopeBudgetToCandidates makes QueryBudgetExhaustedIssues answer only
-	// for the candidate IDs it receives, as persistence.Store does.
+	// for the candidate IDs it receives, as the SQLite store does.
 	scopeBudgetToCandidates bool
 
 	// onAppendRunHistory and onUpsertSessionMetadata, when set, run
 	// synchronously after the write so a test can capture single-writer
 	// state at the moment a record is persisted rather than by polling.
 	onAppendRunHistory      func(storage.RunHistory)
-	onUpsertSessionMetadata func(persistence.SessionMetadata)
+	onUpsertSessionMetadata func(storage.SessionMetadata)
 }
 
 var _ OrchestratorStore = (*stubStore)(nil)
@@ -218,22 +222,22 @@ func (s *stubStore) AppendRunHistory(_ context.Context, run storage.RunHistory) 
 	return run, nil
 }
 
-func (s *stubStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
+func (s *stubStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, _ []storage.RunEvent, _ storage.RunEventLimits) (storage.RunHistory, error) {
 	return s.AppendRunHistory(ctx, run)
 }
 
-func (s *stubStore) AppendRunEvents(context.Context, string, string, []persistence.RunEvent, persistence.RunEventLimits) error {
+func (s *stubStore) AppendRunEvents(context.Context, string, string, []storage.RunEvent, storage.RunEventLimits) error {
 	return nil
 }
 
-func (s *stubStore) UpsertAggregateMetrics(_ context.Context, m persistence.AggregateMetrics) error {
+func (s *stubStore) UpsertAggregateMetrics(_ context.Context, m storage.AggregateMetrics) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aggregates = append(s.aggregates, m)
 	return nil
 }
 
-func (s *stubStore) UpsertSessionMetadata(_ context.Context, m persistence.SessionMetadata) error {
+func (s *stubStore) UpsertSessionMetadata(_ context.Context, m storage.SessionMetadata) error {
 	s.mu.Lock()
 	s.sessions = append(s.sessions, m)
 	hook := s.onUpsertSessionMetadata
@@ -245,15 +249,15 @@ func (s *stubStore) UpsertSessionMetadata(_ context.Context, m persistence.Sessi
 	return err
 }
 
-func (s *stubStore) sessionWrites() []persistence.SessionMetadata {
+func (s *stubStore) sessionWrites() []storage.SessionMetadata {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]persistence.SessionMetadata, len(s.sessions))
+	out := make([]storage.SessionMetadata, len(s.sessions))
 	copy(out, s.sessions)
 	return out
 }
 
-func (s *stubStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (s *stubStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.savedRetries = append(s.savedRetries, entry)
@@ -384,7 +388,7 @@ func (s *stubStore) LatestRunCompletionByIdentifier(_ context.Context, _ []strin
 	return map[string]string{}, nil
 }
 
-func (s *stubStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+func (s *stubStore) UpsertParkedIssue(_ context.Context, entry storage.ParkedIssue) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.parkedIssues = append(s.parkedIssues, entry)
@@ -405,18 +409,18 @@ func (s *stubStore) MarkParkedIssueLabelApplied(_ context.Context, issueID strin
 	return nil
 }
 
-func (s *stubStore) ListParkedIssues(_ context.Context) ([]persistence.ParkedIssue, error) {
+func (s *stubStore) ListParkedIssues(_ context.Context) ([]storage.ParkedIssue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listParkedIssueErr != nil {
 		return nil, s.listParkedIssueErr
 	}
-	out := make([]persistence.ParkedIssue, len(s.listParkedIssues))
+	out := make([]storage.ParkedIssue, len(s.listParkedIssues))
 	copy(out, s.listParkedIssues)
 	return out, nil
 }
 
-func (s *stubStore) UpsertBudgetHoldNotice(_ context.Context, notice persistence.BudgetHoldNotice) error {
+func (s *stubStore) UpsertBudgetHoldNotice(_ context.Context, notice storage.BudgetHoldNotice) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.upsertBudgetHoldNoticeErr != nil {
@@ -440,25 +444,25 @@ func (s *stubStore) DeleteAllBudgetHoldNotices(_ context.Context) error {
 	return s.deleteAllBudgetHoldErr
 }
 
-func (s *stubStore) ListBudgetHoldNotices(_ context.Context) ([]persistence.BudgetHoldNotice, error) {
+func (s *stubStore) ListBudgetHoldNotices(_ context.Context) ([]storage.BudgetHoldNotice, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listBudgetHoldNoticesErr != nil {
 		return nil, s.listBudgetHoldNoticesErr
 	}
-	out := make([]persistence.BudgetHoldNotice, len(s.listBudgetHoldNotices))
+	out := make([]storage.BudgetHoldNotice, len(s.listBudgetHoldNotices))
 	copy(out, s.listBudgetHoldNotices)
 	return out, nil
 }
 
-func (s *stubStore) SaveAttentionAcknowledgement(_ context.Context, ack persistence.AttentionAcknowledgement) error {
+func (s *stubStore) SaveAttentionAcknowledgement(_ context.Context, ack storage.AttentionAcknowledgement) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.saveAcknowledgementErr != nil {
 		return s.saveAcknowledgementErr
 	}
 	if s.storedAcknowledgements == nil {
-		s.storedAcknowledgements = make(map[string]persistence.AttentionAcknowledgement)
+		s.storedAcknowledgements = make(map[string]storage.AttentionAcknowledgement)
 	}
 	s.storedAcknowledgements[ack.ItemID] = ack
 	s.savedAcknowledgements = append(s.savedAcknowledgements, ack)
@@ -478,7 +482,7 @@ func (s *stubStore) DeleteAttentionAcknowledgements(_ context.Context, itemIDs [
 	return nil
 }
 
-func (s *stubStore) ListAttentionAcknowledgements(_ context.Context) ([]persistence.AttentionAcknowledgement, error) {
+func (s *stubStore) ListAttentionAcknowledgements(_ context.Context) ([]storage.AttentionAcknowledgement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Collect(maps.Values(s.storedAcknowledgements)), nil
@@ -1254,11 +1258,11 @@ func TestOrchestrator_QueuedMessagesApplyAheadOfExit(t *testing.T) {
 			// an empty DispatchID is HandleWorkerExit's own, distinguishable
 			// from the queued write regardless of call order.
 			type observedRow struct {
-				meta               persistence.SessionMetadata
+				meta               storage.SessionMetadata
 				selfReviewQueueLen int
 			}
 			captured := make(chan observedRow, 1)
-			store.onUpsertSessionMetadata = func(meta persistence.SessionMetadata) {
+			store.onUpsertSessionMetadata = func(meta storage.SessionMetadata) {
 				if meta.DispatchID != "" {
 					return
 				}
@@ -1316,7 +1320,7 @@ func TestOrchestrator_QueuedMessagesApplyAheadOfExit(t *testing.T) {
 			// distinguishes it from the queued event's earlier throttled
 			// incremental write, carrying the entry's non-empty DispatchID.
 			selfReviewQueueLen := -1
-			store.onUpsertSessionMetadata = func(meta persistence.SessionMetadata) {
+			store.onUpsertSessionMetadata = func(meta storage.SessionMetadata) {
 				if meta.DispatchID != "" {
 					return
 				}
@@ -1859,8 +1863,8 @@ func TestOrchestrator_UnaccountedTurnsRelayWritesWithoutWorkerExit(t *testing.T)
 		store := &stubStore{}
 		o := budgetOrchestrator(state, budgetTickConfig(0), store, &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}})
 		o.drainTimeout = 100 * time.Millisecond
-		written := make(chan persistence.SessionMetadata, 8)
-		store.onUpsertSessionMetadata = func(meta persistence.SessionMetadata) { written <- meta }
+		written := make(chan storage.SessionMetadata, 8)
+		store.onUpsertSessionMetadata = func(meta storage.SessionMetadata) { written <- meta }
 		o.unaccountedTurnsCh <- unaccountedTurnsMsg{IssueID: issueID, UnaccountedTurns: 3}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -5767,7 +5771,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		if _, ok := state.BudgetExhausted[issue.ID]; ok {
 			t.Errorf("BudgetExhausted[%s] remains with MaxSessions=0, want cleared", issue.ID)
 		}
-		requireLivePasses(t, "DeleteLivePass", store.deleted, []persistence.LivePass{{IssueID: issue.ID, Kind: persistence.LivePassBudget}})
+		requireLivePasses(t, "DeleteLivePass", store.deleted, []storage.LivePass{{IssueID: issue.ID, Kind: storage.LivePassBudget}})
 	})
 
 	t.Run("empty candidate list with budget enabled clears stale set", func(t *testing.T) {
@@ -5792,7 +5796,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		if _, ok := state.BudgetExhausted[issue.ID]; ok {
 			t.Errorf("BudgetExhausted[%s] retained on empty candidate list, want cleared", issue.ID)
 		}
-		requireLivePasses(t, "DeleteLivePass", store.deleted, []persistence.LivePass{{IssueID: issue.ID, Kind: persistence.LivePassBudget}})
+		requireLivePasses(t, "DeleteLivePass", store.deleted, []storage.LivePass{{IssueID: issue.ID, Kind: storage.LivePassBudget}})
 	})
 
 	t.Run("dispatch context of a hold", func(t *testing.T) {
@@ -5810,7 +5814,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 			RuleName: "plan", AgentAdapter: "kind-b", ConfiguredModel: "model-run", StagePrevious: "specify", StagePreviousOutcome: "succeeded",
 			ChainID: "chain-run", DispatchedAt: "2026-03-19T09:00:00Z",
 		}}
-		waiting := persistence.StageHop{
+		waiting := storage.StageHop{
 			IssueID: issue.ID, Identifier: issue.Identifier, HopCount: 1, SourceRule: "specify", TargetRule: "plan", TargetLabel: "Stage-Plan",
 			PreviousOutcome: "succeeded", ChainID: "chain-hop", HoppedAt: "2026-03-19T10:00:00Z", DispatchedAt: "2026-03-19T09:00:00Z",
 		}
@@ -5832,7 +5836,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		tests := []struct {
 			name      string
 			prior     *BudgetExhaustedEntry
-			hop       *persistence.StageHop
+			hop       *storage.StageHop
 			runsErr   error
 			ticks     int
 			want      holdContext
@@ -5860,7 +5864,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 					state.BudgetExhausted[issue.ID] = tt.prior
 				}
 				if tt.hop != nil {
-					PopulateStageHops(state, []persistence.StageHop{*tt.hop}, nil)
+					PopulateStageHops(state, []storage.StageHop{*tt.hop}, nil)
 				}
 				tracker := &candidateTrackerAdapter{
 					mockTrackerAdapter: &mockTrackerAdapter{},
@@ -5883,7 +5887,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 				if reads := len(store.latestRunsCalls); reads != tt.wantReads {
 					t.Errorf("LatestAgentRuns calls = %d over %d ticks, want %d", reads, tt.ticks, tt.wantReads)
 				}
-				wantPasses := []persistence.LivePass{{IssueID: issue.ID, Kind: persistence.LivePassBudget, ChainID: tt.want.lineage.ChainID, RuleName: tt.want.rule, StagePrevious: tt.want.lineage.PreviousRule}}
+				wantPasses := []storage.LivePass{{IssueID: issue.ID, Kind: storage.LivePassBudget, ChainID: tt.want.lineage.ChainID, RuleName: tt.want.rule, StagePrevious: tt.want.lineage.PreviousRule}}
 				if !tt.wantRow {
 					wantPasses = nil
 				}
@@ -9218,7 +9222,7 @@ func TestHandleTick_StageLineageChain(t *testing.T) {
 
 	const fresh = "<fresh>"
 	passAt := time.Date(2026, 3, 19, 9, 0, 0, 500_000_000, time.UTC)
-	hopReachedPlan := persistence.StageHop{
+	hopReachedPlan := storage.StageHop{
 		IssueID: "id-1", Identifier: "S-1", HopCount: 1, SourceRule: "specify", TargetRule: "plan", TargetLabel: "Stage-Plan",
 		PreviousOutcome: "succeeded", SourceDispatchID: "d0", HoppedAt: "2026-03-19T10:00:00Z", ChainID: "chain-hop",
 		DispatchedAt: "2026-03-19T09:00:00.5Z",
@@ -9228,7 +9232,7 @@ func TestHandleTick_StageLineageChain(t *testing.T) {
 	reachedPlan := StageLineage{PreviousRule: "specify", PreviousOutcome: "succeeded", ChainID: "chain-hop", DispatchedAt: passAt}
 	tests := []struct {
 		name       string
-		hops       []persistence.StageHop
+		hops       []storage.StageHop
 		want       map[string]StageLineage
 		wantBefore int
 		wantMarked []string
@@ -9237,12 +9241,12 @@ func TestHandleTick_StageLineageChain(t *testing.T) {
 		{name: "dispatches no hop reached each start a chain", want: map[string]StageLineage{"id-1": {ChainID: fresh}, "id-2": {ChainID: fresh}}},
 		{
 			name: "a restored hop record hands its chain and pass time to the dispatch it reached and to no other",
-			hops: []persistence.StageHop{hopReachedPlan}, want: map[string]StageLineage{"id-1": reachedPlan, "id-2": {ChainID: fresh}},
+			hops: []storage.StageHop{hopReachedPlan}, want: map[string]StageLineage{"id-1": reachedPlan, "id-2": {ChainID: fresh}},
 			wantBefore: 1, wantMarked: []string{"id-1"}, wantFirst: "id-1",
 		},
 		{
 			name: "a restored hop record already followed by a run is neither listed nor marked again",
-			hops: []persistence.StageHop{followedByRun}, want: map[string]StageLineage{"id-1": reachedPlan, "id-2": {ChainID: fresh}},
+			hops: []storage.StageHop{followedByRun}, want: map[string]StageLineage{"id-1": reachedPlan, "id-2": {ChainID: fresh}},
 		},
 	}
 
@@ -9289,7 +9293,7 @@ func TestHandleTick_StageLineageChain(t *testing.T) {
 				if wantFirst := id == tt.wantFirst; entry.FirstAfterHop != wantFirst {
 					t.Errorf("Running[%q].FirstAfterHop = %t, want %t", id, entry.FirstAfterHop, wantFirst)
 				}
-				wantPass := persistence.LivePass{IssueID: id, Kind: persistence.LivePassRunning, ChainID: entry.StageLineage.ChainID, RuleName: "plan", StagePrevious: want.PreviousRule}
+				wantPass := storage.LivePass{IssueID: id, Kind: storage.LivePassRunning, ChainID: entry.StageLineage.ChainID, RuleName: "plan", StagePrevious: want.PreviousRule}
 				if !slices.Contains(h.store.upserted, wantPass) {
 					t.Errorf("UpsertLivePass calls = %+v, want one for %+v", h.store.upserted, wantPass)
 				}
@@ -10217,7 +10221,7 @@ func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
 	state := NewState(60000, 10, 0, nil, AgentTotals{})
 	// The state a restart leaves behind: the notice memory is reloaded
 	// from the durable rows, while the exhausted set starts empty.
-	PopulateBudgetHoldNotices(state, []persistence.BudgetHoldNotice{
+	PopulateBudgetHoldNotices(state, []storage.BudgetHoldNotice{
 		{IssueID: issue.ID, Reason: budgetReasonSession, NoticedAt: "2026-08-25T09:14:03Z"},
 	}, discardLogger())
 	tracker := &candidateTrackerAdapter{
@@ -10832,7 +10836,7 @@ func seedRetry(h *runHarness, mode string, entry RetryEntry) {
 	h.state.Claimed[entry.IssueID] = struct{}{}
 	if mode == "recovered" {
 		session := entry.SessionID
-		PopulateRetries(h.state, []persistence.PendingRetry{{Entry: persistence.RetryEntry{
+		PopulateRetries(h.state, []storage.PendingRetry{{Entry: storage.RetryEntry{
 			IssueID: entry.IssueID, Identifier: entry.Identifier, Attempt: entry.Attempt, SessionID: &session,
 			RuleName: entry.RuleName, TemplateID: entry.TemplateID, AgentKind: entry.AgentKind,
 		}}}, nil)
@@ -11351,7 +11355,7 @@ func TestHandleTick_FreshDispatchIsGivenPullRequestComments(t *testing.T) {
 
 func (s *stubStore) DeleteStageHop(context.Context, string) error { return nil }
 
-func (s *stubStore) RecordStageHop(context.Context, persistence.StageHop) error { return nil }
+func (s *stubStore) RecordStageHop(context.Context, storage.StageHop) error { return nil }
 
 func (s *stubStore) RecordRunStageResult(context.Context, int64, string, string) error { return nil }
 
@@ -11380,7 +11384,7 @@ func (s *stubStore) LatestAgentRuns(_ context.Context, issueIDs []string) (map[s
 	return runs, nil
 }
 
-func (s *stubStore) ListStageHops(context.Context) ([]persistence.StageHop, error) {
+func (s *stubStore) ListStageHops(context.Context) ([]storage.StageHop, error) {
 	return nil, nil
 }
 

@@ -8,7 +8,11 @@ import (
 	"fmt"
 
 	_ "modernc.org/sqlite" // Register the "sqlite" database/sql driver.
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
+
+var _ storage.Pinger = (*Store)(nil)
 
 // Store provides single-writer access to the SQLite database. All write
 // operations must be serialized through a single Store instance. Concurrent

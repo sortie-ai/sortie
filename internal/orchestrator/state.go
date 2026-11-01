@@ -358,7 +358,7 @@ type RunningEntry struct {
 
 // RetryEntry holds the runtime state for a pending retry. IssueID,
 // Identifier, DisplayID, IssueIdentity, Attempt, DueAtMS, and Error map to
-// persistence.RetryEntry;
+// storage.RetryEntry;
 // the rest is runtime-only and reconstructed on startup from persisted
 // due_at timestamps.
 type RetryEntry struct {

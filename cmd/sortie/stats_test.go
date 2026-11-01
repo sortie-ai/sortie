@@ -77,7 +77,7 @@ func createStatsDB(t *testing.T, dbPath string, runs ...storage.RunHistory) {
 	for _, r := range runs {
 		if len(r.ModelUsage) > 0 || len(r.ReportedAmounts) > 0 {
 			r.DispatchID = new("dispatch-" + r.IssueID)
-			_, err = store.AppendRunHistoryWithEvents(ctx, r, nil, persistence.RunEventLimits{})
+			_, err = store.AppendRunHistoryWithEvents(ctx, r, nil, storage.RunEventLimits{})
 		} else {
 			_, err = store.AppendRunHistory(ctx, r)
 		}
@@ -1010,13 +1010,13 @@ func holdFunnelPasses(t *testing.T, dbPath string) {
 		t.Fatalf("persistence.Open(%q): %v", dbPath, err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	retry := persistence.RetryEntry{IssueID: "ISS-c4", Identifier: "PROJ-c4", Attempt: 1, DueAtMs: 1, RuleName: "plan", ChainID: "c4", StagePrevious: "specify"}
+	retry := storage.RetryEntry{IssueID: "ISS-c4", Identifier: "PROJ-c4", Attempt: 1, DueAtMs: 1, RuleName: "plan", ChainID: "c4", StagePrevious: "specify"}
 	if err := store.SaveRetryEntry(ctx, retry); err != nil {
 		t.Fatalf("SaveRetryEntry: %v", err)
 	}
-	for _, pass := range []persistence.LivePass{
-		{IssueID: "ISS-c5", Kind: persistence.LivePassRunning, ChainID: "c5", RuleName: "implement", StagePrevious: "plan"},
-		{IssueID: "ISS-c6", Kind: persistence.LivePassBudget, ChainID: "c6", RuleName: "plan", StagePrevious: "specify"},
+	for _, pass := range []storage.LivePass{
+		{IssueID: "ISS-c5", Kind: storage.LivePassRunning, ChainID: "c5", RuleName: "implement", StagePrevious: "plan"},
+		{IssueID: "ISS-c6", Kind: storage.LivePassBudget, ChainID: "c6", RuleName: "plan", StagePrevious: "specify"},
 	} {
 		if err := store.UpsertLivePass(ctx, pass); err != nil {
 			t.Fatalf("UpsertLivePass(%+v): %v", pass, err)

@@ -32,18 +32,26 @@ import (
 )
 
 type mockExitStore struct {
+	storage.RunHistoryStore
+	storage.RunEventStore
+	storage.AggregateMetricsStore
+	storage.SessionMetadataStore
+	storage.RetryEntryStore
+	storage.ParkedIssueStore
+	storage.ReactionHandoffStore
+	storage.StageHopStore
 	reactionActivityLog
 	livePassLog
 	noopOutcomeRecorder
 	noEscalationRecords
 	noUsageLimitHolds
 	runHistories    []storage.RunHistory
-	metrics         []persistence.AggregateMetrics
-	sessionMetadata []persistence.SessionMetadata
-	retryEntries    []persistence.RetryEntry
+	metrics         []storage.AggregateMetrics
+	sessionMetadata []storage.SessionMetadata
+	retryEntries    []storage.RetryEntry
 	deletedRetryIDs []string
 
-	recordedStageHops []persistence.StageHop
+	recordedStageHops []storage.StageHop
 	stageResults      []recordedStageResult
 
 	// absenceResetAt maps an issue ID to the run-history watermark at
@@ -53,7 +61,7 @@ type mockExitStore struct {
 
 	absenceCountedIssueIDs []string
 
-	parkedIssues     []persistence.ParkedIssue
+	parkedIssues     []storage.ParkedIssue
 	deletedParkedIDs []string
 	upsertParkedErr  error
 	deleteParkedErr  error
@@ -76,7 +84,7 @@ type recordedStageResult struct {
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
 
-func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []persistence.RunEvent, _ persistence.RunEventLimits) (storage.RunHistory, error) {
+func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []storage.RunEvent, _ storage.RunEventLimits) (storage.RunHistory, error) {
 	m.runHistories = append(m.runHistories, run)
 	if m.appendRunHistoryErr != nil {
 		return storage.RunHistory{}, m.appendRunHistoryErr
@@ -85,12 +93,12 @@ func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run storag
 	return run, nil
 }
 
-func (m *mockExitStore) UpsertAggregateMetrics(_ context.Context, metrics persistence.AggregateMetrics) error {
+func (m *mockExitStore) UpsertAggregateMetrics(_ context.Context, metrics storage.AggregateMetrics) error {
 	m.metrics = append(m.metrics, metrics)
 	return m.upsertAggregateMetricsErr
 }
 
-func (m *mockExitStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (m *mockExitStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	m.retryEntries = append(m.retryEntries, entry)
 	return m.saveRetryEntryErr
 }
@@ -138,12 +146,12 @@ func (m *mockExitStore) ResetHandoffAbsenceSequence(_ context.Context, issueID s
 	return nil
 }
 
-func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta persistence.SessionMetadata) error {
+func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta storage.SessionMetadata) error {
 	m.sessionMetadata = append(m.sessionMetadata, meta)
 	return m.upsertSessionMetadataErr
 }
 
-func (m *mockExitStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+func (m *mockExitStore) UpsertParkedIssue(_ context.Context, entry storage.ParkedIssue) error {
 	m.parkedIssues = append(m.parkedIssues, entry)
 	return m.upsertParkedErr
 }
@@ -984,7 +992,7 @@ func TestHandleWorkerExit_RequestCountReconciliation(t *testing.T) {
 func TestHandleWorkerExit_ReconciliationNoOpWhenResultMatchesEntry(t *testing.T) {
 	t.Parallel()
 
-	buildRecords := func(t *testing.T, result WorkerResult) (storage.RunHistory, persistence.AggregateMetrics, persistence.SessionMetadata) {
+	buildRecords := func(t *testing.T, result WorkerResult) (storage.RunHistory, storage.AggregateMetrics, storage.SessionMetadata) {
 		t.Helper()
 
 		store := &mockExitStore{}
@@ -1156,11 +1164,11 @@ func TestHandleWorkerExit_RetryableReactionErrorPreservesContext(t *testing.T) {
 
 type holdRecordingExitStore struct {
 	*mockExitStore
-	saved   []persistence.UsageLimitHold
+	saved   []storage.UsageLimitHold
 	deleted []UsageLimitHoldKey
 }
 
-func (s *holdRecordingExitStore) SaveUsageLimitHold(_ context.Context, hold persistence.UsageLimitHold) error {
+func (s *holdRecordingExitStore) SaveUsageLimitHold(_ context.Context, hold storage.UsageLimitHold) error {
 	s.saved = append(s.saved, hold)
 	return nil
 }
@@ -1573,7 +1581,7 @@ func TestHandleWorkerExit_CancelledExit(t *testing.T) {
 	if len(store.retryEntries) != 0 {
 		t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
 	}
-	requireLivePasses(t, "DeleteLivePass", store.deleted, []persistence.LivePass{{IssueID: "ISSUE-4", Kind: persistence.LivePassRunning}})
+	requireLivePasses(t, "DeleteLivePass", store.deleted, []storage.LivePass{{IssueID: "ISSUE-4", Kind: storage.LivePassRunning}})
 }
 
 func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testing.T) {
@@ -2452,12 +2460,12 @@ type orderRecordingExitStore struct {
 
 var _ WorkerExitStore = (*orderRecordingExitStore)(nil)
 
-func (s *orderRecordingExitStore) UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error {
+func (s *orderRecordingExitStore) UpsertSessionMetadata(ctx context.Context, meta storage.SessionMetadata) error {
 	s.callOrder = append(s.callOrder, "UpsertSessionMetadata")
 	return s.mockExitStore.UpsertSessionMetadata(ctx, meta)
 }
 
-func (s *orderRecordingExitStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error) {
+func (s *orderRecordingExitStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []storage.RunEvent, limits storage.RunEventLimits) (storage.RunHistory, error) {
 	s.callOrder = append(s.callOrder, "AppendRunHistory")
 	return s.mockExitStore.AppendRunHistoryWithEvents(ctx, run, events, limits)
 }
@@ -5141,7 +5149,7 @@ func TestHandleWorkerExit_HandoffReview_DoesNotOverwriteExistingPendingReaction(
 	if reviewData.PRNumber != 99 {
 		t.Errorf("ReviewReactionData.PRNumber = %d, want 99 (seeded value)", reviewData.PRNumber)
 	}
-	if watches := store.activities(persistence.ReactionActivityWatch); len(watches) != 0 {
+	if watches := store.activities(storage.ReactionActivityWatch); len(watches) != 0 {
 		t.Errorf("RecordReactionActivity watch records = %+v, want none for an entry the exit did not create", watches)
 	}
 }
@@ -6311,7 +6319,7 @@ func TestHandleWorkerExitBlockedDrivingDispatchParksIssue(t *testing.T) {
 	if len(store.runHistories) != 1 || !store.runHistories[0].AgentBlocked {
 		t.Errorf("appended run history = %+v, want one row with AgentBlocked true", store.runHistories)
 	}
-	requireLivePasses(t, "DeleteLivePass", store.deleted, []persistence.LivePass{{IssueID: "BLK-1", Kind: persistence.LivePassRunning}})
+	requireLivePasses(t, "DeleteLivePass", store.deleted, []storage.LivePass{{IssueID: "BLK-1", Kind: storage.LivePassRunning}})
 }
 
 func TestHandleWorkerExitBlockedWithReviewMetadataTakesBlockedDisposition(t *testing.T) {
@@ -6588,7 +6596,7 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	if _, ok := state.PendingReactions[ReactionKey("CI-ISS-1", ReactionKindReview)]; ok {
 		t.Error("PendingReactions[CI-ISS-1:review] present, want absent without the review reaction configured")
 	}
-	watches := store.activities(persistence.ReactionActivityWatch)
+	watches := store.activities(storage.ReactionActivityWatch)
 	if len(watches) != 1 || watches[0].IssueID != "CI-ISS-1" || watches[0].ChainID != "chain-ci-1" || watches[0].Kind != ReactionKindCI {
 		t.Errorf("RecordReactionActivity watch records = %+v, want one for CI-ISS-1 kind %q chain %q", watches, ReactionKindCI, "chain-ci-1")
 	}
@@ -9001,7 +9009,7 @@ func TestHandleWorkerExit_StopSignalDispositionsDestroyForeignIncumbent(t *testi
 			if _, ok := state.Claimed[tc.issueID]; ok {
 				t.Error("Claimed entry survived a stop-signal disposition, want released even against a foreign incumbent")
 			}
-			requireLivePasses(t, "DeleteLivePass", store.deleted, []persistence.LivePass{{IssueID: tc.issueID, Kind: persistence.LivePassRunning}})
+			requireLivePasses(t, "DeleteLivePass", store.deleted, []storage.LivePass{{IssueID: tc.issueID, Kind: storage.LivePassRunning}})
 		})
 	}
 
@@ -10289,7 +10297,7 @@ func (m *mockExitStore) RecordRunStageResult(_ context.Context, runID int64, tar
 	return nil
 }
 
-func (m *mockExitStore) RecordStageHop(_ context.Context, hop persistence.StageHop) error {
+func (m *mockExitStore) RecordStageHop(_ context.Context, hop storage.StageHop) error {
 	m.recordedStageHops = append(m.recordedStageHops, hop)
 	return nil
 }
@@ -10509,7 +10517,7 @@ func TestHandleWorkerExit_StageHopOnlyForSuccessfulRun(t *testing.T) {
 func TestHandleWorkerExit_StageHopFallsBackToHandoff(t *testing.T) {
 	t.Parallel()
 
-	restoredRow := persistence.StageHop{
+	restoredRow := storage.StageHop{
 		IssueID: hopExitIssueID, HopCount: 3, SourceRule: "specify", TargetRule: "implement", TargetLabel: hopExitTargetLabel,
 		HoppedAt: "2026-03-15T12:00:00Z",
 	}
@@ -10528,7 +10536,7 @@ func TestHandleWorkerExit_StageHopFallsBackToHandoff(t *testing.T) {
 			f.state.StageHops[hopExitIssueID] = &StageHopEntry{Count: 3, SourceRule: "specify", TargetRule: "implement", TargetLabel: hopExitTargetLabel}
 		}, ceiling, notAdvanced(3, "ceiling")},
 		{"count restored from the store at the ceiling", func(f *hopExitFixture) {
-			PopulateStageHops(f.state, []persistence.StageHop{restoredRow}, discardLogger())
+			PopulateStageHops(f.state, []storage.StageHop{restoredRow}, discardLogger())
 		}, ceiling, notAdvanced(3, "ceiling")},
 		{"label add fails", func(f *hopExitFixture) { f.tracker.addErr = errors.New("add refused") },
 			[]recordedStageResult{{1, "implement", "failed"}}, notAdvanced(0, "failed")},
@@ -10646,21 +10654,21 @@ func fixtureRatesVersion(t *testing.T, inputPerMtok float64) string {
 var usageS = domain.TokenUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000}
 
 type appendCapturingStore struct {
-	*persistence.Store
+	OrchestratorStore
 	appended storage.RunHistory
 }
 
-func (s *appendCapturingStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []persistence.RunEvent, limits persistence.RunEventLimits) (storage.RunHistory, error) {
+func (s *appendCapturingStore) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []storage.RunEvent, limits storage.RunEventLimits) (storage.RunHistory, error) {
 	s.appended = run
-	return s.Store.AppendRunHistoryWithEvents(ctx, run, events, limits)
+	return s.OrchestratorStore.AppendRunHistoryWithEvents(ctx, run, events, limits)
 }
 
 func TestHandleWorkerExit_PricesUnderReloadedRatesAndClearsLiveEstimate(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := &appendCapturingStore{Store: openInMemoryStore(t)}
-	if err := store.UpsertSessionMetadata(ctx, persistence.SessionMetadata{
+	store := &appendCapturingStore{OrchestratorStore: openInMemoryStore(t)}
+	if err := store.UpsertSessionMetadata(ctx, storage.SessionMetadata{
 		IssueID: "ISS-1", EstimatedCostUSD: new(12.0), CostStatus: "estimated", UpdatedAt: baseTime.Format(time.RFC3339),
 	}); err != nil {
 		t.Fatalf("UpsertSessionMetadata: %v", err)

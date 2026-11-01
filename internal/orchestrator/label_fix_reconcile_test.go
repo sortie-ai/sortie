@@ -12,7 +12,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
@@ -21,6 +20,8 @@ import (
 // reconcileLabelFixCommands never reads the flag: a fresh event past the
 // stored mark still dispatches regardless of its value.
 type labelFixDispatchedFlagStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -43,7 +44,7 @@ func (s *labelFixDispatchedFlagStore) UpsertReactionFingerprint(_ context.Contex
 	return nil
 }
 
-func (s *labelFixDispatchedFlagStore) SaveRetryEntry(_ context.Context, _ persistence.RetryEntry) error {
+func (s *labelFixDispatchedFlagStore) SaveRetryEntry(_ context.Context, _ storage.RetryEntry) error {
 	return nil
 }
 

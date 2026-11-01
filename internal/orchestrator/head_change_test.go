@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
@@ -15,6 +14,8 @@ import (
 // every other method is a no-op, since classifyHeadChange consults no
 // other store method.
 type headChangeStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -28,8 +29,8 @@ type headChangeStore struct {
 
 var _ ReconcileStore = (*headChangeStore)(nil)
 
-func (s *headChangeStore) SaveRetryEntry(context.Context, persistence.RetryEntry) error { return nil }
-func (s *headChangeStore) DeleteRetryEntry(context.Context, string) error               { return nil }
+func (s *headChangeStore) SaveRetryEntry(context.Context, storage.RetryEntry) error { return nil }
+func (s *headChangeStore) DeleteRetryEntry(context.Context, string) error           { return nil }
 func (s *headChangeStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	return run, nil
 }

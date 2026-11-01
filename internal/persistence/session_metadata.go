@@ -5,53 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// SessionMetadata represents the last known session metadata for a single
-// issue, persisted in the session_metadata table. It captures the agent
-// session ID, process ID, and accumulated token counters at the time of
-// the last update.
-type SessionMetadata struct {
-	IssueID          string  // Tracker-internal issue ID (primary key).
-	SessionID        string  // Last session ID assigned by the agent adapter.
-	AgentPID         *string // Last known agent PID; nil when unknown.
-	InputTokens      int64   // Accumulated input tokens for the session.
-	OutputTokens     int64   // Accumulated output tokens for the session.
-	TotalTokens      int64   // Accumulated total tokens for the session.
-	CacheReadTokens  int64   // Accumulated cache-read tokens for the session.
-	CacheWriteTokens int64   // Accumulated cache-write tokens for the session.
-	ModelName        string  // Last reported LLM model identifier.
-	APIRequestCount  int     // Measured model API requests; zero when APIRequestsMeasured is false.
-	UpdatedAt        string  // ISO-8601 timestamp of last update.
-
-	// APIRequestsMeasured is true when APIRequestCount is a
-	// measurement of model API requests. False when nothing counted
-	// them, in which case a current writer stores APIRequestCount as
-	// zero so the row cannot contradict its own qualifier. A row last
-	// written before this field existed is the exception: it keeps the
-	// count it had beside a false qualifier until its issue runs again.
-	APIRequestsMeasured bool
-
-	// DispatchID is the dispatch ID of the running session whose
-	// in-flight write last stored the row; empty when the session-exit
-	// write last stored it or the row predates the column.
-	DispatchID string
-
-	// UnaccountedTurns is the running session's count of turns that
-	// spent tokens no figure was proven to cover, as of the last
-	// in-flight write; zero after the session-exit write.
-	UnaccountedTurns int
-
-	// EstimatedCostUSD and CostStatus are the running session's live
-	// estimate as of the last in-flight write. Nil and "" mean no estimate.
-	EstimatedCostUSD *float64
-	CostStatus       string
-}
+var _ storage.SessionMetadataStore = (*Store)(nil)
 
 // UpsertSessionMetadata inserts or replaces session metadata for the given
 // issue. If an entry with the same IssueID already exists, all fields are
 // updated.
-func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata) error {
+func (s *Store) UpsertSessionMetadata(ctx context.Context, meta storage.SessionMetadata) error {
 	var nullPID sql.NullString
 	if meta.AgentPID != nil {
 		nullPID = sql.NullString{String: *meta.AgentPID, Valid: true}
@@ -92,10 +55,10 @@ func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata)
 }
 
 // LoadSessionMetadata returns the session metadata for the given issue ID.
-// Returns the metadata and true if found, or a zero-value [SessionMetadata]
+// Returns the metadata and true if found, or a zero-value [storage.SessionMetadata]
 // and false if no entry exists.
-func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (SessionMetadata, bool, error) {
-	var m SessionMetadata
+func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (storage.SessionMetadata, bool, error) {
+	var m storage.SessionMetadata
 	var nullPID sql.NullString
 	var nullCost sql.NullFloat64
 
@@ -111,10 +74,10 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 		&m.APIRequestsMeasured, &m.DispatchID, &m.UnaccountedTurns, &nullCost, &m.CostStatus, &m.UpdatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return SessionMetadata{}, false, nil
+		return storage.SessionMetadata{}, false, nil
 	}
 	if err != nil {
-		return SessionMetadata{}, false, fmt.Errorf("load session metadata %q: %w", issueID, err)
+		return storage.SessionMetadata{}, false, fmt.Errorf("load session metadata %q: %w", issueID, err)
 	}
 	if nullPID.Valid {
 		m.AgentPID = new(nullPID.String)
@@ -128,7 +91,7 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 // LoadAllSessionMetadata returns all session metadata entries ordered by
 // updated_at descending (most recently updated first). Returns an empty
 // non-nil slice when no entries exist.
-func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, error) {
+func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]storage.SessionMetadata, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens,
 		        cache_read_tokens, cache_write_tokens, model_name, api_request_count, api_requests_measured,
@@ -140,9 +103,9 @@ func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, 
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	entries := []SessionMetadata{}
+	entries := []storage.SessionMetadata{}
 	for rows.Next() {
-		var m SessionMetadata
+		var m storage.SessionMetadata
 		var nullPID sql.NullString
 		if err := rows.Scan(&m.IssueID, &m.SessionID, &nullPID,
 			&m.InputTokens, &m.OutputTokens, &m.TotalTokens,

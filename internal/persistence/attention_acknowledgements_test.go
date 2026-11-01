@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func listAcknowledgementTimes(t *testing.T, s *Store) map[string]time.Time {
@@ -30,7 +32,7 @@ func TestAttentionAcknowledgementRoundTrip(t *testing.T) {
 		"9c3d7a10e5b84f26b1a0d8e47c2f6a95": time.Date(2026, 2, 25, 8, 30, 0, 0, time.UTC),
 	}
 	for id, at := range saved {
-		if err := s.SaveAttentionAcknowledgement(ctx, AttentionAcknowledgement{ItemID: id, AcknowledgedAt: at}); err != nil {
+		if err := s.SaveAttentionAcknowledgement(ctx, storage.AttentionAcknowledgement{ItemID: id, AcknowledgedAt: at}); err != nil {
 			t.Fatalf("SaveAttentionAcknowledgement(%q): %v", id, err)
 		}
 	}

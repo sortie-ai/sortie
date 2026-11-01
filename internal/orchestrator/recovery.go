@@ -10,7 +10,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -29,7 +28,7 @@ import (
 //
 // Must be called before [NewOrchestrator] so the retry timer channel
 // buffer can be sized to accommodate immediate-fire entries.
-func PopulateRetries(state *State, entries []persistence.PendingRetry, log *slog.Logger) {
+func PopulateRetries(state *State, entries []storage.PendingRetry, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -92,7 +91,7 @@ func PopulateRetries(state *State, entries []persistence.PendingRetry, log *slog
 // PopulateUsageLimitHolds loads persisted usage-limit holds into the state.
 // An expired hold loads and stays inert until a refusal replaces it or a
 // run started after it clears it.
-func PopulateUsageLimitHolds(state *State, holds []persistence.UsageLimitHold) {
+func PopulateUsageLimitHolds(state *State, holds []storage.UsageLimitHold) {
 	for _, hold := range holds {
 		key := UsageLimitHoldKey{AgentKind: hold.AgentKind, ModelOnly: hold.ModelOnly, Model: hold.Model}
 		state.UsageLimitHolds[key] = UsageLimitHold{
@@ -110,12 +109,6 @@ const PendingReactionRecoveryLookback = 30 * 24 * time.Hour
 // PendingReactionRecoveryMaxCandidates is the maximum number of unique issues
 // considered for pending reaction recovery in a single startup pass.
 const PendingReactionRecoveryMaxCandidates = 200
-
-// ReactionRecoveryRunStore is the persistence contract consumed by startup
-// wiring and orchestrator tests.
-type ReactionRecoveryRunStore interface {
-	LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context, completedAfter time.Time, limit int) ([]storage.RunHistory, error)
-}
 
 // PendingReactionRecoveryParams holds all inputs for [RecoverPendingReactions].
 type PendingReactionRecoveryParams struct {

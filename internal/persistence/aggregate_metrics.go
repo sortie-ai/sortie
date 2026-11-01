@@ -5,34 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// AggregateMetrics represents global token and runtime totals persisted in
-// the aggregate_metrics table. The Key field identifies the metric category
-// (e.g., "agent_totals"). These counters survive process restarts and are
-// restored during startup recovery.
-type AggregateMetrics struct {
-	Key              string // Primary key identifying the metric category (e.g. "agent_totals").
-	InputTokens      int64
-	OutputTokens     int64
-	TotalTokens      int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	SecondsRunning   float64
-
-	// UnmeasuredSessions is a cumulative count of ended sessions whose
-	// usage was never recorded, marking the totals above as a lower
-	// bound.
-	UnmeasuredSessions int64
-
-	UpdatedAt string // ISO-8601 timestamp of last update.
-}
+var _ storage.AggregateMetricsStore = (*Store)(nil)
 
 // UpsertAggregateMetrics inserts or replaces aggregate metrics for the given
 // key. If an entry with the same Key already exists, all fields are updated.
 // The caller computes cumulative totals before calling; this method stores
 // provided values directly.
-func (s *Store) UpsertAggregateMetrics(ctx context.Context, metrics AggregateMetrics) error {
+func (s *Store) UpsertAggregateMetrics(ctx context.Context, metrics storage.AggregateMetrics) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO aggregate_metrics
 			(key, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, seconds_running, unmeasured_sessions, updated_at)
@@ -57,10 +40,10 @@ func (s *Store) UpsertAggregateMetrics(ctx context.Context, metrics AggregateMet
 }
 
 // LoadAggregateMetrics returns the aggregate metrics for the given key.
-// Returns the metrics and true if found, or a zero-value [AggregateMetrics]
+// Returns the metrics and true if found, or a zero-value [storage.AggregateMetrics]
 // and false if no entry exists.
-func (s *Store) LoadAggregateMetrics(ctx context.Context, key string) (AggregateMetrics, bool, error) {
-	var m AggregateMetrics
+func (s *Store) LoadAggregateMetrics(ctx context.Context, key string) (storage.AggregateMetrics, bool, error) {
+	var m storage.AggregateMetrics
 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT key, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, seconds_running, unmeasured_sessions, updated_at
@@ -70,10 +53,10 @@ func (s *Store) LoadAggregateMetrics(ctx context.Context, key string) (Aggregate
 		&m.TotalTokens, &m.CacheReadTokens, &m.CacheWriteTokens, &m.SecondsRunning, &m.UnmeasuredSessions, &m.UpdatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return AggregateMetrics{}, false, nil
+		return storage.AggregateMetrics{}, false, nil
 	}
 	if err != nil {
-		return AggregateMetrics{}, false, fmt.Errorf("load aggregate metrics %q: %w", key, err)
+		return storage.AggregateMetrics{}, false, fmt.Errorf("load aggregate metrics %q: %w", key, err)
 	}
 	return m, true, nil
 }

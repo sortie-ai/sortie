@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func TestMigrate_Migration014AppliesFromVersion13(t *testing.T) {
@@ -63,7 +65,7 @@ func TestUpsertParkedIssue_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := mustOpenStore(t)
 
-	entry := ParkedIssue{
+	entry := storage.ParkedIssue{
 		IssueID:      "ISS-1",
 		Identifier:   "PROJ-1",
 		DisplayID:    "PROJ-1-display",
@@ -108,7 +110,7 @@ func TestUpsertParkedIssue_RewritesExistingRow(t *testing.T) {
 	s := mustOpenStore(t)
 	const issueID = "ISS-2"
 
-	if err := s.UpsertParkedIssue(ctx, ParkedIssue{
+	if err := s.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID: issueID, Identifier: "PROJ-2", Reason: "agent_blocked",
 		ParkedState: "In Progress", Label: "needs-human", ParkedAt: "2026-08-17T00:00:00Z",
 		IssueTitle: "Old title", IssueURL: "https://tracker.example.test/browse/OLD",
@@ -119,7 +121,7 @@ func TestUpsertParkedIssue_RewritesExistingRow(t *testing.T) {
 		t.Fatalf("UpsertParkedIssue (initial): %v", err)
 	}
 
-	rewritten := ParkedIssue{
+	rewritten := storage.ParkedIssue{
 		IssueID: issueID, Identifier: "PROJ-2", Reason: "handoff_absence",
 		ParkedState: "Blocked", Label: "operator-needed", LabelApplied: true,
 		ParkedAt: "2026-08-17T01:00:00Z", IssueTitle: "New title", IssueURL: "https://tracker.example.test/browse/PROJ-2",
@@ -147,7 +149,7 @@ func TestMarkParkedIssueLabelApplied_SetsFlag(t *testing.T) {
 	s := mustOpenStore(t)
 	const issueID = "ISS-3"
 
-	if err := s.UpsertParkedIssue(ctx, ParkedIssue{
+	if err := s.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID: issueID, Identifier: "PROJ-3", Reason: "agent_blocked",
 		ParkedState: "In Progress", Label: "needs-human", ParkedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
@@ -185,7 +187,7 @@ func TestDeleteParkedIssue_RemovesRow(t *testing.T) {
 	s := mustOpenStore(t)
 	const issueID = "ISS-4"
 
-	if err := s.UpsertParkedIssue(ctx, ParkedIssue{
+	if err := s.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID: issueID, Identifier: "PROJ-4", Reason: "agent_blocked",
 		ParkedState: "In Progress", Label: "needs-human", ParkedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
@@ -240,13 +242,13 @@ func TestListParkedIssues_MultipleRowsIndependent(t *testing.T) {
 	ctx := context.Background()
 	s := mustOpenStore(t)
 
-	if err := s.UpsertParkedIssue(ctx, ParkedIssue{
+	if err := s.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID: "ISS-5", Identifier: "PROJ-5", Reason: "agent_blocked",
 		ParkedState: "In Progress", Label: "needs-human", ParkedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("UpsertParkedIssue(ISS-5): %v", err)
 	}
-	if err := s.UpsertParkedIssue(ctx, ParkedIssue{
+	if err := s.UpsertParkedIssue(ctx, storage.ParkedIssue{
 		IssueID: "ISS-6", Identifier: "PROJ-6", Reason: "handoff_absence",
 		ParkedState: "Blocked", Label: "needs-human", ParkedAt: "2026-08-17T00:00:00Z",
 	}); err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/config"
@@ -84,7 +85,7 @@ type SessionToolRegistry struct {
 	// Store is the read-only connection backing workspace_history and
 	// cost_budget, or nil when neither was registered. The caller closes
 	// it after consuming Registry.
-	Store *persistence.Store
+	Store io.Closer
 }
 
 // BuildSessionToolRegistry returns tools whose registration inputs are satisfied.
@@ -152,5 +153,11 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 		reg.Register(notifyTool)
 	}
 
-	return SessionToolRegistry{Registry: reg, Store: store}, nil
+	// A nil store pointer inside an io.Closer is a non-nil interface, so a
+	// caller's != nil check then Close would panic.
+	var closer io.Closer
+	if store != nil {
+		closer = store
+	}
+	return SessionToolRegistry{Registry: reg, Store: closer}, nil
 }

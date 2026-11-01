@@ -94,7 +94,7 @@ func moneyCeilingStopError(usedUSD, budgetUSD float64) error {
 //
 // Must run on the single-writer event loop, after [HandleAgentEvent] has
 // applied the event's usage delta.
-func enforceInFlightMoneyCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store issueTokenStore, logger *slog.Logger) {
+func enforceInFlightMoneyCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store storage.RunHistoryStore, logger *slog.Logger) {
 	ceiling := state.MaxCostUSD
 	if ceiling <= 0 {
 		return

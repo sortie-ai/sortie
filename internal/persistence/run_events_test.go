@@ -11,10 +11,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-var unboundedRunEvents = RunEventLimits{MaxAge: 100 * 365 * 24 * time.Hour, MaxBytes: math.MaxInt64, MaxExpiredRuns: 4}
+var unboundedRunEvents = storage.RunEventLimits{MaxAge: 100 * 365 * 24 * time.Hour, MaxBytes: math.MaxInt64, MaxExpiredRuns: 4}
 
-func twoEvents() []RunEvent {
-	return []RunEvent{
+func twoEvents() []storage.RunEvent {
+	return []storage.RunEvent{
 		{Seq: 1, At: "2026-03-19T10:00:00Z", Event: "notification", Payload: `{"message":"a"}`, Size: 10},
 		{Seq: 2, At: "2026-03-19T10:00:01Z", Event: "notification", Payload: `{"message":"b"}`, Size: 10},
 	}
@@ -100,12 +100,12 @@ func TestAppendRunHistoryWithEvents_FailureIsolation(t *testing.T) {
 
 			_, err := s.AppendRunHistoryWithEvents(context.Background(), runWithDispatch("d1", "2026-03-19T10:00:30Z"), twoEvents(), unboundedRunEvents)
 
-			var eventsErr *RunEventsError
+			var eventsErr *storage.RunEventsError
 			if err == nil {
 				t.Fatalf("AppendRunHistoryWithEvents() = nil, want error")
 			}
 			if got := errors.As(err, &eventsErr); got != tt.wantEventsErr {
-				t.Errorf("AppendRunHistoryWithEvents() error %T is *RunEventsError = %v, want %v", err, got, tt.wantEventsErr)
+				t.Errorf("AppendRunHistoryWithEvents() error %T is *storage.RunEventsError = %v, want %v", err, got, tt.wantEventsErr)
 			}
 			if got := scalar(t, s, `SELECT COUNT(*) FROM run_history`); got != tt.wantHistory {
 				t.Errorf("run_history rows = %d, want %d", got, tt.wantHistory)
@@ -170,7 +170,7 @@ func TestAppendRunHistoryWithEvents_Pruning(t *testing.T) {
 				assertTotalMatchesSizes(t, s)
 			}
 
-			limits := RunEventLimits{MaxAge: 24 * time.Hour, MaxBytes: tt.maxBytes, MaxExpiredRuns: 4}
+			limits := storage.RunEventLimits{MaxAge: 24 * time.Hour, MaxBytes: tt.maxBytes, MaxExpiredRuns: 4}
 			if _, err := s.AppendRunHistoryWithEvents(ctx, runWithDispatch(written, "2026-03-20T12:00:00Z"), twoEvents(), limits); err != nil {
 				t.Fatalf("AppendRunHistoryWithEvents(%q): %v", written, err)
 			}

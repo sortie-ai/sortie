@@ -6,16 +6,16 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-type noopOutcomeRecorder struct{}
+type noopOutcomeRecorder struct{ storage.IssueOutcomeStore }
 
-func (noopOutcomeRecorder) RecordIssueOutcome(context.Context, persistence.IssueOutcome) error {
+func (noopOutcomeRecorder) RecordIssueOutcome(context.Context, storage.IssueOutcome) error {
 	return nil
 }
 
-func requireStoredOutcome(t *testing.T, store *persistence.Store, want persistence.IssueOutcome) {
+func requireStoredOutcome(t *testing.T, store storage.IssueOutcomeStore, want storage.IssueOutcome) {
 	t.Helper()
 	got, err := store.IssueOutcomes(context.Background(), []string{want.IssueID})
 	if err != nil {
@@ -42,7 +42,7 @@ func perPRSCM(statuses map[int]domain.PRMergeStatus) *controlledSCMAdapter {
 	}
 }
 
-func handoffExitParams(t *testing.T, store *persistence.Store, handoffState string) HandleWorkerExitParams {
+func handoffExitParams(t *testing.T, store OrchestratorStore, handoffState string) HandleWorkerExitParams {
 	t.Helper()
 	params := defaultExitParams(t, nil)
 	params.Store = store
@@ -61,8 +61,8 @@ func TestIssueOutcome_HandoffExit(t *testing.T) {
 		target string
 		want   string
 	}{
-		{"handoff to a review state", "Human Review", persistence.IssueOutcomeHandedOff},
-		{"handoff to a terminal state", "Done", persistence.IssueOutcomeTerminal},
+		{"handoff to a review state", "Human Review", storage.IssueOutcomeHandedOff},
+		{"handoff to a terminal state", "Done", storage.IssueOutcomeTerminal},
 	}
 
 	for _, tt := range tests {
@@ -74,7 +74,7 @@ func TestIssueOutcome_HandoffExit(t *testing.T) {
 
 			HandleWorkerExit(state, WorkerResult{IssueID: "OUT-1", Identifier: "OUT-1-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock"}, handoffExitParams(t, store, tt.target))
 
-			requireStoredOutcome(t, store, persistence.IssueOutcome{IssueID: "OUT-1", Kind: tt.want, ObservedAt: "2026-03-15T12:01:00Z", State: tt.target})
+			requireStoredOutcome(t, store, storage.IssueOutcome{IssueID: "OUT-1", Kind: tt.want, ObservedAt: "2026-03-15T12:01:00Z", State: tt.target})
 		})
 	}
 }
@@ -85,10 +85,10 @@ func TestIssueOutcome_Reconcile(t *testing.T) {
 	const issueID = "OUT-2"
 	merged := domain.PRMergeStatus{Merged: true, MergeCommitSHA: "merge-sha", Mergeability: domain.MergeabilityUnknown}
 	open := domain.PRMergeStatus{Mergeability: domain.MergeabilityClean, HeadSHA: "head-sha"}
-	mergedBy := func(kind, repo string) persistence.IssueOutcome {
-		return persistence.IssueOutcome{IssueID: issueID, Kind: persistence.IssueOutcomeMerged, ObservedAt: "2026-07-01T09:00:00Z", MergeReactionKind: kind, PRNumber: 42, PRRepository: repo}
+	mergedBy := func(kind, repo string) storage.IssueOutcome {
+		return storage.IssueOutcome{IssueID: issueID, Kind: storage.IssueOutcomeMerged, ObservedAt: "2026-07-01T09:00:00Z", MergeReactionKind: kind, PRNumber: 42, PRRepository: repo}
 	}
-	terminal := persistence.IssueOutcome{IssueID: issueID, Kind: persistence.IssueOutcomeTerminal, ObservedAt: "2026-07-01T09:00:00Z", State: "Done"}
+	terminal := storage.IssueOutcome{IssueID: issueID, Kind: storage.IssueOutcomeTerminal, ObservedAt: "2026-07-01T09:00:00Z", State: "Done"}
 
 	tests := []struct {
 		name            string
@@ -97,7 +97,7 @@ func TestIssueOutcome_Reconcile(t *testing.T) {
 		autoMerge       bool
 		running         bool
 		pr              domain.PRMergeStatus
-		want            persistence.IssueOutcome
+		want            storage.IssueOutcome
 	}{
 		{name: "merge completion reads the merge", trackerState: "In Review", mergeCompletion: true, pr: merged, want: mergedBy(ReactionKindMergeCompletion, "owner/repo")},
 		{name: "auto-merge merges the pull request", trackerState: "In Review", autoMerge: true, pr: open, want: mergedBy(ReactionKindAutoMerge, "corp/api")},
@@ -125,7 +125,7 @@ func TestIssueOutcome_Reconcile(t *testing.T) {
 				state.Claimed[issueID] = struct{}{}
 			}
 			otherPR := domain.PRMergeStatus{Mergeability: domain.MergeabilityDirty}
-			if tt.want.Kind == persistence.IssueOutcomeTerminal {
+			if tt.want.Kind == storage.IssueOutcomeTerminal {
 				otherPR = merged
 			}
 			params := mgcParams(store, perPRSCM(map[int]domain.PRMergeStatus{42: tt.pr, 7: otherPR}), &mgcTrackerFake{states: map[string]string{issueID: tt.trackerState}})
@@ -160,7 +160,7 @@ func TestIssueOutcome_MergedPullRequestEndsAutoMergeWatch(t *testing.T) {
 
 	const issueID = "OUT-9"
 	store := openInMemoryStore(t)
-	handedOff := persistence.IssueOutcome{IssueID: issueID, Kind: persistence.IssueOutcomeHandedOff, ObservedAt: "2026-02-01T00:00:00Z", State: "In Review"}
+	handedOff := storage.IssueOutcome{IssueID: issueID, Kind: storage.IssueOutcomeHandedOff, ObservedAt: "2026-02-01T00:00:00Z", State: "In Review"}
 	if err := store.RecordIssueOutcome(context.Background(), handedOff); err != nil {
 		t.Fatalf("RecordIssueOutcome: %v", err)
 	}
@@ -177,8 +177,8 @@ func TestIssueOutcome_MergedPullRequestEndsAutoMergeWatch(t *testing.T) {
 
 	ReconcileRunningIssues(state, params)
 
-	requireStoredOutcome(t, store, persistence.IssueOutcome{
-		IssueID: issueID, Kind: persistence.IssueOutcomeMerged, ObservedAt: "2026-07-01T09:00:00Z",
+	requireStoredOutcome(t, store, storage.IssueOutcome{
+		IssueID: issueID, Kind: storage.IssueOutcomeMerged, ObservedAt: "2026-07-01T09:00:00Z",
 		MergeReactionKind: ReactionKindAutoMerge, PRNumber: 42, PRRepository: "corp/api",
 	})
 	if _, ok := state.PendingReactions[rkey]; ok {

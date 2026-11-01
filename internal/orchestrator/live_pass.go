@@ -5,22 +5,8 @@ import (
 	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
-
-// livePassStore is the persistence surface of the live pass record, which the
-// stats report reads to count passes held outside finished runs. A failed
-// write never blocks or aborts the dispatch, exit, or hold it accompanies.
-type livePassStore interface {
-	livePassDeleter
-	UpsertLivePass(ctx context.Context, pass persistence.LivePass) error
-}
-
-// livePassDeleter is the part of [livePassStore] an exit needs: it removes a
-// pass and never stores one.
-type livePassDeleter interface {
-	DeleteLivePass(ctx context.Context, issueID, kind string) error
-}
 
 // identifiesPass reports whether a rule and chain together identify a pass.
 func identifiesPass(ruleName, chainID string) bool {
@@ -30,13 +16,13 @@ func identifiesPass(ruleName, chainID string) bool {
 // recordRunningPass stores the running stage session of entry. A reaction
 // session and an entry without a rule or chain identifier store nothing. log
 // must already carry issue_id and issue_identifier.
-func recordRunningPass(ctx context.Context, store livePassStore, issueID string, entry *RunningEntry, log *slog.Logger) {
+func recordRunningPass(ctx context.Context, store storage.LivePassStore, issueID string, entry *RunningEntry, log *slog.Logger) {
 	if entry.ReactionKind != "" || !identifiesPass(entry.RuleName, entry.StageLineage.ChainID) {
 		return
 	}
-	upsertLivePass(ctx, store, persistence.LivePass{
+	upsertLivePass(ctx, store, storage.LivePass{
 		IssueID:       issueID,
-		Kind:          persistence.LivePassRunning,
+		Kind:          storage.LivePassRunning,
 		ChainID:       entry.StageLineage.ChainID,
 		RuleName:      entry.RuleName,
 		StagePrevious: entry.StageLineage.PreviousRule,
@@ -46,13 +32,13 @@ func recordRunningPass(ctx context.Context, store livePassStore, issueID string,
 // recordBudgetPass stores the budget hold of entry. An entry without a rule or
 // chain identifier stores nothing. log must already carry issue_id and
 // issue_identifier.
-func recordBudgetPass(ctx context.Context, store livePassStore, issueID string, entry *BudgetExhaustedEntry, log *slog.Logger) {
+func recordBudgetPass(ctx context.Context, store storage.LivePassStore, issueID string, entry *BudgetExhaustedEntry, log *slog.Logger) {
 	if !identifiesPass(entry.RuleName, entry.StageLineage.ChainID) {
 		return
 	}
-	upsertLivePass(ctx, store, persistence.LivePass{
+	upsertLivePass(ctx, store, storage.LivePass{
 		IssueID:       issueID,
-		Kind:          persistence.LivePassBudget,
+		Kind:          storage.LivePassBudget,
 		ChainID:       entry.StageLineage.ChainID,
 		RuleName:      entry.RuleName,
 		StagePrevious: entry.StageLineage.PreviousRule,
@@ -62,14 +48,14 @@ func recordBudgetPass(ctx context.Context, store livePassStore, issueID string, 
 // syncBudgetPasses brings the stored budget holds from prior to fresh: it
 // stores a hold that starts or changes its rule, chain, or previous rule and
 // deletes the record of a hold that ends or loses its identity.
-func syncBudgetPasses(ctx context.Context, store livePassStore, prior, fresh map[string]*BudgetExhaustedEntry, log *slog.Logger) {
+func syncBudgetPasses(ctx context.Context, store storage.LivePassStore, prior, fresh map[string]*BudgetExhaustedEntry, log *slog.Logger) {
 	for id, entry := range fresh {
 		issueLog := logging.WithIssue(log, id, entry.Identifier)
 		held := prior[id]
 		switch {
 		case !identifiesPass(entry.RuleName, entry.StageLineage.ChainID):
 			if held != nil && identifiesPass(held.RuleName, held.StageLineage.ChainID) {
-				deleteLivePass(ctx, store, id, persistence.LivePassBudget, issueLog)
+				deleteLivePass(ctx, store, id, storage.LivePassBudget, issueLog)
 			}
 		case held == nil ||
 			held.RuleName != entry.RuleName ||
@@ -82,11 +68,11 @@ func syncBudgetPasses(ctx context.Context, store livePassStore, prior, fresh map
 		if _, stillHeld := fresh[id]; stillHeld {
 			continue
 		}
-		deleteLivePass(ctx, store, id, persistence.LivePassBudget, logging.WithIssue(log, id, held.Identifier))
+		deleteLivePass(ctx, store, id, storage.LivePassBudget, logging.WithIssue(log, id, held.Identifier))
 	}
 }
 
-func upsertLivePass(ctx context.Context, store livePassStore, pass persistence.LivePass, log *slog.Logger) {
+func upsertLivePass(ctx context.Context, store storage.LivePassStore, pass storage.LivePass, log *slog.Logger) {
 	if err := store.UpsertLivePass(ctx, pass); err != nil {
 		log.Error("failed to persist live pass",
 			slog.String("kind", pass.Kind),
@@ -97,7 +83,7 @@ func upsertLivePass(ctx context.Context, store livePassStore, pass persistence.L
 
 // deleteLivePass removes the live pass row of the issue and kind. log must
 // already carry issue_id and issue_identifier.
-func deleteLivePass(ctx context.Context, store livePassDeleter, issueID, kind string, log *slog.Logger) {
+func deleteLivePass(ctx context.Context, store storage.LivePassStore, issueID, kind string, log *slog.Logger) {
 	if err := store.DeleteLivePass(ctx, issueID, kind); err != nil {
 		log.Error("failed to delete live pass",
 			slog.String("kind", kind),

@@ -60,12 +60,6 @@ type CeilingStopRequest struct {
 	Usage *storage.IssueTokenUsage
 }
 
-// issueTokenStore is the persistence contract [freezeIssueTokenBaseline]
-// and [enforceInFlightTokenCeiling] need.
-type issueTokenStore interface {
-	TokenUsageByIssue(ctx context.Context, issueID string) (storage.IssueTokenUsage, error)
-}
-
 // sessionUncachedTokens returns the running session's total tokens less its
 // cache reads, floored at zero.
 func (e *RunningEntry) sessionUncachedTokens() int64 {
@@ -84,7 +78,7 @@ func (e *RunningEntry) issueUncachedTokens() int64 {
 // spend whether or not a ceiling is set. Without a ceiling a failed read
 // emits nothing. Must run on the single-writer event loop, after
 // entry.UsageArrival and entry.CarriesTokenFigure have been assigned.
-func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string, store issueTokenStore, logger *slog.Logger) {
+func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string, store storage.RunHistoryStore, logger *slog.Logger) {
 	entry, ok := state.Running[issueID]
 	if !ok {
 		return
@@ -145,7 +139,7 @@ func warnCeilingUnboundAtDispatch(log *slog.Logger, budgetTokens int, entry *Run
 //
 // Must run on the single-writer event loop, after [HandleAgentEvent] has
 // applied the event's usage delta.
-func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store issueTokenStore, logger *slog.Logger) {
+func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store storage.RunHistoryStore, logger *slog.Logger) {
 	ceiling := state.MaxTokens
 	if ceiling <= 0 {
 		return

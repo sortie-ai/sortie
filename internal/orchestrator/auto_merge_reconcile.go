@@ -11,7 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // autoMergePendingBackoffBase is the base interval for auto-merge
@@ -292,7 +292,7 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 
 		state.ReactionAttempts[rkey]++
 		recordReactionActivity(ctx, params.Store, pending.IssueID, pending.StageLineage,
-			persistence.ReactionActivityAction, []string{ReactionKindAutoMerge}, now, entryLog)
+			storage.ReactionActivityAction, []string{ReactionKindAutoMerge}, now, entryLog)
 
 		if err != nil {
 			handleMergeError(state, params, key, pending, autoMergeData, fingerprint, err, now, pollInterval, entryLog, ctx, metrics)

@@ -5,59 +5,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
-// Activity values of a reaction_activity row.
-const (
-	ReactionActivityWatch        = "watch"
-	ReactionActivityContinuation = "continuation"
-	ReactionActivityAction       = "action"
-	ReactionActivityEscalation   = "escalation"
-)
-
-// ReactionActivity is one thing a pull request reaction did in one pass of an
-// issue.
-type ReactionActivity struct {
-	IssueID    string
-	ChainID    string
-	Kind       string
-	Activity   string
-	RecordedAt time.Time
-}
-
-// PassRef names one pass of one issue and when its first run was dispatched.
-type PassRef struct {
-	IssueID      string
-	ChainID      string
-	DispatchedAt time.Time // zero for an undated pass
-}
-
-// PassKey keys a pass in a PassActivities result.
-type PassKey struct {
-	IssueID string
-	ChainID string
-}
-
-// KindActivity sums what one reaction kind recorded in one pass.
-type KindActivity struct {
-	Watched       bool
-	Continuations int
-	Acted         bool // an action row exists
-	Escalated     bool
-}
-
-// PassActivity is what the reactions recorded in one pass. Recorded is false
-// for a pass without a chain identifier or a dispatch time, or dispatched
-// before the second the table was created in; Kinds is then empty.
-type PassActivity struct {
-	Recorded bool
-	Kinds    map[string]KindActivity // keyed by reaction kind
-}
+var _ storage.ReactionActivityStore = (*Store)(nil)
 
 // RecordReactionActivity appends records in one transaction. A watch record
 // whose issue, chain, and kind already hold one is ignored. An empty list
 // writes nothing.
-func (s *Store) RecordReactionActivity(ctx context.Context, records []ReactionActivity) error {
+func (s *Store) RecordReactionActivity(ctx context.Context, records []storage.ReactionActivity) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -88,8 +45,8 @@ func (s *Store) RecordReactionActivity(ctx context.Context, records []ReactionAc
 // PassActivities returns what each listed pass recorded, keyed by issue and
 // chain. A listed pass without rows maps to its Recorded value and empty
 // Kinds. An empty list reads nothing and returns an empty, non-nil map.
-func (s *Store) PassActivities(ctx context.Context, passes []PassRef) (map[PassKey]PassActivity, error) {
-	result := make(map[PassKey]PassActivity, len(passes))
+func (s *Store) PassActivities(ctx context.Context, passes []storage.PassRef) (map[storage.PassKey]storage.PassActivity, error) {
+	result := make(map[storage.PassKey]storage.PassActivity, len(passes))
 	if len(passes) == 0 {
 		return result, nil
 	}
@@ -101,16 +58,16 @@ func (s *Store) PassActivities(ctx context.Context, passes []PassRef) (map[PassK
 		return nil, err
 	}
 
-	recorded := make(map[PassKey]struct{}, len(passes))
+	recorded := make(map[storage.PassKey]struct{}, len(passes))
 	issueSet := make(map[string]struct{}, len(passes))
 	for _, p := range passes {
-		key := PassKey{IssueID: p.IssueID, ChainID: p.ChainID}
+		key := storage.PassKey{IssueID: p.IssueID, ChainID: p.ChainID}
 		if _, ok := recorded[key]; ok {
 			continue
 		}
 		isRecorded := p.ChainID != "" && !p.DispatchedAt.IsZero() &&
 			!p.DispatchedAt.Truncate(time.Second).Before(trackedSince)
-		result[key] = PassActivity{Recorded: isRecorded}
+		result[key] = storage.PassActivity{Recorded: isRecorded}
 		if isRecorded {
 			recorded[key] = struct{}{}
 			issueSet[p.IssueID] = struct{}{}
@@ -141,7 +98,7 @@ func (s *Store) PassActivities(ctx context.Context, passes []PassRef) (map[PassK
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
 	for rows.Next() {
-		var key PassKey
+		var key storage.PassKey
 		var kind, activity string
 		var count int
 		if err := rows.Scan(&key.IssueID, &key.ChainID, &kind, &activity, &count); err != nil {
@@ -153,17 +110,17 @@ func (s *Store) PassActivities(ctx context.Context, passes []PassRef) (map[PassK
 
 		pass := result[key]
 		if pass.Kinds == nil {
-			pass.Kinds = make(map[string]KindActivity)
+			pass.Kinds = make(map[string]storage.KindActivity)
 		}
 		ka := pass.Kinds[kind]
 		switch activity {
-		case ReactionActivityWatch:
+		case storage.ReactionActivityWatch:
 			ka.Watched = true
-		case ReactionActivityContinuation:
+		case storage.ReactionActivityContinuation:
 			ka.Continuations += count
-		case ReactionActivityAction:
+		case storage.ReactionActivityAction:
 			ka.Acted = true
-		case ReactionActivityEscalation:
+		case storage.ReactionActivityEscalation:
 			ka.Escalated = true
 		default:
 			continue

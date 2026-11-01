@@ -231,7 +231,7 @@ func TestHandleWorkerExit_PersistedRunEventsReadBackEqual(t *testing.T) {
 	}
 }
 
-func exitRun(state *State, store *persistence.Store) {
+func exitRun(state *State, store OrchestratorStore) {
 	HandleWorkerExit(state, WorkerResult{
 		IssueID: "ISS-1", Identifier: "ISS-1-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock",
 	}, HandleWorkerExitParams{
@@ -317,18 +317,20 @@ func openFileStore(t *testing.T, path string) *persistence.Store {
 }
 
 type failingRunEventStore struct {
+	storage.RunEventStore
+
 	failures int
 
 	mu    sync.Mutex
 	calls map[string]int
-	last  map[string][]persistence.RunEvent
+	last  map[string][]storage.RunEvent
 }
 
-func (s *failingRunEventStore) AppendRunEvents(_ context.Context, dispatchID, _ string, events []persistence.RunEvent, _ persistence.RunEventLimits) error {
+func (s *failingRunEventStore) AppendRunEvents(_ context.Context, dispatchID, _ string, events []storage.RunEvent, _ storage.RunEventLimits) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.calls == nil {
-		s.calls, s.last = map[string]int{}, map[string][]persistence.RunEvent{}
+		s.calls, s.last = map[string]int{}, map[string][]storage.RunEvent{}
 	}
 	s.calls[dispatchID]++
 	s.last[dispatchID] = events
@@ -338,7 +340,7 @@ func (s *failingRunEventStore) AppendRunEvents(_ context.Context, dispatchID, _ 
 	return nil
 }
 
-func (s *failingRunEventStore) callsFor(dispatchID string) (int, []persistence.RunEvent) {
+func (s *failingRunEventStore) callsFor(dispatchID string) (int, []storage.RunEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls[dispatchID], s.last[dispatchID]
@@ -358,7 +360,7 @@ func heldRunOf(dispatchID string, size int64) HeldRunEvents {
 	return HeldRunEvents{
 		IssueID: "ISS-" + dispatchID, Identifier: "ISS-" + dispatchID, DispatchID: dispatchID,
 		CompletedAt: "2026-03-15T12:01:00Z",
-		Events:      []persistence.RunEvent{{Seq: 1, At: "2026-03-15T12:00:00Z", Event: "notification", Payload: `{"message":"m"}`, Size: size}},
+		Events:      []storage.RunEvent{{Seq: 1, At: "2026-03-15T12:00:00Z", Event: "notification", Payload: `{"message":"m"}`, Size: size}},
 	}
 }
 

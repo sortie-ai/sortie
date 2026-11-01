@@ -12,7 +12,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
@@ -122,6 +121,8 @@ func (p *labelReviewSCMPanicOnOthers) DeleteBranch(_ context.Context, _, _, _ st
 // value. Only the fingerprint methods carry behavior; the rest satisfy the
 // interface.
 type labelReviewFingerprintStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -154,7 +155,7 @@ func (s *labelReviewFingerprintStore) GetReactionFingerprint(_ context.Context, 
 	return s.marks[issueID+":"+kind], false, nil
 }
 
-func (s *labelReviewFingerprintStore) SaveRetryEntry(_ context.Context, _ persistence.RetryEntry) error {
+func (s *labelReviewFingerprintStore) SaveRetryEntry(_ context.Context, _ storage.RetryEntry) error {
 	return nil
 }
 

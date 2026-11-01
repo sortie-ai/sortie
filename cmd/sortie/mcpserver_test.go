@@ -281,7 +281,7 @@ func seedBudgetStore(t *testing.T, dispatchID string) *persistence.Store {
 		}
 	}
 
-	meta := persistence.SessionMetadata{
+	meta := storage.SessionMetadata{
 		IssueID:     "iss-1",
 		SessionID:   "sess-live",
 		DispatchID:  dispatchID,
@@ -459,7 +459,7 @@ func seedBudgetMeasurementStore(t *testing.T) *persistence.Store {
 		}
 	}
 
-	metas := []persistence.SessionMetadata{
+	metas := []storage.SessionMetadata{
 		{IssueID: "iss-mixed", SessionID: "sess-mixed-live", DispatchID: "dispatch-mixed-live", TotalTokens: 50, UpdatedAt: "2026-03-19T10:02:00Z"},
 		{IssueID: "iss-zero", SessionID: "sess-zero-live", DispatchID: "dispatch-zero-live", TotalTokens: 0, UpdatedAt: "2026-03-19T10:02:00Z"},
 		{IssueID: "iss-priced", SessionID: "sess-priced-live", DispatchID: "dispatch-priced-live", TotalTokens: 100, EstimatedCostUSD: new(0.125), CostStatus: "estimated", UpdatedAt: "2026-03-19T10:02:00Z"},

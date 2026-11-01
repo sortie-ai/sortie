@@ -5,14 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
-
-// reactionActivityStore is the store method the reaction activity record
-// needs. Satisfied by [persistence.Store].
-type reactionActivityStore interface {
-	RecordReactionActivity(ctx context.Context, records []persistence.ReactionActivity) error
-}
 
 // recordReactionActivity records activity for each kind in the pass lineage
 // names. A nil store, or a lineage without a chain identifier or a dispatch
@@ -20,7 +14,7 @@ type reactionActivityStore interface {
 // the caller proceeds: the act it describes has already happened.
 func recordReactionActivity(
 	ctx context.Context,
-	store reactionActivityStore,
+	store storage.ReactionActivityStore,
 	issueID string,
 	lineage StageLineage,
 	activity string,
@@ -35,9 +29,9 @@ func recordReactionActivity(
 		log = slog.Default()
 	}
 
-	records := make([]persistence.ReactionActivity, 0, len(kinds))
+	records := make([]storage.ReactionActivity, 0, len(kinds))
 	for _, kind := range kinds {
-		records = append(records, persistence.ReactionActivity{
+		records = append(records, storage.ReactionActivity{
 			IssueID:    issueID,
 			ChainID:    lineage.ChainID,
 			Kind:       kind,
@@ -60,12 +54,12 @@ func recordReactionActivity(
 func scheduleReactionContinuation(
 	ctx context.Context,
 	state *State,
-	store reactionActivityStore,
+	store storage.ReactionActivityStore,
 	params ScheduleRetryParams,
 	onFire func(issueID string),
 	now time.Time,
 ) {
 	ScheduleRetry(state, params, onFire)
 	recordReactionActivity(ctx, store, params.IssueID, params.StageLineage,
-		persistence.ReactionActivityContinuation, []string{params.ReactionKind}, now, params.Logger)
+		storage.ReactionActivityContinuation, []string{params.ReactionKind}, now, params.Logger)
 }

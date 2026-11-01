@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
@@ -26,20 +25,10 @@ const (
 
 // ParkStore is the persistence contract [parkIssue] and [unparkIssue] need.
 type ParkStore interface {
-	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
-	DeleteParkedIssue(ctx context.Context, issueID string) error
-	DeleteRetryEntry(ctx context.Context, issueID string) error
-	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
-	DeleteStageHop(ctx context.Context, issueID string) error
-}
-
-// parkObserverStore widens [ParkStore] with the one method the release pass
-// needs to confirm a parking label. It stays off ParkStore itself, because
-// only the release pass, running on the orchestrator's own store, ever
-// reaches it.
-type parkObserverStore interface {
-	ParkStore
-	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
+	storage.ParkedIssueStore
+	storage.RetryEntryStore
+	storage.RunHistoryStore
+	storage.StageHopStore
 }
 
 // parkHandOver is what a park keeps from the run it follows for the first
@@ -304,7 +293,7 @@ func formatWholeSecondUTC(t time.Time) string {
 // PopulateParked loads persisted park records into state.Parked, and rows
 // a person already released into state.ParkReleases. Called during startup
 // recovery, before the event loop starts, beside [PopulateRetries].
-func PopulateParked(state *State, rows []persistence.ParkedIssue, log *slog.Logger) {
+func PopulateParked(state *State, rows []storage.ParkedIssue, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -365,7 +354,7 @@ func PopulateParked(state *State, rows []persistence.ParkedIssue, log *slog.Logg
 // empty entry.ParkedState is backfilled from observed without releasing.
 // A non-empty entry.ParkedState that differs from observed, compared
 // case-insensitively, unparks the issue with trigger "state_changed".
-func observeParkedState(ctx context.Context, state *State, store parkObserverStore, log *slog.Logger, entry *ParkedEntry, issueID, observed string) (stillParked bool) {
+func observeParkedState(ctx context.Context, state *State, store ParkStore, log *slog.Logger, entry *ParkedEntry, issueID, observed string) (stillParked bool) {
 	if observed == "" {
 		return true
 	}
@@ -389,7 +378,7 @@ func observeParkedState(ctx context.Context, state *State, store parkObserverSto
 // LabelApplied. A parking label observed absent while confirmed unparks
 // the issue with trigger "label_removed". A parking label observed absent
 // while unconfirmed leaves the park unchanged.
-func observeParkedLabels(ctx context.Context, state *State, store parkObserverStore, log *slog.Logger, entry *ParkedEntry, issueID string, labels []string) {
+func observeParkedLabels(ctx context.Context, state *State, store ParkStore, log *slog.Logger, entry *ParkedEntry, issueID string, labels []string) {
 	hasLabel := slices.ContainsFunc(labels, func(label string) bool {
 		return strings.EqualFold(label, entry.Label)
 	})
@@ -419,8 +408,8 @@ func labelsWithout(labels []string, drop string) []string {
 }
 
 // parkedIssueRow builds the persisted row for the given runtime park entry.
-func parkedIssueRow(issueID string, entry *ParkedEntry) persistence.ParkedIssue {
-	return persistence.ParkedIssue{
+func parkedIssueRow(issueID string, entry *ParkedEntry) storage.ParkedIssue {
+	return storage.ParkedIssue{
 		IssueID:      issueID,
 		Identifier:   entry.Identifier,
 		DisplayID:    entry.DisplayID,

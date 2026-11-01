@@ -8,7 +8,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
@@ -86,6 +85,8 @@ func (s *retrySlotSCM) RemoveLabel(_ context.Context, _ int, _, _, label string)
 // so "unchanged" and "advanced" assertions exercise real state rather than
 // a canned return value.
 type retrySlotStore struct {
+	storage.RetryEntryStore
+	storage.StageHopStore
 	reactionActivityLog
 	noopOutcomeRecorder
 	noEscalationRecords
@@ -95,7 +96,7 @@ type retrySlotStore struct {
 	dispatched map[string]bool
 
 	runHistories []storage.RunHistory
-	savedEntries []persistence.RetryEntry
+	savedEntries []storage.RetryEntry
 	deletedIDs   []string
 
 	upsertCalls   int
@@ -113,7 +114,7 @@ func newRetrySlotStore() *retrySlotStore {
 	}
 }
 
-func (s *retrySlotStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+func (s *retrySlotStore) SaveRetryEntry(_ context.Context, entry storage.RetryEntry) error {
 	s.savedEntries = append(s.savedEntries, entry)
 	return nil
 }

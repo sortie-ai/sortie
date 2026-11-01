@@ -135,16 +135,11 @@ type SpendCeilingStatus struct {
 	incompleteWarned bool
 }
 
-// spendStore is the read evaluateSpendCeiling needs.
-type spendStore interface {
-	UsageCompletedBetween(ctx context.Context, since, until time.Time) (storage.IssueTokenUsage, error)
-}
-
 // spendCeilingParams carries the inputs of one evaluateSpendCeiling call.
 type spendCeilingParams struct {
 	// Ctx nil reads context.Background().
 	Ctx   context.Context
-	Store spendStore
+	Store storage.RunHistoryStore
 
 	// Ceilings is the setting of each window; a window absent or at 0 is off.
 	Ceilings map[SpendWindow]float64
