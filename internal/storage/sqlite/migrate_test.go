@@ -1,0 +1,1191 @@
+package sqlite
+
+import (
+	"context"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
+)
+
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open(:memory:): %v", err)
+	}
+	t.Cleanup(func() { closeStore(t, s) })
+	return s
+}
+
+func migrateOrFatal(t *testing.T, s *Store) {
+	t.Helper()
+	if err := s.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+}
+
+func TestMigrate_FreshDB(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	want := map[string]bool{
+		"schema_migrations": false,
+		"retry_entries":     false,
+		"run_history":       false,
+		"session_metadata":  false,
+		"aggregate_metrics": false,
+		"sqlite_sequence":   false, // created by AUTOINCREMENT
+	}
+
+	rows, err := s.db.QueryContext(context.Background(),
+		"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	if err != nil {
+		t.Fatalf("query sqlite_master: %v", err)
+	}
+	defer rows.Close() //nolint:errcheck // test helper
+
+	var got []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		got = append(got, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows iteration: %v", err)
+	}
+
+	for _, name := range got {
+		if _, ok := want[name]; ok {
+			want[name] = true
+		}
+	}
+
+	for name, found := range want {
+		if name == "sqlite_sequence" {
+			continue // optional internal table
+		}
+		if !found {
+			t.Errorf("table %q not found after Migrate", name)
+		}
+	}
+}
+
+func TestMigrate_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	if err := s.Migrate(context.Background()); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+
+	var count int
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("count schema_migrations: %v", err)
+	}
+	if count != len(migrations) {
+		t.Errorf("schema_migrations row count = %d, want %d", count, len(migrations))
+	}
+}
+
+func TestMigrate_SchemaMigrationsTracking(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	var version int
+	var appliedAt string
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT version, applied_at FROM schema_migrations WHERE version = 1",
+	).Scan(&version, &appliedAt); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+
+	if version != 1 {
+		t.Errorf("version = %d, want 1", version)
+	}
+	if appliedAt == "" {
+		t.Fatal("applied_at is empty")
+	}
+	if _, err := time.Parse(time.RFC3339, appliedAt); err != nil {
+		t.Errorf("applied_at %q is not valid RFC 3339: %v", appliedAt, err)
+	}
+}
+
+// columnInfo mirrors the output of PRAGMA table_info.
+type columnInfo struct {
+	CID       int
+	Name      string
+	Type      string
+	NotNull   bool
+	DefaultAt *string
+	PK        int
+}
+
+func tableColumns(t *testing.T, s *Store, table string) []columnInfo {
+	t.Helper()
+	rows, err := s.db.QueryContext(context.Background(),
+		"PRAGMA table_info("+table+")")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+	}
+	defer rows.Close() //nolint:errcheck // test helper
+
+	var cols []columnInfo
+	for rows.Next() {
+		var c columnInfo
+		if err := rows.Scan(&c.CID, &c.Name, &c.Type, &c.NotNull, &c.DefaultAt, &c.PK); err != nil {
+			t.Fatalf("scan table_info(%s): %v", table, err)
+		}
+		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows iteration table_info(%s): %v", table, err)
+	}
+	return cols
+}
+
+func TestMigrate_ColumnCorrectness(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	type colSpec struct {
+		Name    string
+		Type    string
+		NotNull bool
+		PK      int // 0 = not PK, 1+ = PK position
+	}
+
+	tests := []struct {
+		table string
+		cols  []colSpec
+	}{
+		{
+			table: "retry_entries",
+			cols: []colSpec{
+				{"issue_id", "TEXT", false, 1},
+				{"identifier", "TEXT", true, 0},
+				{"attempt", "INTEGER", true, 0},
+				{"due_at_ms", "INTEGER", true, 0},
+				{"error", "TEXT", false, 0},
+				{"session_id", "TEXT", false, 0},
+				{"rule_name", "TEXT", true, 0},
+				{"template_id", "TEXT", true, 0},
+				{"agent_kind", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+				{"stage_previous_outcome", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
+				{"display_identifier", "TEXT", true, 0},
+				{"issue_title", "TEXT", true, 0},
+				{"issue_url", "TEXT", true, 0},
+				{"trigger", "TEXT", true, 0},
+				{"configured_model", "TEXT", true, 0},
+				{"issue_type", "TEXT", true, 0},
+				{"issue_labels", "TEXT", true, 0},
+				{"issue_state", "TEXT", true, 0},
+				{"dispatched_at", "TEXT", true, 0},
+				{"origin_trigger", "TEXT", true, 0},
+				{"usage_limit_notified", "INTEGER", true, 0},
+			},
+		},
+		{
+			table: "run_history",
+			cols: []colSpec{
+				{"id", "INTEGER", false, 1},
+				{"issue_id", "TEXT", true, 0},
+				{"identifier", "TEXT", true, 0},
+				{"attempt", "INTEGER", true, 0},
+				{"agent_adapter", "TEXT", true, 0},
+				{"workspace", "TEXT", true, 0},
+				{"started_at", "TEXT", true, 0},
+				{"completed_at", "TEXT", true, 0},
+				{"status", "TEXT", true, 0},
+				{"error", "TEXT", false, 0},
+				{"workflow_file", "TEXT", false, 0},
+				{"turns_completed", "INTEGER", true, 0},
+				{"display_identifier", "TEXT", false, 0},
+				{"review_metadata", "TEXT", false, 0},
+				{"rule_name", "TEXT", true, 0},
+				{"template_id", "TEXT", true, 0},
+				{"input_tokens", "INTEGER", true, 0},
+				{"output_tokens", "INTEGER", true, 0},
+				{"total_tokens", "INTEGER", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
+				{"tokens_measured", "INTEGER", true, 0},
+				{"unaccounted_turns", "INTEGER", true, 0},
+				{"cache_write_tokens", "INTEGER", true, 0},
+				{"configured_model", "TEXT", true, 0},
+				{"configured_effort", "TEXT", true, 0},
+				{"reported_model", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+				{"stage_previous_outcome", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
+				{"stage_target", "TEXT", true, 0},
+				{"stage_result", "TEXT", true, 0},
+				{"issue_title", "TEXT", true, 0},
+				{"issue_url", "TEXT", true, 0},
+				{"dispatched_at", "TEXT", true, 0},
+				{"trigger", "TEXT", false, 0},
+				{"reaction_kind", "TEXT", false, 0},
+				{"session_id", "TEXT", false, 0},
+				{"ssh_host", "TEXT", false, 0},
+				{"first_after_hop", "INTEGER", true, 0},
+				{"dispatch_id", "TEXT", false, 0},
+				{"agent_blocked", "INTEGER", true, 0},
+				{"estimated_cost_usd", "REAL", false, 0},
+				{"cost_status", "TEXT", false, 0},
+				{"declared_outcome", "TEXT", true, 0},
+				{"agent_text", "TEXT", true, 0},
+				{"skills", "TEXT", false, 0},
+				{"usage_provenance", "TEXT", false, 0},
+				{"usage_completeness", "TEXT", false, 0},
+			},
+		},
+		{
+			table: "run_model_usage",
+			cols: []colSpec{
+				{"run_id", "INTEGER", true, 1},
+				{"model", "TEXT", true, 2},
+				{"input_tokens", "INTEGER", true, 0},
+				{"output_tokens", "INTEGER", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
+				{"cache_write_tokens", "INTEGER", true, 0},
+				{"estimated_cost_usd", "REAL", false, 0},
+				{"cost_status", "TEXT", false, 0},
+				{"price_source", "TEXT", true, 0},
+				{"price_table_version", "TEXT", true, 0},
+				{"unrated_classes", "TEXT", false, 0},
+			},
+		},
+		{
+			table: "live_passes",
+			cols: []colSpec{
+				{"issue_id", "TEXT", true, 1},
+				{"kind", "TEXT", true, 2},
+				{"chain_id", "TEXT", true, 0},
+				{"rule_name", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+			},
+		},
+		{
+			table: "stage_hops",
+			cols: []colSpec{
+				{"issue_id", "TEXT", false, 1},
+				{"identifier", "TEXT", true, 0},
+				{"hop_count", "INTEGER", true, 0},
+				{"source_rule", "TEXT", true, 0},
+				{"target_rule", "TEXT", true, 0},
+				{"target_label", "TEXT", true, 0},
+				{"previous_outcome", "TEXT", true, 0},
+				{"source_dispatch_id", "TEXT", true, 0},
+				{"target_observed", "INTEGER", true, 0},
+				{"hopped_at", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
+				{"display_identifier", "TEXT", true, 0},
+				{"issue_title", "TEXT", true, 0},
+				{"issue_url", "TEXT", true, 0},
+				{"dispatched_at", "TEXT", true, 0},
+				{"run_dispatched", "INTEGER", true, 0},
+				{"issue_type", "TEXT", true, 0},
+				{"issue_labels", "TEXT", true, 0},
+				{"issue_state", "TEXT", true, 0},
+			},
+		},
+		{
+			table: "parked_issues",
+			cols: []colSpec{
+				{"issue_id", "TEXT", false, 1},
+				{"identifier", "TEXT", true, 0},
+				{"display_id", "TEXT", false, 0},
+				{"reason", "TEXT", true, 0},
+				{"parked_state", "TEXT", true, 0},
+				{"label", "TEXT", true, 0},
+				{"label_applied", "INTEGER", true, 0},
+				{"parked_at", "TEXT", true, 0},
+				{"issue_title", "TEXT", true, 0},
+				{"issue_url", "TEXT", true, 0},
+				{"rule_name", "TEXT", true, 0},
+				{"agent_kind", "TEXT", true, 0},
+				{"configured_model", "TEXT", true, 0},
+				{"stage_previous", "TEXT", true, 0},
+				{"stage_previous_outcome", "TEXT", true, 0},
+				{"chain_id", "TEXT", true, 0},
+				{"dispatched_at", "TEXT", true, 0},
+				{"issue_type", "TEXT", true, 0},
+				{"issue_labels", "TEXT", true, 0},
+				{"session_id", "TEXT", true, 0},
+				{"template_id", "TEXT", true, 0},
+				{"statement", "TEXT", true, 0},
+				{"released_at", "TEXT", true, 0},
+				{"release_gesture", "TEXT", true, 0},
+			},
+		},
+		{
+			table: "session_metadata",
+			cols: []colSpec{
+				{"issue_id", "TEXT", false, 1},
+				{"session_id", "TEXT", true, 0},
+				{"agent_pid", "TEXT", false, 0},
+				{"input_tokens", "INTEGER", true, 0},
+				{"output_tokens", "INTEGER", true, 0},
+				{"total_tokens", "INTEGER", true, 0},
+				{"updated_at", "TEXT", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
+				{"model_name", "TEXT", true, 0},
+				{"api_request_count", "INTEGER", true, 0},
+				{"api_requests_measured", "INTEGER", true, 0},
+				{"dispatch_id", "TEXT", true, 0},
+				{"cache_write_tokens", "INTEGER", true, 0},
+				{"unaccounted_turns", "INTEGER", true, 0},
+				{"estimated_cost_usd", "REAL", false, 0},
+				{"cost_status", "TEXT", true, 0},
+			},
+		},
+		{
+			table: "aggregate_metrics",
+			cols: []colSpec{
+				{"key", "TEXT", false, 1},
+				{"input_tokens", "INTEGER", true, 0},
+				{"output_tokens", "INTEGER", true, 0},
+				{"total_tokens", "INTEGER", true, 0},
+				{"seconds_running", "REAL", true, 0},
+				{"updated_at", "TEXT", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
+				{"unmeasured_sessions", "INTEGER", true, 0},
+				{"cache_write_tokens", "INTEGER", true, 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.table, func(t *testing.T) {
+			got := tableColumns(t, s, tt.table)
+
+			if len(got) != len(tt.cols) {
+				var names []string
+				for _, c := range got {
+					names = append(names, c.Name)
+				}
+				t.Fatalf("column count = %d, want %d; got columns: %v",
+					len(got), len(tt.cols), names)
+			}
+
+			for i, want := range tt.cols {
+				g := got[i]
+				if g.Name != want.Name {
+					t.Errorf("column[%d].Name = %q, want %q", i, g.Name, want.Name)
+				}
+				if !strings.EqualFold(g.Type, want.Type) {
+					t.Errorf("column %q Type = %q, want %q", g.Name, g.Type, want.Type)
+				}
+				if g.NotNull != want.NotNull {
+					t.Errorf("column %q NotNull = %v, want %v", g.Name, g.NotNull, want.NotNull)
+				}
+				if g.PK != want.PK {
+					t.Errorf("column %q PK = %d, want %d", g.Name, g.PK, want.PK)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrate_RunHistoryAutoincrement(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	var ddl string
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT sql FROM sqlite_master WHERE name='run_history'",
+	).Scan(&ddl); err != nil {
+		t.Fatalf("query run_history DDL: %v", err)
+	}
+	if !strings.Contains(strings.ToUpper(ddl), "AUTOINCREMENT") {
+		t.Errorf("run_history DDL missing AUTOINCREMENT:\n%s", ddl)
+	}
+}
+
+func TestMigrate_DefaultValues(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, updated_at)
+		 VALUES ('test-1', 'sess-1', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert session_metadata: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO aggregate_metrics (key, updated_at)
+		 VALUES ('agent_totals', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert aggregate_metrics: %v", err)
+	}
+
+	var inTok, outTok, totTok int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT input_tokens, output_tokens, total_tokens FROM session_metadata WHERE issue_id='test-1'",
+	).Scan(&inTok, &outTok, &totTok); err != nil {
+		t.Fatalf("query session_metadata defaults: %v", err)
+	}
+	if inTok != 0 || outTok != 0 || totTok != 0 {
+		t.Errorf("session_metadata token defaults = (%d, %d, %d), want (0, 0, 0)", inTok, outTok, totTok)
+	}
+
+	var secRunning float64
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT seconds_running FROM aggregate_metrics WHERE key='agent_totals'",
+	).Scan(&secRunning); err != nil {
+		t.Fatalf("query aggregate_metrics defaults: %v", err)
+	}
+	if secRunning != 0.0 {
+		t.Errorf("aggregate_metrics.seconds_running default = %f, want 0.0", secRunning)
+	}
+}
+
+func TestMigrate_Migration018_UnmeasuredSessionsDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO aggregate_metrics (key, updated_at)
+		 VALUES ('agent_totals', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert aggregate_metrics: %v", err)
+	}
+
+	var unmeasured int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT unmeasured_sessions FROM aggregate_metrics WHERE key='agent_totals'`,
+	).Scan(&unmeasured); err != nil {
+		t.Fatalf("query aggregate_metrics.unmeasured_sessions: %v", err)
+	}
+	if unmeasured != 0 {
+		t.Errorf("aggregate_metrics.unmeasured_sessions default = %d, want 0", unmeasured)
+	}
+}
+
+// TestMigrate_Migration020_CacheWriteTokensDefault verifies migration
+// 020 applies cleanly against a database already seeded through
+// migration 019, and that a row written before it reads
+// cache_write_tokens zero on all three tables it touches.
+func TestMigrate_Migration020_CacheWriteTokensDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 19)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		 VALUES ('rh-pre020', 'MT-020', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-020 run_history row: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, updated_at) VALUES ('sm-pre020', 'sess-pre020', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-020 session_metadata row: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO aggregate_metrics (key, updated_at) VALUES ('agent_totals', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-020 aggregate_metrics row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	tests := []struct {
+		table string
+		query string
+	}{
+		{"run_history", `SELECT cache_write_tokens FROM run_history WHERE issue_id = 'rh-pre020'`},
+		{"session_metadata", `SELECT cache_write_tokens FROM session_metadata WHERE issue_id = 'sm-pre020'`},
+		{"aggregate_metrics", `SELECT cache_write_tokens FROM aggregate_metrics WHERE key = 'agent_totals'`},
+	}
+	for _, tt := range tests {
+		var got int64
+		if err := s.db.QueryRowContext(ctx, tt.query).Scan(&got); err != nil {
+			t.Fatalf("query %s.cache_write_tokens: %v", tt.table, err)
+		}
+		if got != 0 {
+			t.Errorf("%s.cache_write_tokens for a pre-migration-020 row = %d, want 0", tt.table, got)
+		}
+	}
+}
+
+func insertBareRun(t *testing.T, s *Store, issueID string) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		 VALUES (?, 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded')`, issueID,
+	); err != nil {
+		t.Fatalf("insert run_history row %s: %v", issueID, err)
+	}
+}
+
+func TestMigrate_Migration024_ExistingRowsKeepValuesAndGetEmptyChainColumns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, insert, query, want string }{
+		{
+			"run_history",
+			`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, stage_previous)
+				VALUES ('i', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded', 'specify')`,
+			`SELECT stage_previous || '|' || chain_id || '|' || stage_target || '|' || stage_result FROM run_history`, "specify|||",
+		},
+		{
+			"retry_entries",
+			`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, rule_name, template_id, agent_kind, stage_previous)
+				VALUES ('i', 'MT-1', 2, 1000, 'plan', 'plan', 'mock', 'specify')`,
+			`SELECT stage_previous || '|' || chain_id FROM retry_entries`, "specify|",
+		},
+		{
+			"stage_hops",
+			`INSERT INTO stage_hops (issue_id, identifier, hop_count, source_rule, target_rule, target_label, previous_outcome, source_dispatch_id, hopped_at)
+				VALUES ('i', 'MT-1', 1, 'specify', 'plan', 'plan', 'succeeded', 'd1', '2026-01-01T00:00:00Z')`,
+			`SELECT target_rule || '|' || chain_id FROM stage_hops`, "plan|",
+		},
+	}
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 23)
+	for _, tt := range tests {
+		if _, err := s.db.ExecContext(context.Background(), tt.insert); err != nil {
+			t.Fatalf("insert pre-migration-024 %s row: %v", tt.name, err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	for _, tt := range tests {
+		var got string
+		if err := s.db.QueryRowContext(context.Background(), tt.query).Scan(&got); err != nil || got != tt.want {
+			t.Errorf("%s row after upgrade = %q, %v, want %q, nil", tt.name, got, err, tt.want)
+		}
+	}
+}
+
+func TestMigrate_Migration027_FillsOlderRows(t *testing.T) {
+	t.Parallel()
+
+	// Run B's offset makes it the later instant while its text sorts first, so
+	// a text comparison picks the wrong run as the start of the pass.
+	seed := []string{
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, chain_id, configured_model, display_identifier, issue_title, issue_url)
+			VALUES ('i1', 'MT-1', 1, 'mock', '/tmp', '2026-02-01T10:00:00Z', '2026-02-01T10:01:00Z', 'succeeded', 'c1', 'model-a', 'o/r#1', 'Old title', 'https://example.test/old'),
+				('i1', 'MT-1', 2, 'mock', '/tmp', '2026-02-01T09:30:00-01:00', '2026-02-01T09:31:00-01:00', 'failed', 'c1', 'model-b', 'o/r#1', 'New title', 'https://example.test/new'),
+				('i2', 'MT-2', 1, 'mock', '/tmp', '2026-02-01T08:00:00Z', '2026-02-01T08:01:00Z', 'failed', '', 'model-x', '', '', '')`,
+		`INSERT INTO stage_hops (issue_id, identifier, hop_count, source_rule, target_rule, target_label, previous_outcome, source_dispatch_id, hopped_at, chain_id)
+			VALUES ('i1', 'MT-1', 1, 'specify', 'plan', 'plan', 'succeeded', 'd1', '2026-02-01T10:05:00Z', 'c1')`,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, chain_id)
+			VALUES ('i1', 'MT-1', 3, 1000, 'c1'), ('i2', 'MT-2', 2, 1000, '')`,
+	}
+	tests := []struct{ name, query, want string }{
+		{
+			name:  "runs of the chain",
+			query: `SELECT group_concat(dispatched_at, '|') FROM run_history WHERE issue_id = 'i1'`,
+			want:  "2026-02-01T10:00:00Z|2026-02-01T10:00:00Z",
+		},
+		{
+			name:  "retry of the chain",
+			query: `SELECT dispatched_at || '|' || configured_model FROM retry_entries WHERE issue_id = 'i1'`,
+			want:  "2026-02-01T10:00:00Z|model-b",
+		},
+		{
+			name:  "hop",
+			query: `SELECT dispatched_at || '|' || display_identifier || '|' || issue_title || '|' || issue_url || '|' || run_dispatched FROM stage_hops`,
+			want:  "2026-02-01T10:00:00Z|o/r#1|New title|https://example.test/new|1",
+		},
+		{
+			name:  "retry without a chain",
+			query: `SELECT dispatched_at || '|' || configured_model FROM retry_entries WHERE issue_id = 'i2'`,
+			want:  "|",
+		},
+	}
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 26)
+	for _, stmt := range seed {
+		if _, err := s.db.ExecContext(context.Background(), stmt); err != nil {
+			t.Fatalf("seed version 26 store: %v", err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	for _, tt := range tests {
+		var got string
+		if err := s.db.QueryRowContext(context.Background(), tt.query).Scan(&got); err != nil || got != tt.want {
+			t.Errorf("%s after upgrade = %q, %v, want %q, nil", tt.name, got, err, tt.want)
+		}
+	}
+}
+
+func TestMigrate_Migration031_FillsParkedRuns(t *testing.T) {
+	t.Parallel()
+
+	// Attempt 4 sorts before parked_at as text but starts after it.
+	seed := []string{
+		`INSERT INTO parked_issues (issue_id, identifier, reason, label, parked_at)
+			VALUES ('i1', 'MT-1', 'agent_blocked', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i2', 'MT-2', 'agent_blocked', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i3', 'MT-3', 'agent_blocked', 'needs-human', 'not a time')`,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, rule_name, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at)
+			VALUES ('i1', 'MT-1', 1, 'claude-code', '/tmp', '2026-02-01T09:00:00Z', '2026-02-01T09:01:00Z', 'succeeded', 'plan', 'model-p', '', '', 'c1', '2026-02-01T08:00:00Z'),
+				('i1', 'MT-1', 2, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'succeeded', 'implement', 'model-a', 'plan', 'succeeded', 'c1', '2026-02-01T08:00:00Z'),
+				('i1', 'MT-1', 3, '', '/tmp', '2026-02-01T09:45:00Z', '2026-02-01T09:46:00Z', 'succeeded', 'ci_failed', '', '', '', '', ''),
+				('i1', 'MT-1', 4, 'codex', '/tmp', '2026-02-01T09:30:00-01:00', '2026-02-01T09:31:00-01:00', 'succeeded', 'review', 'model-c', '', '', 'c2', '2026-02-01T10:30:00Z'),
+				('i3', 'MT-3', 1, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'succeeded', 'implement', 'model-a', '', '', 'c3', '2026-02-01T09:30:00Z')`,
+	}
+	tests := []struct{ issueID, want string }{
+		{"i1", "implement|claude-code|model-a|plan|succeeded|c1|2026-02-01T08:00:00Z"},
+		{"i2", "||||||"},
+		{"i3", "||||||"},
+	}
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 30)
+	for _, stmt := range seed {
+		if _, err := s.db.ExecContext(context.Background(), stmt); err != nil {
+			t.Fatalf("seed version 30 store: %v", err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	for _, tt := range tests {
+		var got string
+		err := s.db.QueryRowContext(context.Background(),
+			`SELECT rule_name || '|' || agent_kind || '|' || configured_model || '|' || stage_previous || '|' || stage_previous_outcome || '|' || chain_id || '|' || dispatched_at
+			FROM parked_issues WHERE issue_id = ?`, tt.issueID).Scan(&got)
+		if err != nil || got != tt.want {
+			t.Errorf("park of %s after upgrade = %q, %v, want %q, nil", tt.issueID, got, err, tt.want)
+		}
+	}
+}
+
+func TestMigrate_Migration047_BackfillsParkHandOver(t *testing.T) {
+	t.Parallel()
+
+	// i1's attempt 3 starts after the park but sorts before it as text; i2 to
+	// i5 differ only in how the run the park follows ended.
+	seed := []string{
+		`INSERT INTO parked_issues (issue_id, identifier, reason, label, parked_at)
+			VALUES ('i1', 'MT-1', 'agent_blocked', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i2', 'MT-2', 'agent_blocked', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i3', 'MT-3', 'handoff_absence', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i4', 'MT-4', 'agent_blocked', 'needs-human', '2026-02-01T10:00:00Z'),
+				('i5', 'MT-5', 'agent_blocked', 'needs-human', 'not a time')`,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, reaction_kind, session_id, template_id, agent_text)
+			VALUES ('i1', 'MT-1', 1, 'claude-code', '/tmp', '2026-02-01T08:00:00Z', '2026-02-01T08:01:00Z', 'succeeded', NULL, NULL, 's-old', 'old', 'old question'),
+				('i1', 'MT-1', 2, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'succeeded', NULL, NULL, 's-1', 'tpl-1', 'which database?'),
+				('i1', 'MT-1', 3, 'claude-code', '/tmp', '2026-02-01T09:30:00-01:00', '2026-02-01T09:31:00-01:00', 'succeeded', NULL, NULL, 's-late', 'late', 'after the park'),
+				('i2', 'MT-2', 1, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'succeeded', NULL, 'review', 's-2', 'tpl-2', 'review stopped'),
+				('i3', 'MT-3', 1, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'failed', 'handoff withheld: no work observed', NULL, NULL, 'tpl-3', 'done, I think'),
+				('i4', 'MT-4', 1, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'failed', 'agent crashed', '', 's-4', 'tpl-4', 'crash text'),
+				('i5', 'MT-5', 1, 'claude-code', '/tmp', '2026-02-01T09:30:00Z', '2026-02-01T09:31:00Z', 'succeeded', NULL, NULL, 's-5', 'tpl-5', 'unreachable')`,
+	}
+	tests := []struct{ name, issueID, want string }{
+		{"eligible run", "i1", "which database?|s-1|tpl-1"},
+		{"reaction run keeps the statement only", "i2", "review stopped||"},
+		{"withheld handoff without a session", "i3", "done, I think||tpl-3"},
+		{"error exit keeps the statement only", "i4", "crash text||"},
+		{"park time that does not parse", "i5", "||"},
+	}
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 46)
+	for _, stmt := range seed {
+		if _, err := s.db.ExecContext(context.Background(), stmt); err != nil {
+			t.Fatalf("seed version 46 store: %v", err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	for _, tt := range tests {
+		var got string
+		err := s.db.QueryRowContext(context.Background(),
+			`SELECT statement || '|' || session_id || '|' || template_id || '|' || released_at || release_gesture
+			FROM parked_issues WHERE issue_id = ?`, tt.issueID).Scan(&got)
+		if want := tt.want + "|"; err != nil || got != want {
+			t.Errorf("%s: park of %s after upgrade = %q, %v, want %q, nil", tt.name, tt.issueID, got, err, want)
+		}
+	}
+}
+
+func TestMigrate_Migration032_MarksFirstRunAfterHop(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 31)
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, rule_name, chain_id, stage_previous, trigger, reaction_kind)
+			VALUES ('i1', 'MT-1', 1, 'mock', '/tmp', '2026-02-01T10:00:00Z', '2026-02-01T10:01:00Z', 'succeeded', 'plan', 'c1', 'specify', '', ''),
+				('i1', 'MT-1', 2, 'mock', '/tmp', '2026-02-01T11:00:00Z', '2026-02-01T11:01:00Z', 'succeeded', 'plan', 'c1', 'specify', '', ''),
+				('i2', 'MT-2', 1, 'mock', '/tmp', '2026-02-01T10:00:00Z', '2026-02-01T10:01:00Z', 'succeeded', 'plan', 'c2', 'specify', NULL, NULL),
+				('i2', 'MT-2', 2, 'mock', '/tmp', '2026-02-01T11:00:00Z', '2026-02-01T11:01:00Z', 'succeeded', 'plan', 'c2', 'specify', '', '')`,
+	); err != nil {
+		t.Fatalf("seed version 31 store: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var got string
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT group_concat(first_after_hop, '|') FROM (SELECT first_after_hop FROM run_history ORDER BY id)`).Scan(&got)
+	if want := "1|0|1|0"; err != nil || got != want {
+		t.Errorf("first_after_hop by id after upgrade = %q, %v, want %q, nil", got, err, want)
+	}
+}
+
+func TestMigrate_Migration028_OlderRowsKeepNoOrigin(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s := openTestStore(t)
+	migrateToVersion(t, s, 27)
+	insertBareRun(t, s, "old")
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, trigger)
+			VALUES ('r-stall', 'MT-1', 2, 1000, 'stall'), ('r-timer', 'MT-2', 2, 1000, 'timer'), ('r-none', 'MT-3', 2, 1000, '')`); err != nil {
+		t.Fatalf("seed version 27 store: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+	appendOrFatal(t, s, newTestRun(1))
+
+	runs := map[string]storage.RunHistory{}
+	for _, r := range queryAllRuns(t, s, 10) {
+		runs[r.IssueID] = r
+	}
+	if r := runs["old"]; r.OriginRecorded || r.Trigger != nil {
+		t.Errorf("run recorded before the upgrade: origin recorded = %v, trigger = %s, want false, <nil>", r.OriginRecorded, triggerText(r.Trigger))
+	}
+	if r := runs["ISS-1"]; !r.OriginRecorded || r.Trigger != nil {
+		t.Errorf("run appended after the upgrade with a nil trigger: origin recorded = %v, trigger = %s, want true, <nil>", r.OriginRecorded, triggerText(r.Trigger))
+	}
+
+	retries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	gotOrigin := map[string]string{}
+	for _, e := range retries {
+		gotOrigin[e.IssueID] = e.OriginTrigger
+		if e.UsageLimitNotified {
+			t.Errorf("UsageLimitNotified of retry %q written before the upgrade = true, want false", e.IssueID)
+		}
+	}
+	wantOrigin := map[string]string{"r-stall": "stall", "r-timer": "", "r-none": ""}
+	if !reflect.DeepEqual(gotOrigin, wantOrigin) {
+		t.Errorf("OriginTrigger by retry after upgrade = %v, want %v", gotOrigin, wantOrigin)
+	}
+}
+
+func TestMigrate_Migration022_HandedOffCommentsStartEmpty(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 21)
+	if err := s.UpsertReactionFingerprint(context.Background(), "ISS-PRE022", "review", "fp"); err != nil {
+		t.Fatalf("UpsertReactionFingerprint on a pre-migration-022 store: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var rows int
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM reaction_handoffs`).Scan(&rows); err != nil {
+		t.Fatalf("count reaction_handoffs: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("reaction_handoffs row count after upgrade = %d, want 0", rows)
+	}
+}
+
+func TestMigrate_Migration022_PrimaryKeyRejectsDuplicateComment(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	const insert = `INSERT INTO reaction_handoffs (issue_id, kind, comment_id) VALUES ('ISS-1', 'review', 'c1')`
+	if _, err := s.db.ExecContext(context.Background(), insert); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err := s.db.ExecContext(context.Background(), insert)
+
+	if err == nil {
+		t.Error("duplicate (issue_id, kind, comment_id) insert = nil error, want a primary key violation")
+	}
+}
+
+func TestMigrate_NullConstraints(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error)
+		 VALUES ('re-1', 'MT-1', 1, 1000, NULL)`); err != nil {
+		t.Errorf("retry_entries.error should accept NULL: %v", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error)
+		 VALUES ('rh-1', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded', NULL)`); err != nil {
+		t.Errorf("run_history.error should accept NULL: %v", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, agent_pid, updated_at)
+		 VALUES ('sm-1', 'sess-1', NULL, '2026-01-01T00:00:00Z')`); err != nil {
+		t.Errorf("session_metadata.agent_pid should accept NULL: %v", err)
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
+		 VALUES ('re-2', NULL, 1, 1000)`)
+	if err == nil {
+		t.Error("retry_entries.identifier should reject NULL")
+	}
+}
+
+func TestMigrate_PrimaryKeyConstraints(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
+		 VALUES ('pk-1', 'MT-1', 1, 1000)`); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
+		 VALUES ('pk-1', 'MT-2', 2, 2000)`)
+	if err == nil {
+		t.Error("duplicate primary key should be rejected")
+	}
+}
+
+func TestMigrations_Registry(t *testing.T) {
+	t.Parallel()
+
+	if len(migrations) == 0 {
+		t.Fatal("migrations slice is empty")
+	}
+
+	versions := make([]int, len(migrations))
+	for i, m := range migrations {
+		versions[i] = m.Version
+		if m.SQL == "" {
+			t.Errorf("migration %d has empty SQL", m.Version)
+		}
+		if m.Description == "" {
+			t.Errorf("migration %d has empty Description", m.Version)
+		}
+	}
+
+	if !sort.IntsAreSorted(versions) {
+		t.Errorf("migrations not sorted by version: %v", versions)
+	}
+	if versions[0] != 1 {
+		t.Errorf("first migration version = %d, want 1", versions[0])
+	}
+}
+
+func migrateToVersion(t *testing.T, s *Store, version int) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at TEXT    NOT NULL
+		)`); err != nil {
+		t.Fatalf("create schema_migrations table: %v", err)
+	}
+	for _, m := range migrations {
+		if m.Version > version {
+			break
+		}
+		if err := s.applyMigration(ctx, m); err != nil {
+			t.Fatalf("apply migration %d: %v", m.Version, err)
+		}
+	}
+}
+
+// TestMigrate_Migration012_TokensMeasuredDefault verifies a pre-012 row
+// reads tokens_measured = 1 after migration, so an upgraded deployment's
+// existing rows keep behaving as measured runs.
+func TestMigrate_Migration012_TokensMeasuredDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 11)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		 VALUES ('rh-pre012', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-012 run_history row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var tokensMeasured int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT tokens_measured FROM run_history WHERE issue_id = 'rh-pre012'`,
+	).Scan(&tokensMeasured); err != nil {
+		t.Fatalf("query tokens_measured: %v", err)
+	}
+	if tokensMeasured != 1 {
+		t.Errorf("tokens_measured for a pre-migration-012 row = %d, want 1 (the column default)", tokensMeasured)
+	}
+}
+
+// TestMigrate_Migration016_APIRequestsMeasuredDefault verifies a pre-016
+// row keeps its api_request_count and reads api_requests_measured = 0: a row
+// with no recorded measurement state states that honestly rather than
+// presuming it was measured.
+func TestMigrate_Migration016_APIRequestsMeasuredDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 15)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, api_request_count, updated_at)
+		 VALUES ('sm-pre016', 'sess-pre016', 42, '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-016 session_metadata row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var apiRequestCount, apiRequestsMeasured int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT api_request_count, api_requests_measured FROM session_metadata WHERE issue_id = 'sm-pre016'`,
+	).Scan(&apiRequestCount, &apiRequestsMeasured); err != nil {
+		t.Fatalf("query api_request_count, api_requests_measured: %v", err)
+	}
+	if apiRequestCount != 42 {
+		t.Errorf("api_request_count for a pre-migration-016 row = %d, want 42 (unchanged)", apiRequestCount)
+	}
+	if apiRequestsMeasured != 0 {
+		t.Errorf("api_requests_measured for a pre-migration-016 row = %d, want 0 (the column default)", apiRequestsMeasured)
+	}
+}
+
+// TestMigrate_Migration017_DispatchIDDefault verifies a pre-017 row reads
+// dispatch_id as empty: a row predating the column belongs to no running
+// dispatch and must never match one.
+func TestMigrate_Migration017_DispatchIDDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 16)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, total_tokens, updated_at)
+		 VALUES ('sm-pre017', 'sess-pre017', 500, '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-017 session_metadata row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var dispatchID string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT dispatch_id FROM session_metadata WHERE issue_id = 'sm-pre017'`,
+	).Scan(&dispatchID); err != nil {
+		t.Fatalf("query dispatch_id: %v", err)
+	}
+	if dispatchID != "" {
+		t.Errorf("dispatch_id for a pre-migration-017 row = %q, want empty (the column default)", dispatchID)
+	}
+}
+
+func TestMigrate_Migration002_Defaults(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, updated_at)
+		 VALUES ('m2-1', 'sess-1', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert session_metadata: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO aggregate_metrics (key, updated_at)
+		 VALUES ('agent_totals', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert aggregate_metrics: %v", err)
+	}
+
+	var cacheRead int64
+	var modelName string
+	var apiReqCount int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT cache_read_tokens, model_name, api_request_count
+		 FROM session_metadata WHERE issue_id='m2-1'`,
+	).Scan(&cacheRead, &modelName, &apiReqCount); err != nil {
+		t.Fatalf("query session_metadata new columns: %v", err)
+	}
+	if cacheRead != 0 {
+		t.Errorf("session_metadata.cache_read_tokens default = %d, want 0", cacheRead)
+	}
+	if modelName != "" {
+		t.Errorf("session_metadata.model_name default = %q, want empty", modelName)
+	}
+	if apiReqCount != 0 {
+		t.Errorf("session_metadata.api_request_count default = %d, want 0", apiReqCount)
+	}
+
+	var aggCacheRead int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT cache_read_tokens FROM aggregate_metrics WHERE key='agent_totals'`,
+	).Scan(&aggCacheRead); err != nil {
+		t.Fatalf("query aggregate_metrics new column: %v", err)
+	}
+	if aggCacheRead != 0 {
+		t.Errorf("aggregate_metrics.cache_read_tokens default = %d, want 0", aggCacheRead)
+	}
+}
+
+func TestMigrate_Migration002_SchemaMigrationsTracking(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	var version int
+	var appliedAt string
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT version, applied_at FROM schema_migrations WHERE version = 2",
+	).Scan(&version, &appliedAt); err != nil {
+		t.Fatalf("query schema_migrations version 2: %v", err)
+	}
+	if version != 2 {
+		t.Errorf("version = %d, want 2", version)
+	}
+	if appliedAt == "" {
+		t.Fatal("applied_at is empty")
+	}
+	if _, err := time.Parse(time.RFC3339, appliedAt); err != nil {
+		t.Errorf("applied_at %q is not valid RFC 3339: %v", appliedAt, err)
+	}
+}
+
+// insertPreMigration018AggregateMetrics inserts a row using the pre-018
+// column set (no unmeasured_sessions).
+func insertPreMigration018AggregateMetrics(t *testing.T, s *Store, key string, inputTokens int64) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO aggregate_metrics (key, input_tokens, output_tokens, total_tokens, cache_read_tokens, seconds_running, updated_at)
+		 VALUES (?, ?, 0, 0, 0, 0, '2026-01-01T00:00:00Z')`, key, inputTokens,
+	); err != nil {
+		t.Fatalf("insert pre-migration-018 aggregate_metrics row: %v", err)
+	}
+}
+
+func insertRunHistoryRow(t *testing.T, s *Store, issueID, status string, tokensMeasured bool) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, tokens_measured)
+		 VALUES (?, 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', ?, ?)`,
+		issueID, status, tokensMeasured,
+	); err != nil {
+		t.Fatalf("insert run_history row %q: %v", issueID, err)
+	}
+}
+
+func TestMigrate_Migration018_BackfillsUnmeasuredSessionCount(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 17)
+	insertPreMigration018AggregateMetrics(t, s, "agent_totals", 1000)
+
+	insertRunHistoryRow(t, s, "rh-unmeasured-1", "succeeded", false)
+	insertRunHistoryRow(t, s, "rh-unmeasured-2", "failed", false)
+	insertRunHistoryRow(t, s, "rh-unmeasured-3", "needs_person", false)
+	insertRunHistoryRow(t, s, "rh-measured-1", "succeeded", true)
+	insertRunHistoryRow(t, s, "rh-measured-2", "budget_stopped", true)
+	insertRunHistoryRow(t, s, "rh-ci-failed", "ci_failed", true)
+
+	migrateOrFatal(t, s)
+
+	var unmeasured int64
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT unmeasured_sessions FROM aggregate_metrics WHERE key = 'agent_totals'`,
+	).Scan(&unmeasured); err != nil {
+		t.Fatalf("query aggregate_metrics.unmeasured_sessions: %v", err)
+	}
+	if unmeasured != 3 {
+		t.Errorf("aggregate_metrics.unmeasured_sessions = %d, want 3 (the tokens_measured = 0 rows only)", unmeasured)
+	}
+
+	var inputTokens int64
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT input_tokens FROM aggregate_metrics WHERE key = 'agent_totals'`,
+	).Scan(&inputTokens); err != nil {
+		t.Fatalf("query aggregate_metrics.input_tokens: %v", err)
+	}
+	if inputTokens != 1000 {
+		t.Errorf("aggregate_metrics.input_tokens = %d, want 1000 (unrelated column left untouched by the backfill)", inputTokens)
+	}
+}
+
+func TestMigrate_Migration018_NoAgentTotalsRow(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 17)
+	insertRunHistoryRow(t, s, "rh-orphan-1", "succeeded", false)
+	insertRunHistoryRow(t, s, "rh-orphan-2", "succeeded", true)
+
+	migrateOrFatal(t, s)
+
+	var count int
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM aggregate_metrics WHERE key = 'agent_totals'`,
+	).Scan(&count); err != nil {
+		t.Fatalf("count aggregate_metrics rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("aggregate_metrics row count for key 'agent_totals' = %d, want 0 (no row existed to backfill)", count)
+	}
+}

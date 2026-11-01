@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 )
 
 var fullCaps = storage.RunHistoryCapabilities{
@@ -67,9 +67,9 @@ Do {{ .issue.title }}.
 func createStatsDB(t *testing.T, dbPath string, runs ...storage.RunHistory) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, dbPath)
+	store, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open(%q): %v", dbPath, err)
+		t.Fatalf("sqlite.Open(%q): %v", dbPath, err)
 	}
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -527,9 +527,9 @@ func TestRunStatsAgainstLiveWriter(t *testing.T) {
 	dbPath := filepath.Join(dir, ".sortie.db")
 
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, dbPath)
+	store, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open(%q): %v", dbPath, err)
+		t.Fatalf("sqlite.Open(%q): %v", dbPath, err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
@@ -1005,9 +1005,9 @@ func funnelRuns() []storage.RunHistory {
 func holdFunnelPasses(t *testing.T, dbPath string) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, dbPath)
+	store, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open(%q): %v", dbPath, err)
+		t.Fatalf("sqlite.Open(%q): %v", dbPath, err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	retry := storage.RetryEntry{IssueID: "ISS-c4", Identifier: "PROJ-c4", Attempt: 1, DueAtMs: 1, RuleName: "plan", ChainID: "c4", StagePrevious: "specify"}

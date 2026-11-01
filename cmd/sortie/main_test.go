@@ -602,7 +602,7 @@ func TestRunServerShutdownError(t *testing.T) {
 	}
 }
 
-// TestRunReadOnlyWorkflowDir covers the persistence.Open error path that
+// TestRunReadOnlyWorkflowDir covers the sqlite.Open error path that
 // fires when the database file cannot be created because the workflow
 // directory has no write permission.
 func TestRunReadOnlyWorkflowDir(t *testing.T) {

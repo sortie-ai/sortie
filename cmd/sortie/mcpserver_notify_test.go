@@ -22,10 +22,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
@@ -288,7 +288,7 @@ func startNotifyOrchestrator(t *testing.T, cfg config.ServiceConfig, tracker dom
 	t.Helper()
 
 	ctx := context.Background()
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}

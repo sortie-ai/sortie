@@ -7,7 +7,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/notify"
@@ -98,7 +97,7 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	}
 
 	reg := domain.NewToolRegistry()
-	var store *persistence.Store
+	var store io.Closer
 
 	if params.TrackerAdapter != nil && params.Project != "" {
 		reg.Register(trackerapi.New(params.TrackerAdapter, params.Project))
@@ -111,15 +110,15 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	}
 
 	if params.DBPath != "" && params.IssueID != "" {
-		openedStore, err := persistence.OpenReadOnly(ctx, params.DBPath)
+		openedStore, err := openStoreReadOnly(ctx, params.DBPath)
 		if err != nil {
 			logger.Warn("failed to open read-only db for workspace_history and cost_budget",
 				slog.String("db_path", params.DBPath),
 				slog.Any("error", err))
 		} else {
 			store = openedStore
-			reg.Register(history.New(buildHistoryQuery(store), params.IssueID))
-			reg.Register(budget.New(buildBudgetQuery(store), params.IssueID, params.DispatchID, params.MaxTokens, params.MaxSessions, params.TokenWarningThreshold, params.MaxCostUSD))
+			reg.Register(history.New(buildHistoryQuery(openedStore), params.IssueID))
+			reg.Register(budget.New(buildBudgetQuery(openedStore), params.IssueID, params.DispatchID, params.MaxTokens, params.MaxSessions, params.TokenWarningThreshold, params.MaxCostUSD))
 		}
 	}
 
@@ -153,11 +152,5 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 		reg.Register(notifyTool)
 	}
 
-	// A nil store pointer inside an io.Closer is a non-nil interface, so a
-	// caller's != nil check then Close would panic.
-	var closer io.Closer
-	if store != nil {
-		closer = store
-	}
-	return SessionToolRegistry{Registry: reg, Store: closer}, nil
+	return SessionToolRegistry{Registry: reg, Store: store}, nil
 }

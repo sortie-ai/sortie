@@ -5,7 +5,7 @@ import (
 )
 
 // SessionMetadata represents the last known session metadata for a single
-// issue, persisted in the session_metadata table. It captures the agent
+// issue, persisted by [SessionMetadataStore]. It captures the agent
 // session ID, process ID, and accumulated token counters at the time of
 // the last update.
 type SessionMetadata struct {
@@ -31,7 +31,7 @@ type SessionMetadata struct {
 
 	// DispatchID is the dispatch ID of the running session whose
 	// in-flight write last stored the row; empty when the session-exit
-	// write last stored it or the row predates the column.
+	// write last stored it or the record was stored before the field existed.
 	DispatchID string
 
 	// UnaccountedTurns is the running session's count of turns that

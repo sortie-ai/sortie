@@ -7,11 +7,11 @@
 ```
 cmd/sortie -> internal/* (wiring only)
 server -> domain, orchestrator, config, redact, registry, sentence, runstats, pricing, server/ui
-orchestrator -> domain, config, persistence, workspace, workspacekit, registry, prompt, workflow, logging, redact, pricing, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
+orchestrator -> domain, config, storage, workspace, workspacekit, registry, prompt, workflow, logging, redact, pricing, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
 workflow -> config, prompt
-workspace -> domain, config, persistence, agent/procutil, workspacekit
-persistence -> domain, config
-runstats -> domain, persistence
+workspace -> domain, config, storage, agent/procutil, workspacekit
+storage/sqlite -> domain, config, storage
+runstats -> domain, storage
 pricing -> domain, config
 registry -> domain, typeutil
 tracker/*, scm/*, agent/*, notify/* -> domain, registry, logging, redact, trackermetrics, *kit/*util, packages under their own family root that register no kind; no cross-adapter imports
@@ -23,7 +23,7 @@ prompt -> domain, maputil
 httpkit, issuekit, trackermetrics -> domain, typeutil
 logging -> redact
 redact -> httpkit
-domain, maputil, typeutil, workspacekit, waittest, server/ui -> no internal deps
+domain, maputil, typeutil, workspacekit, waittest, storage, server/ui -> no internal deps
 test and test-support code (_test.go files, agenttest, tools/qualify) -> waittest
 ```
 

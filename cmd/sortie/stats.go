@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/storage"
@@ -45,7 +44,7 @@ type statsSource struct {
 // [since, until). Each call opens its own connection, so concurrent calls
 // share nothing and a long scan never holds the orchestrator's store.
 func (src statsSource) report(ctx context.Context, since, until *time.Time, generatedAt time.Time) (runstats.Report, error) {
-	store, err := persistence.OpenReadOnly(ctx, src.dbPath)
+	store, err := openStoreReadOnly(ctx, src.dbPath)
 	if err != nil {
 		return runstats.Report{}, fmt.Errorf("open database %s: %w", src.dbPath, err)
 	}

@@ -14,11 +14,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
@@ -232,7 +232,7 @@ func TestMCPServerBudget(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "budget-e2e.db")
 
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}
@@ -435,7 +435,7 @@ func TestMCPServerBudget_WarningThreshold(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "budget-warning-e2e.db")
 
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}

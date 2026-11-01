@@ -23,11 +23,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/tracker/file"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
@@ -562,7 +562,7 @@ func newHarness(t *testing.T, agent domain.AgentAdapter, agentCommand, agentKind
 	}
 	manager := &workflowManager{config: cfg, template: tmpl, workflowPath: filepath.Join(root, "WORKFLOW.md")}
 
-	store, err := persistence.Open(context.Background(), filepath.Join(root, "e2e.db"))
+	store, err := sqlite.Open(context.Background(), filepath.Join(root, "e2e.db"))
 	if err != nil {
 		t.Fatalf("open temporary store: %v", err)
 	}

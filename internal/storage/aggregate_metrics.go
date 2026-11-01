@@ -4,8 +4,8 @@ import (
 	"context"
 )
 
-// AggregateMetrics represents global token and runtime totals persisted in
-// the aggregate_metrics table. The Key field identifies the metric category
+// AggregateMetrics represents global token and runtime totals persisted by
+// [AggregateMetricsStore]. The Key field identifies the metric category
 // (e.g., "agent_totals"). These counters survive process restarts and are
 // restored during startup recovery.
 type AggregateMetrics struct {

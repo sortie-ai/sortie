@@ -1,6 +1,6 @@
 package storage
 
-// UnrecordedRun is a run_history row whose cost was not recorded.
+// UnrecordedRun is a stored [RunHistory] record whose cost was not recorded.
 type UnrecordedRun struct {
 	ID               int64
 	AgentAdapter     string
@@ -14,7 +14,7 @@ type UnrecordedRun struct {
 	ConfiguredModel  string
 	ReportedModel    string
 
-	// Parts holds the row's run_model_usage rows; nil when it has none.
+	// Parts holds the run's stored per-model usage; nil when it has none.
 	Parts map[string]ModelTokens
 }
 
@@ -24,7 +24,7 @@ type RunCostRecord struct {
 	EstimatedCostUSD *float64
 	CostStatus       string
 
-	// NewParts are run_model_usage rows to insert, nil when the row has its own.
+	// NewParts is the per-model usage to store, nil when the run has its own.
 	NewParts map[string]ModelTokens
 
 	PartCosts map[string]ModelCost

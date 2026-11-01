@@ -5,11 +5,12 @@ import (
 )
 
 // Live pass kinds. A running stage session and a budget hold are stored; a
-// queued retry is reported by [LivePassStore.ListLivePasses] from retry_entries.
+// queued retry is reported by [LivePassStore.ListLivePasses] from the stored
+// [RetryEntry] records.
 const (
 	LivePassRunning = "running" // a running stage session
 	LivePassBudget  = "budget"  // a budget hold
-	LivePassRetry   = "retry"   // a retry_entries row; ListLivePasses reports it, nothing stores it
+	LivePassRetry   = "retry"   // a [RetryEntry]; ListLivePasses reports it, nothing stores it
 )
 
 // LivePass is a stage pass the orchestrator holds outside finished runs: the

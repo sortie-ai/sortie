@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
@@ -396,12 +396,12 @@ func (m *autoMergeMetricsCounter) mergedCount() int {
 }
 
 // openInMemoryStore opens an in-memory SQLite store and runs migrations.
-func openInMemoryStore(t *testing.T) *persistence.Store {
+func openInMemoryStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, ":memory:")
+	store, err := sqlite.Open(ctx, ":memory:")
 	if err != nil {
-		t.Fatalf("persistence.Open(:memory:): %v", err)
+		t.Fatalf("sqlite.Open(:memory:): %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {

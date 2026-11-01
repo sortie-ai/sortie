@@ -14,8 +14,8 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 )
 
 type handoffLabelCall struct {
@@ -945,9 +945,9 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 
 	const issueID = "ORD-1"
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, ":memory:")
+	store, err := sqlite.Open(ctx, ":memory:")
 	if err != nil {
-		t.Fatalf("persistence.Open: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {

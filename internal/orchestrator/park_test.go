@@ -14,8 +14,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -252,12 +252,12 @@ func TestParkIssueSuccessfulLabelWriteDoesNotConfirmWithoutObservation(t *testin
 // simulated restart: the in-memory State is discarded and rebuilt purely
 // from the durable rows, and the rebuilt state still refuses dispatch.
 
-func openParkStore(t *testing.T) *persistence.Store {
+func openParkStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()
-	store, err := persistence.Open(ctx, t.TempDir()+"/test.db")
+	store, err := sqlite.Open(ctx, t.TempDir()+"/test.db")
 	if err != nil {
-		t.Fatalf("persistence.Open: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
