@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
@@ -303,11 +303,11 @@ func TestHandleAgentEvent_SkillCallsOutliveTheEventBuffer(t *testing.T) {
 	}
 }
 
-func openFileStore(t *testing.T, path string) *persistence.Store {
+func openFileStore(t *testing.T, path string) *sqlite.Store {
 	t.Helper()
-	store, err := persistence.Open(context.Background(), path)
+	store, err := sqlite.Open(context.Background(), path)
 	if err != nil {
-		t.Fatalf("persistence.Open(%q): %v", path, err)
+		t.Fatalf("sqlite.Open(%q): %v", path, err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Migrate(context.Background()); err != nil {

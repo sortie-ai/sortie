@@ -4,8 +4,8 @@ import (
 	"context"
 )
 
-// BudgetHoldNotice is one row of the budget_hold_notices table: the
-// tracker notice already posted for the current budget hold on one issue.
+// BudgetHoldNotice is the stored tracker notice already posted for the
+// current budget hold on one issue.
 type BudgetHoldNotice struct {
 	IssueID   string
 	Reason    string // "session_budget", "token_budget", or "money_budget"

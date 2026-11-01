@@ -21,7 +21,7 @@ Two rules govern every finding.
 - **Intent says opt-in or default-off.** Find the branch that makes it inert when unconfigured, and confirm nothing outside it changed behavior. An opt-in feature that alters a default path is the failure this claim hides.
 - **Sensitive Areas names a file.** Review it first and hardest. An empty Sensitive Areas on a diff that touches orchestrator state, an adapter boundary, or workspace removal is itself a finding.
 - **Breaking Changes says none.** Check exported signatures, domain struct fields consumed by adapters, config field names and defaults, and log or metric names an operator may depend on.
-- **Migrations says none.** Check `internal/persistence/sql/` and any new column read.
+- **Migrations says none.** Check `internal/storage/sqlite/sql/` and any new column read.
 
 ## Documentation is part of the change
 

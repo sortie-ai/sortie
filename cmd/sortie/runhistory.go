@@ -21,7 +21,7 @@ type runHistorySource interface {
 }
 
 // runHistoryReader serves the HTTP server's run history from the store, so
-// the server never names a persistence type.
+// the server never names a storage type.
 type runHistoryReader struct {
 	store runHistorySource
 }

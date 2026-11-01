@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// ParkedIssue is one row of the parked_issues table: an issue held out of
+// ParkedIssue is one stored park: an issue held out of
 // primary dispatch until the orchestrator observes that a person acted.
 type ParkedIssue struct {
 	IssueID      string

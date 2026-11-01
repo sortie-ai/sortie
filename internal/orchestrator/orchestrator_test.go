@@ -24,11 +24,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 	"github.com/sortie-ai/sortie/internal/workflow"
 
@@ -9679,9 +9679,9 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
 
-	store1, err := persistence.Open(ctx, dbPath)
+	store1, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	if err := store1.Migrate(ctx); err != nil {
 		t.Fatalf("store1.Migrate: %v", err)
@@ -9742,9 +9742,9 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 		t.Fatalf("store1.Close: %v", err)
 	}
 
-	store2, err := persistence.Open(ctx, dbPath)
+	store2, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open (reopen): %v", err)
+		t.Fatalf("sqlite.Open (reopen): %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store2.Close(); err != nil {

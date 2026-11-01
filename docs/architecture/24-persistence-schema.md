@@ -4,7 +4,7 @@
 
 Sortie uses an embedded SQLite database for durable state. The database file path defaults to `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path` front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and runs all pending schema migrations before beginning normal operation. The last price tables accepted from a download (Section 13.5) are files beside the database file, outside the schema.
 
-Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts. Only the code that opens the database depends on the SQLite store itself; every other component depends on the contracts. An operation that must see or change two domains at one instant is a single operation of one contract, which every implementation carries out atomically: appending a finished run with its events, recording a stage hop with the deletion of the issue's retry entry, and listing the live passes with the retry entries.
+Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts in a component of its own, which holds everything specific to SQLite: the database driver, the connection setup, the SQL dialect, and the schema migrations. Any other backend implements the same contracts the same way, as a sibling component that holds its own, so adding one changes neither the contracts nor their callers. The database is opened at one place, which applies the pending migrations when the orchestrator starts and applies none when a process that only reads opens the database read-only. Only that place depends on the SQLite store itself; every other component depends on the contracts. An operation that must see or change two domains at one instant is a single operation of one contract, which every implementation carries out atomically: appending a finished run with its events, recording a stage hop with the deletion of the issue's retry entry, and listing the live passes with the retry entries.
 
 ### 19.2 Tables
 
@@ -446,7 +446,7 @@ Every write of `run_events` updates `bytes` in its own transaction, so the figur
 
 ### 19.3 Migration Strategy
 
-- Migrations are numbered sequentially and applied in order at startup.
+- Migrations belong to the SQLite store: they are written in its SQL dialect, ship inside it, are numbered sequentially, and are applied in order at startup by the place that opens the database. The storage contracts define no table and no migration.
 - Applied migrations are tracked in a `schema_migrations` table. The `applied_at` of the migration that creates `reaction_activity` marks the start of the passes whose reaction activity is recorded (Section 19.2).
 - Migrations are additive (new columns/tables) where possible; destructive migrations require explicit versioning.
 - The migration that adds the recorded cost leaves the pricing of the rows written before it to the first start that applies it, which prices them once under the rates in force at that start and never again (Section 19.2).

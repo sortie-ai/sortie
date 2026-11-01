@@ -21,7 +21,7 @@ var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/config":                     "assembling the ServiceConfig the harness's orchestrator runs",
 	"github.com/sortie-ai/sortie/internal/domain":                     "the AgentAdapter interface and the session/turn types the fake agent implements",
 	"github.com/sortie-ai/sortie/internal/orchestrator":               "the real orchestrator the harness drives end to end",
-	"github.com/sortie-ai/sortie/internal/persistence":                "opening and migrating the store the orchestrator runs against",
+	"github.com/sortie-ai/sortie/internal/storage/sqlite":             "opening and migrating the store the orchestrator runs against",
 	"github.com/sortie-ai/sortie/internal/pricing":                    "the rates type the harness's workflow manager double returns",
 	"github.com/sortie-ai/sortie/internal/prompt":                     "parsing the fixture's workflow prompt template",
 	"github.com/sortie-ai/sortie/internal/registry":                   "registering the fixture agent kind the orchestrator's preflight resolves",

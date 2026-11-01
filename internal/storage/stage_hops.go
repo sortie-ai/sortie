@@ -4,8 +4,8 @@ import (
 	"context"
 )
 
-// StageHop is one row of the stage_hops table: an issue's consecutive
-// automatic stage hops since the last reset, and the latest hop.
+// StageHop is one stored record of an issue's consecutive automatic stage
+// hops since the last reset, and the latest hop.
 type StageHop struct {
 	IssueID          string
 	Identifier       string
@@ -17,7 +17,7 @@ type StageHop struct {
 	SourceDispatchID string // dispatch of the run whose exit made the hop
 	TargetObserved   bool   // a read has shown TargetLabel on the issue
 	HoppedAt         string // RFC 3339
-	ChainID          string // chain of the run whose exit made the hop; empty for rows written before migration 024
+	ChainID          string // chain of the run whose exit made the hop; empty for a hop stored before the field existed
 
 	// DisplayID, IssueTitle, and IssueURL name the issue to a person; each
 	// is empty when the hop was recorded without a read of the issue.

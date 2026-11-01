@@ -16,7 +16,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 )
 
 // webhookBackend returns a NotificationBackend pointing at a live httptest
@@ -38,7 +38,7 @@ func webhookBackend(t *testing.T) config.NotificationBackend {
 func seedDB(t *testing.T, dbPath string) {
 	t.Helper()
 	ctx := context.Background()
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("seedDB: Open(%q): %v", dbPath, err)
 	}

@@ -1,16 +1,16 @@
 package storage
 
-// RunHistoryCapabilities reports which optional run_history columns a
+// RunHistoryCapabilities reports which optional [RunHistory] fields a
 // database carries, so a read-only caller can pick a projection the schema
-// supports. A field the underlying table does not carry holds its zero
+// supports. A field the underlying database does not carry holds its zero
 // value in every [RunStatsRow] the read returns.
 type RunHistoryCapabilities struct {
-	HasTurnsCompleted   bool // migration 005
-	HasReviewMetadata   bool // migration 007
-	HasRuleRouting      bool // migration 010: rule_name, template_id
-	HasTokens           bool // migration 011: the four token columns
-	HasTokenMeasurement bool // migration 012: tokens_measured
-	HasCacheWriteTokens bool // migration 020
+	HasTurnsCompleted   bool // [RunStatsRow.TurnsCompleted] is stored
+	HasReviewMetadata   bool // [RunStatsRow.ReviewMetadata] is stored
+	HasRuleRouting      bool // [RunStatsRow.RuleName] and [RunStatsRow.TemplateID] are stored
+	HasTokens           bool // [RunStatsRow.InputTokens], [RunStatsRow.OutputTokens], [RunStatsRow.TotalTokens], and [RunStatsRow.CacheReadTokens] are stored
+	HasTokenMeasurement bool // [RunStatsRow.TokensMeasured] is stored
+	HasCacheWriteTokens bool // [RunStatsRow.CacheWriteTokens] is stored
 
 	// HasConfiguredSettings is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.ModelBreakdown] depends on it.
@@ -23,15 +23,15 @@ type RunHistoryCapabilities struct {
 	// HasTrigger is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.TriggerBreakdown] depends on it, and
 	// [RunHistoryCapabilities.OriginBreakdown] through it.
-	HasTrigger bool // migration 028: trigger, reaction_kind
+	HasTrigger bool // [RunStatsRow.Trigger] and [RunStatsRow.ReactionKind] are stored
 
 	// HasFirstAfterHop is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.OriginBreakdown] depends on it.
-	HasFirstAfterHop bool // migration 032: first_after_hop
+	HasFirstAfterHop bool // [RunStatsRow.FirstAfterHop] is stored
 
 	// HasAgentBlocked is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.FunnelBreakdown] depends on it.
-	HasAgentBlocked bool // migration 037: agent_blocked
+	HasAgentBlocked bool // [RunStatsRow.AgentBlocked] is stored
 
 	// HasRecordedCost is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.RecordedCost] depends on it.
@@ -43,13 +43,14 @@ type RunHistoryCapabilities struct {
 
 	// HasUsageProvenance is outside [RunHistoryCapabilities.Full];
 	// [RunHistoryCapabilities.UsageProvenance] depends on it. It is true when
-	// run_history carries usage_completeness and usage_provenance and the
-	// run_reported_amounts table exists.
-	HasUsageProvenance bool // migration 050
+	// the database stores [RunStatsRow.UsageCompleteness] and
+	// [RunStatsRow.UsageProvenance] and the amounts a run reported, which
+	// [RunStatsRow.ReportedUnits] reads.
+	HasUsageProvenance bool // [RunStatsRow.UsageCompleteness] and [RunStatsRow.UsageProvenance] are stored
 }
 
-// Full reports whether the database carries every optional run_history
-// column group. It is the single owner of the capability tier decision:
+// Full reports whether the database carries every optional [RunHistory]
+// field group. It is the single owner of the capability tier decision:
 // [RunHistoryStore.ScanRunHistoryRange] selects its projection from this predicate and
 // no caller may re-derive the conjunction or branch on an individual flag,
 // because a database migrated only partway is the common case rather than
@@ -59,31 +60,31 @@ func (c RunHistoryCapabilities) Full() bool {
 }
 
 // ModelBreakdown reports whether a read can group runs by model: Full plus
-// the configured-settings columns.
+// the configured-settings fields.
 func (c RunHistoryCapabilities) ModelBreakdown() bool {
 	return c.Full() && c.HasConfiguredSettings
 }
 
 // ChainBreakdown reports whether a read can group runs by stage chain:
-// ModelBreakdown plus the stage-chain columns.
+// ModelBreakdown plus the stage-chain fields.
 func (c RunHistoryCapabilities) ChainBreakdown() bool {
 	return c.ModelBreakdown() && c.HasStageChains
 }
 
 // TriggerBreakdown reports whether a read can group runs by retry trigger:
-// ChainBreakdown plus the trigger column.
+// ChainBreakdown plus the trigger field.
 func (c RunHistoryCapabilities) TriggerBreakdown() bool {
 	return c.ChainBreakdown() && c.HasTrigger
 }
 
 // OriginBreakdown reports whether a read can group runs by run origin:
-// TriggerBreakdown plus the first-run-after-hop column.
+// TriggerBreakdown plus the first-run-after-hop field.
 func (c RunHistoryCapabilities) OriginBreakdown() bool {
 	return c.TriggerBreakdown() && c.HasFirstAfterHop
 }
 
 // FunnelBreakdown reports whether a read can fold runs into stage funnels:
-// OriginBreakdown plus the blocked-run column.
+// OriginBreakdown plus the blocked-run field.
 func (c RunHistoryCapabilities) FunnelBreakdown() bool {
 	return c.OriginBreakdown() && c.HasAgentBlocked
 }
@@ -96,19 +97,19 @@ func (c RunHistoryCapabilities) RecordedCost() bool {
 }
 
 // SkillBreakdown reports whether a read can fold each run's skill calls:
-// RecordedCost plus the skills column.
+// RecordedCost plus the skills field.
 func (c RunHistoryCapabilities) SkillBreakdown() bool {
 	return c.RecordedCost() && c.HasSkills
 }
 
 // UsageProvenance reports whether the stats report can read each run's usage
 // completeness, provenance, and reported units: RecordedCost plus the
-// provenance columns.
+// provenance fields.
 func (c RunHistoryCapabilities) UsageProvenance() bool {
 	return c.RecordedCost() && c.HasUsageProvenance
 }
 
-// RunStatsRow is the narrow run_history projection the aggregate read
+// RunStatsRow is the narrow [RunHistory] projection the aggregate read
 // returns. A field the schema does not carry holds its zero value.
 type RunStatsRow struct {
 	// IssueID is filled on every capability tier.
@@ -121,12 +122,12 @@ type RunStatsRow struct {
 	StartedAt        string // ISO-8601 as stored
 	CompletedAt      string // ISO-8601 as stored
 	TurnsCompleted   int
-	ReviewMetadata   *string // nil when the column is NULL or absent
+	ReviewMetadata   *string // nil when no value is stored or the store lacks the field
 	InputTokens      int64
 	OutputTokens     int64
 	TotalTokens      int64
 	CacheReadTokens  int64
-	CacheWriteTokens int64 // 0 when the database lacks the column
+	CacheWriteTokens int64 // 0 when the database lacks the field
 	TokensMeasured   bool
 
 	// ConfiguredModel and ReportedModel are empty when the run named or
@@ -142,11 +143,11 @@ type RunStatsRow struct {
 	StagePrevious string
 	StageResult   string
 
-	// Trigger is nil when the column is NULL or
+	// Trigger is nil when no value is stored or
 	// [RunHistoryCapabilities.TriggerBreakdown] reports false.
 	Trigger *string
 
-	// ReactionKind is empty when the column is NULL or empty, or
+	// ReactionKind is empty when no value is stored or it is empty, or
 	// [RunHistoryCapabilities.TriggerBreakdown] reports false.
 	ReactionKind string
 
@@ -160,28 +161,28 @@ type RunStatsRow struct {
 	AgentBlocked    bool
 	HandoffWithheld bool
 
-	// EstimatedCostUSD is nil when the column is NULL or
+	// EstimatedCostUSD is nil when no value is stored or
 	// [RunHistoryCapabilities.RecordedCost] reports false. CostStatus is empty
-	// for a NULL status and under the same condition.
+	// for a status with no stored value and under the same condition.
 	EstimatedCostUSD *float64
 	CostStatus       string
 
-	// Parts are the run's run_model_usage rows ordered by model, carrying
+	// Parts are the run's [RunModelPart] records ordered by model, carrying
 	// Model, Tokens, EstimatedCostUSD, CostStatus, and PriceSource;
 	// UnratedClasses and UnratedRecorded stay zero. Nil when the run has none
 	// or [RunHistoryCapabilities.RecordedCost] reports false.
 	Parts []RunModelPart
 
-	// UnaccountedTurns is run_history.unaccounted_turns; zero when
+	// UnaccountedTurns is [RunHistory.UnaccountedTurns]; zero when
 	// [RunHistoryCapabilities.RecordedCost] reports false.
 	UnaccountedTurns int
 
-	// Skills is run_history.skills as stored; nil when the column is NULL or
+	// Skills is [RunHistory.Skills] as stored; nil when no value is stored or
 	// [RunHistoryCapabilities.SkillBreakdown] reports false.
 	Skills *string
 
 	// UsageCompleteness and UsageProvenance are the stored values; each is
-	// empty when the column is NULL or [RunHistoryCapabilities.UsageProvenance]
+	// empty when no value is stored or [RunHistoryCapabilities.UsageProvenance]
 	// reports false.
 	UsageCompleteness string
 	UsageProvenance   string

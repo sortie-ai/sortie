@@ -21,9 +21,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
@@ -251,12 +251,12 @@ func TestMCPServerShortHelp(t *testing.T) {
 // session_metadata row for the live session "sess-live" carrying 150
 // total tokens and the given dispatch ID, then reopens it read-only as
 // the sidecar does.
-func seedBudgetStore(t *testing.T, dispatchID string) *persistence.Store {
+func seedBudgetStore(t *testing.T, dispatchID string) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "budget.db")
 
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}
@@ -299,7 +299,7 @@ func seedBudgetStore(t *testing.T, dispatchID string) *persistence.Store {
 		t.Fatalf("Close read-write store: %v", err)
 	}
 
-	ro, err := persistence.OpenReadOnly(ctx, dbPath)
+	ro, err := sqlite.OpenReadOnly(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
 	}
@@ -408,12 +408,12 @@ func TestBuildBudgetQuery(t *testing.T) {
 	})
 }
 
-func seedBudgetMeasurementStore(t *testing.T) *persistence.Store {
+func seedBudgetMeasurementStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "budget-measurement.db")
 
-	rw, err := persistence.Open(ctx, dbPath)
+	rw, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}
@@ -475,7 +475,7 @@ func seedBudgetMeasurementStore(t *testing.T) *persistence.Store {
 		t.Fatalf("Close read-write store: %v", err)
 	}
 
-	ro, err := persistence.OpenReadOnly(ctx, dbPath)
+	ro, err := sqlite.OpenReadOnly(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
 	}

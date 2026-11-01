@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 	"github.com/sortie-ai/sortie/internal/waittest"
 
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
@@ -244,9 +244,9 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	}
 
 	dbPath := t.TempDir() + "/test.db"
-	store, err := persistence.Open(ctx, dbPath)
+	store, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("persistence.Open: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {

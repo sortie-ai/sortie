@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 )
 
 type runRef struct {
@@ -28,9 +28,9 @@ type runsHarness struct {
 
 func newRunsHarness(t *testing.T, snap orchestrator.RuntimeSnapshotResult) *runsHarness {
 	t.Helper()
-	store, err := persistence.Open(t.Context(), ":memory:")
+	store, err := sqlite.Open(t.Context(), ":memory:")
 	if err != nil {
-		t.Fatalf("persistence.Open: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Migrate(t.Context()); err != nil {

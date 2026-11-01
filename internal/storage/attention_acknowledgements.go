@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// AttentionAcknowledgement is one row of attention_acknowledgements: when a
+// AttentionAcknowledgement is one stored acknowledgement: when a
 // person acknowledged one attention item.
 type AttentionAcknowledgement struct {
 	ItemID         string

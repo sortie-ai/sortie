@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// HandoffAbsenceErrorPrefix marks a run_history error where a handoff was
+// HandoffAbsenceErrorPrefix marks a [RunHistory.Error] where a handoff was
 // withheld because no work was observed. Keeping it stable lets the retry
 // and polling paths reconstruct the consecutive-absence sequence without a
-// verdict column.
+// verdict field.
 const HandoffAbsenceErrorPrefix = "handoff withheld: "
 
-// The verdicts that follow [HandoffAbsenceErrorPrefix] in a run_history error.
+// The verdicts that follow [HandoffAbsenceErrorPrefix] in a [RunHistory.Error].
 // Whoever words the stored error for a person matches on them, so they are
 // shared rather than repeated.
 const (
@@ -21,15 +21,15 @@ const (
 
 // ModelTokens is one model's token counts.
 type ModelTokens struct {
-	// InputTokens includes cache reads and writes, as run_history.input_tokens does.
+	// InputTokens includes cache reads and writes, as [RunHistory.InputTokens] does.
 	InputTokens      int64 `json:"input_tokens"`
 	OutputTokens     int64 `json:"output_tokens"`
 	CacheReadTokens  int64 `json:"cache_read_tokens"`
 	CacheWriteTokens int64 `json:"cache_write_tokens"`
 }
 
-// ModelCost is the recorded price of one run_model_usage part. A nil
-// EstimatedCostUSD and an empty CostStatus write NULL.
+// ModelCost is the recorded price of one [RunModelPart]. A nil
+// EstimatedCostUSD and an empty CostStatus store no value.
 type ModelCost struct {
 	EstimatedCostUSD  *float64
 	CostStatus        string
@@ -37,20 +37,20 @@ type ModelCost struct {
 	PriceTableVersion string
 
 	// UnratedClasses names the token classes that had no rate. An empty
-	// CostStatus writes NULL for it whatever it holds, so an unpriced part
+	// CostStatus stores no value for it whatever it holds, so an unpriced part
 	// reads as not recorded.
 	UnratedClasses []string
 }
 
-// RunModelPart is one run_model_usage row as read.
+// RunModelPart is one stored model part of a run, as read.
 type RunModelPart struct {
 	Model            string
 	Tokens           ModelTokens
-	EstimatedCostUSD *float64 // nil when NULL
-	CostStatus       string   // "" when NULL
+	EstimatedCostUSD *float64 // nil when absent
+	CostStatus       string   // "" when absent
 
-	// UnratedRecorded is false when unrated_classes is NULL; UnratedClasses
-	// is nil when it is NULL or empty.
+	// UnratedRecorded is false when no UnratedClasses value was stored;
+	// UnratedClasses is nil when none was stored or it is empty.
 	UnratedClasses  []string
 	UnratedRecorded bool
 
@@ -82,7 +82,7 @@ type ReportedAmount struct {
 	LowerBound bool // True when the run may have spent more in Unit than Amount.
 }
 
-// RunHistory is a single completed run attempt in the run_history table.
+// RunHistory is a single completed run attempt, as stored.
 // ID is assigned by the database on insert; leave it zero when calling
 // [RunHistoryStore.AppendRunHistory].
 type RunHistory struct {
@@ -97,7 +97,7 @@ type RunHistory struct {
 	CompletedAt    string
 	Status         string // "succeeded", "failed", "cancelled", "ci_failed", "needs_person", "budget_stopped", or "usage_limited".
 	Error          *string
-	WorkflowFile   string // Base filename; empty for pre-migration rows.
+	WorkflowFile   string // Base filename; empty for a run stored before the field existed.
 	TurnsCompleted int
 	ReviewMetadata *string // JSON ReviewMetadata; nil when self-review did not run.
 	Skills         *string // JSON array of the run's skill calls, [] when it called none; nil only when the row records no skill calls.
@@ -106,37 +106,37 @@ type RunHistory struct {
 
 	// ConfiguredModel and ConfiguredEffort are what the attempt was
 	// configured with; ReportedModel is what the runtime reported running.
-	// Each is empty when unset, and for pre-migration rows.
+	// Each is empty when unset, and for a run stored before the fields existed.
 	ConfiguredModel  string
 	ConfiguredEffort string
 	ReportedModel    string
 
-	InputTokens      int64 // 0 for pre-migration rows.
-	OutputTokens     int64 // 0 for pre-migration rows.
-	TotalTokens      int64 // 0 for pre-migration rows.
-	CacheReadTokens  int64 // 0 for pre-migration rows.
-	CacheWriteTokens int64 // 0 for pre-migration rows.
+	InputTokens      int64 // 0 for a run stored before the field existed.
+	OutputTokens     int64 // 0 for a run stored before the field existed.
+	TotalTokens      int64 // 0 for a run stored before the field existed.
+	CacheReadTokens  int64 // 0 for a run stored before the field existed.
+	CacheWriteTokens int64 // 0 for a run stored before the field existed.
 
-	// TokensMeasured is true when the token columns carry a runtime-reported
+	// TokensMeasured is true when the token fields carry a runtime-reported
 	// figure and false when spend is unknown rather than zero. Every writer
-	// must set it explicitly: the column's SQL default is 1, so an omitted
-	// field records an unmeasured run rather than inheriting the default.
+	// must set it explicitly: a store records the value as passed, so a field
+	// left at its zero value records an unmeasured run.
 	TokensMeasured bool
 
 	// UnaccountedTurns counts turns that spent tokens no figure was proven
-	// to cover; that overspend reaches none of the token columns, so a
+	// to cover; that overspend reaches none of the token fields, so a
 	// non-zero count makes this row's total a lower bound. Orthogonal to
 	// TokensMeasured.
 	UnaccountedTurns int
 
 	// StagePrevious and StagePreviousOutcome are the frozen stage.previous
 	// pair the attempt rendered with; both are empty when no hop led to the
-	// dispatch and for pre-migration rows.
+	// dispatch and for a run stored before the fields existed.
 	StagePrevious        string
 	StagePreviousOutcome string
 
 	// ChainID groups the runs of one pass through a chain of stages; it is
-	// empty only for rows written before migration 024.
+	// empty only for a run stored before the field existed.
 	ChainID string
 
 	// StageTarget and StageResult record the hop decision the attempt's
@@ -146,8 +146,8 @@ type RunHistory struct {
 	StageResult string
 
 	// IssueTitle and IssueURL are the tracker's title and web link as read
-	// when the attempt was dispatched; both are empty for rows written
-	// before migration 025.
+	// when the attempt was dispatched; both are empty for a run stored
+	// before the fields existed.
 	IssueTitle string
 	IssueURL   string
 
@@ -158,8 +158,8 @@ type RunHistory struct {
 	// Trigger is the sortie_retries_total label of the schedule that
 	// started the retry whose fire dispatched the run; empty for a poll-tick
 	// dispatch and for a retry a reaction other than the CI fix started. Nil
-	// reads and writes NULL: the retry never stored what started it, or the
-	// row predates migration 028.
+	// reads and writes as absent: the retry never stored what started it, or
+	// the run was stored before the field existed.
 	Trigger *string
 
 	// ReactionKind is the dispatching retry's reaction kind; empty when none.
@@ -172,8 +172,8 @@ type RunHistory struct {
 	// SSHHost is the SSH worker the run executed on; empty for a local run.
 	SSHHost string
 
-	// OriginRecorded is false when session_id is NULL, which only a row
-	// written before migration 028 holds. It is ignored on write.
+	// OriginRecorded is false when SessionID has no stored value, which only a
+	// run stored before the field existed holds. It is ignored on write.
 	OriginRecorded bool
 
 	// FirstAfterHop is true on the first run dispatched after the stage hop
@@ -181,8 +181,8 @@ type RunHistory struct {
 	FirstAfterHop bool
 
 	// DispatchID keys the run's retained events: the agent run's dispatch
-	// ID, and "" on a row no agent run produced. Nil reads and writes NULL:
-	// only rows written before the column existed.
+	// ID, and "" on a row no agent run produced. Nil reads and writes as absent:
+	// only a run stored before the field existed.
 	DispatchID *string
 
 	// AgentBlocked is true when the run's agent ended it with a blocked soft
@@ -192,7 +192,7 @@ type RunHistory struct {
 	// DeclaredOutcome is the recognized status token the run's agent ended
 	// it with, and AgentText the masked statement written after it. Both
 	// appends write them and only [RunHistoryStore.QueryRunHistory] reads them; each
-	// is empty when the run ended on no declaration or predates the columns.
+	// is empty when the run ended on no declaration or predates the fields.
 	DeclaredOutcome string
 	AgentText       string
 
@@ -202,7 +202,7 @@ type RunHistory struct {
 	ModelUsage map[string]ModelTokens
 
 	// EstimatedCostUSD and CostStatus are the run's recorded cost. Nil and ""
-	// write NULL. Only [RunHistoryStore.QueryRunHistory] reads them.
+	// store no value. Only [RunHistoryStore.QueryRunHistory] reads them.
 	EstimatedCostUSD *float64
 	CostStatus       string
 
@@ -216,7 +216,7 @@ type RunHistory struct {
 	UsageProvenance string
 
 	// UsageCompleteness is [UsageComplete], [UsageLowerBound], or
-	// [UsageUnmeasured]; empty writes NULL here and in UsageProvenance, which
+	// [UsageUnmeasured]; empty stores no value here and in UsageProvenance, which
 	// reads as not recorded.
 	UsageCompleteness string
 
@@ -235,7 +235,8 @@ func (h RunHistory) Completeness() string {
 	return UsageCompletenessOf(h.TokensMeasured, h.UnaccountedTurns)
 }
 
-// RunHistoryFilter selects run_history rows; a zero field matches every row.
+// RunHistoryFilter selects stored [RunHistory] records; a zero field matches
+// every one.
 type RunHistoryFilter struct {
 	IssueID    string
 	Identifier string
@@ -300,7 +301,7 @@ type IssueGroup struct {
 	NewestRunID int64
 }
 
-// IssueTokenUsage is the token and cost spend of a set of run_history rows:
+// IssueTokenUsage is the token and cost spend of a set of [RunHistory] records:
 // one issue's, or those completed in a window.
 type IssueTokenUsage struct {
 	// TotalTokens sums total_tokens, prompt-cache reads included. It is not
@@ -354,7 +355,7 @@ type ModelUse struct {
 	Model string
 	// LastUsedAt is the latest completed_at of the runs, zero when none parses.
 	LastUsedAt time.Time
-	// Runs counts the runs that have a run_model_usage row for the pair.
+	// Runs counts the runs that have a [RunModelPart] for the pair.
 	Runs int
 }
 

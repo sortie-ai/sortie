@@ -11,10 +11,10 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/storage/sqlite"
 )
 
 type fakeSpendStore struct {
@@ -217,10 +217,10 @@ func TestEvaluateSpendCeiling_IndependentOfRatesAndRestart(t *testing.T) {
 
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "sortie.db")
-	openStore := func() *persistence.Store {
-		store, err := persistence.Open(context.Background(), path)
+	openStore := func() *sqlite.Store {
+		store, err := sqlite.Open(context.Background(), path)
 		if err != nil {
-			t.Fatalf("persistence.Open(%q): %v", path, err)
+			t.Fatalf("sqlite.Open(%q): %v", path, err)
 		}
 		t.Cleanup(func() { _ = store.Close() })
 		if err := store.Migrate(context.Background()); err != nil {

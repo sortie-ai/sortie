@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Activity values of a reaction_activity row.
+// Activity values of a [ReactionActivity].
 const (
 	ReactionActivityWatch        = "watch"
 	ReactionActivityContinuation = "continuation"
@@ -46,7 +46,8 @@ type KindActivity struct {
 
 // PassActivity is what the reactions recorded in one pass. Recorded is false
 // for a pass without a chain identifier or a dispatch time, or dispatched
-// before the second the table was created in; Kinds is then empty.
+// before the second reaction activity began to be recorded; Kinds is then
+// empty.
 type PassActivity struct {
 	Recorded bool
 	Kinds    map[string]KindActivity // keyed by reaction kind

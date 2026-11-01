@@ -34,7 +34,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
-	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/pricing"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/runstats"
@@ -260,7 +259,7 @@ func labelFixCommandActive(cfg config.ServiceConfig) bool {
 }
 
 // modelUseSource serves the HTTP server's model usage from the store, so the
-// server needs no persistence import.
+// server imports no storage package.
 func modelUseSource(store storage.RunHistoryStore) server.ModelUseFunc {
 	return func(ctx context.Context) ([]server.ModelUse, error) {
 		uses, err := store.ListModelUse(ctx)
@@ -364,17 +363,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	workflowDir := filepath.Dir(br.path)
 	dbPath := resolveDBPath(br.cfg.DBPath, workflowDir)
 	br.logger.Info("database path resolved", slog.String("db_path", dbPath))
-	store, err := persistence.Open(ctx, dbPath)
-	if err != nil {
-		br.logger.Error("failed to open database", slog.Any("error", err))
+	store, ok := openStore(ctx, dbPath, br.logger)
+	if !ok {
 		return 1
 	}
 	defer store.Close() //nolint:errcheck // best-effort cleanup at shutdown
-
-	if err := store.Migrate(ctx); err != nil {
-		br.logger.Error("failed to migrate database", slog.Any("error", err))
-		return 1
-	}
 
 	downloader := pricing.NewDownloader(dbPath, br.logger)
 	br.mgr.SetDownloader(downloader)
