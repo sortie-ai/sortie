@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -651,6 +652,33 @@ func TestFetchIssueCommentChanges(t *testing.T) {
 	}
 	if changes.Next != "" {
 		t.Errorf("FetchIssueCommentChanges Next = %q, want zero point", changes.Next)
+	}
+}
+
+func TestFetchIssueCommentChanges_RejectsMalformedComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		comments string
+	}{
+		{"unparseable created_at", `[{"id": "c1", "author": "alice", "body": "hi", "created_at": "yesterday"}]`},
+		{"duplicate id", `[{"id": "c1", "author": "alice", "body": "hi", "created_at": "2026-03-01T10:00:00Z"},
+			{"id": "c1", "author": "bob", "body": "me too", "created_at": "2026-03-01T10:05:00Z"}]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "issues.json")
+			issues := `[{"id": "1", "identifier": "PROJ-1", "title": "t", "state": "To Do", "comments": ` + tt.comments + `}]`
+			if err := os.WriteFile(path, []byte(issues), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := newAdapter(t, path, nil).FetchIssueCommentChanges(context.Background(), "1", "")
+			requireTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		})
 	}
 }
 

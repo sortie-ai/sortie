@@ -342,14 +342,23 @@ func (a *FileAdapter) FetchIssueCommentChanges(_ context.Context, issueID string
 }
 
 // sortByCreation returns comments oldest first, ties by ascending ID, and
-// leaves the fixture order of the full reads untouched.
+// leaves the fixture order of the full reads untouched. A change read holds
+// each ID once, so a fixture repeating an id is rejected rather than read.
 func sortByCreation(comments []domain.Comment) ([]domain.Comment, error) {
 	type datedComment struct {
 		domain.Comment
 		created time.Time
 	}
 	dated := make([]datedComment, len(comments))
+	seen := make(map[string]bool, len(comments))
 	for i, c := range comments {
+		if seen[c.ID] {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("duplicate comment id %q", c.ID),
+			}
+		}
+		seen[c.ID] = true
 		created, err := c.CreatedTime()
 		if err != nil {
 			return nil, &domain.TrackerError{
