@@ -18,16 +18,23 @@ func TestResolveSessionStart(t *testing.T) {
 	const resumeID = "7d0f2b1e-3c4a-4d5e-8f60-a1b2c3d4e5f6"
 
 	tests := []struct {
-		name       string
-		resumeID   string
-		endContext bool
-		signal     ResumeSignal[struct{}]
-		probeErr   *domain.AgentError
-		wantKind   domain.AgentErrorKind
-		wantCause  error
+		name           string
+		resumeID       string
+		endBeforeStart bool
+		endDuringProbe bool
+		signal         ResumeSignal[struct{}]
+		probeErr       *domain.AgentError
+		wantKind       domain.AgentErrorKind
+		wantCause      error
 	}{
 		{
 			name: "empty resume id skips the probe",
+		},
+		{
+			name:           "fresh start after the start context ended",
+			endBeforeStart: true,
+			wantKind:       domain.ErrTurnCancelled,
+			wantCause:      context.Canceled,
 		},
 		{
 			name:     "unknown verdict starts a new session",
@@ -42,20 +49,20 @@ func TestResolveSessionStart(t *testing.T) {
 			wantCause: sshutil.ErrConnectionFailed,
 		},
 		{
-			name:       "carried verdict after the start context ended",
-			resumeID:   resumeID,
-			endContext: true,
-			signal:     ResumeSignal[struct{}]{Verdict: ResumeCarried},
-			wantKind:   domain.ErrTurnCancelled,
-			wantCause:  context.Canceled,
+			name:           "carried verdict after the start context ended",
+			resumeID:       resumeID,
+			endDuringProbe: true,
+			signal:         ResumeSignal[struct{}]{Verdict: ResumeCarried},
+			wantKind:       domain.ErrTurnCancelled,
+			wantCause:      context.Canceled,
 		},
 		{
-			name:       "probe error after the start context ended",
-			resumeID:   resumeID,
-			endContext: true,
-			probeErr:   &domain.AgentError{Kind: domain.ErrPortExit, Message: "probe connection ended"},
-			wantKind:   domain.ErrTurnCancelled,
-			wantCause:  context.Canceled,
+			name:           "probe error after the start context ended",
+			resumeID:       resumeID,
+			endDuringProbe: true,
+			probeErr:       &domain.AgentError{Kind: domain.ErrPortExit, Message: "probe connection ended"},
+			wantKind:       domain.ErrTurnCancelled,
+			wantCause:      context.Canceled,
 		},
 	}
 
@@ -64,13 +71,16 @@ func TestResolveSessionStart(t *testing.T) {
 			t.Parallel()
 
 			ctx, cancel := context.WithCancel(t.Context())
-			if tt.endContext {
+			if tt.endBeforeStart {
 				cancel()
 			}
 			defer cancel()
 			calls := 0
 			probe := ResumeProbeFunc[struct{}](func(context.Context, string) (ResumeSignal[struct{}], *domain.AgentError) {
 				calls++
+				if tt.endDuringProbe {
+					cancel()
+				}
 				return tt.signal, tt.probeErr
 			})
 

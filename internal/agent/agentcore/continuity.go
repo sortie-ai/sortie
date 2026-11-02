@@ -68,14 +68,17 @@ func (f ResumeProbeFunc[A]) ProbeResume(ctx context.Context, resumeID string) (R
 }
 
 // ResolveSessionStart decides whether a start continues resumeID, calling the
-// probe exactly once when resumeID is non-empty. It returns a start failure
-// when the start's context ended or the check's transport was lost, and
-// otherwise logs one warning for a session that did not continue.
+// probe at most once. It returns a start failure when the start's context
+// ended or the check's transport was lost, and otherwise logs one warning for
+// a session that did not continue.
 //
 // The ctx MUST be the context StartSession received: a probe bounds its own
 // read on a context it derives from the one it is given, so reaching its own
 // bound is [ResumeUnknown] and never an ended start context.
 func ResolveSessionStart[A any](ctx context.Context, resumeID string, probe ResumeProbe[A], logger *slog.Logger) (SessionStart[A], *domain.AgentError) {
+	if ctx.Err() != nil {
+		return SessionStart[A]{}, startCancelled(ctx)
+	}
 	if resumeID == "" {
 		return SessionStart[A]{}, nil
 	}
@@ -92,9 +95,9 @@ func ResolveSessionStart[A any](ctx context.Context, resumeID string, probe Resu
 	if signal.Verdict == ResumeCarried {
 		return SessionStart[A]{resumeID: resumeID, answer: signal.Answer}, nil
 	}
-	attrs := []any{"resume_id", resumeID, "resume_verdict", signal.Verdict.String()}
+	attrs := []any{slog.String("resume_id", resumeID), slog.String("resume_verdict", signal.Verdict.String())}
 	if signal.Cause != nil {
-		attrs = append(attrs, "error", signal.Cause)
+		attrs = append(attrs, slog.Any("error", signal.Cause))
 	}
 	logger.Warn("session resume not continued, starting new session", attrs...)
 	return SessionStart[A]{}, nil
