@@ -627,6 +627,12 @@ func TestCommentIssue_V2RawStringBody(t *testing.T) {
 		t.Fatalf("FetchIssueComments (v2): %v", err)
 	}
 	adaptertest.AssertPostedCommentListed(t, id, comments)
+	if first := comments[0]; first.AuthorID != "bob.server" || first.AuthorKind != domain.CommentAuthorPerson || first.UpdatedAt != "2025-02-05T10:30:00.000+0000" {
+		t.Errorf("v2 comment without account type = %+v, want AuthorID bob.server, kind person, UpdatedAt 2025-02-05T10:30:00.000+0000", first)
+	}
+	if second := comments[1]; second.AuthorID != "" || second.AuthorKind != domain.CommentAuthorUnknown {
+		t.Errorf("v2 comment without author = %+v, want empty AuthorID and unknown kind", second)
+	}
 
 	if gotMethod != "POST" {
 		t.Errorf("method = %q, want POST", gotMethod)

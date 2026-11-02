@@ -1,0 +1,8 @@
+{
+  "startAt": 0,
+  "maxResults": 50,
+  "total": 1,
+  "comments": [
+    {"id": "20001", "author": {"accountId": "712020:7f3c1a52-98de-4a1c-b0d3-2d44f5a9e6b1", "displayName": "Bob Jones", "accountType": "atlassian"}, "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Comment 20001."}]}]}, "created": "yesterday", "updated": "2025-03-01T00:00:00.000+0000", "jsdPublic": true}
+  ]
+}

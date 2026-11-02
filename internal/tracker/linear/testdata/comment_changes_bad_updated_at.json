@@ -1,0 +1,24 @@
+{
+  "data": {
+    "issue": {
+      "comments": {
+        "nodes": [
+          {
+            "id": "comment-bad-time",
+            "body": "Updated sometime yesterday.",
+            "createdAt": "2026-11-02T09:30:00.000Z",
+            "updatedAt": "yesterday",
+            "url": "https://linear.app/sortie/issue/SOR-5#comment-bad-time",
+            "user": { "id": "user-ada", "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com", "app": false },
+            "botActor": null,
+            "externalUser": null
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "comment-bad-time"
+        }
+      }
+    }
+  }
+}

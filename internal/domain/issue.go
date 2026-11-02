@@ -135,6 +135,12 @@ const (
 	// CommentAuthorApp is a person's account, and the tracker reports that
 	// an app created the comment for it.
 	CommentAuthorApp CommentAuthorKind = "app"
+
+	// CommentAuthorExternal is a person the tracker marks as outside its
+	// own users, such as a service-desk customer or someone without an
+	// account whose comment an integration relayed. The forges never
+	// report it.
+	CommentAuthorExternal CommentAuthorKind = "external"
 )
 
 // Comment represents a single comment on an issue. Adapters normalize
@@ -148,7 +154,8 @@ type Comment struct {
 
 	// AuthorID is the author's account identity as the tracker reports it,
 	// a login or an account ID and never a display name, compared exactly.
-	// It is empty when the tracker reports no author.
+	// A tracker with no account system reports its one author string
+	// instead. It is empty when the tracker reports no author.
 	AuthorID string
 
 	// AuthorKind is the kind of the author's account;

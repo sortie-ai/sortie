@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/adaptertest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -242,20 +243,50 @@ func TestNormalizeComments(t *testing.T) {
 		}
 	})
 
-	t.Run("nil author", func(t *testing.T) {
+	t.Run("author identity and kind", func(t *testing.T) {
 		t.Parallel()
 
-		comments := []jiraComment{
-			{
-				ID:      "200",
-				Author:  nil,
-				Body:    json.RawMessage(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"auto"}]}]}`),
-				Created: "2025-01-01T00:00:00.000+0000",
-			},
+		tests := []struct {
+			name     string
+			author   *jiraUser
+			wantID   string
+			wantKind domain.CommentAuthorKind
+		}{
+			{"no author", nil, "", domain.CommentAuthorUnknown},
+			{"atlassian prefers account ID over name", &jiraUser{DisplayName: "Display Name", AccountID: "acc-1", Name: "alice", AccountType: "atlassian"}, "acc-1", domain.CommentAuthorPerson},
+			{"mixed-case account type", &jiraUser{DisplayName: "Display Name", AccountID: "acc-1", AccountType: "Atlassian"}, "acc-1", domain.CommentAuthorPerson},
+			{"app", &jiraUser{DisplayName: "Display Name", AccountID: "acc-2", AccountType: "app"}, "acc-2", domain.CommentAuthorBot},
+			{"customer", &jiraUser{DisplayName: "Display Name", AccountID: "acc-3", AccountType: "customer"}, "acc-3", domain.CommentAuthorExternal},
+			{"other account type", &jiraUser{DisplayName: "Display Name", AccountID: "acc-4", AccountType: "robot"}, "acc-4", domain.CommentAuthorUnknown},
+			{"no account type with name", &jiraUser{DisplayName: "Display Name", Name: "alice"}, "alice", domain.CommentAuthorPerson},
+			{"no account type and no name", &jiraUser{DisplayName: "Display Name"}, "", domain.CommentAuthorUnknown},
 		}
-		result := normalizeComments("3", comments)
-		if result[0].Author != "" {
-			t.Errorf("Author = %q, want empty for nil author", result[0].Author)
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				wantAuthor := ""
+				if tt.author != nil {
+					wantAuthor = tt.author.DisplayName
+				}
+
+				got := normalizeComments("3", []jiraComment{{
+					ID:      "100",
+					Author:  tt.author,
+					Body:    json.RawMessage(`{"type":"doc","content":[]}`),
+					Created: "2025-01-01T00:00:00.000+0000",
+					Updated: "2025-01-02T00:00:00.000+0000",
+				}})[0]
+
+				want := domain.Comment{
+					ID: "100", Author: wantAuthor, AuthorID: tt.wantID, AuthorKind: tt.wantKind,
+					CreatedAt: "2025-01-01T00:00:00.000+0000", UpdatedAt: "2025-01-02T00:00:00.000+0000",
+				}
+				if got != want {
+					t.Errorf("normalizeComments(%+v) = %+v, want %+v", tt.author, got, want)
+				}
+			})
 		}
 	})
 
