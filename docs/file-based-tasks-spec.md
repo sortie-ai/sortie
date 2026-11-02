@@ -76,12 +76,10 @@ Optional fields MAY be omitted entirely from the JSON object. When omitted, the 
 
 A Parent Reference is a JSON object identifying the parent issue for a sub-task.
 
-| Field        | JSON Type | Required | Description                                                                           |
-| ------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
-| `id`         | string    | No       | Tracker-internal comment identifier. Derived when omitted or empty (Section 7.3).     |
-| `author`     | string    | Yes      | Display name or username of the author. Also the author's identity, compared exactly. |
-| `body`       | string    | Yes      | Comment text content.                                                                 |
-| `created_at` | string    | Yes      | ISO-8601 timestamp.                                                                   |
+| Field        | JSON Type | Required | Description                        |
+| ------------ | --------- | -------- | ---------------------------------- |
+| `id`         | string    | Yes      | Tracker-internal ID of the parent. |
+| `identifier` | string    | Yes      | Human-readable key of the parent.  |
 
 Example:
 
