@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. A prompt template can place these comments itself through the new `comment_feed` variable; otherwise Sortie adds them after the template's text. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
 - `sortie validate` checks the `comment_feed` setting and warns about a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- The state API serves `config.tracker.project_url`, the web address of the tracked project, for the GitHub and Jira trackers.
 
 ### Changed
 

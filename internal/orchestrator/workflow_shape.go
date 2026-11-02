@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -19,10 +20,12 @@ type WorkflowShape struct {
 }
 
 // ShapeTracker reports the tracker kind and project the poll loop's adapter was
-// built with, and the states the workflow acts on.
+// built with, the project's web address when the adapter names one, and the
+// states the workflow acts on.
 type ShapeTracker struct {
 	Kind            string   `json:"kind"`
 	Project         string   `json:"project,omitempty"`
+	ProjectURL      string   `json:"project_url,omitempty"`
 	ActiveStates    []string `json:"active_states"`
 	InProgressState string   `json:"in_progress_state,omitempty"`
 	HandoffState    string   `json:"handoff_state,omitempty"`
@@ -187,6 +190,7 @@ func (o *Orchestrator) WorkflowShape() WorkflowShape {
 		Tracker: ShapeTracker{
 			Kind:            o.trackerKind,
 			Project:         o.trackerProject,
+			ProjectURL:      o.trackerProjectURL(),
 			ActiveStates:    copyStrings(cfg.Tracker.ActiveStates),
 			InProgressState: cfg.Tracker.InProgressState,
 			HandoffState:    cfg.Tracker.HandoffState,
@@ -427,4 +431,13 @@ func positiveOrNil[T int | float64](n T) *T {
 		return nil
 	}
 	return &n
+}
+
+// trackerProjectURL returns the web address of the tracker's project, or ""
+// when the adapter names none.
+func (o *Orchestrator) trackerProjectURL() string {
+	if linker, ok := o.trackerAdapter.(domain.ProjectLinker); ok {
+		return linker.ProjectURL()
+	}
+	return ""
 }

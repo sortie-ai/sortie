@@ -48,6 +48,7 @@ var (
 	_ domain.CommentChangeReader = (*GitHubAdapter)(nil)
 
 	_ domain.CommentAuthorAccessReader = (*GitHubAdapter)(nil)
+	_ domain.ProjectLinker             = (*GitHubAdapter)(nil)
 )
 
 // maxPages is the upper bound on paginated fetches. At 50 items per
@@ -63,6 +64,7 @@ type GitHubAdapter struct {
 	owner       string
 	repo        string
 	queryFilter string
+	projectURL  string
 	metrics     domain.Metrics
 	etagCache   *etagCache
 	model       *issuekit.LabelStateModel
@@ -163,11 +165,17 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		owner:       owner,
 		repo:        repo,
 		queryFilter: queryFilter,
+		projectURL:  webBase(endpoint) + "/" + owner + "/" + repo,
 		etagCache:   newETagCache(etagCacheSize),
 		model:       issuekit.NewLabelStateModel(source, slog.Default()),
 	}
 	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 	return adapter, nil
+}
+
+// ProjectURL returns the web address of the configured repository.
+func (a *GitHubAdapter) ProjectURL() string {
+	return a.projectURL
 }
 
 // FetchCandidateIssues returns the open issues that carry a label of a

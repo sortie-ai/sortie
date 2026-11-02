@@ -4726,6 +4726,9 @@
         "project": {
           "type": "string"
         },
+        "project_url": {
+          "type": "string"
+        },
         "terminal_states": {
           "anyOf": [
             {
