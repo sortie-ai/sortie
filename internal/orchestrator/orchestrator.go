@@ -55,6 +55,7 @@ type OrchestratorStore interface {
 	storage.LivePassStore
 	storage.IssueOutcomeStore
 	storage.AttentionAcknowledgementStore
+	storage.PostedCommentStore
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -1285,11 +1286,20 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		}
 		issueLog := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 		release := o.state.ParkReleases[issue.ID]
+		var posted []string
 		if release != nil {
 			comments, err := o.trackerAdapter.FetchIssueComments(ctx, issue.ID)
 			if err != nil {
 				o.hostPool.ReleaseHost(issue.ID)
 				issueLog.Warn("park release comment read failed, holding issue", slog.Any("error", err))
+				held.hold(issue, HeldEntry{Reason: SkipParkCommentsUnread})
+				o.once.deferFor(issue.ID, deferTick)
+				continue
+			}
+			posted, err = o.store.ListPostedComments(ctx, issue.ID)
+			if err != nil {
+				o.hostPool.ReleaseHost(issue.ID)
+				issueLog.Warn("park release posted-comment record read failed, holding issue", slog.Any("error", err))
 				held.hold(issue, HeldEntry{Reason: SkipParkCommentsUnread})
 				o.once.deferFor(issue.ID, deferTick)
 				continue
@@ -1318,7 +1328,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		resumeSessionID := ""
 		var parkCtx prompt.ParkContext
 		if release != nil {
-			parkCtx = parkContextOf(release, issue.Comments)
+			parkCtx = parkContextOf(release, issue.Comments, posted)
 			dispatchCtx = withParkRender(dispatchCtx, parkCtx)
 			resumeSessionID = resumeSessionFor(release.SessionID,
 				DispatchResolution{AgentKind: release.AgentKind, TemplateID: release.TemplateID},

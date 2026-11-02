@@ -280,6 +280,12 @@ func (s *stubStore) DeleteRetryEntry(_ context.Context, issueID string) error {
 
 func (s *stubStore) Ping(_ context.Context) error { return nil }
 
+func (s *stubStore) AddPostedComment(context.Context, string, string) error { return nil }
+
+func (s *stubStore) ListPostedComments(context.Context, string) ([]string, error) {
+	return []string{}, nil
+}
+
 func (s *stubStore) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
 	return s.unsupportedReactionObservationStore.CountWorkerRunsCompletedSince(ctx, issueID, since)
 }

@@ -9219,6 +9219,18 @@ func TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement(t *testing.T) {
 	}
 }
 
+func requireStampBetweenLastTwoTurns(t *testing.T, got time.Time, turnReads []time.Time) {
+	t.Helper()
+
+	if len(turnReads) < 2 {
+		t.Fatalf("RunTurn calls = %d, want at least 2", len(turnReads))
+	}
+	prev, last := turnReads[len(turnReads)-2], turnReads[len(turnReads)-1]
+	if got.Before(prev) || got.After(last) {
+		t.Errorf("WorkerResult.LastPromptAt = %v, want within [%v, %v]", got, prev, last)
+	}
+}
+
 func TestRunWorkerAttempt_OnTurnStartedDeliversPerTurnTally(t *testing.T) {
 	t.Parallel()
 
@@ -9245,11 +9257,13 @@ func TestRunWorkerAttempt_OnTurnStartedDeliversPerTurnTally(t *testing.T) {
 			// call order.
 			var order []string
 			var onTurnStartedCalls []int
+			var turnReads []time.Time
 
 			adapter := &turnEmissionAdapter{
 				emits: pattern.emits,
 				beforeRunTurn: func(turn int) {
 					order = append(order, fmt.Sprintf("run:%d", turn))
+					turnReads = append(turnReads, time.Now())
 				},
 			}
 
@@ -9292,6 +9306,7 @@ func TestRunWorkerAttempt_OnTurnStartedDeliversPerTurnTally(t *testing.T) {
 			if !slices.Equal(order, wantOrder) {
 				t.Errorf("interleaved OnTurnStarted/RunTurn order = %v, want %v", order, wantOrder)
 			}
+			requireStampBetweenLastTwoTurns(t, result.LastPromptAt, turnReads)
 		})
 	}
 }
@@ -9313,6 +9328,7 @@ func TestRunWorkerAttempt_SelfReviewTurnsCountTowardTurnsStarted(t *testing.T) {
 
 	startFn, wsPath := captureWorkspacePath()
 	var onTurnStartedCalls []int
+	var turnReads []time.Time
 	ec := newExitCapture()
 
 	deps := WorkerDeps{
@@ -9320,6 +9336,7 @@ func TestRunWorkerAttempt_SelfReviewTurnsCountTowardTurnsStarted(t *testing.T) {
 		AgentAdapter: &mockAgentAdapter{
 			startSessionFn: startFn,
 			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				turnReads = append(turnReads, time.Now())
 				if isSelfReviewTurnPrompt(params.Prompt) {
 					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
 				}
@@ -9361,6 +9378,7 @@ func TestRunWorkerAttempt_SelfReviewTurnsCountTowardTurnsStarted(t *testing.T) {
 	if !result.ReviewMetadata.CapReached {
 		t.Error("ReviewMetadata.CapReached = false, want true")
 	}
+	requireStampBetweenLastTwoTurns(t, result.LastPromptAt, turnReads)
 }
 
 func turnStartedFixture(t *testing.T, turnStartedChCap int) (*Orchestrator, domain.Issue) {

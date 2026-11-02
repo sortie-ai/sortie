@@ -124,7 +124,7 @@ Named by document and topic rather than by section or filename, since neither is
 
 The decision is validated when all of the following hold:
 
-1. A parked issue whose parking label a person removes is released on the next poll tick and is no longer held back by the park. The release is kept until the issue's next run starts, which continues the parked run's agent session where it can and receives the comments posted since the park; while those comments cannot be read, the issue waits for a later tick.
+1. A parked issue whose parking label a person removes is released on the next poll tick and is no longer held back by the park. The release is kept until the issue's next run starts, which continues the parked run's agent session where it can and receives the comments posted since the parked run's last prompt, except those Sortie posted itself; while those comments cannot be read, the issue waits for a later tick.
 2. A parked issue that a person moves to a different tracker state is released on the next poll tick, and where the new state is not active the issue remains undispatchable by the pre-existing active-state gate rather than by the park.
 3. Both releases behave identically for a park taken because the agent reported it could not proceed and for a park taken because the absence ceiling was reached.
 4. A park whose label write failed, or whose adapter recorded nothing, is not released by the absence of that label. The issue stays parked.

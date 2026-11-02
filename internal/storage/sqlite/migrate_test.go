@@ -253,6 +253,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"skills", "TEXT", false, 0},
 				{"usage_provenance", "TEXT", false, 0},
 				{"usage_completeness", "TEXT", false, 0},
+				{"last_prompt_at", "TEXT", true, 0},
 			},
 		},
 		{
@@ -332,6 +333,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"statement", "TEXT", true, 0},
 				{"released_at", "TEXT", true, 0},
 				{"release_gesture", "TEXT", true, 0},
+				{"last_prompt_at", "TEXT", true, 0},
 			},
 		},
 		{

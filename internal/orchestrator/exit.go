@@ -488,6 +488,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		ChainID:              entry.StageLineage.ChainID,
 		DispatchedAt:         formatDispatchedAt(entry.StageLineage.DispatchedAt),
 
+		LastPromptAt: formatDispatchedAt(workerResult.LastPromptAt),
+
 		Trigger:      trigger,
 		ReactionKind: entry.ReactionKind,
 		SessionID:    sessionID,

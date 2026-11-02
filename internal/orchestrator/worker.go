@@ -124,6 +124,10 @@ type WorkerResult struct {
 	// TurnsCompleted.
 	TurnsStarted int
 
+	// LastPromptAt is when the worker counted its last started turn, before
+	// that turn's prompt was sent; zero when TurnsStarted is 0.
+	LastPromptAt time.Time
+
 	// SessionID is the accepted session identifier at the moment report
 	// hands this result to [WorkerDeps.OnExit]. It is empty when the
 	// working session never started, or started with an empty identifier
@@ -774,6 +778,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	reported := false
 
 	var acceptedSessionID string
+	var lastPromptAt time.Time
 
 	// cancelledAtEnding is read right after the call that last ended a run attempt.
 	var cancelledAtEnding bool
@@ -795,6 +800,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			result.CancelCause = context.Cause(ctx)
 		}
 		result.SessionID = acceptedSessionID
+		result.LastPromptAt = lastPromptAt
 		result.UsageByModel = maps.Clone(localUsageByModel)
 		result.UsageProvenance = slices.Clone(localProvenance)
 		result.ReportedAmounts = slices.Clone(localAmounts)
@@ -1454,6 +1460,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 		turnsStarted++
+		lastPromptAt = time.Now().UTC()
 		if deps.OnTurnStarted != nil {
 			deps.OnTurnStarted(issue.ID, turnsStarted)
 		}
@@ -1639,6 +1646,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			OnProgress:   deps.OnProgress,
 			OnTurnStarted: func() {
 				turnsStarted++
+				lastPromptAt = time.Now().UTC()
 				writeDispatchIdentity(acceptedSessionID)
 				if deps.OnTurnStarted != nil {
 					deps.OnTurnStarted(issue.ID, turnsStarted)
