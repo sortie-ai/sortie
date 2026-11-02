@@ -17,8 +17,8 @@ func (s *Store) UpsertParkedIssue(ctx context.Context, entry storage.ParkedIssue
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO parked_issues (issue_id, identifier, display_id, reason, parked_state, label, label_applied, parked_at, issue_title, issue_url,
 			rule_name, agent_kind, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at, issue_type, issue_labels,
-			session_id, template_id, statement, released_at, release_gesture)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, template_id, statement, last_prompt_at, released_at, release_gesture)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (issue_id) DO UPDATE SET
 			identifier             = excluded.identifier,
 			display_id             = excluded.display_id,
@@ -41,6 +41,7 @@ func (s *Store) UpsertParkedIssue(ctx context.Context, entry storage.ParkedIssue
 			session_id             = excluded.session_id,
 			template_id            = excluded.template_id,
 			statement              = excluded.statement,
+			last_prompt_at         = excluded.last_prompt_at,
 			released_at            = excluded.released_at,
 			release_gesture        = excluded.release_gesture`,
 		entry.IssueID, entry.Identifier, entry.DisplayID, entry.Reason, entry.ParkedState,
@@ -48,7 +49,7 @@ func (s *Store) UpsertParkedIssue(ctx context.Context, entry storage.ParkedIssue
 		entry.RuleName, entry.AgentKind, entry.ConfiguredModel, entry.StagePrevious,
 		entry.StagePreviousOutcome, entry.ChainID, entry.DispatchedAt, entry.IssueType,
 		encodeIssueLabels(entry.IssueLabels),
-		entry.SessionID, entry.TemplateID, entry.Statement, entry.ReleasedAt, entry.ReleaseGesture,
+		entry.SessionID, entry.TemplateID, entry.Statement, entry.LastPromptAt, entry.ReleasedAt, entry.ReleaseGesture,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert parked issue %q: %w", entry.IssueID, err)
@@ -84,7 +85,7 @@ func (s *Store) ListParkedIssues(ctx context.Context) ([]storage.ParkedIssue, er
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, identifier, display_id, reason, parked_state, label, label_applied, parked_at, issue_title, issue_url,
 			rule_name, agent_kind, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at, issue_type, issue_labels,
-			session_id, template_id, statement, released_at, release_gesture
+			session_id, template_id, statement, last_prompt_at, released_at, release_gesture
 		FROM parked_issues`)
 	if err != nil {
 		return nil, fmt.Errorf("list parked issues: %w", err)
@@ -100,7 +101,7 @@ func (s *Store) ListParkedIssues(ctx context.Context) ([]storage.ParkedIssue, er
 			&e.Label, &e.LabelApplied, &e.ParkedAt, &e.IssueTitle, &e.IssueURL,
 			&e.RuleName, &e.AgentKind, &e.ConfiguredModel, &e.StagePrevious, &e.StagePreviousOutcome,
 			&e.ChainID, &e.DispatchedAt, &e.IssueType, &labels,
-			&e.SessionID, &e.TemplateID, &e.Statement, &e.ReleasedAt, &e.ReleaseGesture); err != nil {
+			&e.SessionID, &e.TemplateID, &e.Statement, &e.LastPromptAt, &e.ReleasedAt, &e.ReleaseGesture); err != nil {
 			return nil, fmt.Errorf("scan parked issue: %w", err)
 		}
 		e.DisplayID = displayID.String

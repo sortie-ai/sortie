@@ -86,6 +86,7 @@ func TestUpsertParkedIssue_RoundTrip(t *testing.T) {
 		StagePreviousOutcome: "succeeded",
 		ChainID:              "chain-1",
 		DispatchedAt:         "2026-08-16T22:00:00.123456789Z",
+		LastPromptAt:         "2026-08-16T23:30:00.987654321Z",
 	}
 	if err := s.UpsertParkedIssue(ctx, entry); err != nil {
 		t.Fatalf("UpsertParkedIssue: %v", err)

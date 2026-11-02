@@ -20,10 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// The release rule: a state change unparks, a confirmed label removed
-// unparks, an unconfirmed label absent stays parked, and a label observed
-// while unconfirmed sets and persists the confirmation flag.
-
 func assertReleaseKept(t *testing.T, store *stubStore, wantGesture string) {
 	t.Helper()
 	var gestures []string
@@ -143,10 +139,6 @@ func TestObserveParkedLabelsReleaseRule(t *testing.T) {
 	})
 }
 
-// A failed label write must not cost the park: it stays in place with the
-// label unconfirmed, and a later release pass that still observes the
-// label absent leaves it exactly where a failed write left it.
-
 func TestParkIssueFailedLabelWriteLeavesLabelUnconfirmed(t *testing.T) {
 	t.Parallel()
 
@@ -191,11 +183,6 @@ func TestParkIssueFailedLabelWriteLeavesLabelUnconfirmed(t *testing.T) {
 		t.Error("LabelApplied became true after the release pass, want it to stay false")
 	}
 }
-
-// A successful AddLabel write is not, by itself, confirmation: only a
-// later observation of the label on a tracker read sets LabelApplied. A
-// tracker whose AddLabel reports success without the label ever becoming
-// visible on a read must not release the park it never confirmed.
 
 func TestParkIssueSuccessfulLabelWriteDoesNotConfirmWithoutObservation(t *testing.T) {
 	t.Parallel()
@@ -247,10 +234,6 @@ func TestParkIssueSuccessfulLabelWriteDoesNotConfirmWithoutObservation(t *testin
 		t.Errorf("MarkParkedIssueLabelApplied calls = %v, want none", store.labelAppliedIDs)
 	}
 }
-
-// A park recorded through a store opened on a temporary file survives a
-// simulated restart: the in-memory State is discarded and rebuilt purely
-// from the durable rows, and the rebuilt state still refuses dispatch.
 
 func openParkStore(t *testing.T) *sqlite.Store {
 	t.Helper()
@@ -595,11 +578,12 @@ func TestRefreshParkedIssuesIdentityBackfill(t *testing.T) {
 func TestParkedRunOfHandOver(t *testing.T) {
 	t.Parallel()
 
+	lastPrompt := time.Date(2026, 3, 15, 12, 0, 30, 123_456_789, time.UTC)
 	run := func(status, reaction string, errText *string) storage.RunHistory {
-		return storage.RunHistory{Status: status, ReactionKind: reaction, Error: errText, SessionID: "sess-1", TemplateID: "tpl", AgentText: "stopped"}
+		return storage.RunHistory{Status: status, ReactionKind: reaction, Error: errText, SessionID: "sess-1", TemplateID: "tpl", AgentText: "stopped", LastPromptAt: lastPrompt.Format(time.RFC3339Nano)}
 	}
-	statementOnly := parkHandOver{Statement: "stopped"}
-	all := parkHandOver{SessionID: "sess-1", TemplateID: "tpl", Statement: "stopped"}
+	statementOnly := parkHandOver{Statement: "stopped", LastPromptAt: lastPrompt}
+	all := parkHandOver{SessionID: "sess-1", TemplateID: "tpl", Statement: "stopped", LastPromptAt: lastPrompt}
 
 	tests := []struct {
 		name string
@@ -626,35 +610,72 @@ func TestParkedRunOfHandOver(t *testing.T) {
 func TestParkReleaseCommentWindow(t *testing.T) {
 	t.Parallel()
 
-	parkedAt := time.Date(2026, 3, 15, 12, 1, 0, 700_000_000, time.UTC)
+	start := time.Date(2026, 3, 15, 12, 1, 0, 700_000_000, time.UTC)
 	at := func(id, createdAt string) domain.Comment { return domain.Comment{ID: id, CreatedAt: createdAt} }
 
 	tests := []struct {
 		name     string
-		parkedAt time.Time
+		release  ParkedEntry
 		comments []domain.Comment
+		posted   []string
 		want     []string
 	}{
-		{"before the park second is out, after is in", parkedAt, []domain.Comment{at("before", "2026-03-15T12:00:59Z"), at("after", "2026-03-15T12:05:00Z")}, []string{"after"}},
-		{"park's own second is in", parkedAt, []domain.Comment{at("same", "2026-03-15T12:01:00Z")}, []string{"same"}},
-		{"offset without a colon compares as an instant", parkedAt, []domain.Comment{at("before", "2026-03-15T13:00:30+0100"), at("after", "2026-03-15T13:05:00+0100")}, []string{"after"}},
-		{"empty and unparseable times are in", parkedAt, []domain.Comment{at("empty", ""), at("garbled", "yesterday")}, []string{"empty", "garbled"}},
-		{"zero park time keeps every comment", time.Time{}, []domain.Comment{at("ancient", "2001-01-01T00:00:00Z")}, []string{"ancient"}},
-		{"nothing kept is an empty list, not nil", parkedAt, []domain.Comment{at("before", "2026-03-15T12:00:59Z")}, nil},
+		{
+			"window opens at the last prompt, not the later park",
+			ParkedEntry{LastPromptAt: start, ParkedAt: start.Add(time.Hour)},
+			[]domain.Comment{at("before", "2026-03-15T12:00:59Z"), at("own-second", "2026-03-15T12:01:00Z"), at("between", "2026-03-15T12:30:00Z")},
+			nil, []string{"own-second", "between"},
+		},
+		{
+			"zero last prompt falls back to the park",
+			ParkedEntry{ParkedAt: start},
+			[]domain.Comment{at("before", "2026-03-15T12:00:59Z"), at("after", "2026-03-15T12:05:00Z")},
+			nil, []string{"after"},
+		},
+		{
+			"offset without a colon compares as an instant",
+			ParkedEntry{LastPromptAt: start},
+			[]domain.Comment{at("before", "2026-03-15T13:00:30+0100"), at("after", "2026-03-15T13:05:00+0100")},
+			nil, []string{"after"},
+		},
+		{
+			"empty and unparseable times are in",
+			ParkedEntry{LastPromptAt: start},
+			[]domain.Comment{at("empty", ""), at("garbled", "yesterday")},
+			nil, []string{"empty", "garbled"},
+		},
+		{
+			"zero start keeps every comment",
+			ParkedEntry{},
+			[]domain.Comment{at("ancient", "2001-01-01T00:00:00Z")},
+			nil, []string{"ancient"},
+		},
+		{
+			"recorded comment is out whatever its time",
+			ParkedEntry{LastPromptAt: start},
+			[]domain.Comment{at("mine-after", "2026-03-15T12:05:00Z"), at("mine-garbled", "yesterday"), at("theirs", "2026-03-15T12:05:00Z")},
+			[]string{"mine-after", "mine-garbled"}, []string{"theirs"},
+		},
+		{
+			"nothing kept is an empty list, not nil",
+			ParkedEntry{LastPromptAt: start},
+			[]domain.Comment{at("before", "2026-03-15T12:00:59Z")},
+			nil, nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := parkContextOf(&ParkedEntry{ParkedAt: tt.parkedAt}, tt.comments).Comments
+			got := parkContextOf(&tt.release, tt.comments, tt.posted).Comments
 
 			var ids []string
 			for _, c := range got {
 				ids = append(ids, c["id"].(string))
 			}
 			if got == nil || !slices.Equal(ids, tt.want) {
-				t.Errorf("parkContextOf(parked %v, %d comments).Comments ids = %v (nil: %v), want %v as a non-nil list", tt.parkedAt, len(tt.comments), ids, got == nil, tt.want)
+				t.Errorf("parkContextOf(%+v, %d comments, posted %v).Comments ids = %v (nil: %v), want %v as a non-nil list", tt.release, len(tt.comments), tt.posted, ids, got == nil, tt.want)
 			}
 		})
 	}
@@ -684,6 +705,7 @@ func parkBlockedRun(t *testing.T, store OrchestratorStore, issueID string) *Stat
 		SoftStop:          true,
 		SoftStopReason:    "blocked",
 		SoftStopStatement: workspace.StatusStatement{Text: "which database?"},
+		LastPromptAt:      time.Now().UTC().Add(-time.Minute),
 	}, HandleWorkerExitParams{
 		Store:               store,
 		MaxRetryBackoffMS:   300_000,
@@ -706,7 +728,7 @@ func TestParkReleaseHandOff(t *testing.T) {
 
 	const (
 		issueID    = "PARK-HANDOFF"
-		wantParked = "park=agent_blocked|which database?|%s|%s|released|c-stop;c-answer;|issue=c-old;c-stop;c-answer;"
+		wantParked = "park=agent_blocked|which database?|%s|%s|released|c-between;c-answer;|issue=c-old;c-between;c-stop;c-answer;"
 	)
 	candidate := func(state string, labels ...string) domain.Issue {
 		return domain.Issue{ID: issueID, Identifier: "PROJ-HANDOFF", Title: "t", State: state, Labels: labels}
@@ -742,6 +764,7 @@ func TestParkReleaseHandOff(t *testing.T) {
 			store := openParkStore(t)
 			state := NewState(1000, 10, 0, nil, AgentTotals{})
 			parkedAt := time.Now().UTC().Truncate(time.Second)
+			lastPrompt := parkedAt.Add(-time.Minute)
 			if tt.parked {
 				state = parkBlockedRun(t, store, issueID)
 				rows, err := store.ListParkedIssues(ctx)
@@ -749,12 +772,20 @@ func TestParkReleaseHandOff(t *testing.T) {
 					t.Fatalf("ListParkedIssues after the park = %+v, %v, want one row", rows, err)
 				}
 				parkedAt, _ = time.Parse(time.RFC3339, rows[0].ParkedAt)
+				if lastPrompt, err = time.Parse(time.RFC3339Nano, rows[0].LastPromptAt); err != nil {
+					t.Fatalf("stored last_prompt_at %q: %v", rows[0].LastPromptAt, err)
+				}
+				lastPrompt = lastPrompt.Truncate(time.Second)
+				if err := store.AddPostedComment(ctx, issueID, "c-stop"); err != nil {
+					t.Fatalf("AddPostedComment: %v", err)
+				}
 			}
 			if tt.evidence {
 				unparkIssue(ctx, state, issueID, unparkTriggerEvidenceObserved, store, discardLogger())
 			}
 			comments := []domain.Comment{
-				{ID: "c-old", CreatedAt: parkedAt.Add(-30 * time.Second).Format(time.RFC3339)},
+				{ID: "c-old", CreatedAt: lastPrompt.Add(-time.Second).Format(time.RFC3339)},
+				{ID: "c-between", CreatedAt: lastPrompt.Add(30 * time.Second).Format(time.RFC3339)},
 				{ID: "c-stop", CreatedAt: parkedAt.Format(time.RFC3339)},
 				{ID: "c-answer", CreatedAt: parkedAt.Add(5 * time.Minute).Format(time.RFC3339)},
 			}

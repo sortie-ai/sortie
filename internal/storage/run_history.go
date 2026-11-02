@@ -155,6 +155,12 @@ type RunHistory struct {
 	// ChainID names; empty when the pass could not be dated.
 	DispatchedAt string
 
+	// LastPromptAt is the RFC 3339 moment, with nanoseconds in UTC, the run
+	// began its last turn; empty when the run began none, on a ci_failed
+	// row, and for a run stored before the field existed. Only the appends
+	// write it and only [RunHistoryStore.LatestAgentRuns] reads it.
+	LastPromptAt string
+
 	// Trigger is the sortie_retries_total label of the schedule that
 	// started the retry whose fire dispatched the run; empty for a poll-tick
 	// dispatch and for a retry a reaction other than the CI fix started. Nil

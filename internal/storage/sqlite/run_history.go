@@ -162,15 +162,15 @@ func insertRunHistory(ctx context.Context, ex statementExecer, run storage.RunHi
 
 	res, err := ex.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills, usage_provenance, usage_completeness)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens, tokens_measured, unaccounted_turns, configured_model, configured_effort, reported_model, stage_previous, stage_previous_outcome, chain_id, stage_target, stage_result, issue_title, issue_url, dispatched_at, last_prompt_at, trigger, reaction_kind, session_id, ssh_host, first_after_hop, dispatch_id, agent_blocked, estimated_cost_usd, cost_status, declared_outcome, agent_text, skills, usage_provenance, usage_completeness)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
 		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens, run.CacheWriteTokens, run.TokensMeasured,
 		run.UnaccountedTurns, run.ConfiguredModel, run.ConfiguredEffort, run.ReportedModel,
 		run.StagePrevious, run.StagePreviousOutcome, run.ChainID, run.StageTarget, run.StageResult,
-		run.IssueTitle, run.IssueURL, run.DispatchedAt,
+		run.IssueTitle, run.IssueURL, run.DispatchedAt, run.LastPromptAt,
 		triggerVal, run.ReactionKind, run.SessionID, run.SSHHost, run.FirstAfterHop,
 		dispatchIDVal, run.AgentBlocked,
 		nullFloat(run.EstimatedCostUSD), nullIfEmpty(run.CostStatus),
@@ -823,7 +823,7 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 // greatest id among the issue's rows whose agent_adapter is non-empty. An
 // issue with no such row is absent; an empty slice runs no query. Only the
 // columns that describe the dispatch and the run's outcome are filled: Status,
-// Error, ReactionKind, SessionID, TemplateID, and AgentText. A NULL
+// Error, ReactionKind, SessionID, TemplateID, LastPromptAt, and AgentText. A NULL
 // reaction_kind or session_id reads as empty and a NULL error as nil.
 func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[string]storage.RunHistory, error) {
 	runs := map[string]storage.RunHistory{}
@@ -840,7 +840,7 @@ func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[str
 	}
 
 	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(issueIDs); no user data in format string
-		`SELECT id, issue_id, rule_name, agent_adapter, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at,
+		`SELECT id, issue_id, rule_name, agent_adapter, configured_model, stage_previous, stage_previous_outcome, chain_id, dispatched_at, last_prompt_at,
 			status, error, reaction_kind, session_id, template_id, agent_text
 		FROM run_history
 		WHERE id IN (
@@ -861,7 +861,7 @@ func (s *Store) LatestAgentRuns(ctx context.Context, issueIDs []string) (map[str
 		var run storage.RunHistory
 		var runError, reactionKind, sessionID sql.NullString
 		if err := rows.Scan(&run.ID, &run.IssueID, &run.RuleName, &run.AgentAdapter, &run.ConfiguredModel,
-			&run.StagePrevious, &run.StagePreviousOutcome, &run.ChainID, &run.DispatchedAt,
+			&run.StagePrevious, &run.StagePreviousOutcome, &run.ChainID, &run.DispatchedAt, &run.LastPromptAt,
 			&run.Status, &runError, &reactionKind, &sessionID, &run.TemplateID, &run.AgentText); err != nil {
 			return nil, fmt.Errorf("scan latest agent run: %w", err)
 		}

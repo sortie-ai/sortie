@@ -1087,13 +1087,15 @@ type ParkedEntry struct {
 	AgentKind       string
 	ConfiguredModel string
 
-	// SessionID, TemplateID, and Statement are what the park hands to the
-	// first run after a release, as parkHandOverOf derives them from the
-	// run the park follows. TemplateID is empty for the workflow body
-	// template.
-	SessionID  string
-	TemplateID string
-	Statement  string
+	// SessionID, TemplateID, Statement, and LastPromptAt are what the park
+	// hands to the first run after a release, as parkHandOverOf derives them
+	// from the run the park follows. TemplateID is empty for the workflow
+	// body template; LastPromptAt is zero when the park records no run or
+	// that run recorded none.
+	SessionID    string
+	TemplateID   string
+	Statement    string
+	LastPromptAt time.Time
 
 	// ReleasedAt and ReleaseGesture record a person's release; both are
 	// zero while the park holds.

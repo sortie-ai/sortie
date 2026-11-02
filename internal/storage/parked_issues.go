@@ -34,12 +34,15 @@ type ParkedIssue struct {
 	ChainID              string
 	DispatchedAt         string // RFC 3339 with nanoseconds, UTC
 
-	// SessionID, TemplateID, and Statement are what the park hands to the
-	// first run after a release; each is empty when the park recorded none.
-	// TemplateID is empty for the workflow body template.
-	SessionID  string
-	TemplateID string
-	Statement  string
+	// SessionID, TemplateID, Statement, and LastPromptAt are what the park
+	// hands to the first run after a release; each is empty when the park
+	// recorded none. TemplateID is empty for the workflow body template.
+	// LastPromptAt is the moment the run began its last turn, RFC 3339 with
+	// nanoseconds, UTC.
+	SessionID    string
+	TemplateID   string
+	Statement    string
+	LastPromptAt string
 
 	// ReleasedAt (RFC 3339 UTC, whole seconds) and ReleaseGesture
 	// ("label_removed" or "state_changed") record a person's release; both

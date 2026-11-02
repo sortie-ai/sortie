@@ -777,7 +777,7 @@ Template input variables:
   - `statement` (string): the stop statement of the run the park follows; empty when that run declared none.
   - `parked_at` and `released_at` (strings): RFC 3339 times in UTC, whole seconds.
   - `gesture` (string): `label_removed` or `state_changed`.
-  - `comments` (list, never null): the comments created since the park, oldest first, each with `id`, `author`, `body`, and `created_at`.
+  - `comments` (list, never null): the comments created since the parked run's last prompt, oldest first, less every comment Sortie posted, each with `id`, `author`, `body`, and `created_at`. The window includes the second of that prompt and starts at the park time when the park records no last prompt (Section 17).
 
 Define blocks and calls:
 

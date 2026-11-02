@@ -34,18 +34,22 @@ type ParkStore interface {
 // parkHandOver is what a park keeps from the run it follows for the first
 // run after a person releases it.
 type parkHandOver struct {
-	SessionID  string
-	TemplateID string // "" for the workflow body template
-	Statement  string
+	SessionID    string
+	TemplateID   string // "" for the workflow body template
+	Statement    string
+	LastPromptAt time.Time
 }
 
 // parkHandOverOf derives the hand-over from the record of the run a park
-// follows. The statement always carries over. The session and template carry
-// over only from a run with no reaction kind that ended normally, because a
-// retry policy starts a new session after any other run, so resuming one of
-// those sessions would resume a suspect conversation.
+// follows. The statement and the last-prompt moment always carry over. The
+// session and template carry over only from a run with no reaction kind that
+// ended normally, because a retry policy starts a new session after any other
+// run, so resuming one of those sessions would resume a suspect conversation.
 func parkHandOverOf(run storage.RunHistory) parkHandOver {
-	handOver := parkHandOver{Statement: run.AgentText}
+	handOver := parkHandOver{
+		Statement:    run.AgentText,
+		LastPromptAt: parseDispatchedAt(run.LastPromptAt),
+	}
 	if run.ReactionKind != "" || !endedNormally(run) {
 		return handOver
 	}
@@ -149,9 +153,10 @@ func parkIssue(state *State, params parkIssueParams) {
 		AgentKind:       params.Run.AgentKind,
 		ConfiguredModel: params.Run.ConfiguredModel,
 
-		SessionID:  params.Run.HandOver.SessionID,
-		TemplateID: params.Run.HandOver.TemplateID,
-		Statement:  params.Run.HandOver.Statement,
+		SessionID:    params.Run.HandOver.SessionID,
+		TemplateID:   params.Run.HandOver.TemplateID,
+		Statement:    params.Run.HandOver.Statement,
+		LastPromptAt: params.Run.HandOver.LastPromptAt,
 	}
 	delete(state.ParkReleases, params.IssueID)
 	state.Parked[params.IssueID] = entry
@@ -258,16 +263,26 @@ func consumeParkRelease(ctx context.Context, state *State, store ParkStore, issu
 	}
 }
 
-// parkContextOf builds the park render context from a pending release and
-// the issue's comments. The window keeps a comment created at or after the
-// park's whole second, and keeps one whose time does not parse so a possible
-// answer is never dropped; a zero park time keeps every comment.
-func parkContextOf(release *ParkedEntry, comments []domain.Comment) prompt.ParkContext {
-	boundary := release.ParkedAt.UTC().Truncate(time.Second)
+// parkContextOf builds the park render context from a pending release, the
+// issue's comments, and the IDs of the comments Sortie posted. The window
+// opens at the parked run's last prompt, or at the park when no prompt was
+// recorded, and includes that whole second. A comment whose time does not
+// parse stays so a possible answer is never dropped, and a zero start keeps
+// every comment. Sortie's own comments leave by exact ID alone, because a
+// time, author, or text test would also drop a person's comment.
+func parkContextOf(release *ParkedEntry, comments []domain.Comment, posted []string) prompt.ParkContext {
+	start := release.LastPromptAt
+	if start.IsZero() {
+		start = release.ParkedAt
+	}
+	boundary := start.UTC().Truncate(time.Second)
 	kept := make([]domain.Comment, 0, len(comments))
 	for _, c := range comments {
+		if slices.Contains(posted, c.ID) {
+			continue
+		}
 		created, err := c.CreatedTime()
-		if release.ParkedAt.IsZero() || err != nil || !created.Before(boundary) {
+		if start.IsZero() || err != nil || !created.Before(boundary) {
 			kept = append(kept, c)
 		}
 	}
@@ -334,9 +349,10 @@ func PopulateParked(state *State, rows []storage.ParkedIssue, log *slog.Logger) 
 			AgentKind:       row.AgentKind,
 			ConfiguredModel: row.ConfiguredModel,
 
-			SessionID:  row.SessionID,
-			TemplateID: row.TemplateID,
-			Statement:  row.Statement,
+			SessionID:    row.SessionID,
+			TemplateID:   row.TemplateID,
+			Statement:    row.Statement,
+			LastPromptAt: parseDispatchedAt(row.LastPromptAt),
 		}
 		if row.ReleasedAt == "" {
 			state.Parked[row.IssueID] = entry
@@ -434,6 +450,7 @@ func parkedIssueRow(issueID string, entry *ParkedEntry) storage.ParkedIssue {
 		SessionID:      entry.SessionID,
 		TemplateID:     entry.TemplateID,
 		Statement:      entry.Statement,
+		LastPromptAt:   formatDispatchedAt(entry.LastPromptAt),
 		ReleasedAt:     formatWholeSecondUTC(entry.ReleasedAt),
 		ReleaseGesture: entry.ReleaseGesture,
 	}

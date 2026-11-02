@@ -990,6 +990,7 @@ func dispatchRun(i int, issueID, adapter string) storage.RunHistory {
 		IssueID: issueID, AgentAdapter: adapter, RuleName: fmt.Sprintf("rule-%d", i), ConfiguredModel: fmt.Sprintf("model-%d", i),
 		StagePrevious: fmt.Sprintf("previous-%d", i), StagePreviousOutcome: fmt.Sprintf("outcome-%d", i),
 		ChainID: fmt.Sprintf("chain-%d", i), DispatchedAt: fmt.Sprintf("2026-03-19T09:%02d:00Z", i),
+		LastPromptAt: fmt.Sprintf("2026-03-19T10:%02d:00.123456789Z", i),
 	}
 	if adapter == "" {
 		run.Status = "ci_failed"

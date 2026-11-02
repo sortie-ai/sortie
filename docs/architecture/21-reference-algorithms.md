@@ -187,12 +187,21 @@ on_tick(state, once):
           once.defer(issue.id, tick)                     // evaluated again on the next tick
         continue
       # An issue with a pending park release reads its comments once its
-      # agent kind, template, and attempt settings pass (Section 16.4). A
-      # failed read holds the issue and keeps the release, so no run starts
-      # on a partial view.
+      # agent kind, template, and attempt settings pass (Section 16.4), then
+      # the record of the comments Sortie posted on it. A failed read of
+      # either holds the issue and keeps the release, so no run starts on a
+      # partial view.
       release = state.park_releases[issue.id]
+      posted = []
       if release != null:
         comments, err = tracker.fetch_issue_comments(issue.id)
+        if err != null:
+          release_host(issue.id)
+          hold(issue, park_comments_unread)
+          if once != null:
+            once.defer(issue.id, tick)                   // the next tick reads again
+          continue
+        posted, err = store.list_posted_comments(issue.id)   // after the comment read
         if err != null:
           release_host(issue.id)
           hold(issue, park_comments_unread)
@@ -207,7 +216,7 @@ on_tick(state, once):
       # A candidate that holds a standing escalation is read against the
       # handoff state before it is claimed (Section 16.3).
       state = end_outside_handoff(state, issue.id, issue.state)
-      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release)
+      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release, posted=posted)
       if release != null and issue.id in state.running:
         consume_park_release(state, issue.id)            // deletes the pending release and its row
       if once != null:
@@ -522,7 +531,7 @@ function reconcile_review_comments(state):
 ### 16.4 Dispatch One Issue
 
 ```text
-function dispatch_issue(issue, state, attempt, release):
+function dispatch_issue(issue, state, attempt, release, posted):
   (agent_kind, template_id, rule_name) = resolve_rule(
     issue, state.dispatch_cfg, hop_route_of(state, issue.id),
     state.default_agent_kind, state.default_template_id
@@ -545,7 +554,7 @@ function dispatch_issue(issue, state, attempt, release):
   park_context = null
   resume_session_id = null
   if release != null:
-    park_context = park_context_of(release, issue.comments)
+    park_context = park_context_of(release, issue.comments, posted)
     resume_session_id = resume_session_for(release.session_id,
       (release.agent_kind, release.template_id), (agent_kind, template_id))
 
@@ -1101,10 +1110,10 @@ on_worker_exit(issue_id, reason, worker_result, state):
       # The sequence stops at the ceiling: parking cancels the retry,
       # releases the claim, and holds the issue out of dispatch until a
       # later tick observes a release (Section 14.2).
-      # The park records the session, template, and stop statement of this
-      # run; the session and template only when the run had no reaction kind
-      # and ended normally, so the first run after a release resumes a
-      # trustworthy session (Section 14.2).
+      # The park records the session, template, last-prompt moment, and stop
+      # statement of this run; the session and template only when the run had
+      # no reaction kind and ended normally, so the first run after a release
+      # resumes a trustworthy session (Section 14.2).
       park_issue(state, issue_id, reason="handoff_absence")
       absence_parked = true
 
