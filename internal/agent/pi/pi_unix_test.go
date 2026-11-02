@@ -17,7 +17,11 @@ import (
 
 func writePiScript(t *testing.T, dir, body string) string {
 	t.Helper()
-	return agenttest.WriteScript(t, dir, "fake-pi", body)
+	return agenttest.WriteScript(t, dir, "fake-pi", versionAnsweringScript(body))
+}
+
+func versionAnsweringScript(body string) string {
+	return "case \"$1\" in\n  --version) echo '0.99.0'; exit 0;;\nesac\n" + body
 }
 
 func mustStartSession(t *testing.T, a domain.AgentAdapter, workDir, cmd string) domain.Session {
@@ -470,7 +474,10 @@ func TestRunTurn_RemoteLaunch(t *testing.T) {
 	// Not parallel: puts a fake ssh client first on PATH.
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "ssh-argv.txt")
-	agenttest.WriteScript(t, dir, "ssh", `printf '%s\n' "$@" > '`+argvFile+`'
+	agenttest.WriteScript(t, dir, "ssh", `case "$*" in
+  *--version*) echo '0.99.0'; exit 0;;
+esac
+printf '%s\n' "$@" > '`+argvFile+`'
 cat > /dev/null
 printf '%s\n' '{"type":"session","version":3,"id":"remote-1","timestamp":"t","cwd":"/private/remote/workspace"}' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"stopReason":"stop"}}' '{"type":"agent_end","messages":[],"willRetry":false}'`)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

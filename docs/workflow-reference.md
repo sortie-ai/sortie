@@ -5198,7 +5198,7 @@ pi:
   approve: false
 ```
 
-The `pi` block is forwarded to the Pi adapter, which runs `pi -p --mode json` once per turn with the prompt on standard input, with the issue workspace as the process working directory, and adds `--session <session_id>` on every turn once a session ID is known. A key the adapter does not read is ignored. A `model` value of another YAML type fails the session start and, offline, is reported by `sortie validate` under the check `pi.model.wrong_type`.
+The `pi` block is forwarded to the Pi adapter, which drives Pi 0.99.0 or later. It queries `agent.command` for its version at the start of each session and refuses a version it cannot read and any version below 0.99.0. Pi at those versions is published on npm as `@earendil-works/pi-coding-agent`. The adapter runs `pi -p --mode json` once per turn with the prompt on standard input, with the issue workspace as the process working directory, and adds `--session <session_id>` on every turn once a session ID is known. A key the adapter does not read is ignored. A `model` value of another YAML type fails the session start and, offline, is reported by `sortie validate` under the check `pi.model.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -6291,6 +6291,7 @@ These errors are raised when an agent session starts, before any turn runs, and 
 | --- | --- | --- |
 | `opencode.pure is not supported by OpenCode 2.x; remove it` | The `opencode` block sets `pure: true`. | Remove `opencode.pure`. |
 | `OpenCode <version> is not supported; install OpenCode 2.x, published on npm as @opencode/cli` | `agent.command` reports a major other than 2. | Install OpenCode 2.x, or point `agent.command` at an installation of it. |
+| `Pi <version> is not supported; install Pi 0.99.0 or later, published on npm as @earendil-works/pi-coding-agent` | `agent.command` reports a version below 0.99.0. | Install Pi 0.99.0 or later, or point `agent.command` at an installation of it. |
 
 ---
 

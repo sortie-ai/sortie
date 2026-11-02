@@ -6,7 +6,7 @@ Last updated: November 2026
 
 ## Where to get the volatile facts
 
-Nothing here pins a flag list, an event vocabulary, or a model name. Read the flags off `pi --help` on the version you target. Take providers, authentication, sessions, and project trust from the documentation the installed release ships, in its `docs` directory. The JSON stream is described in its `json.md`. The adapter's `command.go` defines what Sortie sends and `parse.go` defines what it reads. The event and delta types `parse.go` accepts are a closed set: a type outside it is reported as a malformed line, so re-derive the set from a live run after a pi upgrade instead of widening it on the assumption that a new type is harmless.
+Nothing here pins a flag list, an event vocabulary, or a model name. Read the flags off `pi --help` on the version you target. The minimum version is in the workflow reference. Take providers, authentication, sessions, and project trust from the documentation the installed release ships, in its `docs` directory. The JSON stream is described in its `json.md`. The adapter's `command.go` defines what Sortie sends and `parse.go` defines what it reads. The event and delta types `parse.go` accepts are a closed set: a type outside it is reported as a malformed line, so re-derive the set from a live run after a pi upgrade instead of widening it on the assumption that a new type is harmless.
 
 ## The surface we drive
 
