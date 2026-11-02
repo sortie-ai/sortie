@@ -134,6 +134,9 @@ func TestStartSession_ContinuesASessionJournaledUnderAnotherPhysicalPath(t *test
 	if !session.CarriedHistory || session.ID != resumeID {
 		t.Errorf("StartSession() = {ID: %q, CarriedHistory: %v}, want {%q, true}", session.ID, session.CarriedHistory, resumeID)
 	}
+	if got, want := session.Internal.(*sessionState).journalDir, journalDir("/private/remote/physical/workspace"); got != want {
+		t.Errorf("journal directory = %q, want the held journal's %q", got, want)
+	}
 }
 
 func TestSessionContinuity(t *testing.T) {

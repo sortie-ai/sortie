@@ -7,6 +7,7 @@
 package claude
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -289,7 +290,7 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 		mcpConfigPath:          mcpConfigPath,
 		credentialVerification: params.CredentialVerification,
 		ledger:                 ledger,
-		journalDir:             journalDir(target.WorkspacePath),
+		journalDir:             cmp.Or(heldJournalDir(start.Answer()), journalDir(target.WorkspacePath)),
 		acc:                    agentcore.NewRunUsage(),
 
 		reducedVerificationContext: params.ReducedVerificationContext(),

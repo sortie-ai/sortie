@@ -132,21 +132,21 @@ func (s SessionStart[A]) AssignedID() (string, *domain.AgentError) {
 }
 
 // RuntimeFileProbe returns the probe of a runtime that keeps each session in a
-// file under its home: a present file continues the session, an absent file or
-// home replaces it, and a failed read leaves the verdict unknown. The read is
-// bounded by bound on a context derived inside the probe.
-func RuntimeFileProbe(target LaunchTarget, bound time.Duration, file func(sessionID string) RuntimePath) ResumeProbe[struct{}] {
-	return ResumeProbeFunc[struct{}](func(ctx context.Context, resumeID string) (ResumeSignal[struct{}], *domain.AgentError) {
+// file under its home: a present file continues the session and is the answer,
+// an absent file or home replaces it, and a failed read leaves the verdict
+// unknown. The read is bounded by bound on a context derived inside the probe.
+func RuntimeFileProbe(target LaunchTarget, bound time.Duration, file func(sessionID string) RuntimePath) ResumeProbe[RuntimePath] {
+	return ResumeProbeFunc[RuntimePath](func(ctx context.Context, resumeID string) (ResumeSignal[RuntimePath], *domain.AgentError) {
 		ctx, cancel := context.WithTimeout(ctx, bound)
 		defer cancel()
 		matches, err := target.MatchRuntimeFiles(ctx, nil, file(resumeID))
 		switch {
 		case err != nil:
-			return ResumeSignal[struct{}]{Cause: err}, nil
+			return ResumeSignal[RuntimePath]{Cause: err}, nil
 		case len(matches) > 0:
-			return ResumeSignal[struct{}]{Verdict: ResumeCarried}, nil
+			return ResumeSignal[RuntimePath]{Verdict: ResumeCarried, Answer: matches[0]}, nil
 		default:
-			return ResumeSignal[struct{}]{Verdict: ResumeReplaced}, nil
+			return ResumeSignal[RuntimePath]{Verdict: ResumeReplaced}, nil
 		}
 	})
 }
