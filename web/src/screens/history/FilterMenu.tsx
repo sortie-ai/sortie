@@ -52,7 +52,7 @@ export function FilterMenu({ label, valueText, options, value, onChange }: Filte
         <span className="text-ink wrap-anywhere">{valueText}</span>
         <ChevronDownIcon />
       </PopoverTrigger>
-      <PopoverPopup aria-label={label} className="w-72 max-w-[calc(100vw-2rem)]">
+      <PopoverPopup aria-label={label} isOnPanelContent className="w-72 max-w-[calc(100vw-2rem)]">
         <Combobox
           items={options}
           inputValue={query}
