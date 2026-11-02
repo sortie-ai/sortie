@@ -283,3 +283,16 @@ type CommentAuthorAccessReader interface {
 	// cannot ask, and nothing is remembered on error.
 	CommentAuthorCanWrite(ctx context.Context, c Comment) (bool, error)
 }
+
+// CommentAuthorKindReader is the optional capability a tracker adapter
+// implements when its full comment reads report no author kind.
+type CommentAuthorKindReader interface {
+	// LookupCommentAuthorKind reports the kind that
+	// [CommentChangeReader.FetchIssueCommentChanges] reports for the author
+	// of c. It reads c.AuthorID only; an empty AuthorID is
+	// [CommentAuthorUnknown] without a request.
+	//
+	// An adapter remembers an answer for its lifetime and nothing on
+	// error. The errors are those of [TrackerAdapter.FetchIssueComments].
+	LookupCommentAuthorKind(ctx context.Context, c Comment) (CommentAuthorKind, error)
+}

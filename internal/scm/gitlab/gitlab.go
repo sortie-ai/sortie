@@ -77,6 +77,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*GitLabAdapter)(nil)
 var _ domain.CommentChangeReader = (*GitLabAdapter)(nil)
+var _ domain.CommentAuthorKindReader = (*GitLabAdapter)(nil)
 var _ domain.CommentAuthorAccessReader = (*GitLabAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 100 items per page
@@ -104,6 +105,7 @@ type GitLabAdapter struct {
 	log         *slog.Logger
 	metrics     domain.Metrics
 	bots        *botFlags
+	kinds       *authorKinds
 	access      *scmcore.WriteAccessCache
 
 	// queryFilter holds the validated tracker.query_filter parameters, or
@@ -400,6 +402,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		model:            model,
 		log:              log,
 		bots:             newBotFlags(client),
+		kinds:            newAuthorKinds(),
 		queryFilter:      queryFilter,
 		stateLabelCasing: stateLabelCasing,
 	}

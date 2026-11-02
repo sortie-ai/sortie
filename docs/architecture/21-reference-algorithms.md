@@ -181,7 +181,7 @@ on_tick(state, once):
         if once != null:
           once.drop(issue.id)                            // the run does not wait for the reset
         continue
-      issue, dispatchable = hold_for_stage_hop(issue, state)   // Section 16.4
+      issue, dispatch_read, dispatchable = hold_for_stage_hop(issue, state)   // Section 16.4
       if not dispatchable:
         if once != null:
           once.defer(issue.id, tick)                     // evaluated again on the next tick
@@ -209,6 +209,7 @@ on_tick(state, once):
             once.defer(issue.id, tick)                   // the next tick reads again
           continue
         issue.comments = comments                        // every other field stays the candidate's
+        dispatch_read = comments                         // the later read of the two wins the handover
       # The seed holds the pull request's review comments no run of the
       # issue was given, per configured kind without a triage block; nil
       # dispatches as before.
@@ -216,7 +217,7 @@ on_tick(state, once):
       # A candidate that holds a standing escalation is read against the
       # handoff state before it is claimed (Section 16.3).
       state = end_outside_handoff(state, issue.id, issue.state)
-      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release, posted=posted)
+      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release, posted=posted, dispatch_read=dispatch_read)
       if release != null and issue.id in state.running:
         consume_park_release(state, issue.id)            // deletes the pending release and its row
       if once != null:
@@ -531,7 +532,7 @@ function reconcile_review_comments(state):
 ### 16.4 Dispatch One Issue
 
 ```text
-function dispatch_issue(issue, state, attempt, release, posted):
+function dispatch_issue(issue, state, attempt, release, posted, dispatch_read):
   (agent_kind, template_id, rule_name) = resolve_rule(
     issue, state.dispatch_cfg, hop_route_of(state, issue.id),
     state.default_agent_kind, state.default_template_id
@@ -559,7 +560,7 @@ function dispatch_issue(issue, state, attempt, release, posted):
       (release.agent_kind, release.template_id), (agent_kind, template_id))
 
   worker = spawn_worker(
-    fn -> run_agent_attempt(issue, attempt, attempt_settings.settings, parent_orchestrator_pid, park_context, resume_session_id) end
+    fn -> run_agent_attempt(issue, attempt, attempt_settings.settings, parent_orchestrator_pid, park_context, resume_session_id, dispatch_read) end
   )
 
   if worker spawn failed:
@@ -649,35 +650,37 @@ A poll tick holds an issue that carries a stage hop record until a read shows th
 function hold_for_stage_hop(issue, state):
   hop = state.stage_hops[issue.id]
   if hop is absent or hop.target_observed:
-    return issue, dispatchable
+    return issue, null, dispatchable
   if issue.labels contains hop.target_label:
     mark_observed(state, issue.id)
-    return issue, dispatchable
+    return issue, null, dispatchable
   read, err = tracker.fetch_issue_by_id(issue.id)
   if err:
     log_warn("stage hop target read failed, holding issue")
-    return issue, held                                   // retried next tick
+    return issue, null, held                             // retried next tick
   if read.state is empty:
     log_info("stage hop target read shows no state, holding issue")   // the record stays; reconciliation decides on the second reading
-    return issue, held
+    return issue, null, held
   if is_terminal_state(read.state):
     reset_stage_hop(state, issue.id, "terminal")
-    return issue, held
+    return issue, null, held
   if not is_active_state(read.state):
     reset_stage_hop(state, issue.id, "not_active")
-    return issue, held
+    return issue, null, held
   mark_observed(state, issue.id)
   if read.labels does not contain hop.target_label:
     log_info("stage hop target label absent, hold released")
   issue.labels = read.labels                             // routing uses the fresher read
-  return issue, dispatchable
+  return issue, read.comments, dispatchable             // an empty list when the read found no comment; null when no read ran
 
 function mark_observed(state, issue_id):
   state.stage_hops[issue_id].target_observed = true
   persist_stage_hop_observed(issue_id)                   // a failure is logged; the runtime value stands
 ```
 
-The hold reads at most once per hop and only when the listing lacks the target label. A held issue the listing omits is never read here; reconciliation reads it every tick (§16.3). The retry lane needs no hold, because a made hop leaves the issue with no queued retry. The dispatch records the frozen stage lineage the render reads: `fresh_lineage(state, issue_id, rule_name)` returns the hop's source rule, outcome, chain identifier, and pass dispatch time when the issue holds a hop record whose target is `rule_name`, and an empty lineage otherwise, and `with_chain_id(lineage)` fills an empty chain identifier with a fresh random value that is never a dispatch or session identifier. A retry that keeps its frozen rule reuses the lineage it froze, an empty chain from a row written before chains were recorded included, and with it the pass dispatch time; a retry routed afresh computes it as a poll tick does. Every worker prompt render passes the pair with `stage.current`, which is the rule name when the rule carries a stage label and empty otherwise (§12.1).
+The hold reads at most once per hop and only when the listing lacks the target label, and a dispatch that follows the read carries the read's comments to the worker (below). A held issue the listing omits is never read here; reconciliation reads it every tick (§16.3). The retry lane needs no hold, because a made hop leaves the issue with no queued retry. The dispatch records the frozen stage lineage the render reads: `fresh_lineage(state, issue_id, rule_name)` returns the hop's source rule, outcome, chain identifier, and pass dispatch time when the issue holds a hop record whose target is `rule_name`, and an empty lineage otherwise, and `with_chain_id(lineage)` fills an empty chain identifier with a fresh random value that is never a dispatch or session identifier. A retry that keeps its frozen rule reuses the lineage it froze, an empty chain from a row written before chains were recorded included, and with it the pass dispatch time; a retry routed afresh computes it as a poll tick does. Every worker prompt render passes the pair with `stage.current`, which is the rule name when the rule carries a stage label and empty otherwise (§12.1).
+
+A dispatch hands the worker the comments it already read, so the first turn of a run with the comment feed on reuses them instead of reading again. The retry timer hands over the comments of its `fetch_issue_by_id` read, the park release hands over the result of its `fetch_issue_comments` read, and the stage-hop hold hands over the comments of its read. When the park-release and stage-hop reads run in the same tick, the park-release read is handed over, because it runs later. A handover carries the fact that the read ran, an empty list included, and every other poll-tick dispatch hands over nothing. The handover is not a template input, so with the feed off nothing reads it.
 
 The dispatch records the pass dispatch time on the lineage as its own start when the lineage holds none, so the first run of a pass dates the pass and every later run of it keeps that time. It then marks the issue's hop record dispatched, which ends the issue's listing between stages, the interval from the hop until a run of the issue is dispatched (§13.7.2). Poll-tick dispatches and retry dispatches both pass through this step. A poll-tick dispatch whose lineage the hop record supplies reads, before the mark, whether the record's `run_dispatched` was still false, and records that as its run's `first_after_hop`; a retry dispatch records false:
 
@@ -693,7 +696,7 @@ function mark_stage_hop_dispatched(state, issue_id):
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
 ```text
-function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
+function run_agent_attempt(issue, attempt, settings, orchestrator_channel, dispatch_read):
   // Every after_run call below passes SORTIE_RUN_OUTCOME. run_outcome(worker_ctx,
   // kind, err, declared) groups the status the exit that follows the hook
   // reports into succeeded, stopped, failed, or cancelled (Section 8.1), with
@@ -702,6 +705,22 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
   // reads succeeded here.
   cfg = current_config()
   turn_timeout_ms = cfg.agent.turn_timeout_ms  // snapshot at attempt start; bounds every turn below, including the self-review phase's turns (not re-read per turn)
+
+  // The comment feed reads its configuration from this attempt-start snapshot
+  // for every boundary, the self-review phase's included, never from the
+  // configuration re-read before that phase. It is off, with no tracker or
+  // store call, unless the switch is on and the orchestrator supplied both
+  // the report callback and the given-comment store. dispatch_read is the
+  // comment read the dispatch already made, or null when it made none. Every
+  // exit below, fail_worker, exit_cancelled, and exit_normal alike, first
+  // calls feed.finish(session_id) so rows still waiting for a session
+  // identifier are reported once, before the exit result is sent.
+  feed = null
+  if cfg.comment_feed.enabled and report_callback is present and given_comment_store is present:
+    feed = new_comment_feed(cfg.comment_feed, issue.id,
+      tracker_source(tracker, dispatch_read, posting_register, given_comment_store),
+      given_comment_store,
+      report=(rows) -> send(orchestrator_channel, {comments_given, issue.id, dispatch_id, rows}))
 
   // Dispatch-time in-progress transition (non-fatal).
   if cfg.tracker.in_progress_state is configured:
@@ -769,6 +788,11 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
     })
     fail_worker("agent session startup error")
 
+  // The conversation identity of the comment feed's record. It moves only when
+  // the runtime reports its session identifier, and stays empty until then for a
+  // kind that assigns the identifier on its first turn; rows wait for it.
+  accepted_session_id = session.id
+
   if skipped:
     // A skipped run has no verification request to mark its local usage as
     // measured, so a kind whose derived usage arrival is "none" reports unmeasured.
@@ -790,6 +814,15 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       })
       exit_cancelled()
 
+    # Boundary: select what the conversation has not been given. A failed
+    # read sends the turn without comments and never fails it.
+    selection = empty
+    if feed != null:
+      selection, err = feed.select(conversation(accepted_session_id, session.carried_history))
+      if err != null:
+        log_warn("issue comment feed read failed", turn_number, err)
+        selection = empty
+
     if reaction_kind != "":
       # a reaction run gets the operator's branch for its continuation key
       # or the key's built-in prompt, on every turn
@@ -803,6 +836,10 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
       prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context)
     else:
       prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
+    // The block follows the render and precedes the text turn 1 appends
+    // afterwards (tool advertisement, runtime status suffix); placed holds the
+    // comments that changed the prompt, empty when selection is empty.
+    prompt, placed = place_comment_block(prompt, selection)
     cancelled_at_ending = worker_ctx is done  // read immediately after the call, before any teardown below
     if prompt failed:
       agent_adapter.stop_session(session)
@@ -810,6 +847,13 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
         SORTIE_RUN_OUTCOME: run_outcome(worker_ctx, exit_kind_at_ending(worker_ctx, cancelled_at_ending), "prompt error")
       })
       fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), "prompt error")
+
+    // The turn has started with the prompt. Report what it delivered, empty
+    // lists included, whatever the turn's outcome; a turn that never starts
+    // reports nothing, so the next boundary selects the comments again.
+    last_prompt_at = now()
+    if feed != null:
+      feed.delivered(accepted_session_id, last_prompt_at, "next_prompt", placed)
 
     // The derived turn context bounds only this call; worker_ctx itself is
     // never replaced and keeps flowing to every consumer below.
@@ -886,16 +930,17 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
   review_metadata = null
   phase_err = null
   phase_cut = false
-  cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms
+  review_cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms or of the comment feed's configuration
   signal_admits = pending_reason == "" OR pending_reason == "needs-human-review" OR pending_reason == "no-change-needed"
-  admitted = cfg.self_review.enabled AND issue.state is active AND deps.Posture.DrivesIssueState() AND signal_admits
+  admitted = review_cfg.self_review.enabled AND issue.state is active AND deps.Posture.DrivesIssueState() AND signal_admits
   if admitted AND worker_ctx is not done:
     if pending_reason != "":
       log_info("agent signaled a status admitting self-review, entering the phase", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
     review_metadata, phase_signal, phase_statement, cancelled_at_ending, phase_err = run_self_review_loop(
-      session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
-      turn_timeout_ms=turn_timeout_ms  // the attempt-start snapshot, bounding both phase turns
+      session, workspace, issue, review_cfg.self_review, agent_adapter, orchestrator_channel,
+      turn_timeout_ms=turn_timeout_ms,  // the attempt-start snapshot, bounding both phase turns
+      prepare_prompt=feed_prepare(feed)  // null with the feed off; otherwise selects and places the block on each review and fix prompt, then reports the placed comments as the turn starts
     )
     if phase_signal == "blocked":
       pending_reason = "blocked"
@@ -966,8 +1011,23 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
 
 ### 16.6 Worker Exit and Retry Handling
 
+A worker reports the comments each turn delivered through a message on the orchestrator's event channel. The event loop applies every report a worker queued before its exit result ahead of that result, in the normal loop and in the shutdown drain, so a run's last turn is recorded before its exit disposition runs:
+
+```text
+function apply_comments_given(report, state):
+  entry = state.running[report.issue_id]
+  if entry is absent or entry.dispatch_id != report.dispatch_id:
+    log_debug("comments report for a run that is not running, dropped")
+    return
+  // A pending cleanup does not prevent the write: the agent received the prompt.
+  err = sqlite.record_given_comments(report.issue_id, report.rows)
+  if err != null:
+    log_error("failed to record given comments", conversation, count, err)
+```
+
 ```text
 on_worker_exit(issue_id, reason, worker_result, state):
+  // Every comments_given report this worker queued has been applied above.
   running_entry = state.running.remove(issue_id)
   if running_entry.cancel_func is not null:
     running_entry.cancel_func()  // also cancels the worker context nested under it
@@ -1524,7 +1584,7 @@ on_retry_timer(issue_id, state, release_held=false):
 
   return dispatch_issue(issue, state, attempt=retry_entry.attempt,
     resume_session_id=resume_session_id, selection=selection,
-    attempt_settings=attempt_settings, stage_lineage=lineage)
+    attempt_settings=attempt_settings, stage_lineage=lineage, dispatch_read=issue.comments)
 ```
 
 A changed settings result never clears `resume_session_id`; only a changed kind or template does.

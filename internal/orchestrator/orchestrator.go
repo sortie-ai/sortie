@@ -56,6 +56,7 @@ type OrchestratorStore interface {
 	storage.IssueOutcomeStore
 	storage.AttentionAcknowledgementStore
 	storage.PostedCommentStore
+	storage.GivenCommentStore
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -289,6 +290,7 @@ type Orchestrator struct {
 	selfReviewCh       chan selfReviewProgressMsg
 	turnStartedCh      chan turnStartedMsg
 	issueReadCh        chan issueReadMsg
+	commentsGivenCh    chan commentsGivenMsg
 	unaccountedTurnsCh chan unaccountedTurnsMsg
 	snapshotCh         chan snapshotRequest
 	refreshCh          chan struct{}
@@ -297,6 +299,10 @@ type Orchestrator struct {
 	// closes once, when shutdown begins and before workers drain.
 	actionCh chan *loopAction
 	stopping chan struct{}
+
+	// commentFeedAccessDenied latches, for the process, that the tracker
+	// token was refused the author access lookup, so the refusal is logged once.
+	commentFeedAccessDenied atomic.Bool
 
 	preflightParams PreflightParams
 	observers       []Observer
@@ -466,6 +472,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		selfReviewCh:                      make(chan selfReviewProgressMsg, eventBuf),
 		turnStartedCh:                     make(chan turnStartedMsg, eventBuf),
 		issueReadCh:                       make(chan issueReadMsg, eventBuf),
+		commentsGivenCh:                   make(chan commentsGivenMsg, eventBuf),
 		unaccountedTurnsCh:                make(chan unaccountedTurnsMsg, eventBuf),
 		snapshotCh:                        make(chan snapshotRequest, 4),
 		refreshCh:                         make(chan struct{}, 1),
@@ -643,6 +650,9 @@ func (o *Orchestrator) applyQueuedAheadOfExit(ctx context.Context, exitingIssueI
 	applyQueued(o.selfReviewCh, o.applySelfReviewProgress)
 	applyQueued(o.turnStartedCh, o.applyTurnStarted)
 	applyQueued(o.issueReadCh, o.applyIssueRead)
+	applyQueued(o.commentsGivenCh, func(msg commentsGivenMsg) {
+		o.applyCommentsGiven(ctx, msg)
+	})
 	applyQueued(o.unaccountedTurnsCh, func(msg unaccountedTurnsMsg) {
 		o.applyUnaccountedTurns(ctx, msg)
 	})
@@ -830,6 +840,10 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case msg := <-o.issueReadCh:
 			o.applyIssueRead(msg)
+			o.notifyObservers()
+
+		case msg := <-o.commentsGivenCh:
+			o.applyCommentsGiven(ctx, msg)
 			o.notifyObservers()
 
 		case msg := <-o.unaccountedTurnsCh:
@@ -1220,7 +1234,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			o.once.declined(issue, decision.Reason)
 			continue
 		}
-		issue, dispatchable := o.holdForStageHop(ctx, decision.Issue, activeSet, terminalSet)
+		issue, stageHopComments, dispatchable := o.holdForStageHop(ctx, decision.Issue, activeSet, terminalSet)
 		if !dispatchable {
 			if o.state.StageHops[issue.ID] != nil {
 				held.hold(issue, HeldEntry{Reason: SkipStageHopUnconfirmed})
@@ -1287,6 +1301,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		issueLog := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 		release := o.state.ParkReleases[issue.ID]
 		var posted []string
+		var parkComments []domain.Comment
 		if release != nil {
 			comments, err := o.trackerAdapter.FetchIssueComments(ctx, issue.ID)
 			if err != nil {
@@ -1305,6 +1320,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 				continue
 			}
 			issue.Comments = comments
+			parkComments = nonNilComments(comments)
 		}
 		dispatchCtx := ctx
 		seed := freshRunSeed(ctx, o.state, freshRunSeedParams{
@@ -1325,6 +1341,14 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			Previous:        lineage.PreviousRule,
 			PreviousOutcome: lineage.PreviousOutcome,
 		})
+		// The park-release read runs after the stage-hop read, so it is the
+		// fresher of the two when both ran.
+		switch {
+		case release != nil:
+			dispatchCtx = withDispatchCommentRead(dispatchCtx, parkComments)
+		case stageHopComments != nil:
+			dispatchCtx = withDispatchCommentRead(dispatchCtx, stageHopComments)
+		}
 		resumeSessionID := ""
 		var parkCtx prompt.ParkContext
 		if release != nil {
@@ -1558,6 +1582,22 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 				case <-runContextFrom(ctx).Done():
 				}
 			},
+			CommentFeedStore: o.store,
+			OnCommentsGiven: func(issueID string, rows []storage.GivenComment) {
+				msg := commentsGivenMsg{IssueID: issueID, DispatchID: dispatchIDFromContext(ctx), Rows: rows}
+				select {
+				case o.commentsGivenCh <- msg:
+					return
+				default:
+				}
+				// A report must land after the worker context cancels too, so
+				// only the run context, which outlives a ceiling stop, ends the wait.
+				select {
+				case o.commentsGivenCh <- msg:
+				case <-runContextFrom(ctx).Done():
+				}
+			},
+			CommentFeedAccessDenied: &o.commentFeedAccessDenied,
 			OnProgress: func(msg selfReviewProgressMsg) {
 				select {
 				case o.selfReviewCh <- msg:
@@ -2440,6 +2480,9 @@ func (o *Orchestrator) drainRunningWorkers() {
 			applyQueued(o.selfReviewCh, o.applySelfReviewProgress)
 			applyQueued(o.turnStartedCh, o.applyTurnStarted)
 			applyQueued(o.issueReadCh, o.applyIssueRead)
+			applyQueued(o.commentsGivenCh, func(msg commentsGivenMsg) {
+				o.applyCommentsGiven(drainCtx, msg)
+			})
 			applyQueued(o.unaccountedTurnsCh, func(msg unaccountedTurnsMsg) {
 				o.applyUnaccountedTurns(drainCtx, msg)
 			})
@@ -2494,6 +2537,10 @@ func (o *Orchestrator) drainRunningWorkers() {
 
 		case msg := <-o.issueReadCh:
 			o.applyIssueRead(msg)
+			o.notifyObservers()
+
+		case msg := <-o.commentsGivenCh:
+			o.applyCommentsGiven(drainCtx, msg)
 			o.notifyObservers()
 
 		case msg := <-o.unaccountedTurnsCh:

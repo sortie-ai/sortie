@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
@@ -46,6 +47,13 @@ func (r *commentRecorder) recorded() []trackerComment {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.comments)
+}
+
+type countingRecorder struct{ rows atomic.Int32 }
+
+func (c *countingRecorder) AddPostedComment(context.Context, string, string) error {
+	c.rows.Add(1)
+	return nil
 }
 
 type recordingNotifier struct {
@@ -656,6 +664,63 @@ func TestDelivery_Deliver_JoinsEverySend(t *testing.T) {
 	}
 	if outcomes[2].Kind != "webhook" {
 		t.Errorf("Deliver() webhook outcome Kind = %q, want %q", outcomes[2].Kind, "webhook")
+	}
+}
+
+func TestRouter_AwaitTrackerCommentsWaitsForAPostInFlight(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		endWaitFirst bool
+		wantErr      error
+		wantRows     int32
+	}{
+		{name: "the post returns after its row is recorded", wantRows: 1},
+		{name: "the context ends before the post returns", endWaitFirst: true, wantErr: context.Canceled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				tracker := &commentRecorder{posted: make(chan struct{})}
+				recorder := &countingRecorder{}
+				router := route.NewRouter(tracker, recorder, nil, nil)
+				mustUpdate(t, router, route.Inputs{Entries: []config.NotificationBackend{entry(domain.TrackerCommentKind, domain.EventSessionStopped)}})
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				go router.Route(notificationOf(domain.EventSessionStopped)).Deliver(context.Background())
+				synctest.Wait()
+				awaited := make(chan error, 1)
+				go func() { awaited <- router.AwaitTrackerComments(ctx, "ISS-1") }()
+				synctest.Wait()
+
+				select {
+				case err := <-awaited:
+					t.Fatalf("AwaitTrackerComments(ISS-1) = %v while a post is in flight, want it pending", err)
+				default:
+				}
+				if tt.endWaitFirst {
+					cancel()
+				} else {
+					<-tracker.posted
+				}
+				err := <-awaited
+				gotRows := recorder.rows.Load()
+				if tt.endWaitFirst {
+					<-tracker.posted
+				}
+
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("AwaitTrackerComments(ISS-1) = %v, want %v", err, tt.wantErr)
+				}
+				if gotRows != tt.wantRows {
+					t.Errorf("posted rows when AwaitTrackerComments(ISS-1) returned = %d, want %d", gotRows, tt.wantRows)
+				}
+			})
+		})
 	}
 }
 

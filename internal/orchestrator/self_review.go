@@ -45,6 +45,9 @@ type RunSelfReviewParams struct {
 	// OnTurnStarted, when non-nil, is called on the worker goroutine
 	// before each review and fix turn.
 	OnTurnStarted func()
+	// PreparePrompt, when non-nil, is called on the worker goroutine before
+	// each review and fix turn; the turn sends the text it returns.
+	PreparePrompt func(prompt string) string
 
 	Logger         *slog.Logger
 	Metrics        domain.Metrics
@@ -549,6 +552,9 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			cancelledAtEnding = true
 			break
 		}
+		if params.PreparePrompt != nil {
+			reviewPrompt = params.PreparePrompt(reviewPrompt)
+		}
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()
 		}
@@ -668,6 +674,9 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 		if ctx.Err() != nil {
 			cancelledAtEnding = true
 			break
+		}
+		if params.PreparePrompt != nil {
+			fixPrompt = params.PreparePrompt(fixPrompt)
 		}
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()

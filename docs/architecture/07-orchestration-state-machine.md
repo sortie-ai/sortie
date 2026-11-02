@@ -30,6 +30,7 @@ Important nuance:
 - If the issue is still in an active state, the worker should start another turn on the same live coding-agent thread in the same workspace, up to `agent.max_turns`.
 - The first turn should use the full rendered task prompt.
 - Continuation turns should send only continuation guidance to the existing thread, not resend the original task prompt that is already present in thread history.
+- With the comment feed on (`comment_feed.enabled`), every turn, continuation turns included, also carries the issue comments the conversation has not been given, appended after the prompt guidance for that turn. With the feed off, continuation turns read no comments.
 - Once the worker exits normally with the issue still active and no handoff state configured, the orchestrator schedules a short continuation retry (about 1 second) so it can re-check whether the issue remains active and needs another worker session. Section 7.3 gives the full set of exit dispositions and the order they are evaluated in.
 
 ### 7.2 Run Attempt Lifecycle
@@ -50,6 +51,8 @@ A run attempt transitions through these phases:
 12. `CanceledByReconciliation`
 
 Distinct terminal reasons are important because retry logic and logs differ.
+
+**Comment delivery.** With the comment feed on, the worker selects the pending comments at the start of every turn of the attempt (the first turn, each continuation turn, each reaction turn, and each self-review review and fix turn) and appends the feed's block to that turn's prompt. The worker takes the feed's configuration from the snapshot read when the attempt began. Once a turn has started with its prompt, whatever the turn's outcome, the worker reports the comments that prompt delivered to the orchestrator through a per-turn callback, and the orchestrator, which is the only writer of the given-comment record, writes them on its event loop. A report is applied only while the issue still has a running entry for the same dispatch, and a pending cleanup does not prevent it, because the agent received the prompt. Every report queued before a worker result is applied before that result is handled, on the normal path and in the drain at shutdown, so a run's last turn is recorded before its exit disposition runs. A report that is never recorded (the run context ended first, or the write failed) causes those comments to be delivered once more in a later run and loses none. A turn that never starts reports nothing, and the next boundary selects its comments again. A read or store failure at a boundary sends that turn's prompt without comments and never fails the turn.
 
 ### 7.3 Transition Triggers
 

@@ -381,18 +381,19 @@ func labelsAfterHop(labels []string, rules []config.DispatchRule, targetLabel st
 // holdForStageHop keeps an issue that was just hopped from dispatching on
 // any rule until a read shows the label the hop added. It returns the
 // issue to dispatch, carrying the labels of the direct read when one was
-// made, and false when the issue must wait or its hop record was reset.
+// made, the comments of that read (non-nil exactly when the read was made and
+// succeeded), and false when the issue must wait or its hop record was reset.
 // activeSet and terminalSet hold lowercased state names.
-func (o *Orchestrator) holdForStageHop(ctx context.Context, issue domain.Issue, activeSet, terminalSet map[string]struct{}) (domain.Issue, bool) {
+func (o *Orchestrator) holdForStageHop(ctx context.Context, issue domain.Issue, activeSet, terminalSet map[string]struct{}) (domain.Issue, []domain.Comment, bool) {
 	hop := o.state.StageHops[issue.ID]
 	if hop == nil || hop.TargetObserved {
-		return issue, true
+		return issue, nil, true
 	}
 	log := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 
 	if carriesLabel(issue.Labels, hop.TargetLabel) {
 		o.markObserved(ctx, issue.ID, hop, log)
-		return issue, true
+		return issue, nil, true
 	}
 
 	read, err := o.trackerAdapter.FetchIssueByID(ctx, issue.ID)
@@ -401,7 +402,7 @@ func (o *Orchestrator) holdForStageHop(ctx context.Context, issue domain.Issue, 
 			slog.String("target_label", hop.TargetLabel),
 			slog.Any("error", err),
 		)
-		return issue, false
+		return issue, nil, false
 	}
 
 	// Reconcile reads every hop-record issue each tick and resets the
@@ -411,18 +412,18 @@ func (o *Orchestrator) holdForStageHop(ctx context.Context, issue domain.Issue, 
 		log.Info("stage hop target read showed no state, holding issue",
 			slog.String("target_label", hop.TargetLabel),
 		)
-		return issue, false
+		return issue, nil, false
 	}
 
 	readState := strings.ToLower(read.State)
 	if _, terminal := terminalSet[readState]; terminal {
 		resetStageHop(ctx, o.state, o.store, issue.ID, stageResetTerminal, log)
 		recordIssueOutcome(ctx, o.store, terminalOutcome(issue.ID, read.State, time.Now()), log)
-		return issue, false
+		return issue, nil, false
 	}
 	if _, active := activeSet[readState]; !active {
 		resetStageHop(ctx, o.state, o.store, issue.ID, stageResetNotActive, log)
-		return issue, false
+		return issue, nil, false
 	}
 
 	o.markObserved(ctx, issue.ID, hop, log)
@@ -433,7 +434,7 @@ func (o *Orchestrator) holdForStageHop(ctx context.Context, issue domain.Issue, 
 		)
 	}
 	issue.Labels = read.Labels
-	return issue, true
+	return issue, nonNilComments(read.Comments), true
 }
 
 // markObserved latches the hold release in memory and persists it.

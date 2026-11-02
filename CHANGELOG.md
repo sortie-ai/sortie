@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. ([#1585](https://github.com/sortie-ai/sortie/issues/1585))
+- `sortie validate` checks the `comment_feed` setting. ([#1585](https://github.com/sortie-ai/sortie/issues/1585))
+
 ### Changed
 
 - A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
