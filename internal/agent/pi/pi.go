@@ -117,10 +117,13 @@ func NewPiAdapter() (domain.AgentAdapter, error) {
 	return &PiAdapter{}, nil
 }
 
-// StartSession resolves the launch target and initializes adapter-owned
-// session state without starting a turn subprocess. A resumed session is
-// continued only when pi's session file for it is present on the session's
-// host; otherwise the session starts new.
+// StartSession parses the session's settings, checks that the installed
+// Pi is at least 0.99.0, and initializes adapter-owned session state
+// without starting a turn subprocess. It refuses an unusable settings
+// block before launching anything, and an unreadable or older version
+// once the version is read. A resumed session is continued only when pi's
+// session file for it is present on the session's host; otherwise the session
+// starts new.
 func (a *PiAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	pt, fault := parsePassthroughConfig(params.Settings)
 	if fault != nil {
@@ -152,6 +155,10 @@ func (a *PiAdapter) StartSession(ctx context.Context, params domain.StartSession
 
 		reducedVerificationContext: params.ReducedVerificationContext(),
 	}
+	if versionErr := checkRuntimeVersion(ctx, state); versionErr != nil {
+		return domain.Session{}, versionErr
+	}
+
 	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID,
 		sessionProbe(target, agentcore.ReadTimeout(params.AgentConfig)), state.baseLogger)
 	if startErr != nil {
