@@ -1,8 +1,10 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useRef } from "react";
 
-import { Card } from "@/components/ui/card";
+import { ChartFrame } from "@/components/ChartFrame";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
+import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
+import { Panel } from "@/components/Panel";
 import { CHART_ESTIMATED, CHART_UNKNOWN, COST_LOWER_BOUND } from "@/lib/figures";
 import {
   fmtMoney,
@@ -15,7 +17,7 @@ import {
 } from "@/lib/format";
 
 import type { Spend, SpendBucket } from "@/api/types.gen";
-import type { CSSProperties, RefObject } from "react";
+import type { CSSProperties } from "react";
 
 type Period = "day" | "month";
 
@@ -76,25 +78,6 @@ function noteOf(bucket: SpendBucket, bar: Bar | undefined): string {
     return "No runs finished in this period.";
   }
   return bar === undefined ? "The runs of this period spent nothing." : NOTE_BY_KIND[bar.kind];
-}
-
-function useWidth(ref: RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    setWidth(element.clientWidth);
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry !== undefined) {
-        setWidth(entry.contentRect.width);
-      }
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
 }
 
 // Every Nth slot carries a label once the slots are narrower than the widest
@@ -182,47 +165,28 @@ export function SpendChart({ spend, since }: SpendChartProps) {
   const bars = buckets.map((bucket) => barOf(bucket, top));
   const ticks = buckets.map((bucket) => fmtUtcPeriodTick(bucket.start, period));
   const stride = labelStrideOf(ticks, plotWidth);
-  const topLabel = fmtMoney(top);
-  const gutter = topLabel.length * LABEL_CHAR_PX + LABEL_GAP_PX;
   const axisName = `UTC ${period}`;
 
   return (
-    <Card title="Spend">
-      <div className="flex flex-col gap-xs px-md py-sm">
-        <div
-          role="img"
-          aria-label={`Estimated cost per ${axisName}, ${plural(buckets.length, period, `${period}s`)}`}
-          className="relative h-44"
-        >
-          <span className="absolute top-0 left-0 text-body-sm text-ink-muted">Estimated cost</span>
-          <div ref={plotRef} className="absolute top-6 right-0 bottom-10" style={{ left: gutter }}>
-            <div className="absolute inset-x-0 top-0 border-t border-line" />
-            <div className="absolute inset-x-0 top-1/2 border-t border-line" />
-            <div className="absolute inset-x-0 bottom-0 border-t border-line-strong" />
-            <span className="absolute top-0 right-full mr-1.5 -translate-y-1/2 text-body-sm text-ink-muted">
-              {topLabel}
-            </span>
-            <div className="absolute inset-0 grid auto-cols-fr grid-flow-col">
-              {buckets.map((bucket, index) => (
-                <SpendSlot
-                  key={bucket.start}
-                  bucket={bucket}
-                  bar={bars[index]}
-                  period={period}
-                  from={fromOf(bucket, index, since, period)}
-                  tick={index % stride === 0 ? ticks[index] : undefined}
-                />
-              ))}
-            </div>
-          </div>
-          <span
-            className="absolute right-0 bottom-0 text-center text-body-sm text-ink-muted"
-            style={{ left: gutter }}
-          >
-            {axisName}
-          </span>
-        </div>
-      </div>
-    </Card>
+    <Panel title="Spend">
+      <ChartFrame
+        label={`Estimated cost per ${axisName}, ${plural(buckets.length, period, `${period}s`)}`}
+        valueName="Estimated cost"
+        categoryName={axisName}
+        ticks={[1, 0.5, 0].map((fraction) => fmtMoney(top * fraction))}
+        plotRef={plotRef}
+      >
+        {buckets.map((bucket, index) => (
+          <SpendSlot
+            key={bucket.start}
+            bucket={bucket}
+            bar={bars[index]}
+            period={period}
+            from={fromOf(bucket, index, since, period)}
+            tick={index % stride === 0 ? ticks[index] : undefined}
+          />
+        ))}
+      </ChartFrame>
+    </Panel>
   );
 }

@@ -1,5 +1,6 @@
 import { NotedFigure } from "@/components/NotedFigure";
 import { Hint } from "@/components/ui/hint";
+import { cn } from "@/lib/cn";
 import {
   COST_PER_RUN_TILE_CAPTION,
   TOKENS_TILE_CAPTION,
@@ -10,7 +11,7 @@ import {
 } from "@/lib/figures";
 import { fmtCount, fmtDuration, fmtMean, fmtPercent, plural } from "@/lib/format";
 
-import type { Report } from "@/api/types.gen";
+import type { Report, Summary } from "@/api/types.gen";
 import type { Figure } from "@/lib/figures";
 import type { ReactNode } from "react";
 
@@ -20,19 +21,48 @@ interface TileProps {
   hint?: string | null;
 }
 
-// Spans two rows of the shared figure grid so the labels and the figures of one
-// visual row stay level when a label wraps. The grid sets no row gap because a
-// subgrid inherits it between its own rows; the label margin spaces the visual
-// rows instead.
+const TRIM = "trim-caps *:trim-caps";
+
+// Spans two rows of the shared figure grid so a wrapped label keeps the labels and figures level.
+// The grid sets no row gap, because a subgrid inherits it; the label margin spaces the rows.
 function Tile({ label, value, hint }: TileProps) {
   return (
     <div className="row-span-2 grid min-w-0 grid-rows-subgrid">
-      <span className="mt-lg text-body-sm text-ink-muted">
+      <span className={cn("mt-lg text-body-sm text-ink-muted", TRIM)}>
         {hint === undefined || hint === null ? label : <Hint hint={hint}>{label}</Hint>}
       </span>
-      <span className="mt-xxs font-heading text-h5 font-semibold text-ink tabular-nums">
+      <span
+        className={cn(
+          "mt-xs self-end font-heading text-h5 font-semibold text-ink tabular-nums",
+          TRIM,
+        )}
+      >
         <NotedFigure figure={value} />
       </span>
+    </div>
+  );
+}
+
+interface RateProps {
+  summary: Summary;
+}
+
+// Spans both rows of the figure grid, so it starts with the labels and ends on the figures' baseline.
+function Rate({ summary }: RateProps) {
+  return (
+    <div className="col-span-full row-span-2 grid grid-flow-col grid-rows-subgrid justify-start gap-x-sm max-xl:mb-md xl:col-auto">
+      <span
+        className={cn(
+          "row-span-2 mt-lg self-start font-heading text-[calc(var(--text-body-sm)+var(--spacing-xxs)+var(--text-h5))] leading-none font-semibold text-ink tabular-nums [font-size-adjust:cap-height_1]",
+          TRIM,
+        )}
+      >
+        {fmtPercent(summary.success_rate)}
+      </span>
+      <Tile
+        label={`${fmtCount(summary.succeeded)} of ${plural(summary.runs, "run", "runs")}`}
+        value={{ text: "succeeded" }}
+      />
     </div>
   );
 }
@@ -56,7 +86,7 @@ export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
         key="duration"
         label="Duration"
         value={{ text: fmtDuration(summary.duration_seconds.p50) }}
-        hint="Median time of a succeeded run."
+        hint="Median duration of a succeeded run."
       />,
       <Tile
         key="turns"
@@ -67,7 +97,11 @@ export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
               ? "not recorded"
               : fmtMean(summary.mean_turns_succeeded),
         }}
-        hint={summary.mean_turns_succeeded === null ? undefined : "mean per succeeded run"}
+        hint={
+          summary.mean_turns_succeeded === null
+            ? undefined
+            : "Mean number of turns of a succeeded run."
+        }
       />,
     );
   }
@@ -106,18 +140,9 @@ export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-lg md:grid-cols-[auto_minmax(0,1fr)] md:items-end md:gap-x-xxxl">
-      <div className="flex flex-col">
-        <span className="font-heading text-h3 font-semibold text-ink tabular-nums">
-          {fmtPercent(summary.success_rate)}
-        </span>
-        <span className="mt-xs text-body-md text-ink-body">
-          {fmtCount(summary.succeeded)} of {plural(summary.runs, "run", "runs")} succeeded
-        </span>
-      </div>
-      <div className="-mt-lg grid grid-cols-2 gap-x-lg md:grid-cols-3 xl:auto-cols-fr xl:grid-flow-col xl:grid-cols-none xl:grid-rows-[repeat(2,auto)]">
-        {tiles}
-      </div>
+    <div className="-mt-lg grid grid-cols-2 gap-x-lg md:grid-cols-3 xl:auto-cols-auto xl:grid-flow-col xl:grid-cols-none xl:grid-rows-[repeat(2,auto)] xl:justify-between">
+      <Rate summary={summary} />
+      {tiles}
     </div>
   );
 }

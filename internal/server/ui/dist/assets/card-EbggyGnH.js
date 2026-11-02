@@ -1,1 +1,0 @@
-import{r as e}from"./react-AyOTluXZ.js";var t=e();function n({title:e,children:n}){return(0,t.jsxs)(`div`,{className:`max-w-full overflow-hidden rounded-xl border border-line bg-canvas`,children:[e===void 0?void 0:(0,t.jsx)(`h2`,{className:`border-b border-line px-md py-sm text-body-md font-medium text-ink`,children:e}),n]})}export{n as t};
