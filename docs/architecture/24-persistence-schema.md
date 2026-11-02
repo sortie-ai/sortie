@@ -357,6 +357,20 @@ One row per issue whose current budget hold has been announced to at least one d
 
 One row per comment the `tracker_comment` destination posted, written after the post and before the delivery completes. A comment is listed on its issue from the moment the tracker creates it, and its row exists once its delivery returns, so a reader that waited for a delivery finds the row of that delivery's comment and a detached delivery gives a reader no such order. That destination is the only writer, and every comment Sortie posts passes through it. A pair written again changes nothing. Nothing deletes a row, because a comment stays on its issue when the issue closes or reopens. A post whose response was lost and a failed write leave no row. The table starts empty on upgrade, so a comment Sortie posted before the upgrade has none. The record is how Sortie tells its own comments from a person's among an issue's comments.
 
+**`given_comments`**: the comments each agent conversation on an issue was given, per issue
+
+| Column            | Type    | Notes                                                                                                   |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `issue_id`        | TEXT PK | Tracker-internal issue ID; the primary key is composite with `conversation_id`, `source`, and `comment_id` |
+| `conversation_id` | TEXT PK | Identity of the agent conversation the comment was given to, as the caller supplies it; compared exactly |
+| `source`          | TEXT PK | Name of the source that yielded the comment, as the caller supplies it                                  |
+| `comment_id`      | TEXT PK | The comment's stable identity within its source; for the tracker, the tracker comment's ID               |
+| `body_sha256`     | TEXT    | SHA-256 of the normalized body of the version given, as 64 lowercase hexadecimal characters              |
+| `channel`         | TEXT    | Name of the channel that reported delivering the comment, as the caller supplies it                      |
+| `given_at`        | TEXT    | When that delivery happened: RFC 3339 with nanoseconds, in UTC                                           |
+
+One row per comment per conversation it was given to. The orchestrator is the only writer: it records the comments a worker reports delivered in a turn, each write in one transaction, so a write that fails stores none of its comments. Recording a comment the conversation already holds replaces its `body_sha256`, `channel`, and `given_at`, which is how an edit to a delivered comment is recorded. The reads are one conversation's rows and the rows of the issue's other conversations, which are the earlier group for a new conversation; a comment several conversations hold comes back once per conversation. Rows recorded under one `conversation_id` are one conversation, whatever agent session served them. Nothing deletes a row, because a reopen is a boundary and a later conversation receives what earlier ones were given, so the rows outlive restarts, failed runs, crashes, the terminal release, and a close followed by a reopen. The table holds no comment text or author; the text is read from the source when it is needed. The table starts empty on upgrade, since nothing recorded given comments before it, and stays empty while the comment feed is off.
+
 **`usage_limit_holds`**: the new sessions a provider usage limit stops until it resets
 
 | Column          | Type    | Notes                                                                                   |
