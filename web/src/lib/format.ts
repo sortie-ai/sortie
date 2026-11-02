@@ -119,16 +119,17 @@ export function pluralVerb(
   return { count: fmtCount(n), noun, verb, subject: plural(n, nouns[0], nouns[1]) };
 }
 
-/** Two decimals below $100, whole dollars with thousands separators from $100; a cost above zero and below one cent reads "under $0.01", so only a cost of zero reads "$0.00". */
+const DOLLARS = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Two decimals with thousands separators at every size; a cost above zero and below one cent reads "under $0.01", so only zero reads "$0.00". */
 export function fmtMoney(usd: number): string {
   if (usd > 0 && usd < 0.01) {
     return "under $0.01";
   }
-  const cents = Math.round(usd * 100);
-  if (cents >= 10_000) {
-    return `$${fmtCount(Math.round(usd))}`;
-  }
-  return `$${(cents / 100).toFixed(2)}`;
+  return `$${DOLLARS.format(Math.round(usd * 100) / 100)}`;
 }
 
 const EXACT = new Intl.NumberFormat("en-US", {
@@ -149,13 +150,10 @@ export function fmtMoneyExact(usd: number): string {
   return `$${fmtCount(Number(whole))}.${fraction.padEnd(2, "0")}`;
 }
 
-/** Cut, never rounded up, so the text never exceeds the spend it bounds: below one cent after the first non-zero digit ("$0.004"), below $100 after two fraction digits (4.205 reads "$4.20"), from $100 before the decimal point (149.6 reads "$149"). */
+/** Cut, never rounded up, so the text never exceeds the spend it bounds: after the first non-zero digit below one cent ("$0.004"), else after two decimals (4.205 reads "$4.20"). */
 export function fmtMoneyCut(usd: number): string {
   const { value, whole, fraction } = exactDigits(usd);
   const grouped = fmtCount(Number(whole));
-  if (value >= 100) {
-    return `$${grouped}`;
-  }
   if (value > 0 && value < 0.01) {
     return `$${grouped}.${/^0*[1-9]/.exec(fraction)?.[0] ?? fraction}`;
   }

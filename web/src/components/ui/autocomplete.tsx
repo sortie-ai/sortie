@@ -28,12 +28,24 @@ export function Autocomplete<ItemValue>(props: AutocompleteProps<ItemValue>) {
 
 export type AutocompleteInputProps = Omit<BaseAutocomplete.Input.Props, "className">;
 
+type InputKeyDownEvent = Parameters<NonNullable<AutocompleteInputProps["onKeyDown"]>>[0];
+
+const TEXT_SELECTION_KEYS = new Set(["Home", "End"]);
+
+/** Leaves Shift+Home and Shift+End to the field, which the inline list takes as jumps otherwise. */
+function keepTextSelection(event: InputKeyDownEvent) {
+  if (event.shiftKey && TEXT_SELECTION_KEYS.has(event.key)) {
+    event.preventBaseUIHandler();
+  }
+}
+
 export function AutocompleteInput(props: AutocompleteInputProps) {
   return (
     <BaseAutocomplete.InputGroup className="flex items-center gap-xs border-b border-line bg-field px-md text-ink-muted">
       <SearchIcon />
       <BaseAutocomplete.Input
         className="h-10 w-full min-w-0 bg-transparent text-body-md text-ink outline-none placeholder:text-ink-muted"
+        onKeyDown={keepTextSelection}
         {...props}
       />
     </BaseAutocomplete.InputGroup>

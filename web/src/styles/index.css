@@ -14,8 +14,30 @@
   }
 }
 
+/* Trims a text box to its capitals and baseline, so a line sits by its ink and not by its leading. Clip such a line only across, or its descenders are cut. */
+@utility trim-caps {
+  text-box: trim-both cap alphabetic;
+}
+
 @layer base {
+  /* The ground under a lane's marks, which fill with it to hide the track; a surface of another fill names its own. */
+  :root {
+    --ground: var(--color-canvas);
+    /* Every scrollbar's thumb takes the strong line color on no track, so it reads on any ground. */
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  /* A thin scrollbar keeps out of a rounded frame's corners, so a list scrolls to its frame's edge. */
+  * {
+    scrollbar-width: thin;
+  }
+
   html {
+    /* An underline runs whole under a word's descenders, instead of breaking around them. */
+    text-decoration-skip-ink: none;
+    /* A short screen keeps the scrollbar's room, so the frame does not shift between screens. */
+    scrollbar-gutter: stable;
+
     @media (min-width: 48rem) {
       scroll-padding-top: var(--size-header);
     }
@@ -37,47 +59,50 @@
     container-type: inline-size;
     scroll-padding-inline-start: var(--frozen-width);
 
-    & tr > :first-child:not([colspan]),
-    &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
-      position: sticky;
-      left: 0;
-      background: var(--color-canvas);
-    }
+    /* A frame too narrow to leave room beside the frozen columns scrolls whole instead. */
+    @container (min-width: 32rem) {
+      & tr > :first-child:not([colspan]),
+      &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
+        position: sticky;
+        left: 0;
+        background: var(--color-canvas);
+      }
 
-    &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
-      left: var(--frozen-lead);
-    }
+      &[data-frozen="2"] tr > :nth-child(2):not([colspan]) {
+        left: var(--frozen-lead);
+      }
 
-    & thead tr > :first-child:not([colspan]),
-    &[data-frozen="2"] thead tr > :nth-child(2):not([colspan]) {
-      background: var(--color-surface);
-    }
+      & thead tr > :first-child:not([colspan]),
+      &[data-frozen="2"] thead tr > :nth-child(2):not([colspan]) {
+        background: var(--color-surface);
+      }
 
-    /* The row's hover tints a frozen cell from underneath its content, in step with the rest of the row. */
-    & tbody tr > td:first-child:not([colspan])::before,
-    &[data-frozen="2"] tbody tr > td:nth-child(2):not([colspan])::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      z-index: -1;
-      background: var(--color-state-hover);
-      opacity: 0;
-      transition: opacity var(--duration-feedback);
-    }
+      /* The row's hover tints a frozen cell from underneath its content, in step with the rest of the row. */
+      & tbody tr > td:first-child:not([colspan])::before,
+      &[data-frozen="2"] tbody tr > td:nth-child(2):not([colspan])::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background: var(--color-state-hover);
+        opacity: 0;
+        transition: opacity var(--duration-feedback);
+      }
 
-    & tbody tr:hover > td:first-child:not([colspan])::before,
-    &[data-frozen="2"] tbody tr:hover > td:nth-child(2):not([colspan])::before {
-      opacity: 1;
-    }
+      & tbody tr:hover > td:first-child:not([colspan])::before,
+      &[data-frozen="2"] tbody tr:hover > td:nth-child(2):not([colspan])::before {
+        opacity: 1;
+      }
 
-    &[data-scrolled][data-frozen="1"] tr > :first-child:not([colspan])::after,
-    &[data-scrolled][data-frozen="2"] tr > :nth-child(2):not([colspan])::after {
-      content: "";
-      position: absolute;
-      inset-block: 0;
-      left: 100%;
-      width: 1px;
-      background: var(--color-line);
+      &[data-scrolled][data-frozen="1"] tr > :first-child:not([colspan])::after,
+      &[data-scrolled][data-frozen="2"] tr > :nth-child(2):not([colspan])::after {
+        content: "";
+        position: absolute;
+        inset-block: 0;
+        left: 100%;
+        width: 1px;
+        background: var(--color-line);
+      }
     }
 
     /* A cell across the whole row, such as a group heading, keeps its content in the frame. */

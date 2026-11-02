@@ -19,6 +19,7 @@
   --color-surface-inverse: #252628;
   --color-on-dark: #edeeee;
   --color-line: rgb(26 28 29 / 0.12);
+  --color-line-solid: color-mix(in srgb, var(--color-ink) 12%, var(--color-canvas));
   --color-line-medium: rgb(26 28 29 / 0.2);
   --color-line-strong: #7d7f81;
   --color-line-active: #1f2937;
@@ -91,9 +92,6 @@
   --text-label-caps: 12px;
   --text-label-caps--line-height: 16px;
   --text-label-caps--letter-spacing: 1.2px;
-  --text-badge: 11px;
-  --text-badge--line-height: 16px;
-  --text-badge--letter-spacing: 0.4px;
 
   --spacing-xxs: 4px;
   --spacing-xs: 8px;
@@ -103,8 +101,10 @@
   --spacing-xl: 32px;
   --spacing-xxl: 48px;
   --spacing-xxxl: 64px;
+  /* The gap under a screen's header, from its standfirst's baseline to the first section's line. */
+  --spacing-head: calc(var(--spacing-xl) + var(--spacing-xs));
   --spacing-nav-rail: 240px;
-  --container-wide: 1152px;
+  --container-wide: 1440px;
 
   --size-icon: 16px;
   --size-control: 32px;
@@ -112,6 +112,11 @@
   --size-kbd: 20px;
   --size-nav-item: 36px;
   --size-header: 56px;
+  --size-drawer: 500px;
+  /* A screen's side column, as wide as the peek's content, so what both show breaks alike. */
+  --size-margin: calc(var(--size-drawer) - 2 * var(--spacing-lg));
+  /* The band between the header's line and a screen title's capitals; it holds the crumbs and the rail's project. */
+  --size-crumbs: calc(2 * var(--spacing-lg));
 
   --radius: 4px;
   --radius-lg: 8px;
@@ -136,6 +141,8 @@
 
   --z-raised: 1;
   --z-sticky: 10;
+  /* The header stays over what sticks under it, so nothing covers the rule it draws below itself. */
+  --z-header: calc(var(--z-sticky) + 1);
   --z-dropdown: 20;
   --z-scrim: 30;
   --z-drawer: 31;
@@ -168,6 +175,7 @@
     --color-surface-inverse: #edeeee;
     --color-on-dark: #101113;
     --color-line: rgb(237 238 238 / 0.16);
+    --color-line-solid: color-mix(in srgb, var(--color-ink) 16%, var(--color-canvas));
     --color-line-medium: rgb(237 238 238 / 0.32);
     --color-line-strong: #97999b;
     --color-line-active: #ced6e2;
@@ -224,6 +232,7 @@
   --color-surface-inverse: #edeeee;
   --color-on-dark: #101113;
   --color-line: rgb(237 238 238 / 0.16);
+  --color-line-solid: color-mix(in srgb, var(--color-ink) 16%, var(--color-canvas));
   --color-line-medium: rgb(237 238 238 / 0.32);
   --color-line-strong: #97999b;
   --color-line-active: #ced6e2;
