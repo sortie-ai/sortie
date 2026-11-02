@@ -3,6 +3,7 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/url"
 	"strconv"
@@ -89,43 +90,18 @@ func (a *GitLabSCMAdapter) fetchNotes(ctx context.Context, prNumber int, owner, 
 // cached, so a route that recovers reclassifies the user on the next
 // call.
 func (a *GitLabSCMAdapter) resolveBotFlag(ctx context.Context, userID int64) (bool, error) {
-	if userID <= 0 {
-		return false, nil
+	bot, err := a.bots.lookup(ctx, userID)
+	if err == nil {
+		return bot, nil
 	}
-
-	a.mu.Lock()
-	cached, hit := a.botCache[userID]
-	a.mu.Unlock()
-	if hit {
-		return cached, nil
-	}
-
-	path := "/users/" + strconv.FormatInt(userID, 10)
-	body, _, err := a.client.Get(ctx, path, nil)
-	if err != nil {
-		scmErr := scmcore.AsSCMError(err)
-		if scmErr.Kind == domain.ErrSCMNotFound {
-			a.mu.Lock()
-			a.botCache[userID] = false
-			a.mu.Unlock()
-			return false, nil
-		}
-		return false, scmErr
-	}
-
-	var detail gitlabUserDetail
-	if jsonErr := json.Unmarshal(body, &detail); jsonErr != nil {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok && te.Kind == domain.ErrTrackerPayload {
 		return false, &domain.SCMError{
 			Kind:    domain.ErrSCMPayload,
-			Message: "failed to parse user response",
-			Err:     jsonErr,
+			Message: te.Message,
+			Err:     te.Err,
 		}
 	}
-
-	a.mu.Lock()
-	a.botCache[userID] = detail.Bot
-	a.mu.Unlock()
-	return detail.Bot, nil
+	return false, scmcore.AsSCMError(err)
 }
 
 // normalizeNotes maps notes to [domain.ReviewComment] values.

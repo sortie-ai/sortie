@@ -41,8 +41,11 @@ func init() {
 	})
 }
 
-// Compile-time interface satisfaction check.
-var _ domain.TrackerAdapter = (*GitHubAdapter)(nil)
+// Compile-time interface satisfaction checks.
+var (
+	_ domain.TrackerAdapter      = (*GitHubAdapter)(nil)
+	_ domain.CommentChangeReader = (*GitHubAdapter)(nil)
+)
 
 // maxPages is the upper bound on paginated fetches. At 50 items per
 // page this allows up to 10,000 results before the adapter stops and
@@ -72,7 +75,8 @@ type GitHubAdapter struct {
 // target and state label), "in_progress_state"; these set the initial
 // state vocabulary, with no default, until SetTrackerStates installs the
 // workflow's live one. Also optional: "query_filter", "user_agent",
-// "etag_cache_size" (int, default 1000; set to 0 to disable ETag caching).
+// "etag_cache_size" (int, default 1000; set to 0 to disable conditional
+// requests, state reads and the comment change read alike).
 func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	apiKey, fault := typeutil.StringField(config, "api_key")
 	if fault != nil {
@@ -729,6 +733,124 @@ func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string
 	}
 
 	return normalizeComments(allComments), nil
+}
+
+// commentPageSize is GitHub's maximum page size for the comments route.
+const commentPageSize = 100
+
+// commentPage is what a comment read remembers about one page: the ETag
+// GitHub answered with and how many comments the page held.
+type commentPage struct {
+	ETag  string `json:"etag"`
+	Count int    `json:"count"`
+}
+
+// FetchIssueCommentChanges reads the issue's comments page by page, each
+// request conditional on the ETag the point carries, so a page that did not
+// change answers 304 and contributes no comments. Comments holds every
+// comment on a page that answered 200. With conditional requests disabled
+// every read is full and Next is zero.
+func (a *GitHubAdapter) FetchIssueCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var changes domain.CommentChanges
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		var readErr error
+		changes, readErr = a.readCommentChanges(ctx, issueID, since)
+		return readErr
+	})
+	if err != nil {
+		return domain.CommentChanges{}, err
+	}
+	return changes, nil
+}
+
+func (a *GitHubAdapter) readCommentChanges(ctx context.Context, issueNumber string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	conditional := a.etagCache.maxSize > 0
+	var stored []commentPage
+	if conditional {
+		stored = decodeCommentPoint(since)
+	}
+
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueNumber) + "/comments"
+	var changed []githubComment
+	var pages []commentPage
+	for number := 1; number <= maxPages; number++ {
+		var validator string
+		if number <= len(stored) {
+			validator = stored[number-1].ETag
+		}
+		params := url.Values{
+			"per_page": {strconv.Itoa(commentPageSize)},
+			"page":     {strconv.Itoa(number)},
+		}
+
+		body, etag, notModified, err := a.client.GetConditional(ctx, path, validator, params)
+		if err != nil {
+			if domain.IsNotFound(err) {
+				return domain.CommentChanges{}, &domain.TrackerError{
+					Kind:    domain.ErrTrackerNotFound,
+					Message: fmt.Sprintf("issue not found: %s", issueNumber),
+				}
+			}
+			return domain.CommentChanges{}, err
+		}
+
+		var page commentPage
+		if notModified {
+			if validator == "" {
+				return domain.CommentChanges{}, &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "comments page answered not modified to an unconditional request",
+				}
+			}
+			page = stored[number-1]
+		} else {
+			var items []githubComment
+			if err := json.Unmarshal(body, &items); err != nil {
+				return domain.CommentChanges{}, &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to parse comments response",
+					Err:     err,
+				}
+			}
+			changed = append(changed, items...)
+			page = commentPage{ETag: etag, Count: len(items)}
+		}
+		pages = append(pages, page)
+
+		// The page after a full page is always requested: the ETag follows
+		// the response body alone, so a full last page keeps its ETag when a
+		// new comment opens the next page.
+		if page.Count < commentPageSize {
+			break
+		}
+		if number == maxPages {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", maxPages),
+				slog.String("endpoint", "/repos/{owner}/{repo}/issues/{issue_id}/comments"))
+		}
+	}
+
+	changes := domain.CommentChanges{Comments: normalizeComments(changed)}
+	if conditional {
+		changes.Next = encodeCommentPoint(pages)
+	}
+	return changes, nil
+}
+
+// decodeCommentPoint returns the pages a point lists, and none for a point
+// that is empty or that another adapter returned.
+func decodeCommentPoint(point domain.CommentReadPoint) []commentPage {
+	var pages []commentPage
+	if err := json.Unmarshal([]byte(point), &pages); err != nil {
+		return nil
+	}
+	return pages
+}
+
+func encodeCommentPoint(pages []commentPage) domain.CommentReadPoint {
+	// Marshaling strings and integers cannot fail.
+	encoded, _ := json.Marshal(pages)
+	return domain.CommentReadPoint(encoded)
 }
 
 // TransitionIssue moves an issue to the specified target state. The target

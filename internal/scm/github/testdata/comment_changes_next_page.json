@@ -1,0 +1,16 @@
+[
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/issues/comments/9101",
+    "html_url": "https://github.com/sortie-ai/sortie/issues/42#issuecomment-9101",
+    "issue_url": "https://api.github.com/repos/sortie-ai/sortie/issues/42",
+    "id": 9101,
+    "node_id": "IC_kwDOPz9101",
+    "user": { "login": "carol", "id": 1003, "type": "User", "site_admin": false },
+    "created_at": "2026-01-18T12:00:00Z",
+    "updated_at": "2026-01-18T12:00:00Z",
+    "author_association": "MEMBER",
+    "body": "The 101st comment.",
+    "reactions": { "total_count": 0 },
+    "performed_via_github_app": null
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/issues/comments/9001",
+    "html_url": "https://github.com/sortie-ai/sortie/issues/42#issuecomment-9001",
+    "issue_url": "https://api.github.com/repos/sortie-ai/sortie/issues/42",
+    "id": 9001,
+    "node_id": "IC_kwDOPz9001",
+    "user": { "login": "alice", "id": 1001, "type": "User", "site_admin": false },
+    "created_at": "2026-01-15T10:00:00Z",
+    "updated_at": "2026-01-15T10:00:00Z",
+    "author_association": "MEMBER",
+    "body": "Looks good, please proceed.",
+    "reactions": { "total_count": 1, "+1": 1 },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/issues/comments/9002",
+    "html_url": "https://github.com/sortie-ai/sortie/issues/42#issuecomment-9002",
+    "issue_url": "https://api.github.com/repos/sortie-ai/sortie/issues/42",
+    "id": 9002,
+    "node_id": "IC_kwDOPz9002",
+    "user": { "login": "bob", "id": 1002, "type": "User", "site_admin": false },
+    "created_at": "2026-01-16T11:30:00Z",
+    "updated_at": "2026-01-17T08:15:00Z",
+    "author_association": "CONTRIBUTOR",
+    "body": "Please fix the indentation, then rebase.",
+    "reactions": { "total_count": 0 },
+    "performed_via_github_app": null
+  },
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/issues/comments/9003",
+    "html_url": "https://github.com/sortie-ai/sortie/issues/42#issuecomment-9003",
+    "issue_url": "https://api.github.com/repos/sortie-ai/sortie/issues/42",
+    "id": 9003,
+    "node_id": "IC_kwDOPz9003",
+    "user": { "login": "github-actions[bot]", "id": 41898282, "type": "Bot", "site_admin": false },
+    "created_at": "2026-01-17T09:00:00Z",
+    "updated_at": "2026-01-17T09:00:00Z",
+    "author_association": "NONE",
+    "body": "CI finished: all checks passed.",
+    "reactions": { "total_count": 0 },
+    "performed_via_github_app": { "id": 15368, "slug": "github-actions", "name": "GitHub Actions" }
+  }
+]

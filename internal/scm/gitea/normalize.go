@@ -2,6 +2,7 @@ package gitea
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/issuekit"
@@ -31,9 +32,10 @@ type giteaLabel struct {
 }
 
 // giteaUser carries the login used for assignee, comment author, and the
-// credential-check identity.
+// credential-check identity. Type is empty on Forgejo and older Gitea.
 type giteaUser struct {
 	Login string `json:"login"`
+	Type  string `json:"type"`
 }
 
 // giteaComment is one comment from the issue comments route.
@@ -42,6 +44,7 @@ type giteaComment struct {
 	User      giteaUser `json:"user"`
 	Body      string    `json:"body"`
 	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
 }
 
 // giteaPR is a marker: a non-nil pointer identifies a pull request rather than
@@ -116,13 +119,30 @@ func normalizeComments(raw []giteaComment) []domain.Comment {
 	source := make([]issuekit.SourceComment, len(raw))
 	for i, c := range raw {
 		source[i] = issuekit.SourceComment{
-			ID:        strconv.FormatInt(c.ID, 10),
-			Author:    c.User.Login,
-			Body:      c.Body,
-			CreatedAt: c.CreatedAt,
+			ID:         strconv.FormatInt(c.ID, 10),
+			Author:     c.User.Login,
+			AuthorID:   c.User.Login,
+			AuthorKind: commentAuthorKind(c.User),
+			Body:       c.Body,
+			CreatedAt:  c.CreatedAt,
+			UpdatedAt:  c.UpdatedAt,
 		}
 	}
 	return issuekit.NormalizeComments(source)
+}
+
+// commentAuthorKind maps the user type to a kind. An absent or unrecognized
+// type is unknown rather than person, because Forgejo and older Gitea send no
+// type and would otherwise report their bots as people.
+func commentAuthorKind(u giteaUser) domain.CommentAuthorKind {
+	switch {
+	case strings.EqualFold(u.Type, "Bot"):
+		return domain.CommentAuthorBot
+	case strings.EqualFold(u.Type, "User"):
+		return domain.CommentAuthorPerson
+	default:
+		return domain.CommentAuthorUnknown
+	}
 }
 
 // normalizeBlockers converts blocker issue responses to [domain.BlockerRef]

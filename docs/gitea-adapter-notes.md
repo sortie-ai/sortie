@@ -18,6 +18,8 @@ Gitea serves no GraphQL. The REST surface is the whole contract, so anything the
 
 **No review decision.** Gitea has no aggregate review verdict, so `GetReviewDecision` folds one out of the review list, the pull request's requested-reviewers signal, and the base branch's `required_approvals`: latest decision per reviewer wins, any standing changes-requested loses, review-required when `required_approvals` exceeds the number of official approvals, otherwise any approval wins, otherwise a non-empty requested-reviewer list means review-requested, which is not a wait on approval. The base branch comes from a separate branch read, encoded as the branch delete encodes it, and a 404 means no rule. Stale approvals count: Gitea counts one unless the rule sets ignore-stale-approvals, a setting only the admin-only protection route shows. Ordering depends on the review timestamp parsing; a value that will not parse fails the read rather than silently sorting to the epoch.
 
+**The user's type is not always rendered.** Newer Gitea renders the user's type on a comment's author (`User`, `Organization`, or `Bot`), and the adapter reads `User` as a person and `Bot` as a bot. Forgejo and older Gitea render no type, and the kind is empty there, never a person: a bot on those servers cannot be told from a human by the payload, and no username pattern stands in for it.
+
 **No priority, no issue type, no parent.** None of these concepts exist. The corresponding domain fields are always empty. Do not add a synthetic mapping for them.
 
 **Two issue numbers, one usable.** Every issue carries a repo-scoped index and an instance-global id. Only the index is accepted by any per-issue route, and the same entity read through the pull route and the issue route reports two different global ids. Store the index; treat the global id as a trap. The adapter maps both `ID` and `Identifier` to the index and qualifies `DisplayID` to `owner/repo#N` so a bare index is never ambiguous across repositories.
@@ -75,6 +77,8 @@ Three different shapes coexist, and picking the wrong helper truncates results w
 - The tracker issue routes emit a standard `Link` header; the link-following paginator is correct there.
 - The reviews, review-comments, and timeline routes emit **no** `Link` header. The link-following paginator stops at the first response without one, which would silently truncate a multi-page read to page one. These go through the page-number paginator, wrapped by the package's own helper so the parameter names, the page ceiling, and the conversion to the SCM error boundary are pinned in one place.
 - The per-issue comments route is unpaginated and returns the whole list in one response, ignoring any page-size parameter.
+
+The comments route takes a `since` filter, which the change read uses. The server compares the comment's update time at whole seconds and includes the boundary second, so the point is truncated to the second and a comment updated in that second is read again. The filtered result stays in creation order.
 
 The instance clamps the requested page size to its own configured maximum, which an operator can lower, so never assume the size you asked for is the size you got; iterate on the pagination signal.
 

@@ -1,6 +1,10 @@
 package domain
 
-import "testing"
+import (
+	"maps"
+	"testing"
+	"time"
+)
 
 func TestToTemplateMap_FullyPopulated(t *testing.T) {
 	t.Parallel()
@@ -22,7 +26,7 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 			Identifier: "PROJ-40",
 		},
 		Comments: []Comment{
-			{ID: "c1", Author: "bob", Body: "Reproduced on staging.", CreatedAt: "2026-03-01T10:00:00Z"},
+			{ID: "c1", Author: "bob", AuthorID: "bob-id", AuthorKind: CommentAuthorBot, Body: "Reproduced on staging.", CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-02T10:00:00Z"},
 		},
 		BlockedBy: []BlockerRef{
 			{ID: "10002", Identifier: "PROJ-43", State: "To Do"},
@@ -85,8 +89,9 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 	if len(comments) != 1 {
 		t.Fatalf("len(comments) = %d, want 1", len(comments))
 	}
-	if comments[0]["author"] != "bob" {
-		t.Errorf("comments[0].author = %v, want bob", comments[0]["author"])
+	wantComment := map[string]any{"id": "c1", "author": "bob", "body": "Reproduced on staging.", "created_at": "2026-03-01T10:00:00Z"}
+	if !maps.Equal(comments[0], wantComment) {
+		t.Errorf("comments[0] = %v, want %v", comments[0], wantComment)
 	}
 
 	blockers, ok := m["blocked_by"].([]map[string]any)
@@ -345,5 +350,32 @@ func TestToTemplateMap_BlockerDisplayID(t *testing.T) {
 	}
 	if blockers[0]["display_id"] != "owner/repo#5" {
 		t.Errorf("blocked_by[0].display_id = %v, want %q", blockers[0]["display_id"], "owner/repo#5")
+	}
+}
+
+func TestComment_UpdatedTime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		updatedAt string
+		want      time.Time
+		wantErr   bool
+	}{
+		{"utc", "2026-03-02T10:00:00Z", time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC), false},
+		{"compact offset", "2026-03-02T12:00:00+0200", time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC), false},
+		{"empty", "", time.Time{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := Comment{UpdatedAt: tt.updatedAt}.UpdatedTime()
+
+			if (err != nil) != tt.wantErr || (err == nil && !got.Equal(tt.want)) {
+				t.Errorf("UpdatedTime(%q) = %v, %v, want %v, error=%t", tt.updatedAt, got, err, tt.want, tt.wantErr)
+			}
+		})
 	}
 }

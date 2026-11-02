@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"testing"
 
@@ -273,34 +274,53 @@ func TestNormalizeBlockers_EmptyReturnsNonNilSlice(t *testing.T) {
 	}
 }
 
-func TestNormalizeComments_NonEmpty(t *testing.T) {
+func TestNormalizeComments(t *testing.T) {
 	t.Parallel()
 
-	comments := []githubComment{
-		{ID: 9001, User: githubUser{Login: "alice"}, Body: "Looks good!", CreatedAt: "2026-01-15T10:00:00Z"},
-		{ID: 9002, User: githubUser{Login: "bob"}, Body: "Fix indentation.", CreatedAt: "2026-01-16T11:30:00Z"},
+	const bot = `{"login":"ci[bot]","type":%q}`
+	const person = `{"login":"alice","type":%q}`
+	const app = `,"performed_via_github_app":{"id":15368,"slug":"ci"}`
+
+	tests := []struct {
+		name     string
+		user     string
+		app      string
+		wantID   string
+		wantKind domain.CommentAuthorKind
+	}{
+		{"bot with app", fmt.Sprintf(bot, "Bot"), app, "ci[bot]", domain.CommentAuthorBot},
+		{"bot without app", fmt.Sprintf(bot, "Bot"), "", "ci[bot]", domain.CommentAuthorBot},
+		{"bot in mixed case", fmt.Sprintf(bot, "bOt"), app, "ci[bot]", domain.CommentAuthorBot},
+		{"user with app", fmt.Sprintf(person, "User"), app, "alice", domain.CommentAuthorApp},
+		{"user in mixed case with app", fmt.Sprintf(person, "uSER"), app, "alice", domain.CommentAuthorApp},
+		{"user with null app", fmt.Sprintf(person, "User"), `,"performed_via_github_app":null`, "alice", domain.CommentAuthorPerson},
+		{"user without app field", fmt.Sprintf(person, "User"), "", "alice", domain.CommentAuthorPerson},
+		{"null user", "null", "", "", domain.CommentAuthorUnknown},
+		{"organization", fmt.Sprintf(person, "Organization"), "", "alice", domain.CommentAuthorUnknown},
+		{"mannequin", fmt.Sprintf(person, "Mannequin"), app, "alice", domain.CommentAuthorUnknown},
+		{"empty type", fmt.Sprintf(person, ""), "", "alice", domain.CommentAuthorUnknown},
 	}
 
-	got := normalizeComments(comments)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if len(got) != 2 {
-		t.Fatalf("normalizeComments len = %d, want 2", len(got))
-	}
-	// ID is strconv.FormatInt of the int64 id.
-	if got[0].ID != "9001" {
-		t.Errorf("got[0].ID = %q, want %q", got[0].ID, "9001")
-	}
-	if got[0].Author != "alice" {
-		t.Errorf("got[0].Author = %q, want %q", got[0].Author, "alice")
-	}
-	if got[0].Body != "Looks good!" {
-		t.Errorf("got[0].Body = %q", got[0].Body)
-	}
-	if got[0].CreatedAt != "2026-01-15T10:00:00Z" {
-		t.Errorf("got[0].CreatedAt = %q", got[0].CreatedAt)
-	}
-	if got[1].ID != "9002" {
-		t.Errorf("got[1].ID = %q, want %q", got[1].ID, "9002")
+			payload := fmt.Sprintf(`{"id":9001,"user":%s,"body":"Looks good!","created_at":"2026-01-15T10:00:00Z","updated_at":"2026-01-15T10:05:00Z"%s}`, tt.user, tt.app)
+			var raw githubComment
+			if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+				t.Fatalf("decoding %s: %v", payload, err)
+			}
+
+			got := normalizeComments([]githubComment{raw})
+
+			want := domain.Comment{
+				ID: "9001", Author: tt.wantID, AuthorID: tt.wantID, AuthorKind: tt.wantKind,
+				Body: "Looks good!", CreatedAt: "2026-01-15T10:00:00Z", UpdatedAt: "2026-01-15T10:05:00Z",
+			}
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("normalizeComments(%s) = %+v, want [%+v]", payload, got, want)
+			}
+		})
 	}
 }
 

@@ -1,0 +1,10 @@
+[
+  {
+    "id": 9003,
+    "html_url": "https://gitea.example.com/acme/widgets/issues/42#issuecomment-9003",
+    "user": { "id": 17, "login": "renovate-bot", "avatar_url": "https://gitea.example.com/avatars/17", "type": "Bot" },
+    "body": "Rebased onto main.",
+    "created_at": "2026-01-17T08:00:00Z",
+    "updated_at": "2026-01-17T08:00:00Z"
+  }
+]

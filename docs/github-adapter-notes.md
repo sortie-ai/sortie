@@ -36,6 +36,8 @@ One consequence: the pull request payload under the current pin carries no merge
 
 **A comment's identity is its decimal `id`, never its `node_id`.** A comment carries a numeric `id` and a `node_id` in the create response and in every read. `CommentIssue` returns the decimal `id`, and every read reports the same value as the comment's identity, because Sortie recognizes its own comments by exact match with the identity it recorded when it posted them.
 
+**A comment's author kind is only as precise as the account type.** A personal access token posts as its owner, whose type is `User`, so the kind cannot tell automation running on a personal token from the person. An app acting for a person posts as that person's `User` account with the app attached to the comment, and reads as `app`. An app's own account has type `Bot` and reads as `bot` whether or not the comment names an app. A comment with no user, or a user of any other type such as `Organization`, reads as unknown.
+
 **Mergeability is computed asynchronously.** GitHub recomputes it after a push, so a read taken too soon returns a value that maps to unknown. Callers treat unknown as a deferral condition and re-read on the next tick; it is not a failure and must not be turned into one.
 
 ## Blocker resolution, and the pre-filter that pays for it
@@ -128,14 +130,15 @@ So the preflight fails open: an absent or empty header returns the "unable to ve
 
 Keep the fail-open arm. Turning an unverifiable check into a hard failure would block every fine-grained-token deployment, which is the least-privilege option and the one we recommend.
 
-## Rate limits shape three decisions
+## Rate limits shape the adapter's reads
 
-The primary hourly budget, the search per-minute budget, and the GraphQL budget are independent, and the adapter's design responds to all three:
+The primary hourly budget, the search per-minute budget, and the GraphQL budget are independent, and the adapter's design responds to each:
 
 - Candidate polling stays off the search route unless an operator filter requires it, because search draws on the smaller budget.
 - The two GraphQL reads are each gated: the review decision is one call per read, and the merge commit is one call only for a pull request already known to be merged.
 - The review watch reads the decision on each pass that finds no actionable comment. A pull request held past the watch window because it waits on a required approval keeps that watch running, so at the default poll interval each held pull request costs 30 GraphQL points and at least 60 REST reads an hour, and keeps its issue's state read running on every reconcile tick, for as long as the approval takes.
-- The per-issue state reads used by reconciliation go through a bounded, per-path ETag cache. The cache stores the issue's labels and closed flag rather than a derived state, so a not-modified response is derived again under the state lists in force, and does not charge the primary budget. This matters precisely because reconciliation polls the same issues over and over. The cache size is an operator-tunable extension key, and zero disables conditional requests entirely.
+- The per-issue state reads used by reconciliation go through a bounded, per-path ETag cache. The cache stores the issue's labels and closed flag rather than a derived state, so a not-modified response is derived again under the state lists in force, and does not charge the primary budget. This matters precisely because reconciliation polls the same issues over and over. The cache size is an operator-tunable extension key that bounds these state reads only, and zero disables every conditional request the adapter sends, the comment change read's included.
+- The comment change read keeps its validators in the point it returns, one `ETag` per page, and not in the state-read cache. It sends no `since` parameter, because that parameter changes the URL whenever the time moves and the stored `ETag` would never match. It requests the page after a full last page of 100 comments, because GitHub's `ETag` follows the response body alone: a full last page keeps its `ETag` when a new comment opens the next page, and an empty page after it answers `200` with `[]`. A reaction changes a page's body, so that page answers `200` and its new `ETag` replaces the stored one though no comment was created or edited.
 
 Secondary limits are separate again and are not a quota you can count down; they arrive as a rejection carrying a retry hint. The adapter never sleeps or retries on its own: it classifies, appends the retry hint to the message, and leaves backoff to the orchestrator.
 

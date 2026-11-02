@@ -214,30 +214,45 @@ func TestSetDisplayID(t *testing.T) {
 func TestNormalizeComments_NonEmpty(t *testing.T) {
 	t.Parallel()
 
-	comments := []giteaComment{
-		{ID: 9001, User: giteaUser{Login: "alice"}, Body: "Looks good!", CreatedAt: "2026-01-15T10:00:00Z"},
-		{ID: 9002, User: giteaUser{Login: "bob"}, Body: "Fix indentation.", CreatedAt: "2026-01-16T11:30:00Z"},
+	tests := []struct {
+		name     string
+		userType string
+		want     domain.CommentAuthorKind
+	}{
+		{"bot", "Bot", domain.CommentAuthorBot},
+		{"user", "User", domain.CommentAuthorPerson},
+		{"absent type", "", domain.CommentAuthorUnknown},
+		{"organization", "Organization", domain.CommentAuthorUnknown},
+		{"mixed case bot", "bOT", domain.CommentAuthorBot},
 	}
 
-	got := normalizeComments(comments)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if len(got) != 2 {
-		t.Fatalf("normalizeComments len = %d, want 2", len(got))
-	}
-	if got[0].ID != "9001" {
-		t.Errorf("got[0].ID = %q, want %q", got[0].ID, "9001")
-	}
-	if got[0].Author != "alice" {
-		t.Errorf("got[0].Author = %q, want %q", got[0].Author, "alice")
-	}
-	if got[0].Body != "Looks good!" {
-		t.Errorf("got[0].Body = %q", got[0].Body)
-	}
-	if got[0].CreatedAt != "2026-01-15T10:00:00Z" {
-		t.Errorf("got[0].CreatedAt = %q", got[0].CreatedAt)
-	}
-	if got[1].ID != "9002" {
-		t.Errorf("got[1].ID = %q, want %q", got[1].ID, "9002")
+			raw := giteaComment{
+				ID:        9001,
+				User:      giteaUser{Login: "alice", Type: tt.userType},
+				Body:      "Looks good!",
+				CreatedAt: "2026-01-15T10:00:00Z",
+				UpdatedAt: "2026-01-16T09:00:00Z",
+			}
+			want := domain.Comment{
+				ID:         "9001",
+				Author:     "alice",
+				AuthorID:   "alice",
+				AuthorKind: tt.want,
+				Body:       "Looks good!",
+				CreatedAt:  "2026-01-15T10:00:00Z",
+				UpdatedAt:  "2026-01-16T09:00:00Z",
+			}
+
+			got := normalizeComments([]giteaComment{raw})
+
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("normalizeComments(type %q) = %+v, want [%+v]", tt.userType, got, want)
+			}
+		})
 	}
 }
 

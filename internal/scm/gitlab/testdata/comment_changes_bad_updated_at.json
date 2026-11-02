@@ -1,0 +1,22 @@
+[
+  {
+    "id": 606,
+    "type": null,
+    "body": "Deployed to production.",
+    "author": {
+      "id": 11,
+      "username": "alice",
+      "name": "Alice Smith",
+      "state": "active"
+    },
+    "created_at": "2026-01-10T12:50:00.000Z",
+    "updated_at": "yesterday",
+    "system": false,
+    "internal": false,
+    "noteable_id": 4210,
+    "noteable_type": "Issue",
+    "noteable_iid": 55,
+    "confidential": false,
+    "resolvable": false
+  }
+]

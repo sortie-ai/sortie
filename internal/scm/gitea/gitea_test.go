@@ -1396,6 +1396,9 @@ func TestFetchIssueComments(t *testing.T) {
 			if r.URL.RawQuery != "" {
 				t.Errorf("unexpected query string %q on the unpaginated comments route", r.URL.RawQuery)
 			}
+			if got := r.Header.Get("If-None-Match"); got != "" {
+				t.Errorf("If-None-Match = %q, want none on the full read", got)
+			}
 			w.WriteHeader(http.StatusOK)
 			w.Write(loadFixture(t, "comments_two.json")) //nolint:errcheck // test helper
 		})
@@ -1472,6 +1475,73 @@ func TestFetchIssueComments(t *testing.T) {
 		_, err := a.FetchIssueComments(context.Background(), "999")
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
+}
+
+func TestFetchIssueCommentChanges(t *testing.T) {
+	t.Parallel()
+
+	botComment := domain.Comment{
+		ID: "9003", Author: "renovate-bot", AuthorID: "renovate-bot", AuthorKind: domain.CommentAuthorBot,
+		Body: "Rebased onto main.", CreatedAt: "2026-01-17T08:00:00Z", UpdatedAt: "2026-01-17T08:00:00Z",
+	}
+	editedComment := domain.Comment{
+		ID: "9002", Author: "bob", AuthorID: "bob", AuthorKind: domain.CommentAuthorPerson,
+		Body: "Please fix the indentation and the import order.", CreatedAt: "2026-01-16T11:30:00Z", UpdatedAt: "2026-01-18T10:15:00Z",
+	}
+
+	tests := []struct {
+		name      string
+		since     domain.CommentReadPoint
+		fixture   string
+		wantSince string
+		want      []domain.Comment
+		wantNext  domain.CommentReadPoint
+		wantKind  domain.TrackerErrorKind
+	}{
+		{"new comment", "2026-01-16T11:30:00Z", "comment_changes_new.json", "2026-01-16T11:30:00Z", []domain.Comment{botComment}, "2026-01-17T08:00:00Z", ""},
+		{"edited comment", "2026-01-17T08:00:00Z", "comment_changes_edited.json", "2026-01-17T08:00:00Z", []domain.Comment{editedComment}, "2026-01-18T10:15:00Z", ""},
+		{"unchanged list keeps the point", "2026-01-17T08:00:00.5Z", "comment_changes_new.json", "2026-01-17T08:00:00Z", []domain.Comment{botComment}, "2026-01-17T08:00:00.5Z", ""},
+		{"undecodable point reads the full list", "x", "comment_changes_new.json", "", []domain.Comment{botComment}, "2026-01-17T08:00:00Z", ""},
+		{"unparseable updated_at", "2026-01-16T11:30:00Z", "comment_changes_bad_updated_at.json", "2026-01-16T11:30:00Z", nil, "", domain.ErrTrackerPayload},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := loadFixture(t, tt.fixture)
+			mux := newPreflightMux(t)
+			var mu sync.Mutex
+			var queries []url.Values
+			mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				queries = append(queries, r.URL.Query())
+				mu.Unlock()
+				w.Write(fixture) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, mux)
+
+			got, err := a.FetchIssueCommentChanges(context.Background(), "42", tt.since)
+
+			if tt.wantKind != "" {
+				assertTrackerErrorKind(t, err, tt.wantKind)
+			} else if err != nil {
+				t.Fatalf("FetchIssueCommentChanges(%q): %v", tt.since, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(queries) != 1 {
+				t.Fatalf("FetchIssueCommentChanges(%q) sent %d requests, want 1", tt.since, len(queries))
+			}
+			if q := queries[0]; q.Get("since") != tt.wantSince || len(q) > 1 {
+				t.Errorf("FetchIssueCommentChanges(%q) query = %v, want only since=%q", tt.since, q, tt.wantSince)
+			}
+			if !slices.Equal(got.Comments, tt.want) || got.Next != tt.wantNext {
+				t.Errorf("FetchIssueCommentChanges(%q) = %+v, want {%+v %q}", tt.since, got, tt.want, tt.wantNext)
+			}
+			adaptertest.AssertCommentsAscending(t, got.Comments)
+		})
+	}
 }
 
 func TestFetchIssueStatesByIDs(t *testing.T) {

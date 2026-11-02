@@ -117,6 +117,26 @@ type ParentRef struct {
 	Identifier string
 }
 
+// CommentAuthorKind is the kind of account that wrote a comment.
+type CommentAuthorKind string
+
+const (
+	// CommentAuthorUnknown means the read cannot tell the kind of account.
+	CommentAuthorUnknown CommentAuthorKind = ""
+
+	// CommentAuthorPerson is a person's account, and the tracker reports
+	// no app acting for it.
+	CommentAuthorPerson CommentAuthorKind = "person"
+
+	// CommentAuthorBot is an automation account, which the tracker marks
+	// as a bot or as an app's own account.
+	CommentAuthorBot CommentAuthorKind = "bot"
+
+	// CommentAuthorApp is a person's account, and the tracker reports that
+	// an app created the comment for it.
+	CommentAuthorApp CommentAuthorKind = "app"
+)
+
 // Comment represents a single comment on an issue. Adapters normalize
 // native comment structures into this type.
 type Comment struct {
@@ -126,6 +146,15 @@ type Comment struct {
 	// Author is the display name or username of the comment author.
 	Author string
 
+	// AuthorID is the author's account identity as the tracker reports it,
+	// a login or an account ID and never a display name, compared exactly.
+	// It is empty when the tracker reports no author.
+	AuthorID string
+
+	// AuthorKind is the kind of the author's account;
+	// [CommentAuthorUnknown] when the read cannot tell.
+	AuthorKind CommentAuthorKind
+
 	// Body is the comment text content.
 	Body string
 
@@ -134,10 +163,17 @@ type Comment struct {
 	// offset, or the same with a "±hhmm" offset. [Comment.CreatedTime]
 	// parses exactly these forms.
 	CreatedAt string
+
+	// UpdatedAt is the tracker's last-update timestamp text, passed through
+	// unchanged, in the forms CreatedAt accepts; it is empty when the
+	// tracker reports none. It narrows a read and never decides whether a
+	// comment is new. [Comment.UpdatedTime] parses it.
+	UpdatedAt string
 }
 
-// commentTimeLayouts are the forms [Comment.CreatedTime] accepts. Parsing
-// with a fractional-seconds-free layout also accepts fractional input.
+// commentTimeLayouts are the forms [Comment.CreatedTime] and
+// [Comment.UpdatedTime] accept. Parsing with a fractional-seconds-free
+// layout also accepts fractional input.
 var commentTimeLayouts = []string{
 	time.RFC3339,
 	"2006-01-02T15:04:05Z0700",
@@ -147,9 +183,20 @@ var commentTimeLayouts = []string{
 // (fractional seconds optional) and the same form with a ±hhmm offset, and
 // returns an error for anything else, the empty string included.
 func (c Comment) CreatedTime() (time.Time, error) {
+	return parseCommentTime(c.CreatedAt)
+}
+
+// UpdatedTime reports the instant UpdatedAt names, in the forms
+// [Comment.CreatedTime] accepts, and returns an error for anything else,
+// the empty string included.
+func (c Comment) UpdatedTime() (time.Time, error) {
+	return parseCommentTime(c.UpdatedAt)
+}
+
+func parseCommentTime(text string) (time.Time, error) {
 	var firstErr error
 	for _, layout := range commentTimeLayouts {
-		t, err := time.Parse(layout, c.CreatedAt)
+		t, err := time.Parse(layout, text)
 		if err == nil {
 			return t, nil
 		}

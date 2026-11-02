@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -45,6 +46,7 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*GiteaAdapter)(nil)
+var _ domain.CommentChangeReader = (*GiteaAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 50 items per page this
 // allows up to 10,000 results before the adapter stops and returns what it has.
@@ -664,9 +666,19 @@ func (a *GiteaAdapter) FetchIssueComments(ctx context.Context, issueID string) (
 // [domain.ErrTrackerNotFound]; an issue with no comments yields a non-nil empty
 // slice.
 func (a *GiteaAdapter) fetchComments(ctx context.Context, index string) ([]domain.Comment, error) {
+	raw, err := a.getComments(ctx, index, nil)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeComments(raw), nil
+}
+
+// getComments issues the one comments request with params and decodes the
+// response.
+func (a *GiteaAdapter) getComments(ctx context.Context, index string, params url.Values) ([]giteaComment, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(index) + "/comments"
 
-	body, _, err := a.client.Get(ctx, path, nil)
+	body, _, err := a.client.Get(ctx, path, params)
 	if err != nil {
 		if domain.IsNotFound(err) {
 			return nil, &domain.TrackerError{
@@ -685,8 +697,69 @@ func (a *GiteaAdapter) fetchComments(ctx context.Context, index string) ([]domai
 			Err:     err,
 		}
 	}
+	return raw, nil
+}
 
-	return normalizeComments(raw), nil
+// FetchIssueCommentChanges reads the comments in one request carrying the
+// route's since filter. The point is the newest update time seen, so the
+// filter's whole-second resolution re-reads the comments updated in that
+// second.
+func (a *GiteaAdapter) FetchIssueCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var changes domain.CommentChanges
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		point := decodeCommentPoint(since)
+		var params url.Values
+		if !point.IsZero() {
+			params = url.Values{"since": {point.Truncate(time.Second).Format(time.RFC3339)}}
+		}
+
+		raw, err := a.getComments(ctx, issueID, params)
+		if err != nil {
+			return err
+		}
+
+		comments := normalizeComments(raw)
+		newest := point
+		for _, c := range comments {
+			updated, err := c.UpdatedTime()
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: fmt.Sprintf("comment %s has an unparseable updated_at", c.ID),
+					Err:     err,
+				}
+			}
+			if updated.After(newest) {
+				newest = updated
+			}
+		}
+
+		changes = domain.CommentChanges{Comments: comments, Next: encodeCommentPoint(newest)}
+		return nil
+	})
+	if err != nil {
+		return domain.CommentChanges{}, err
+	}
+	return changes, nil
+}
+
+// decodeCommentPoint returns the instant a point names, or the zero time for
+// an empty or foreign point.
+func decodeCommentPoint(p domain.CommentReadPoint) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, string(p))
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
+}
+
+// encodeCommentPoint is the inverse of [decodeCommentPoint]; the zero time
+// encodes as the zero point.
+func encodeCommentPoint(t time.Time) domain.CommentReadPoint {
+	if t.IsZero() {
+		return ""
+	}
+	return domain.CommentReadPoint(t.UTC().Format(time.RFC3339Nano))
 }
 
 // FetchIssueStatesByIDs returns the derived state for each requested issue
