@@ -50,7 +50,7 @@ const UNKNOWN_FIGURE = "unknown";
 const BASE_TIER = "base";
 const UNKNOWN_MODEL = "";
 
-export const TOKENS_TILE_CAPTION = "every run measured";
+export const TOKENS_TILE_CAPTION = "Counts every run, since every run reported its tokens.";
 export const COST_PER_RUN_TILE_CAPTION = "Estimated cost divided by the runs that succeeded.";
 
 export const LABEL_TOKENS = "Tokens";
@@ -58,7 +58,8 @@ export const LABEL_EST_COST = "Est. cost";
 export const LABEL_MEASURED_FROM = "Measured from";
 export const LABEL_AGENT_REPORTED = "Agent reported";
 export const LABEL_PRICED_FROM = "Priced from";
-export const LABEL_MODEL_NOT_REPORTED = "Model not reported";
+export const LABEL_MODEL = "Model";
+export const MODEL_NOT_REPORTED = "not reported";
 
 export const UNMEASURED_ENDED_EARLY =
   "The run ended before the agent reported any usage. It will not be measured later, and nothing needs doing on your side.";

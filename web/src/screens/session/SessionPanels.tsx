@@ -1,13 +1,16 @@
 import { NotedFigure } from "@/components/NotedFigure";
 import { Pair, Pairs, Panel } from "@/components/Panel";
 import { StatusMark } from "@/components/StatusMark";
+import { NameText } from "@/components/NameText";
+import { MONO } from "@/components/ui/mono";
 import {
   LABEL_AGENT_REPORTED,
   LABEL_EST_COST,
   LABEL_MEASURED_FROM,
-  LABEL_MODEL_NOT_REPORTED,
+  LABEL_MODEL,
   LABEL_PRICED_FROM,
   LABEL_TOKENS,
+  MODEL_NOT_REPORTED,
   NOT_MEASURED,
   liveCostFigure,
   NOT_RECORDED,
@@ -186,7 +189,7 @@ export interface UsagePanelProps {
 
 export function UsagePanel({ session }: UsagePanelProps) {
   return (
-    <Panel title="Usage">
+    <Panel isRuled title="Usage">
       <Pairs>
         {session.kind === "finished" ? (
           <FinishedUsagePairs run={session.run} />
@@ -204,32 +207,36 @@ export interface ModelCostPanelProps {
 
 export function ModelCostPanel({ parts }: ModelCostPanelProps) {
   return (
-    <Panel title="Cost per model">
-      {parts.map((part) => {
-        const pricedFrom = priceSourceFigure(part);
-        return (
-          <div key={part.model} className="flex flex-col gap-xs">
-            {part.model === "" ? (
-              <p className="text-body-md font-medium text-ink">{LABEL_MODEL_NOT_REPORTED}</p>
-            ) : (
-              <p className="font-mono text-body-sm text-ink wrap-anywhere">{part.model}</p>
-            )}
-            <Pairs>
-              <Pair label={LABEL_TOKENS}>{fmtCount(part.uncached_tokens)}</Pair>
-              <Pair label={LABEL_EST_COST}>
-                <NotedFigure figure={partCostFigure(part)} />
-              </Pair>
-              {pricedFrom === null ? undefined : (
-                <Pair label={LABEL_PRICED_FROM}>
-                  <span className={part.price_source === null ? "text-ink-muted" : undefined}>
-                    <NotedFigure figure={pricedFrom} />
-                  </span>
+    <Panel isRuled title="Cost per model">
+      <div className="flex flex-col gap-lg">
+        {parts.map((part) => {
+          const pricedFrom = priceSourceFigure(part);
+          return (
+            <div key={part.model}>
+              <Pairs>
+                <Pair label={LABEL_MODEL}>
+                  {part.model === "" ? (
+                    MODEL_NOT_REPORTED
+                  ) : (
+                    <span className={`${MONO} wrap-anywhere`}>{part.model}</span>
+                  )}
                 </Pair>
-              )}
-            </Pairs>
-          </div>
-        );
-      })}
+                <Pair label={LABEL_TOKENS}>{fmtCount(part.uncached_tokens)}</Pair>
+                <Pair label={LABEL_EST_COST}>
+                  <NotedFigure figure={partCostFigure(part)} />
+                </Pair>
+                {pricedFrom === null ? undefined : (
+                  <Pair label={LABEL_PRICED_FROM}>
+                    <span className={part.price_source === null ? "text-ink-muted" : undefined}>
+                      <NotedFigure figure={pricedFrom} />
+                    </span>
+                  </Pair>
+                )}
+              </Pairs>
+            </div>
+          );
+        })}
+      </div>
     </Panel>
   );
 }
@@ -240,7 +247,7 @@ export interface SkillsPanelProps {
 
 export function SkillsPanel({ skills }: SkillsPanelProps) {
   return (
-    <Panel title="Skills">
+    <Panel isRuled title="Skills">
       <ol className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-md gap-y-xs text-body-md">
         {skills.map((call, index) => (
           <li key={index} className="contents">
@@ -248,12 +255,12 @@ export function SkillsPanel({ skills }: SkillsPanelProps) {
             {call.tool_error === true ? (
               <StatusMark
                 mark="failed"
-                label={<ToolText text={call.skill} />}
+                label={<ToolText text={call.skill} isMono />}
                 className="min-w-0 *:min-w-0"
               />
             ) : (
               <span className="min-w-0 text-ink">
-                <ToolText text={call.skill} />
+                <ToolText text={call.skill} isMono />
               </span>
             )}
           </li>
@@ -271,7 +278,7 @@ export interface SessionPanelProps {
 
 function ShortValue({ full, shown }: { full: string; shown: string }) {
   return (
-    <span title={full} className="font-mono text-body-sm">
+    <span title={full} className={MONO}>
       {shown}
     </span>
   );
@@ -287,10 +294,14 @@ export function SessionPanel({ session, config }: SessionPanelProps) {
   const stallTimeoutMs = config?.agent.stall_timeout_ms ?? null;
 
   return (
-    <Panel title="Session">
+    <Panel isRuled title="Details">
       <Pairs>
-        <Pair label="Configured">{source.configured_model || "agent default"}</Pair>
-        <Pair label="Reported model">{source.model_name || "not reported"}</Pair>
+        <Pair label="Configured">
+          {source.configured_model ? <NameText name={source.configured_model} /> : "agent default"}
+        </Pair>
+        <Pair label="Reported model">
+          {source.model_name ? <NameText name={source.model_name} /> : MODEL_NOT_REPORTED}
+        </Pair>
         {source.ssh_host ? <Pair label="Host">{`${source.ssh_host} (SSH)`}</Pair> : undefined}
         {isLive ? (
           <Pair label="Workspace">
