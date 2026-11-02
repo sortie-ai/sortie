@@ -193,7 +193,7 @@ An endpoint failure is a declared outcome on the protocol surface and not induci
 - native_stream_json turn_disposition: Not observed: not_observed
 - native_stream_json retry_classification: Not observed: not_observed
 - native_stream_json token_ceiling: Observed: usable
-- native_stream_json session_continuation: Observed: gap
+- native_stream_json session_continuation: Observed: usable
 
 A case that was induced and that the surface reported no outcome for keeps its obligation. It counts against that surface; it is not forgiven.
 
@@ -228,7 +228,7 @@ The notice depends on the model id. `claude-sonnet-4.5` is known to the installe
 
 ## Native headless observations
 
-`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn ran in the same session as the seed. It answered with the seed's reply instead of the stored phrase, so recall is not shown on this surface and the row grades as a gap.
+`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn runs in the same session as the seed and returns the phrase the seed asked it to remember. A recall prompt that asks for "the phrase from earlier" lets a small model answer with its own earlier reply, `STORED`, which reads as lost history; the profile asks which phrase it was told to remember.
 
 The CLI offers no single-document JSON output, so the profile declares the plain-JSON surface absent. The run corroborated the declaration.
 

@@ -1,10 +1,10 @@
 {
   "schema_version": 5,
-  "profile_digest": "27dc656261f9876f6ee5c757894d2a6070bca85d8c62dd8a938aa754e5b99244",
-  "measured_at": "2026-10-29",
+  "profile_digest": "2f09c13a9bababd9902b0d16cbb7e0c435e397df3e0695ac7861ea2692e4fffe",
+  "measured_at": "2026-11-02",
   "expectation": {
-    "Verdict": "not_qualified",
-    "Conformance": "not_qualified",
+    "Verdict": "unmeasured",
+    "Conformance": "unmeasured",
     "Grades": [
       {
         "Surface": "protocol",
@@ -33,7 +33,7 @@
       {
         "Surface": "protocol",
         "Capability": "session_continuation",
-        "Grade": "gap",
+        "Grade": "usable",
         "Label": "Observed:"
       },
       {
@@ -77,13 +77,12 @@
     ],
     "Unobserved": [
       "native_stream_json turn_disposition runtime_failure: fixture_induction_failed",
-      "native_stream_json turn_disposition success: fixture_induction_failed",
       "protocol retry_classification human_input: fixture_induction_failed",
       "protocol turn_disposition runtime_failure: fixture_induction_failed"
     ]
   },
-  "requested_model": "google/gemini-2.5-flash-lite",
+  "requested_model": "google/gemini-3.5-flash",
   "observed_model": null,
-  "provenance_digest": "b8f3789d725418edd690319f84575d07c40a89104078b920d2844be7fc7c0cd7",
+  "provenance_digest": "b9ba6be677262ca6d88287b3b3d6107bc8dcb7a669a9347930552b766b45b08c",
   "evaluator_version": 2
 }

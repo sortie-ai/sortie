@@ -19,7 +19,7 @@
     "runtime_refusal": "Decline to continue this turn and report your refusal outcome without calling a tool.",
     "tool_call": "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
     "continuation_seed": "Remember the phrase {nonce} for the rest of this conversation and reply exactly STORED.",
-    "continuation_recall": "Reply with the phrase from earlier in this conversation and no other text."
+    "continuation_recall": "What phrase did I ask you to remember? Reply with that phrase only."
   },
   "entry_points": {
     "protocol": {
