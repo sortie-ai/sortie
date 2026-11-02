@@ -59,6 +59,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -76,6 +77,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*GitLabAdapter)(nil)
 var _ domain.CommentChangeReader = (*GitLabAdapter)(nil)
+var _ domain.CommentAuthorAccessReader = (*GitLabAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 100 items per page
 // this allows up to 20,000 results before the adapter stops and returns
@@ -102,6 +104,7 @@ type GitLabAdapter struct {
 	log         *slog.Logger
 	metrics     domain.Metrics
 	bots        *botFlags
+	access      *scmcore.WriteAccessCache
 
 	// queryFilter holds the validated tracker.query_filter parameters, or
 	// nil when the key is unset. Never mutated after construction.
@@ -400,6 +403,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		queryFilter:      queryFilter,
 		stateLabelCasing: stateLabelCasing,
 	}
+	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 	adapter.warnUnresolvedFilterLabels(context.Background())
 	return adapter, nil
 }

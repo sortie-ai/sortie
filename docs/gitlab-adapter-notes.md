@@ -270,6 +270,14 @@ An adapter run with an empty allowlist may skip the lookup, but then bot selecti
 
 **The generated-bot username pattern is a hint, not a contract.** GitLab names its own managed token identities predictably, so a prefix match would classify them for free. It would not classify a third-party review bot driven by a personal access token, which is the common case for the review-comments reaction. Never use the pattern as the only platform signal.
 
+## Comment author write access needs a user search first
+
+**The membership route takes a numeric id, and comments carry the username.** A username in place of the id answers `400`. So a lookup searches users by `username`, which matches exactly and ignores letter case, picks the element whose username equals the login ignoring case, and reads that user's membership by its id. A search that returns no such element answers false with no membership request, and no other element is ever used for the membership read. The username is resolved on every lookup and never cached, so the membership read concerns the account that holds the username at that moment.
+
+**Read `members/all`, not `members`.** The `all` route includes memberships inherited from ancestor groups and invited through groups, and reports the highest level among a person's memberships. The direct route answers `404` for a group owner who is not a direct member. The adapter grants at `access_level` 30 (Developer) or above.
+
+**A non-member is `404`.** An existing account that is not a member and an unknown id both answer `404`, and the adapter answers false for both. Any other failure is returned as it arrived. The token needs member read on the project, which project membership gives, so the documented `api` scope is enough. The lookup records one tracker operation for its two requests.
+
 ## Configuration and construction
 
 The endpoint defaults to the hosted host, so only a self-managed deployment sets it. The token is sent in GitLab's own header rather than as a bearer credential, because that header accepts only GitLab access tokens while the bearer header is shared with OAuth flows.

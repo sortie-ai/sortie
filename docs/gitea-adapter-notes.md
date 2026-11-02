@@ -94,6 +94,18 @@ Gitea's own delete-branch-after-merge and merge-when-checks-succeed options stay
 
 Branch names are percent-encoded, slashes included. Deleting an already-absent branch is a not-found error that the caller treats as a successful no-op.
 
+## Comment author write access reads the assignee list
+
+**The collaborator permission route cannot answer for another account.** It answers only a site administrator, a repository administrator, or the account asked about; a token whose account can write but does not administer gets `403` for every other login, and no token scope changes that, because scopes only narrow. It also reports one repository-wide level that no per-unit team grant raises, so a member of a team with write on code and issues reads as `read` or `none`. The collaborator list and check report membership without a level, and team membership needs an organization owner.
+
+**The issue-assignee list is the substitute.** Any account that can read the repository may read it, and the lookup grants a login that appears in it, matched whole and ignoring letter case. The login is never sent. The list is one unpaginated array of active accounts. It holds the accounts whose access level is write or above, the owner of a repository a user owns, and, on an organization repository, members of the repository's teams that can read issues or pull requests, so team members below write count as granted there. A site administrator who holds no collaboration or team on the repository is absent.
+
+**Its `404` is a failure.** The list is read for the repository, not for the author, so a `404` means the repository is not readable, and the lookup returns it as an error instead of refusing. A `403` from a scoped token without repository read arrives as an auth error. The token needs `read:repository` or `write:repository`.
+
+**The single-account assignee route cannot replace the list.** `GET /repos/{owner}/{repo}/assignees/{assignee}` also counts any account that may read pull requests, so it would grant accounts the list refuses.
+
+**Unobserved.** The list on an organization repository is read from the source, because the lab has no organization.
+
 ## The auto-merge scope preflight cannot verify a scope
 
 Gitea exposes no scope introspection: no rate-limit endpoint, no scopes response header, and a token's own scopes appear only inside the body of a rejection on a write call. The repository permissions block reports the token *owner's role*, not the token's scope: a read-only token owned by a repository admin still reports push access. And there is one coarse write scope covering both merge and branch delete, with no contents/pull-request split, so the "requires contents" argument is accepted and inert.

@@ -1,8 +1,9 @@
 // Package scmcore holds the decisions a source-control forge integration
 // makes over normalized domain types rather than wire shapes: the CI
 // verdict a set of check runs implies, the SCM error a tracker error maps
-// to, the merge-conflict promotion and already-merged marker, and the
-// bot-author and event-id primitives. It imports internal/domain only, so
+// to, the merge-conflict promotion and already-merged marker, the
+// bot-author and event-id primitives, and the cache that remembers
+// whether a comment author has write access. It imports internal/domain only, so
 // every forge adapter can depend on it without depending on a sibling
 // forge. The orchestrator also depends on it directly for bot-author
 // classification, without depending on any forge adapter.
