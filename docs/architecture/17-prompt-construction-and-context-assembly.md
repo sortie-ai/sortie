@@ -57,6 +57,8 @@ A built-in prompt switches on `run.is_continuation`. Its first-turn text gives t
 
 A reaction run presents every comment it carries: the operator's render is chosen only when it differs from the render without the comments, and a built-in lists every comment.
 
+**Comment feed block.** The block of the comment feed is not a template input. With the feed on, Sortie appends it after rendering, to the prompt of every turn that has pending comments: after the operator's render or the built-in reaction prompt chosen above, and before the text Sortie appends on the first turn of a run, the tool advertisement and the runtime status suffix. A prompt for a turn with no pending comments, and every prompt while the feed is off, is unchanged. The self-review review and fix prompts, which have no operator template, receive the block the same way. Until the placement change lands, the operator's template cannot place the block. `.issue.comments` stays the raw list the tracker returned, and `.park.comments` keeps its own window, so a template that renders either one also receives the block and a comment can appear twice. The `comment_feed` front matter section states the block's groups and edit mark.
+
 ### 12.2 Rendering Rules
 
 - Render with strict variable checking.
@@ -73,6 +75,8 @@ A reaction run presents every comment it carries: the operator's render is chose
 - continuation turn within an active multi-turn session (`run.is_continuation == true`)
 - retry after error/timeout/stall (`attempt >= 1`, `run.is_continuation == false`)
 - first run after a person releases a park (`attempt` null or absent, `run.is_continuation == false`, `park` set on turn 1): the run resumes the parked run's agent session where one was recorded and the agent kind can resume it, and `issue.comments` carries every comment of the issue
+
+With the comment feed on, every boundary of a run carries the comments its conversation has not been given: the first turn of any run, continuation turns, reaction turns, and self-review review and fix turns. The feed appends them to the prompt, so a template needs no branch for them on any of these turns.
 
 ### 12.4 Failure Semantics
 

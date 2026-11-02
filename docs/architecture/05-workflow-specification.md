@@ -47,6 +47,7 @@ Top-level keys:
 - `reactions`
 - `dispatch`
 - `notifications`
+- `comment_feed`
 
 Unknown keys should be ignored for forward compatibility.
 
@@ -741,6 +742,88 @@ Validation and resolution:
 - An entry that is not `tracker_comment` omits `events`.
 
 No removal date or removal version is set for any deprecated form.
+
+#### 5.3.11 `comment_feed` (object, optional)
+
+The comment feed hands the agent every comment on its issue that the agent's conversation has not been given. A person steers a running agent by commenting on its issue; with the feed on, that comment reaches the agent at the start of its next turn, whatever started the run. With the feed off, prompts and tracker call volume are unchanged. The `tracker.comments` map is deprecated and unrelated: the feed neither reads it nor reuses it.
+
+```yaml
+comment_feed:
+  enabled: false        # default false until the placement change lands
+  authors: members      # members (default) or all
+  include_authors: []   # author identities delivered without a kind or access check
+  exclude_authors: []   # author identities never delivered
+```
+
+Fields, all optional:
+
+- `enabled` (boolean)
+  - Activates the feed. Default: `false` until the placement change lands.
+- `authors` (string)
+  - Exactly `members` or `all`. Default: `members`.
+  - `members` delivers comments from people with write access to the project, plus every author listed in `include_authors`. On a forge (GitHub, Gitea, GitLab) the feed reads the author's access from the forge. On Jira and Linear commenting already requires project or workspace access, so `members` is every identified person there; on the file tracker it is every named author. A comment with no identifiable author is outside `members`.
+  - Authors the tracker marks as bots, apps, or external accounts count only when listed in `include_authors`. This covers Jira Service Management customers, Jira app accounts, Linear apps and bot actors, and comments created through integrations.
+  - `all` delivers every author, identified or not.
+- `include_authors` (list of non-empty strings)
+  - Author identities delivered without a kind or access check. Default: empty.
+- `exclude_authors` (list of non-empty strings)
+  - Author identities never delivered, under both values of `authors`. A name in both lists is excluded. Default: empty.
+
+An entry in either list matches the author identity the tracker reports, exactly and case-sensitively. Each adapter normalizes that identity from its own payload and never uses a display name:
+
+| Tracker | Author identity |
+|---|---|
+| GitHub | The account login |
+| Gitea | The account login |
+| GitLab | The account username |
+| Jira | The account ID; on Jira Data Center, which reports none, the user name |
+| Linear | The ID of the user, or of the external user or bot actor when no user wrote the comment |
+| File | The comment's author string |
+
+**Validation.** The block is validated whether or not the feed is enabled, so `sortie validate` checks it offline. A value that is not a map, an `enabled` that is not a boolean, an `authors` other than `members` or `all`, and an author list that is not a list or holds an item that is not a non-empty string each abort config construction with an error on that key. An unknown key under `comment_feed` draws the unknown-field warning. An absent, null, or empty block takes every default.
+
+**Reload.** The worker reads the block from the configuration in force when the attempt starts, self-review turns included. A reload applies to attempts that start after it, and a feed never changes its behavior inside one run.
+
+**Boundaries.** A boundary is the start of every turn the worker runs: the first turn of any run, whatever started it (poll tick, retry timer, park release, reopen, reaction), every continuation turn, and every self-review review and fix turn. At each boundary the feed selects the comments that are in author scope, were not posted by Sortie, and are not held by the conversation with the same content. A boundary never fails a turn: when the read fails, the turn goes out without comments, the failure is logged as a warning, and the next boundary reads again.
+
+**Conversations and the given record.** A conversation is an agent session. A session that carried its predecessor's history (a resume that the runtime honored) is the same conversation. A session that did not, including a resume the runtime replaced with a new session, is a new conversation. A new conversation also receives, as a separate group, the comments earlier conversations on the issue were given, at their current text; its first boundary reads the issue's full comment list, because the record holds no comment text. Sortie keeps one row per issue, conversation, source, and comment, holding a hash of the comment's body, the delivering channel, and the time. The conversation identity is the session identifier the agent runtime reports and the worker accepts; the feed records nothing under an empty identifier. The worker reports the comments each turn delivered once the turn has started with the prompt, whatever the turn's outcome, and only comments that changed the rendered prompt count. The orchestrator is the only writer of the record. A crash between sending and recording re-delivers a comment once and loses none.
+
+**Edits and deletions.** The hash covers the body with line endings normalized to line feeds and surrounding white space removed, so a change in line-ending style or in surrounding white space is not an edit. A comment whose hash differs from the one the conversation holds is delivered once more, in full, marked as replacing the earlier version. A deletion is ignored: a given comment cannot be withdrawn, and a retraction arrives as an edit or a new comment.
+
+**Sortie's own comments.** A comment that Sortie posts through the built-in `tracker_comment` destination is recorded by identity when it is posted and never comes back through the feed. Before a read's comments are filtered, the feed waits for the issue's `tracker_comment` posts still in flight to return, so a comment posted just before a retry cannot reach the agent as a person's. No other filter applies: no time window, text match, or credential identity, because an operator who runs Sortie with a personal token also comments from that account. A comment the agent posts with its own tools is delivered. Under a shared identity that is one repeated message in a continuing conversation and a report of earlier work in a new one; from an account of its own it is delivered until that account is listed in `exclude_authors`.
+
+**Placement.** The feed appends a block to the prompt after the operator's render (or the built-in reaction prompt) and before the text Sortie appends on the first turn of a run, the tool advertisement and the runtime status suffix. Self-review review and fix prompts receive the same block. The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first:
+
+```text
+## Issue comments from earlier agent sessions
+
+An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first.
+
+### {author}, {created_at}
+
+{body}
+
+## New issue comments
+
+Comments on this issue you have not been given yet, oldest first.
+
+### {author}, {created_at} (edited: this text replaces the version you were given earlier)
+
+{body}
+```
+
+The author is the name the tracker reports, or `unknown author` when it reports none; the creation time and the body are shown as read. The parenthesized edit mark appears only on a comment that replaces a version the conversation holds. Until the placement change lands, the feed always appends the block and the operator's template cannot place it. `.issue.comments` stays the raw comment list. A template that renders `.issue.comments` or `.park.comments` while the feed is on also receives the block, so those comments can appear twice.
+
+**Read cost.** Each boundary makes at most one comment read, one request per page of comments. A first turn whose dispatch already read comments (the retry read, the park-release read, or the stage-hop read) reuses that read and makes none. Every other boundary reads from the point the run's previous read returned; a run's first read is a full read. Each tracker uses its cheapest read: GitHub a conditional request whose not-modified answer costs no rate limit, GitLab notes ordered by update time and read down to the first note older than the previous read, Gitea a server-side `since` filter, Linear a server-side update-time filter, and Jira newest-first pages compared by hash. On Jira an edit to a comment older than every comment a read reaches is not seen. The issue's own updated timestamp is not a change signal and is never consulted. Under `members` a forge author costs one access lookup until granted, a refused comment costs one more lookup for each new comment from the same author, and a grant is remembered for the life of the process, so an author whose access is revoked still counts until Sortie restarts. GitLab also looks up the author kind of a comment that a full read delivered, at most two requests per distinct author for the process. Neither an `include_authors` match nor `authors: all` makes a lookup.
+
+**Access needed by `members`.** The lookup runs with the tracker token Sortie already holds.
+
+- GitHub reads the author's collaborator permission, which needs push access to the repository, the Write role or above. Write and admin permission grant; every other level refuses.
+- GitLab needs nothing beyond the documented `api` scope; the lookup reads the author's project membership, developer access or higher.
+- Gitea needs repository read, `read:repository` or `write:repository` on a scoped token. The lookup reads the repository's assignee list. On a Gitea organization repository that list also holds members of teams that can read but not write, so `members` covers them too.
+- A Jira project that grants comment permission broadly widens `members` to match.
+
+A token that cannot ask the question draws one error log per process that names the tracker kind and the adapter's error, and says that `include_authors` or `authors: all` delivers without the lookup. The run makes no further access lookup, and each later comment that needs one is refused for the rest of the run. Such a comment is not delivered until the token gains the access (effective from the next run), the author is listed in `include_authors`, or `authors: all` is set.
 
 ### 5.4 Prompt Template Contract
 

@@ -136,6 +136,7 @@ type stubStore struct {
 	aggregates      []storage.AggregateMetrics
 	sessions        []storage.SessionMetadata
 	savedRetries    []storage.RetryEntry
+	givenRows       map[string][]storage.GivenComment
 	deletedRetryIDs []string
 	// budgetExhaustedIDs maps an issue to its run-history session count.
 	budgetExhaustedIDs map[string]int
@@ -209,6 +210,40 @@ type stubStore struct {
 }
 
 var _ OrchestratorStore = (*stubStore)(nil)
+
+func (s *stubStore) RecordGivenComments(_ context.Context, issueID string, rows []storage.GivenComment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.givenRows == nil {
+		s.givenRows = make(map[string][]storage.GivenComment)
+	}
+	s.givenRows[issueID] = append(s.givenRows[issueID], rows...)
+	return nil
+}
+
+func (s *stubStore) ListGivenComments(_ context.Context, issueID, conversationID string) ([]storage.GivenComment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []storage.GivenComment
+	for _, row := range s.givenRows[issueID] {
+		if row.ConversationID == conversationID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubStore) ListEarlierGivenComments(_ context.Context, issueID, conversationID string) ([]storage.GivenComment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []storage.GivenComment
+	for _, row := range s.givenRows[issueID] {
+		if row.ConversationID != conversationID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
 
 func (s *stubStore) AppendRunHistory(_ context.Context, run storage.RunHistory) (storage.RunHistory, error) {
 	s.mu.Lock()

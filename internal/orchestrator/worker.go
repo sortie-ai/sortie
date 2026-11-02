@@ -11,11 +11,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/commentfeed"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -23,6 +25,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/storage"
 	"github.com/sortie-ai/sortie/internal/workspace"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
@@ -371,6 +374,19 @@ type WorkerDeps struct {
 	// Called from the worker goroutine; must be concurrency-safe. Nil
 	// disables it.
 	OnUnaccountedTurns func(issueID string, unaccountedTurns int)
+
+	// CommentFeedStore backs the comment feed's posted and given records. Nil
+	// turns the feed off for the attempt.
+	CommentFeedStore commentfeed.Store
+
+	// OnCommentsGiven reports the rows of comments delivered to the agent, each
+	// stamped with its conversation. Called from the worker goroutine; must be
+	// concurrency-safe. Nil turns the feed off for the attempt.
+	OnCommentsGiven func(issueID string, rows []storage.GivenComment)
+
+	// CommentFeedAccessDenied latches, for the process, that the tracker token
+	// was refused the author access lookup. Nil latches per run only.
+	CommentFeedAccessDenied *atomic.Bool
 
 	// ResumeSessionID is the previous attempt's session ID, non-empty on
 	// continuation retries so the adapter can resume the conversation.
@@ -781,6 +797,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// reported guards against double-reporting from the panic recovery.
 	reported := false
 
+	feed := newCommentFeed(ctx, issue.ID, cfg, deps, logger)
+
 	var acceptedSessionID string
 	var sessionStarted bool
 	var lastPromptAt time.Time
@@ -809,6 +827,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			result.UnstartedResumeID = deps.ResumeSessionID
 		}
 		result.LastPromptAt = lastPromptAt
+		if feed != nil {
+			feed.Finish(acceptedSessionID)
+		}
 		result.UsageByModel = maps.Clone(localUsageByModel)
 		result.UsageProvenance = slices.Clone(localProvenance)
 		result.ReportedAmounts = slices.Clone(localAmounts)
@@ -1275,6 +1296,25 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	acceptedSessionID = session.ID
 	writeDispatchIdentity(acceptedSessionID)
 
+	selectComments := func(turn int) commentfeed.Selection {
+		sel, err := feed.Select(ctx, commentfeed.Conversation{ID: acceptedSessionID, Carried: session.CarriedHistory})
+		if err != nil {
+			logger.Warn("issue comment feed read failed", slog.Int("turn_number", turn), slog.Any("error", err))
+			return commentfeed.Selection{}
+		}
+		return sel
+	}
+	deliverComments := func(turn int, sel commentfeed.Selection, placed []commentfeed.Pending) {
+		feed.Delivered(acceptedSessionID, lastPromptAt, commentfeed.ChannelNextPrompt, placed)
+		if len(placed) > 0 {
+			logger.Info("issue comments delivered",
+				slog.Int("turn_number", turn),
+				slog.Int("new_comments", len(sel.New)),
+				slog.Int("earlier_comments", len(sel.Earlier)),
+			)
+		}
+	}
+
 	sessionStartedAt = time.Now().UTC()
 
 	maxTurns := cfg.Agent.TurnLimit()
@@ -1397,19 +1437,29 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		issueMap := issue.ToTemplateMap()
-		var rendered string
-		var err error
-		switch {
-		case deps.ReactionKind != "":
-			rendered, err = prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption)
-			if turnNumber == 1 {
-				presentedComments = carriedCommentIDs(continuation)
+		// Place may call this more than once; it must stay free of effects
+		// beyond its result and presentedComments, assigned on every call.
+		renderTurn := func(commentfeed.Selection) (string, error) {
+			switch {
+			case deps.ReactionKind != "":
+				out, err := prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption)
+				if turnNumber == 1 {
+					presentedComments = carriedCommentIDs(continuation)
+				}
+				return out, err
+			case turnNumber == 1:
+				out, presented, err := renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, firstTurnOptions...)
+				presentedComments = presented
+				return out, err
+			default:
+				return prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
 			}
-		case turnNumber == 1:
-			rendered, presentedComments, err = renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, firstTurnOptions...)
-		default:
-			rendered, err = prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
 		}
+		var sel commentfeed.Selection
+		if feed != nil {
+			sel = selectComments(turnNumber)
+		}
+		rendered, placed, err := commentfeed.Place(renderTurn, sel)
 		cancelledAtEnding = ctx.Err() != nil
 		if err != nil {
 			renderErr := fmt.Errorf("prompt render (turn %d): %w", turnNumber, err)
@@ -1479,6 +1529,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				slog.Int("turn_number", turnNumber),
 				slog.Any("error", err),
 			)
+		}
+
+		if feed != nil {
+			deliverComments(turnNumber, sel, placed)
 		}
 
 		turnResult, err := runBoundedTurn(ctx, deps.AgentAdapter, session, domain.RunTurnParams{
@@ -1640,6 +1694,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			workspace.CleanupStatusFile(wsResult.Path, logger)
 		}
 		var phaseStatus workspace.StatusFile
+		var reviewSel commentfeed.Selection
+		var reviewPlaced []commentfeed.Pending
+		var preparePrompt func(string) string
+		if feed != nil {
+			preparePrompt = func(reviewPrompt string) string {
+				reviewSel = selectComments(turnsStarted + 1)
+				prepared, placed, _ := commentfeed.Place(func(commentfeed.Selection) (string, error) {
+					return reviewPrompt, nil
+				}, reviewSel)
+				reviewPlaced = placed
+				return prepared
+			}
+		}
 		reviewMeta, phaseStatus, cancelledAtEnding, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:       session,
 			Issue:         issue,
@@ -1658,7 +1725,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if deps.OnTurnStarted != nil {
 					deps.OnTurnStarted(issue.ID, turnsStarted)
 				}
+				if feed != nil {
+					deliverComments(turnsStarted, reviewSel, reviewPlaced)
+					reviewSel, reviewPlaced = commentfeed.Selection{}, nil
+				}
 			},
+			PreparePrompt:  preparePrompt,
 			Logger:         logger,
 			Metrics:        deps.Metrics,
 			TurnsCompleted: &turnsCompleted,
@@ -1830,6 +1902,37 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		UsageMeasured:                localMeasured,
 		UnaccountedTurns:             localUnaccounted,
 		HandedOffComments:            presentedComments,
+	})
+}
+
+// newCommentFeed returns the attempt's comment feed, or nil when the feed is
+// off for it. The configuration is the attempt-start snapshot, so a reload
+// never changes the feed inside a run.
+func newCommentFeed(ctx context.Context, issueID string, cfg config.ServiceConfig, deps WorkerDeps, logger *slog.Logger) *commentfeed.Run {
+	if !cfg.CommentFeed.Enabled || deps.OnCommentsGiven == nil || deps.CommentFeedStore == nil {
+		return nil
+	}
+	var posting commentfeed.PostingWaiter
+	if deps.Router != nil {
+		posting = deps.Router
+	}
+	read, hasRead := dispatchCommentReadFrom(ctx)
+	return commentfeed.NewRun(commentfeed.RunParams{
+		Config:  cfg.CommentFeed,
+		IssueID: issueID,
+		Source: commentfeed.NewTrackerSource(commentfeed.TrackerSourceParams{
+			Tracker:         deps.TrackerAdapter,
+			TrackerKind:     cfg.Tracker.Kind,
+			Store:           deps.CommentFeedStore,
+			Posting:         posting,
+			DispatchRead:    read,
+			HasDispatchRead: hasRead,
+			AccessDenied:    deps.CommentFeedAccessDenied,
+			Logger:          logger,
+		}),
+		Store:  deps.CommentFeedStore,
+		Report: func(rows []storage.GivenComment) { deps.OnCommentsGiven(issueID, rows) },
+		Logger: logger,
 	})
 }
 

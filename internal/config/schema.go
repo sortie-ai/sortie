@@ -118,6 +118,14 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "reviewer", Type: FieldString},
 		},
 	},
+	"comment_feed": {
+		Fields: []FieldDef{
+			{Name: "enabled", Type: FieldBool},
+			{Name: "authors", Type: FieldString},
+			{Name: "include_authors", Type: FieldStringList},
+			{Name: "exclude_authors", Type: FieldStringList},
+		},
+	},
 	"reactions": {
 		Fields:           []FieldDef{},
 		AllowDynamicKeys: true,

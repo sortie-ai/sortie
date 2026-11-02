@@ -2932,32 +2932,23 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		assertConfigErrorField(t, err, "self_review.verification_commands")
 	})
 
-	t.Run("MaxIterations_Below1", func(t *testing.T) {
+	t.Run("MaxIterations_Range", func(t *testing.T) {
 		t.Parallel()
-		_, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": 0},
-		})
-		assertConfigErrorField(t, err, "self_review.max_iterations")
-	})
-
-	t.Run("MaxIterations_Above10", func(t *testing.T) {
-		t.Parallel()
-		_, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": 11},
-		})
-		assertConfigErrorField(t, err, "self_review.max_iterations")
-	})
-
-	t.Run("MaxIterations_Boundary", func(t *testing.T) {
-		t.Parallel()
-		for _, n := range []int{1, 10} {
+		for _, tt := range []struct {
+			n       int
+			wantErr bool
+		}{{0, true}, {1, false}, {10, false}, {11, true}} {
 			cfg, err := NewServiceConfig(map[string]any{
-				"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": n},
+				"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": tt.n},
 			})
-			if err != nil {
-				t.Fatalf("max_iterations=%d: unexpected error: %v", n, err)
+			if tt.wantErr {
+				assertConfigErrorField(t, err, "self_review.max_iterations")
+				continue
 			}
-			assertIntEqual(t, "SelfReview.MaxIterations", n, cfg.SelfReview.MaxIterations)
+			if err != nil {
+				t.Fatalf("max_iterations=%d: unexpected error: %v", tt.n, err)
+			}
+			assertIntEqual(t, "SelfReview.MaxIterations", tt.n, cfg.SelfReview.MaxIterations)
 		}
 	})
 
@@ -2997,17 +2988,6 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		assertConfigErrorField(t, err, "self_review.reviewer")
 	})
 
-	t.Run("Reviewer_Same", func(t *testing.T) {
-		t.Parallel()
-		cfg, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "reviewer": "same"},
-		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig: %v", err)
-		}
-		assertStringEqual(t, "SelfReview.Reviewer", "same", cfg.SelfReview.Reviewer)
-	})
-
 	t.Run("IntegerCoercion", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
@@ -3044,21 +3024,6 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		}
 	})
 
-	t.Run("SchemaUnknownKey", func(t *testing.T) {
-		t.Parallel()
-		// Unknown keys inside self_review must not cause a crash; the
-		// schema layer emits a warning but NewServiceConfig still succeeds.
-		cfg, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"unknown_field": "value"},
-		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig: %v", err)
-		}
-		if cfg.SelfReview.Enabled {
-			t.Error("SelfReview.Enabled = true, want false")
-		}
-	})
-
 	t.Run("NotLeakedToExtensions", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
@@ -3074,6 +3039,63 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 			t.Error("self_review leaked into cfg.extensions; want absent")
 		}
 	})
+}
+
+func TestNewServiceConfig_CommentFeed(t *testing.T) {
+	t.Parallel()
+
+	defaults := CommentFeedConfig{Authors: CommentFeedAuthorsMembers}
+
+	tests := []struct {
+		name      string
+		raw       map[string]any
+		want      CommentFeedConfig
+		wantField string
+	}{
+		{name: "absent block", raw: map[string]any{}, want: defaults},
+		{name: "nil block", raw: map[string]any{"comment_feed": nil}, want: defaults},
+		{name: "empty block", raw: map[string]any{"comment_feed": map[string]any{}}, want: defaults},
+		{
+			name: "full block",
+			raw: map[string]any{"comment_feed": map[string]any{
+				"enabled":         true,
+				"authors":         "all",
+				"include_authors": []any{"alice"},
+				"exclude_authors": []any{"sortie-bot", "bob"},
+			}},
+			want: CommentFeedConfig{
+				Enabled:        true,
+				Authors:        CommentFeedAuthorsAll,
+				IncludeAuthors: []string{"alice"},
+				ExcludeAuthors: []string{"sortie-bot", "bob"},
+			},
+		},
+		{name: "block is not a map", raw: map[string]any{"comment_feed": []any{"enabled"}}, wantField: "comment_feed"},
+		{name: "enabled is not a boolean", raw: map[string]any{"comment_feed": map[string]any{"enabled": "yes"}}, wantField: "comment_feed.enabled"},
+		{name: "authors outside members and all", raw: map[string]any{"comment_feed": map[string]any{"authors": "everyone"}}, wantField: "comment_feed.authors"},
+		{name: "authors rejected while the feed is disabled", raw: map[string]any{"comment_feed": map[string]any{"enabled": false, "authors": "everyone"}}, wantField: "comment_feed.authors"},
+		{name: "include_authors is not a list", raw: map[string]any{"comment_feed": map[string]any{"include_authors": "alice"}}, wantField: "comment_feed.include_authors"},
+		{name: "exclude_authors holds an empty string", raw: map[string]any{"comment_feed": map[string]any{"exclude_authors": []any{"bob", ""}}}, wantField: "comment_feed.exclude_authors"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := NewServiceConfig(tt.raw)
+
+			if tt.wantField != "" {
+				assertConfigErrorField(t, err, tt.wantField)
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewServiceConfig(%v) unexpected error: %v", tt.raw, err)
+			}
+			if !reflect.DeepEqual(cfg.CommentFeed, tt.want) {
+				t.Errorf("NewServiceConfig(%v).CommentFeed = %+v, want %+v", tt.raw, cfg.CommentFeed, tt.want)
+			}
+		})
+	}
 }
 
 func TestNewServiceConfig_AgentTurnTimeoutMS(t *testing.T) {

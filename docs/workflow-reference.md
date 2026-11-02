@@ -24,6 +24,7 @@
   - [2.9 `reactions` — Reaction-Based Feedback Loops](#29-reactions--reaction-based-feedback-loops)
   - [2.10 `dispatch` — Rule-based Routing](#210-dispatch--rule-based-routing)
   - [2.11 `notifications` (operator notification backends)](#211-notifications-operator-notification-backends)
+  - [2.12 `comment_feed` (issue comment feed)](#212-comment_feed-issue-comment-feed)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -134,7 +135,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes ten top-level keys:
+The core schema recognizes these top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -147,6 +148,7 @@ reactions: # Reaction-based feedback loops (CI failure, review comments)
 self_review: # Self-review verification loop (optional)
 dispatch: # Rule-based dispatch routing
 notifications: # Operator notification backends (notify_operator tool)
+comment_feed: # Issue comment feed (optional)
 ```
 
 **Unknown top-level keys are ignored** by the core schema for forward compatibility. They are collected into an `Extensions` map and made available to consumers (e.g., `server`, `worker`, adapter-specific blocks like `claude-code`).
@@ -1727,6 +1729,127 @@ A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environmen
 
 ---
 
+### 2.12 `comment_feed` (issue comment feed)
+
+```yaml
+comment_feed: # optional; every key is optional
+  enabled: false        # default false until the placement change lands
+  authors: members      # members (default) or all
+  include_authors: []   # author identities delivered without a kind or access check
+  exclude_authors: []   # author identities never delivered
+```
+
+A person steers a running agent by commenting on its issue. With the feed on, every comment the agent's conversation has not been given reaches the agent at the start of its next turn, whatever started the run. Continuation turns and self-review turns carry comments too, so a correction written during a run does not wait for a later run. With the feed off, prompts and tracker call volume are unchanged.
+
+The deprecated `tracker.comments` map is unrelated to the feed. The feed neither reads nor reuses it.
+
+| Key | Type | Required | Default | Description |
+| --- | ---- | -------- | ------- | ----------- |
+| `enabled` | boolean | No | `false` until the placement change lands | Turns the feed on. |
+| `authors` | string | No | `members` | Whose comments the feed delivers: exactly `members` or `all`. |
+| `include_authors` | list of strings | No | `[]` | Author identities delivered without a kind or access check. Each item must be a non-empty string. |
+| `exclude_authors` | list of strings | No | `[]` | Author identities never delivered, under both values of `authors`. A name in both lists is excluded. Each item must be a non-empty string. |
+
+#### Author identities
+
+An entry in `include_authors` or `exclude_authors` matches the identity the tracker reports for the comment's author, exactly and with letter case counted. It is never a display name. Each tracker reports a different identity:
+
+| Tracker | Identity to list |
+| ------- | ---------------- |
+| GitHub | The account login |
+| Gitea | The account login |
+| GitLab | The account username |
+| Jira | The account ID; on Jira Data Center, which reports none, the user name |
+| Linear | The ID of the user, or of the external user or bot actor when no user wrote the comment |
+| File | The comment's author string |
+
+#### Who counts as a member
+
+`authors: members` delivers comments from people with write access to the project, plus every author in `include_authors`.
+
+- On GitHub, Gitea, and GitLab, anyone who can read a public project may comment on it, so Sortie asks the forge whether the author has write access.
+- On Jira and Linear, commenting already requires project or workspace access, so `members` is every identified person. A Jira project that grants comment permission broadly widens `members` to match.
+- On the file tracker, `members` is every comment with a named author.
+- A comment with no identifiable author is outside `members`.
+- Bots, apps, and external accounts count only when listed in `include_authors`. This covers GitHub bot and app accounts, Jira Service Management customers and Jira app accounts, Linear apps and bot actors, and comments created through integrations.
+
+`authors: all` delivers every author, identified or not. Neither `all` nor an `include_authors` match makes a forge lookup.
+
+#### Token access for `members`
+
+The lookup uses the tracker token Sortie already holds.
+
+| Tracker | What the token needs |
+| ------- | -------------------- |
+| GitHub | Push access to the repository, the Write role or above. Sortie reads the author's collaborator permission, and `write` or `admin` grants. |
+| GitLab | Nothing beyond the documented `api` scope. Sortie reads the author's project membership, and developer access or higher grants. |
+| Gitea | Repository read: `read:repository` or `write:repository` on a scoped token. Sortie reads the repository's assignee list. On an organization repository that list also holds members of teams that can read but not write, so `members` covers those people too. |
+
+Sortie remembers a grant for the life of the process, so an author whose access is revoked still counts until Sortie restarts. It remembers a refusal for that one comment, so the author's next comment is checked again.
+
+When a token cannot ask the question, Sortie logs one error per process. The message names the tracker kind and the error the tracker returned, and says that `include_authors` or `authors: all` delivers without the lookup. The run then makes no further lookup, and each later comment that needs one is not delivered. Such a comment stays undelivered until the token gains the access (effective from the next run), the author is listed in `include_authors`, or `authors: all` is set.
+
+#### What the agent receives
+
+At the start of every turn, Sortie selects the comments that are in author scope, were not posted by Sortie, and are not held by the agent's conversation with the same text. Turns include the first turn of any run (poll tick, retry, release of a parked issue, reopen, or reaction), every continuation turn, and every self-review review and fix turn.
+
+- **Once per conversation.** A comment the conversation holds is not sent again, also after a restart.
+- **New sessions.** A session that does not carry its predecessor's history is a new conversation, including a resume the runtime replaced with a new session. It also receives, in a separate group, the comments earlier sessions on the issue were given, at their current text. Its first read covers the issue's full comment list.
+- **Edits.** A comment whose text changed is delivered once more, in full, marked as replacing the earlier version. Changing only line endings or the white space around the text is not an edit. A deleted comment is ignored: a retraction arrives as an edit or a new comment.
+- **Sortie's own comments.** A comment Sortie posts through the `tracker_comment` destination is recorded when it is posted and never comes back through the feed. A comment the agent posts with its own tools is delivered. Under a shared identity, that is one repeated message in a continuing conversation and a report of earlier work in a new one. From an account of its own, the agent's comments are delivered until that account is listed in `exclude_authors`.
+- **A failed read.** The turn goes out without comments, Sortie logs a warning, and the next turn reads again. A turn is never failed by the feed.
+
+Sortie appends the comments to the prompt as a block, after your template's output (or the built-in reaction prompt) and before the text Sortie adds on the first turn of a run, the tool advertisement and the runtime status line. Self-review prompts receive the same block. The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first. Each comment sits under a heading of author and creation time with its text as read, oldest first:
+
+```text
+## Issue comments from earlier agent sessions
+
+An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first.
+
+### {author}, {created_at}
+
+{body}
+
+## New issue comments
+
+Comments on this issue you have not been given yet, oldest first.
+
+### {author}, {created_at} (edited: this text replaces the version you were given earlier)
+
+{body}
+```
+
+The author is the name the tracker reports, or `unknown author` when it reports none. The edit mark appears only on a comment that replaces a version the conversation holds.
+
+Until the placement change lands, your template cannot place the block. `.issue.comments` stays the raw list the tracker returned, and `.park.comments` keeps its own window (see [template input variables](#52-template-input-variables)). A template that renders `.issue.comments` or `.park.comments` while the feed is on also receives the block, so those comments can appear twice.
+
+#### Cost
+
+Each turn makes at most one comment read, one request per page of comments. A first turn whose dispatch already read the comments (a retry, a release of a parked issue, or a stage hop) reuses that read and makes none. A run's first read is a full read, and later reads fetch only what changed, each tracker with its cheapest read:
+
+- GitHub sends a conditional request, and a not-modified answer costs no rate limit.
+- GitLab reads notes ordered by update time and stops at the first note older than the previous read.
+- Gitea sends a server-side `since` filter.
+- Linear filters by update time on the server.
+- Jira reads newest-first pages and compares comments by content. An edit to a comment older than every comment a read reaches is not seen.
+
+On top of the reads, `authors: members` on a forge costs one access lookup per author until the author is granted, and one more for each new comment from an author who was refused. GitLab also looks up the kind of an author whose comment arrived in a full read, at most two requests per distinct author for the life of the process. A run that uses self-review makes one more read for each review and fix turn.
+
+#### Validation and reload
+
+`sortie validate` checks the block offline, whether or not the feed is enabled. These are errors on the key named:
+
+- `comment_feed` is not a map.
+- `enabled` is not a boolean.
+- `authors` is anything other than `members` or `all`.
+- `include_authors` or `exclude_authors` is not a list, or holds an item that is not a non-empty string.
+
+An absent, null, or empty `comment_feed` takes every default. An unknown key under `comment_feed` draws the unknown-field warning.
+
+A reload applies to runs that start after it. A run reads the block once, when it starts, so a reload never changes the feed's behavior inside one run (see [per-field reload behavior](#72-per-field-reload-behavior)).
+
+---
+
 ## 3. Environment Variable Overrides
 
 Sortie supports a curated set of `SORTIE_*` environment variables that override YAML front matter values. This enables twelve-factor app deployment patterns: operators inject secrets, endpoint URLs, and tuning parameters via environment rather than committing them to a workflow file.
@@ -1900,6 +2023,7 @@ For path fields (`workspace.root`, `db_path`), tilde (`~`) expansion still appli
 | `notifications`                        | List of pass-through destination maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.11), not as field-level overrides. |
 | `reactions.*` (including `reactions.label_commands`) | No override variables exist; reaction configuration comes from WORKFLOW.md |
 | `dispatch.*`                           | No override variables exist; rule definitions and template paths come from WORKFLOW.md |
+| `comment_feed.*`                       | No override variables exist; the feed's configuration comes from WORKFLOW.md |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
 | Extensions (`server`, `worker`, `token_rates`, the rest of `price_table`, etc.) | Extension-defined; would couple core env parsing to extensions. `price_table.fetch` is the one extension field with an override, `SORTIE_PRICE_TABLE_FETCH` |
 | `logging.level` (via extensions)       | Resolved from `--log-level` flag; not part of typed config layer |
@@ -5079,7 +5203,7 @@ All fields from the tracker, normalized into a stable structure regardless of th
 | `.issue.assignee`    | string          | Assignee identity from the tracker. Empty string when absent.                                                                                    |
 | `.issue.issue_type`  | string          | Tracker-defined type (Bug, Story, Task, Epic). Empty string when absent.                                                                         |
 | `.issue.parent`      | object or nil   | Parent issue reference (sub-task relationship). `nil` when no parent.                                                                            |
-| `.issue.comments`    | list or nil     | Comment records (feedback, review notes, workpad entries), oldest first. Each carries `id`, `author`, `body`, and `created_at`, the tracker's timestamp text: RFC 3339, or the same with a `±hhmm` offset. Filled on runs a retry timer starts and on the first run after a person releases a park; `nil` on other runs the poll tick starts, meaning comments were not fetched. An empty non-nil list means no comments exist. |
+| `.issue.comments`    | list or nil     | Comment records (feedback, review notes, workpad entries), oldest first. Each carries `id`, `author`, `body`, and `created_at`, the tracker's timestamp text: RFC 3339, or the same with a `±hhmm` offset. Filled on runs a retry timer starts and on the first run after a person releases a park; `nil` on other runs the poll tick starts, meaning comments were not fetched. An empty non-nil list means no comments exist. With `comment_feed` enabled, a template that renders this list also receives the feed's block ([the comment feed](#212-comment_feed-issue-comment-feed)). |
 | `.issue.blocked_by`  | list or nil     | Blocker references, each with `.id`, `.identifier`, `.state`, `.display_id`. `nil` means the blockers were not resolved; an empty non-nil list means no blockers exist. `.display_id` is the qualified form when the tracker's identifier alone is ambiguous (for example GitHub's `owner/repo#5` against an `identifier` of `5`) and empty otherwise. |
 | `.issue.created_at`  | string          | ISO-8601 creation timestamp. Empty string when absent.                                                                                           |
 | `.issue.updated_at`  | string          | ISO-8601 last-update timestamp. Empty string when absent.                                                                                        |
@@ -5130,7 +5254,7 @@ Present as a key on every render, so `{{ .park }}` and `{{ if .park }}` render u
 | `.park.gesture`      | string | `label_removed` or `state_changed`.                                                                                                                                                                                          |
 | `.park.comments`     | list   | The comments created since the parked run sent its last prompt, less every comment Sortie posted, in tracker order, oldest first. Never `nil`; empty when no such comment exists. Each element has the shape of an `.issue.comments` element: `id`, `author`, `body`, `created_at`. |
 
-A comment is in `.park.comments` when its creation time is at or after the second in which the parked run sent its last prompt, that second included. That window keeps a comment written while the parked run's last turn was running, which is often the answer the park waits for. A park that records no last prompt starts the window at the park time, truncated to the whole second. A comment whose creation time cannot be read is included, and when no start time exists every comment is. Every comment Sortie posted is left out whatever its time, so the stop comment Sortie posts to the tracker is not in the list and the statement reaches the run once, through `.park.statement`. Comments the agent posted with its own tracker tools are included. `.issue.comments` carries every comment of the issue, Sortie's own included, on every turn of that run.
+A comment is in `.park.comments` when its creation time is at or after the second in which the parked run sent its last prompt, that second included. That window keeps a comment written while the parked run's last turn was running, which is often the answer the park waits for. A park that records no last prompt starts the window at the park time, truncated to the whole second. A comment whose creation time cannot be read is included, and when no start time exists every comment is. Every comment Sortie posted is left out whatever its time, so the stop comment Sortie posts to the tracker is not in the list and the statement reaches the run once, through `.park.statement`. Comments the agent posted with its own tracker tools are included. `.issue.comments` carries every comment of the issue, Sortie's own included, on every turn of that run. With `comment_feed` enabled, a template that renders `.park.comments` also receives the feed's block, so those comments can appear twice.
 
 The run resumes the agent session of the run the park follows when that run had no reaction and ended normally and the agent still holds that session, and the agent kind and template are the ones that run used. Otherwise, including when the agent no longer holds the session, it starts a new session, and `.park.statement` still tells it why the run stopped. When the comments or the record of the comments Sortie posted cannot be read, Sortie does not start the run: the issue waits for the next poll and appears under `held` with the reason `park_comments_unread`.
 
@@ -5438,6 +5562,7 @@ A previous attempt failed. Diagnose the root cause.
 - The full prompt template is rendered on **every** turn. The runtime always passes the full rendered result to the agent, regardless of turn number.
 - Workflow authors control what the agent receives on continuation turns by branching on `.run.is_continuation`. Without such branching, the agent receives identical instructions every turn.
 - After each turn, the worker re-checks the tracker issue state. If the issue is still active, another turn begins (up to `agent.max_turns`).
+- With `comment_feed` enabled, every turn also carries the issue comments the agent's conversation has not been given, appended after the rendered template, so a continuation branch needs no text for them. See [the comment feed](#212-comment_feed-issue-comment-feed).
 - On a reaction run, the reaction's key stays set on every turn. A template that switches on `.run.is_continuation` at the top level, with the reaction branches only in the first-turn text, renders its resume text on later turns with and without the key. Sortie treats that as no branch for the key and sends the built-in continuation text, which points back to the instructions of the first turn:
 
   ```
@@ -5736,6 +5861,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, stage, agent, template) reaches future claims only. |
 | `notifications` (agent messages)       | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `notifications` (events Sortie produces) | The next event. Sortie routes each event against the configuration in force when it decides to send it, so a change to `events` or to a destination applies to the next event and never to one already routed. A reload whose destinations for these events cannot be built, such as an unknown `kind` or a required secret that resolved to an empty string, is rejected and the previous configuration stays in force. The `escalation: comment` of a reaction other than `ci_failure` keeps the value read at startup. |
+| `comment_feed.*`                       | Future worker attempts, not in-flight sessions. A run reads the block once, when it starts, so a reload applies to runs that start after it. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
@@ -6129,6 +6255,10 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `notifications[].kind`                  | string           | _(required)_                 | —                                        | Destination discriminator; v1: `webhook`, `slack`, `telegram`, `discord`, and the built-in `tracker_comment`  |
 | `notifications[].events`                | `[string]`       | `[agent.message]` for every backend kind; _(required)_ for `tracker_comment` | — | Event types the entry receives; names from the closed catalog, none repeated; omitting it on a backend kind is deprecated; `agent.message` is rejected on `tracker_comment` |
 | `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for the whole agent run, drawn from entries that receive `agent.message`; `0` selects the default; never unlimited; non-negative |
+| `comment_feed.enabled`                  | boolean          | `false` until the placement change lands | _(none)_                           | Turns on delivery of the issue comments a conversation has not been given, at every turn |
+| `comment_feed.authors`                  | string           | `members`                    | _(none)_                                        | `members` or `all`; `members` delivers comments from people with write access, plus `include_authors` |
+| `comment_feed.include_authors`          | `[string]`       | `[]` (empty)                 | _(none)_                                        | Author identities delivered without a kind or access check; exact, case-sensitive match |
+| `comment_feed.exclude_authors`          | `[string]`       | `[]` (empty)                 | _(none)_                                        | Author identities never delivered; wins over `include_authors` |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |

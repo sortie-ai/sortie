@@ -84,10 +84,73 @@ type snapshot struct {
 type Router struct {
 	tracker domain.TrackerAdapter
 	posted  PostedCommentRecorder
+	posting *postingRegister
 	lookup  NotifierLookup
 	logger  *slog.Logger
 	source  string
 	state   atomic.Pointer[snapshot]
+}
+
+// postingRegister counts the tracker-comment sends in flight per issue so a
+// reader of the posted-comment record can wait for the rows those sends are
+// about to write. It is safe for concurrent use.
+type postingRegister struct {
+	mu       sync.Mutex
+	inFlight map[string]int // guarded by mu
+	// released is closed and replaced whenever any count reaches zero;
+	// waiters recheck their own issue after it closes. Guarded by mu.
+	released chan struct{}
+}
+
+func newPostingRegister() *postingRegister {
+	return &postingRegister{inFlight: make(map[string]int), released: make(chan struct{})}
+}
+
+func (p *postingRegister) begin(issueID string) {
+	p.mu.Lock()
+	p.inFlight[issueID]++
+	p.mu.Unlock()
+}
+
+func (p *postingRegister) end(issueID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.inFlight[issueID]--; p.inFlight[issueID] > 0 {
+		return
+	}
+	delete(p.inFlight, issueID)
+	close(p.released)
+	p.released = make(chan struct{})
+}
+
+// await returns nil once no send for issueID is in flight, or ctx.Err() when
+// ctx ends first.
+func (p *postingRegister) await(ctx context.Context, issueID string) error {
+	for {
+		p.mu.Lock()
+		if p.inFlight[issueID] == 0 {
+			p.mu.Unlock()
+			return nil
+		}
+		released := p.released
+		p.mu.Unlock()
+
+		select {
+		case <-released:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// AwaitTrackerComments returns nil once no tracker_comment send for issueID
+// is in flight, at once when none is, and the context's error when ctx ends
+// first. A nil Router returns nil.
+func (r *Router) AwaitTrackerComments(ctx context.Context, issueID string) error {
+	if r == nil {
+		return nil
+	}
+	return r.posting.await(ctx, issueID)
 }
 
 // NewRouter returns a Router with empty inputs installed. A nil tracker
@@ -100,7 +163,7 @@ func NewRouter(tracker domain.TrackerAdapter, posted PostedCommentRecorder, look
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &Router{tracker: tracker, posted: posted, lookup: lookup, logger: logger}
+	r := &Router{tracker: tracker, posted: posted, posting: newPostingRegister(), lookup: lookup, logger: logger}
 	if host, err := os.Hostname(); err == nil {
 		r.source = host
 	}
@@ -194,7 +257,7 @@ func (r *Router) Route(n domain.Notification) Delivery {
 		targets = append(targets, target{
 			destination: domain.TrackerCommentKind,
 			kind:        domain.TrackerCommentKind,
-			notifier:    trackerComment{adapter: r.tracker, posted: r.posted, logger: r.logger},
+			notifier:    trackerComment{adapter: r.tracker, posted: r.posted, register: r.posting, logger: r.logger},
 		})
 	}
 	for i, destination := range snap.destinations {
