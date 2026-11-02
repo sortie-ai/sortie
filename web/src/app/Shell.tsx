@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router";
+import {
+  Outlet,
+  ScrollRestoration,
+  useLocation,
+  useMatch,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, postRefresh } from "@/api/client";
@@ -12,6 +19,7 @@ import { useLive } from "@/app/live";
 import { NarrowBar } from "@/app/NarrowBar";
 import { Rail } from "@/app/Rail";
 import { ShortcutsDialog } from "@/app/ShortcutsDialog";
+import { RETURN, useScreenTop } from "@/app/screen-top";
 import { PageBreadcrumb, TopBar } from "@/app/TopBar";
 import { activeViewPath } from "@/components/ActiveHead";
 import { IssuePeek } from "@/components/IssuePeek";
@@ -29,11 +37,9 @@ import type { Binding } from "@/app/keys";
 import type { ScreenEntry } from "@/app/Rail";
 import type { RunsResponse } from "@/api/types.gen";
 
-const PAGE_COLUMN = "mx-auto w-full px-xxxl max-xl:px-lg max-md:px-md";
-const WIDE_PAGE_COLUMN = cn(
-  PAGE_COLUMN,
-  "max-w-[calc(var(--container-wide)+2*var(--spacing-xxxl))]",
-);
+// One column for every screen, so widths do not change from screen to screen.
+const PAGE_COLUMN =
+  "mx-auto w-full max-w-[calc(var(--container-wide)+2*var(--spacing-xl))] px-xl max-xl:px-lg max-md:px-md";
 
 const NO_ANSWER = "Sortie did not answer. Nothing changed.";
 
@@ -70,6 +76,8 @@ function ShellFrame({ screens }: ShellFrameProps) {
     data?.counts.attention ?? 0,
     data?.config?.tracker.project,
   );
+
+  useScreenTop();
 
   useEffect(() => {
     if (versionNotice === null || noticedVersion.current === versionNotice) {
@@ -121,7 +129,7 @@ function ShellFrame({ screens }: ShellFrameProps) {
     if (peek.identifier !== null) {
       peek.close();
     } else if (isIssueRoute) {
-      void navigate(backOf(routeState));
+      void navigate(backOf(routeState), { state: RETURN });
     } else if (sessionIdentifier !== undefined) {
       void navigate(`/issues/${encodeURIComponent(sessionIdentifier)}`, {
         state: { back: backOf(routeState) },
@@ -174,20 +182,21 @@ function ShellFrame({ screens }: ShellFrameProps) {
   useShortcuts(bindings);
 
   const handleOpenPalette = () => setIsPaletteOpen(true);
-  const pageColumn = isPipeline ? PAGE_COLUMN : WIDE_PAGE_COLUMN;
 
   return (
     <div className="grid min-h-screen grid-cols-1 md:grid-cols-[var(--spacing-nav-rail)_minmax(0,1fr)]">
-      <Rail screens={screens} onOpenShortcuts={() => setIsShortcutsOpen(true)} />
+      <Rail screens={screens} />
       <div className="min-w-0">
         <NarrowBar onOpenPalette={handleOpenPalette} />
         <TopBar
-          className={pageColumn}
+          className={PAGE_COLUMN}
           isHolding={(isOverview || isPipeline) && peek.identifier !== null}
           onTogglePause={handleTogglePause}
           onOpenPalette={handleOpenPalette}
+          onOpenShortcuts={() => setIsShortcutsOpen(true)}
         />
-        <div className={cn(pageColumn, "pt-xl pb-xxxl max-md:pt-md")}>
+        {/* A screen ends as far above the window's edge as the rail's last line does. */}
+        <div className={cn(PAGE_COLUMN, "pt-(--size-crumbs) pb-lg max-md:pt-5 max-md:pb-5")}>
           <PageBreadcrumb screens={screens} />
           <DegradedBanner />
           <main id="main">
@@ -214,6 +223,8 @@ function ShellFrame({ screens }: ShellFrameProps) {
       />
       <IssuePeek />
       <ShortcutsDialog screens={screens} open={isShortcutsOpen} onOpenChange={setIsShortcutsOpen} />
+      {/* Each screen keeps where it was left on a return or a query change; useScreenTop opens it at its top otherwise. */}
+      <ScrollRestoration getKey={(location) => location.pathname} />
     </div>
   );
 }

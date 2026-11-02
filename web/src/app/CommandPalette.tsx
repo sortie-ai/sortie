@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useIssueLookupQuery, useStateQuery } from "@/api/queries";
 import { Kbd } from "@/app/Kbd";
 import { useLive } from "@/app/live";
+import { Parts } from "@/components/Parts";
 import {
   Autocomplete,
   AutocompleteCollection,
@@ -15,6 +16,7 @@ import {
   AutocompleteList,
   useAutocompleteFilter,
 } from "@/components/ui/autocomplete";
+import { MONO } from "@/components/ui/mono";
 import { Dialog, DialogPopup } from "@/components/ui/dialog";
 import { issueAwaitsApproval, routeText } from "@/lib/active-rows";
 import { fmtStamp, parseInstant } from "@/lib/format";
@@ -272,9 +274,7 @@ export function CommandPalette({
           <AutocompleteList>
             {(group: AutocompleteGroupData<PaletteItem>) => (
               <AutocompleteGroup key={group.value} items={group.items}>
-                {group.value === ISSUES_GROUP || group.value === SESSIONS_GROUP ? (
-                  <AutocompleteGroupLabel>{group.value}</AutocompleteGroupLabel>
-                ) : undefined}
+                <AutocompleteGroupLabel>{group.value}</AutocompleteGroupLabel>
                 <AutocompleteCollection>
                   {(item: PaletteItem) =>
                     isSessionEntry(item) ? (
@@ -286,11 +286,22 @@ export function CommandPalette({
                       >
                         <span className="flex min-w-0 flex-col">
                           <span className="wrap-anywhere">{item.label}</span>
-                          <span className="flex flex-wrap gap-x-sm text-body-sm text-ink-muted wrap-anywhere">
-                            {item.route === null ? undefined : <span>{item.route}</span>}
-                            <span>{item.status}</span>
-                            <span className="tabular-nums">{fmtStamp(item.startedAt)}</span>
-                          </span>
+                          <Parts
+                            className="text-body-sm text-ink-muted wrap-anywhere"
+                            parts={[
+                              ...(item.route === null
+                                ? []
+                                : [
+                                    <span key="route" className={MONO}>
+                                      {item.route}
+                                    </span>,
+                                  ]),
+                              <span key="status">{item.status}</span>,
+                              <span key="at" className="tabular-nums">
+                                {fmtStamp(item.startedAt)}
+                              </span>,
+                            ]}
+                          />
                         </span>
                       </AutocompleteItem>
                     ) : isIssueEntry(item) ? (
@@ -329,7 +340,7 @@ export function CommandPalette({
           {issueQuery !== "" && lookup.isError ? (
             <p className="px-md py-xs text-body-sm text-ink-muted">{LOOKUP_FAILED}</p>
           ) : undefined}
-          <AutocompleteEmpty>{`Nothing matches "${query}".`}</AutocompleteEmpty>
+          <AutocompleteEmpty title="Not found">{`Nothing matches "${query}".`}</AutocompleteEmpty>
         </Autocomplete>
       </DialogPopup>
     </Dialog>

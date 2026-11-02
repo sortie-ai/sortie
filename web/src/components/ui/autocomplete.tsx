@@ -57,7 +57,7 @@ export type AutocompleteListProps = Omit<BaseAutocomplete.List.Props, "className
 export function AutocompleteList(props: AutocompleteListProps) {
   return (
     <BaseAutocomplete.List
-      className="min-h-0 overflow-y-auto overscroll-contain py-xxs scroll-py-xxs"
+      className="min-h-0 overflow-y-auto overscroll-contain pt-xxs pb-xs scroll-py-xxs empty:hidden"
       {...props}
     />
   );
@@ -78,7 +78,7 @@ export interface AutocompleteGroupLabelProps {
 
 export function AutocompleteGroupLabel({ children }: AutocompleteGroupLabelProps) {
   return (
-    <BaseAutocomplete.GroupLabel className="px-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted">
+    <BaseAutocomplete.GroupLabel className="mx-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted [[role=group]:not(:first-child)>&]:mt-xs [[role=group]:not(:first-child)>&]:border-t [[role=group]:not(:first-child)>&]:border-line">
       {children}
     </BaseAutocomplete.GroupLabel>
   );
@@ -111,13 +111,17 @@ export function AutocompleteItem({ className, ...rest }: AutocompleteItemProps) 
 }
 
 export interface AutocompleteEmptyProps {
+  title: string;
   children: ReactNode;
 }
 
-export function AutocompleteEmpty({ children }: AutocompleteEmptyProps) {
+export function AutocompleteEmpty({ title, children }: AutocompleteEmptyProps) {
   return (
-    <BaseAutocomplete.Empty className="px-md py-lg text-body-md text-ink-muted empty:hidden">
-      {children}
+    <BaseAutocomplete.Empty className="pt-xxs pb-xs empty:hidden">
+      <div className="mx-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted">{title}</div>
+      <p className="flex min-h-8 items-center px-md py-xxs text-body-md text-ink-muted">
+        {children}
+      </p>
     </BaseAutocomplete.Empty>
   );
 }

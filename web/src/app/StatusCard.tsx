@@ -14,6 +14,9 @@ import { fmtCount, pluralVerb } from "@/lib/format";
 import type { StateResponse } from "@/api/types.gen";
 import type { Condition } from "@/lib/condition";
 
+// A line ends in an ellipsis; the padding keeps its ascenders and descenders inside the clip.
+const ONE_LINE = "trim-caps -my-xxs block truncate py-xxs";
+
 const CONDITION_DOT: Record<Condition, string> = {
   clear: "bg-success-fill",
   needs: "bg-warning-fill",
@@ -21,31 +24,44 @@ const CONDITION_DOT: Record<Condition, string> = {
   degraded: "bg-error-fill",
 };
 
-interface AgentsLineProps {
+interface AgentsProps {
   running: number;
   cap: number | undefined;
 }
 
 // A cap of one reads as "Agent running" or "Agent idle", never as a fraction.
-function AgentsLine({ running, cap }: AgentsLineProps) {
+function agentsText({ running, cap }: AgentsProps): string {
   if (cap === 1) {
     return running > 0 ? "Agent running" : "Agent idle";
   }
   if (running === 0) {
     return "No agents running";
   }
-  const count = <span className="text-ink tabular-nums">{running}</span>;
-  if (cap === undefined) {
-    return (
-      <>
-        {count} {running === 1 ? "agent" : "agents"} running
-      </>
-    );
-  }
+  return cap === undefined
+    ? `${running} ${running === 1 ? "agent" : "agents"} running`
+    : `${running} of ${cap} agents running`;
+}
+
+function AgentsLine(props: AgentsProps) {
+  return <span className={cn("text-body-sm text-ink-muted", ONE_LINE)}>{agentsText(props)}</span>;
+}
+
+// One name reads in full; several would not fit the card, so they are counted and named in the title.
+function failingText(names: string[]): string {
+  return names.length === 1 ? `${names[0]} failing` : `${names.length} checks failing`;
+}
+
+// One thin segment per agent the cap allows, filled while it runs.
+function AgentsBar({ running, cap }: AgentsProps & { cap: number }) {
   return (
-    <>
-      {count} of {cap} {cap === 1 ? "agent" : "agents"} running
-    </>
+    <span aria-hidden="true" className="flex h-0.5 grow gap-1">
+      {Array.from({ length: cap }, (_, index) => (
+        <span
+          key={index}
+          className={cn("grow rounded-full", index < running ? "bg-primary" : "bg-surface-raised")}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -64,8 +80,7 @@ function Headline({ state, current }: HeadlineProps) {
   if (current === "held") {
     return (
       <>
-        <span className="text-ink tabular-nums">{fmtCount(acknowledgedCount(state))}</span>{" "}
-        {ACKNOWLEDGED_WORD}
+        {fmtCount(acknowledgedCount(state))} {ACKNOWLEDGED_WORD}
       </>
     );
   }
@@ -75,63 +90,75 @@ function Headline({ state, current }: HeadlineProps) {
   const { noun, verb } = pluralVerb(state.counts.attention, ["item", "items"], ["needs", "need"]);
   return (
     <>
-      <span className="text-ink tabular-nums">{fmtCount(state.counts.attention)}</span> {noun}{" "}
-      {verb} attention
+      {fmtCount(state.counts.attention)} {noun} {verb} attention
     </>
   );
 }
 
 interface StatusSummaryProps {
   state: StateResponse | undefined;
+  failing: string[];
 }
 
-function StatusSummary({ state }: StatusSummaryProps) {
+function StatusSummary({ state, failing }: StatusSummaryProps) {
   const current = state === undefined ? undefined : condition(state);
+  const running = state?.counts.running ?? 0;
+  const cap = state?.config?.agent.max_concurrent_agents;
 
   return (
     <>
-      <span className="flex items-center gap-xs text-body-md font-medium text-ink-body">
-        <span
-          aria-hidden="true"
-          className={cn(
-            "size-xs shrink-0 rounded-full",
-            current === undefined ? "bg-ink-muted" : CONDITION_DOT[current],
-          )}
-        />
-        <span>
-          {state === undefined || current === undefined ? (
-            "Loading"
-          ) : (
-            <Headline state={state} current={current} />
-          )}
+      {/* A box as tall as a screen title's capitals puts the line on the title's baseline. */}
+      <span className="flex min-h-[round(up,1cap,1px)] items-end font-heading text-h4">
+        <span className="flex min-w-0 items-center gap-xs font-sans text-body-md font-semibold tracking-normal text-ink">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "size-xs shrink-0 rounded-full",
+              current === undefined ? "bg-ink-muted" : CONDITION_DOT[current],
+            )}
+          />
+          <span className={ONE_LINE}>
+            {state === undefined || current === undefined ? (
+              "Loading"
+            ) : (
+              <Headline state={state} current={current} />
+            )}
+          </span>
         </span>
       </span>
-      {state !== undefined && current === "degraded" ? (
-        <span className="mt-xxs block text-body-sm text-error wrap-anywhere">
-          {joinNames(failingChecks(state))} failing
-        </span>
-      ) : undefined}
-      {state === undefined ? undefined : (
-        <span className="mt-xxs block text-body-sm text-ink-muted wrap-anywhere">
-          <AgentsLine
-            running={state.counts.running}
-            cap={state.config?.agent.max_concurrent_agents}
-          />
-        </span>
-      )}
+      {/* A box as tall as the header's gap and the standfirst's capitals puts the agents on the standfirst's baseline. */}
+      <span className="flex min-h-[calc(var(--spacing-md)+round(down,1cap,1px))] flex-col justify-end text-body-lg">
+        {state === undefined || cap === undefined ? undefined : (
+          // The agents line is mostly lowercase and stands below its capitals, so the bar sits a pixel lower to look centered.
+          <span className="flex grow items-center pt-0.5">
+            <AgentsBar running={running} cap={cap} />
+          </span>
+        )}
+        {state === undefined ? undefined : current === "degraded" ? (
+          <span
+            title={`${joinNames(failing)} failing`}
+            className={cn("text-body-sm text-error", ONE_LINE)}
+          >
+            {failingText(failing)}
+          </span>
+        ) : (
+          <AgentsLine running={running} cap={cap} />
+        )}
+      </span>
     </>
   );
 }
 
 export function StatusCard() {
   const { data } = useStateQuery();
+  const failing = data === undefined ? [] : failingChecks(data);
 
   return (
     <Link
       to="/"
-      className="block rounded-xl bg-canvas p-sm transition-colors duration-(--duration-feedback) hover:bg-item-hover-panel focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring"
+      className="flex flex-col rounded-lg bg-canvas px-sm pb-md transition-colors duration-(--duration-feedback) hover:bg-item-hover-panel focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring"
     >
-      <StatusSummary state={data} />
+      <StatusSummary state={data} failing={failing} />
     </Link>
   );
 }
