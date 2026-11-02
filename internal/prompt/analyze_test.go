@@ -246,6 +246,13 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownVar,
 			wantNode:  ".nope",
 		},
+		{
+			name:      "CommentFeedMisspelledField",
+			body:      `{{ .comment_feed.new }}{{ .comment_feed.earlier }}{{ .comment_feed.nwe }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownField,
+			wantNode:  ".comment_feed.nwe",
+		},
 		// Boundary: nil template must return nil without panic.
 		{
 			name:      "NilTemplate",

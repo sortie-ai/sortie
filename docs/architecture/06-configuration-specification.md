@@ -239,7 +239,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `self_review.max_diff_bytes`: integer, default `102400`; diff truncation limit
 - `self_review.reviewer`: string, default `"same"`; only `"same"` supported in v1
 - `comment_feed`: map, optional; absent, null, or empty takes every default; any other value that is not a map is rejected; validated whether or not the feed is enabled; no environment variable overrides it
-- `comment_feed.enabled`: boolean, default `false` until the placement change lands; activates the issue comment feed
+- `comment_feed.enabled`: boolean, default `true`; activates the issue comment feed
 - `comment_feed.authors`: string, default `members`; exactly `members` or `all`
 - `comment_feed.include_authors`: list of non-empty strings, default empty; author identities delivered without a kind or access check; exact, case-sensitive match
 - `comment_feed.exclude_authors`: list of non-empty strings, default empty; author identities never delivered; wins over `include_authors`

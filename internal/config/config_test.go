@@ -3044,7 +3044,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 func TestNewServiceConfig_CommentFeed(t *testing.T) {
 	t.Parallel()
 
-	defaults := CommentFeedConfig{Authors: CommentFeedAuthorsMembers}
+	defaults := CommentFeedConfig{Enabled: true, Authors: CommentFeedAuthorsMembers}
 
 	tests := []struct {
 		name      string
@@ -3055,6 +3055,8 @@ func TestNewServiceConfig_CommentFeed(t *testing.T) {
 		{name: "absent block", raw: map[string]any{}, want: defaults},
 		{name: "nil block", raw: map[string]any{"comment_feed": nil}, want: defaults},
 		{name: "empty block", raw: map[string]any{"comment_feed": map[string]any{}}, want: defaults},
+		{name: "enabled false", raw: map[string]any{"comment_feed": map[string]any{"enabled": false}}, want: CommentFeedConfig{Authors: CommentFeedAuthorsMembers}},
+		{name: "enabled nil", raw: map[string]any{"comment_feed": map[string]any{"enabled": nil}}, want: defaults},
 		{
 			name: "full block",
 			raw: map[string]any{"comment_feed": map[string]any{

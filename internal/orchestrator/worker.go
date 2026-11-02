@@ -1324,10 +1324,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
 	stageOption := prompt.WithStage(stageRenderFrom(ctx))
-	firstTurnOptions := []prompt.RenderOption{stageOption}
-	if parkContext, ok := parkRenderFrom(ctx); ok {
-		firstTurnOptions = append(firstTurnOptions, prompt.WithPark(parkContext))
-	}
+	parkContext, hasPark := parkRenderFrom(ctx)
 
 	publishWorkerState := func(turn int) error {
 		if mcpConfigPath == "" {
@@ -1439,20 +1436,30 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		issueMap := issue.ToTemplateMap()
 		// Place may call this more than once; it must stay free of effects
 		// beyond its result and presentedComments, assigned on every call.
-		renderTurn := func(commentfeed.Selection) (string, error) {
+		renderTurn := func(sel commentfeed.Selection) (string, error) {
+			feedOption := prompt.WithCommentFeed(commentFeedContextOf(sel))
 			switch {
 			case deps.ReactionKind != "":
-				out, err := prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption)
+				out, err := prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption, feedOption)
 				if turnNumber == 1 {
 					presentedComments = carriedCommentIDs(continuation)
 				}
 				return out, err
 			case turnNumber == 1:
-				out, presented, err := renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, firstTurnOptions...)
+				options := []prompt.RenderOption{stageOption}
+				if hasPark {
+					park := parkContext
+					if feed != nil {
+						park.Comments = pendingTemplateComments(sel)
+					}
+					options = append(options, prompt.WithPark(park))
+				}
+				options = append(options, feedOption)
+				out, presented, err := renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, options...)
 				presentedComments = presented
 				return out, err
 			default:
-				return prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
+				return prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption, feedOption)
 			}
 		}
 		var sel commentfeed.Selection

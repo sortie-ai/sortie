@@ -1733,7 +1733,7 @@ A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environmen
 
 ```yaml
 comment_feed: # optional; every key is optional
-  enabled: false        # default false until the placement change lands
+  enabled: true         # default true
   authors: members      # members (default) or all
   include_authors: []   # author identities delivered without a kind or access check
   exclude_authors: []   # author identities never delivered
@@ -1741,11 +1741,13 @@ comment_feed: # optional; every key is optional
 
 A person steers a running agent by commenting on its issue. With the feed on, every comment the agent's conversation has not been given reaches the agent at the start of its next turn, whatever started the run. Continuation turns and self-review turns carry comments too, so a correction written during a run does not wait for a later run. With the feed off, prompts and tracker call volume are unchanged.
 
+Upgrading turns the feed on for every workflow that does not set `enabled: false`. Prompts change, and Sortie starts reading issue comments, which adds tracker requests (see [Cost](#cost)). The first turn of each issue after the feed turns on carries every comment from an author in scope, because no conversation has been given any. Set `enabled: false` to keep prompts and tracker call volume as they were.
+
 The deprecated `tracker.comments` map is unrelated to the feed. The feed neither reads nor reuses it.
 
 | Key | Type | Required | Default | Description |
 | --- | ---- | -------- | ------- | ----------- |
-| `enabled` | boolean | No | `false` until the placement change lands | Turns the feed on. |
+| `enabled` | boolean | No | `true` | Turns the feed on. `false` turns it off. |
 | `authors` | string | No | `members` | Whose comments the feed delivers: exactly `members` or `all`. |
 | `include_authors` | list of strings | No | `[]` | Author identities delivered without a kind or access check. Each item must be a non-empty string. |
 | `exclude_authors` | list of strings | No | `[]` | Author identities never delivered, under both values of `authors`. A name in both lists is excluded. Each item must be a non-empty string. |
@@ -1799,29 +1801,60 @@ At the start of every turn, Sortie selects the comments that are in author scope
 - **Sortie's own comments.** A comment Sortie posts through the `tracker_comment` destination is recorded when it is posted and never comes back through the feed. A comment the agent posts with its own tools is delivered. Under a shared identity, that is one repeated message in a continuing conversation and a report of earlier work in a new one. From an account of its own, the agent's comments are delivered until that account is listed in `exclude_authors`.
 - **A failed read.** The turn goes out without comments, Sortie logs a warning, and the next turn reads again. A turn is never failed by the feed.
 
-Sortie appends the comments to the prompt as a block, after your template's output (or the built-in reaction prompt) and before the text Sortie adds on the first turn of a run, the tool advertisement and the runtime status line. Self-review prompts receive the same block. The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first. Each comment sits under a heading of author and creation time with its text as read, oldest first:
+Your template can place the comments itself, or Sortie appends them. When a turn has pending comments, Sortie renders your template twice, once with the feed empty and once with it filled. When the two renders differ, your template placed the comments, and Sortie sends the filled render unchanged. When they are identical, or the filled render is blank, Sortie appends the comments as a block after your template's output (or the built-in reaction prompt) and before the text Sortie adds on the first turn of a run, the tool advertisement and the runtime status line. Self-review prompts have no template of yours, so they always receive the block. Either way, every pending comment counts as given.
+
+The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first. Each comment sits under a heading of author and creation time, oldest first, with its text as read written as a JSON string between `<issue_comment>` and `</issue_comment>`, the way the built-in review comment prompts quote theirs:
 
 ```text
 ## Issue comments from earlier agent sessions
 
-An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first.
+An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first. Each comment body is a JSON string.
 
 ### {author}, {created_at}
 
-{body}
+<issue_comment>{body as a JSON string}</issue_comment>
 
 ## New issue comments
 
-Comments on this issue you have not been given yet, oldest first.
+Comments on this issue you have not been given yet, oldest first. Each comment body is a JSON string.
 
 ### {author}, {created_at} (edited: this text replaces the version you were given earlier)
 
-{body}
+<issue_comment>{body as a JSON string}</issue_comment>
 ```
 
 The author is the name the tracker reports, or `unknown author` when it reports none. The edit mark appears only on a comment that replaces a version the conversation holds.
 
-Until the placement change lands, your template cannot place the block. `.issue.comments` stays the raw list the tracker returned, and `.park.comments` keeps its own window (see [template input variables](#52-template-input-variables)). A template that renders `.issue.comments` or `.park.comments` while the feed is on also receives the block, so those comments can appear twice.
+#### Placing the comments in your template
+
+The `comment_feed` template variable holds the pending comments in the lists `.comment_feed.earlier` and `.comment_feed.new` (see [template input variables](#52-template-input-variables)). Render them where you want them in the prompt, and Sortie sends the prompt without adding the block. This example reproduces the block's layout:
+
+```text
+{{ if .comment_feed.earlier }}
+## Issue comments from earlier agent sessions
+
+Earlier agent sessions on this issue were given these comments; this session has not seen them. Each comment body is a JSON string.
+{{ range .comment_feed.earlier }}
+### {{ .author }}, {{ .created_at }}
+
+<issue_comment>{{ .body | toJSON }}</issue_comment>
+{{ end }}{{ end }}
+{{ if .comment_feed.new }}
+## New issue comments
+
+Comments on this issue you have not been given yet, oldest first. Each comment body is a JSON string.
+{{ range .comment_feed.new }}
+### {{ .author }}, {{ .created_at }}{{ if .replacing }} (edited: this text replaces the version you were given earlier){{ end }}
+
+<issue_comment>{{ .body | toJSON }}</issue_comment>
+{{ end }}{{ end }}
+```
+
+- **Both views count.** Rendering one view marks the comments of the other given as well, without showing them. A template that renders only `.comment_feed.new` never shows the agent the comments earlier sessions were given, and Sortie does not deliver them later.
+- **Some turns only.** A template that renders the comments on some turns, for example only while `.run.is_continuation` is false, places them on those turns. On the other turns the two renders are identical, so Sortie appends the block there.
+- **Leaving the comments out.** To keep the comments out of the prompt on purpose, render something else in their place, such as a line that points the agent at its tracker tool: `{{ if .comment_feed.new }}A person commented on the issue. Read it with your tracker tool.{{ end }}`. The renders differ, so Sortie sends the prompt unchanged, and every pending comment counts as given: the agent never receives those comments from Sortie. Turning the feed off with `enabled: false` is the other way.
+- **`.issue.comments`.** It stays the raw list the tracker returned and is outside the comparison. A template that renders it and does not place `comment_feed` or `.park.comments` receives the block too, so those comments can appear twice.
+- **`.park.comments`.** With the feed on, on turn 1 of the first run after a person releases a parked issue, it holds the pending comments, so a template that renders it places them.
 
 #### Cost
 
@@ -5183,7 +5216,7 @@ template.New("prompt").
 
 ### 5.2 Template Input Variables
 
-The data map passed to `Execute` contains the **core top-level keys** (`issue`, `attempt`, `run`, `stage`, `park`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches. `park` is `nil` except on turn 1 of the first run after a person releases a park (see the `park` variable below). A reaction run is a run that a reaction starts, error retries included. Its key stays set on every turn of the run, so a `.run.is_continuation` test inside the key's branch tells the first turn from later ones (see Section 5.5). `review_comments` and `bot_review_comments` are also populated on turn 1 of a new run of an issue whose pull request holds comments no earlier run was given (see `reactions.review_comments` and `reactions.bot_review` in Section 2.9):
+The data map passed to `Execute` contains the **core top-level keys** (`issue`, `attempt`, `run`, `stage`, `park`, `comment_feed`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on reaction-triggered dispatches. `park` is `nil` except on turn 1 of the first run after a person releases a park (see the `park` variable below). `comment_feed` is never `nil` and holds the lists of pending comments (see the `comment_feed` variable below). A reaction run is a run that a reaction starts, error retries included. Its key stays set on every turn of the run, so a `.run.is_continuation` test inside the key's branch tells the first turn from later ones (see Section 5.5). `review_comments` and `bot_review_comments` are also populated on turn 1 of a new run of an issue whose pull request holds comments no earlier run was given (see `reactions.review_comments` and `reactions.bot_review` in Section 2.9):
 
 #### `issue` — Normalized Issue Object
 
@@ -5203,7 +5236,7 @@ All fields from the tracker, normalized into a stable structure regardless of th
 | `.issue.assignee`    | string          | Assignee identity from the tracker. Empty string when absent.                                                                                    |
 | `.issue.issue_type`  | string          | Tracker-defined type (Bug, Story, Task, Epic). Empty string when absent.                                                                         |
 | `.issue.parent`      | object or nil   | Parent issue reference (sub-task relationship). `nil` when no parent.                                                                            |
-| `.issue.comments`    | list or nil     | Comment records (feedback, review notes, workpad entries), oldest first. Each carries `id`, `author`, `body`, and `created_at`, the tracker's timestamp text: RFC 3339, or the same with a `±hhmm` offset. Filled on runs a retry timer starts and on the first run after a person releases a park; `nil` on other runs the poll tick starts, meaning comments were not fetched. An empty non-nil list means no comments exist. With `comment_feed` enabled, a template that renders this list also receives the feed's block ([the comment feed](#212-comment_feed-issue-comment-feed)). |
+| `.issue.comments`    | list or nil     | Comment records (feedback, review notes, workpad entries), oldest first. Each carries `id`, `author`, `body`, and `created_at`, the tracker's timestamp text: RFC 3339, or the same with a `±hhmm` offset. Filled on runs a retry timer starts and on the first run after a person releases a park; `nil` on other runs the poll tick starts, meaning comments were not fetched. An empty non-nil list means no comments exist. With `comment_feed` enabled, the feed's block follows the prompt unless the template places `comment_feed` or `.park.comments` ([the comment feed](#212-comment_feed-issue-comment-feed)). |
 | `.issue.blocked_by`  | list or nil     | Blocker references, each with `.id`, `.identifier`, `.state`, `.display_id`. `nil` means the blockers were not resolved; an empty non-nil list means no blockers exist. `.display_id` is the qualified form when the tracker's identifier alone is ambiguous (for example GitHub's `owner/repo#5` against an `identifier` of `5`) and empty otherwise. |
 | `.issue.created_at`  | string          | ISO-8601 creation timestamp. Empty string when absent.                                                                                           |
 | `.issue.updated_at`  | string          | ISO-8601 last-update timestamp. Empty string when absent.                                                                                        |
@@ -5252,9 +5285,11 @@ Present as a key on every render, so `{{ .park }}` and `{{ if .park }}` render u
 | `.park.parked_at`    | string | Park time, RFC 3339 in UTC, whole seconds. Empty when the stored park time cannot be read.                                                                                                                                   |
 | `.park.released_at`  | string | Release time in the same form.                                                                                                                                                                                               |
 | `.park.gesture`      | string | `label_removed` or `state_changed`.                                                                                                                                                                                          |
-| `.park.comments`     | list   | The comments created since the parked run sent its last prompt, less every comment Sortie posted, in tracker order, oldest first. Never `nil`; empty when no such comment exists. Each element has the shape of an `.issue.comments` element: `id`, `author`, `body`, `created_at`. |
+| `.park.comments`     | list   | With `comment_feed` off: the comments created since the parked run sent its last prompt, less every comment Sortie posted, in tracker order, oldest first. With `comment_feed` on: the comments the agent has not seen yet, from the authors the feed delivers, oldest first (see below). Never `nil`; empty when no such comment exists. Each element has the shape of an `.issue.comments` element: `id`, `author`, `body`, `created_at`. |
 
-A comment is in `.park.comments` when its creation time is at or after the second in which the parked run sent its last prompt, that second included. That window keeps a comment written while the parked run's last turn was running, which is often the answer the park waits for. A park that records no last prompt starts the window at the park time, truncated to the whole second. A comment whose creation time cannot be read is included, and when no start time exists every comment is. Every comment Sortie posted is left out whatever its time, so the stop comment Sortie posts to the tracker is not in the list and the statement reaches the run once, through `.park.statement`. Comments the agent posted with its own tracker tools are included. `.issue.comments` carries every comment of the issue, Sortie's own included, on every turn of that run. With `comment_feed` enabled, a template that renders `.park.comments` also receives the feed's block, so those comments can appear twice.
+With `comment_feed` off, a comment is in `.park.comments` when its creation time is at or after the second in which the parked run sent its last prompt, that second included. That window keeps a comment written while the parked run's last turn was running, which is often the answer the park waits for. A park that records no last prompt starts the window at the park time, truncated to the whole second. A comment whose creation time cannot be read is included, and when no start time exists every comment is. Every comment Sortie posted is left out whatever its time, so the stop comment Sortie posts to the tracker is not in the list and the statement reaches the run once, through `.park.statement`. Comments the agent posted with its own tracker tools are included. `.issue.comments` carries every comment of the issue, Sortie's own included, on every turn of that run.
+
+With `comment_feed` on, `.park.comments` holds the comments the feed delivers on turn 1 of that run: the comments the agent's conversation has not been given. In a new session the list starts with the comments earlier sessions on the issue were given, ahead of the person's reply. The split between those and the new comments, and the `replacing` mark on an edit, are in `.comment_feed.earlier` and `.comment_feed.new`, not in `.park.comments`. A template that renders `.park.comments` places those comments and receives no block for them ([the comment feed](#212-comment_feed-issue-comment-feed)).
 
 The run resumes the agent session of the run the park follows when that run had no reaction and ended normally and the agent still holds that session, and the agent kind and template are the ones that run used. Otherwise, including when the agent no longer holds the session, it starts a new session, and `.park.statement` still tells it why the run stopped. When the comments or the record of the comments Sortie posted cannot be read, Sortie does not start the run: the issue waits for the next poll and appears under `held` with the reason `park_comments_unread`.
 
@@ -5263,6 +5298,17 @@ The run resumes the agent session of the run the park follows when that run had 
 {{ range .park.comments }}{{ .author }}: {{ .body }}
 {{ end }}{{ end }}
 ```
+
+#### `comment_feed`: Pending Issue Comments
+
+Present as a key on every render, and never `nil`, so `{{ range .comment_feed.new }}` and `{{ len .comment_feed.earlier }}` render under `missingkey=error` in every template. Both lists are empty when no comment is pending and on every turn while `comment_feed` is off, so a template that reads them needs no guard. The rule that decides where the comments go in the prompt is in [the comment feed](#placing-the-comments-in-your-template).
+
+| Field                  | Type | Description                                                                                                                                                                                                            |
+| ---------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.comment_feed.new`     | list | Oldest first: the comments no conversation on the issue was given, and the edits to comments this conversation holds. |
+| `.comment_feed.earlier` | list | Oldest first: the comments an earlier conversation was given, at their current text. Filled only in a new conversation, which is a session that does not carry its predecessor's history. |
+
+Every element of either list has the fields of an `.issue.comments` element: `id`, `author`, `body` as read, and `created_at`. It also has `replacing`, a boolean that is `true` when the comment replaces a version this conversation holds, and always `false` in `.comment_feed.earlier`.
 
 #### `ci_failure` — CI Failure Context (continuation key)
 
@@ -5562,7 +5608,7 @@ A previous attempt failed. Diagnose the root cause.
 - The full prompt template is rendered on **every** turn. The runtime always passes the full rendered result to the agent, regardless of turn number.
 - Workflow authors control what the agent receives on continuation turns by branching on `.run.is_continuation`. Without such branching, the agent receives identical instructions every turn.
 - After each turn, the worker re-checks the tracker issue state. If the issue is still active, another turn begins (up to `agent.max_turns`).
-- With `comment_feed` enabled, every turn also carries the issue comments the agent's conversation has not been given, appended after the rendered template, so a continuation branch needs no text for them. See [the comment feed](#212-comment_feed-issue-comment-feed).
+- With `comment_feed` enabled, every turn also carries the issue comments the agent's conversation has not been given, either where your template places `comment_feed` or appended after the rendered template. A template that places them on some turns gets the block on the others, so a continuation branch needs no text for them. See [the comment feed](#212-comment_feed-issue-comment-feed).
 - On a reaction run, the reaction's key stays set on every turn. A template that switches on `.run.is_continuation` at the top level, with the reaction branches only in the first-turn text, renders its resume text on later turns with and without the key. Sortie treats that as no branch for the key and sends the built-in continuation text, which points back to the instructions of the first turn:
 
   ```
@@ -6255,7 +6301,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `notifications[].kind`                  | string           | _(required)_                 | —                                        | Destination discriminator; v1: `webhook`, `slack`, `telegram`, `discord`, and the built-in `tracker_comment`  |
 | `notifications[].events`                | `[string]`       | `[agent.message]` for every backend kind; _(required)_ for `tracker_comment` | — | Event types the entry receives; names from the closed catalog, none repeated; omitting it on a backend kind is deprecated; `agent.message` is rejected on `tracker_comment` |
 | `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for the whole agent run, drawn from entries that receive `agent.message`; `0` selects the default; never unlimited; non-negative |
-| `comment_feed.enabled`                  | boolean          | `false` until the placement change lands | _(none)_                           | Turns on delivery of the issue comments a conversation has not been given, at every turn |
+| `comment_feed.enabled`                  | boolean          | `true`                       | _(none)_                           | Turns on delivery of the issue comments a conversation has not been given, at every turn |
 | `comment_feed.authors`                  | string           | `members`                    | _(none)_                                        | `members` or `all`; `members` delivers comments from people with write access, plus `include_authors` |
 | `comment_feed.include_authors`          | `[string]`       | `[]` (empty)                 | _(none)_                                        | Author identities delivered without a kind or access check; exact, case-sensitive match |
 | `comment_feed.exclude_authors`          | `[string]`       | `[]` (empty)                 | _(none)_                                        | Author identities never delivered; wins over `include_authors` |

@@ -823,23 +823,33 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel, dispa
         log_warn("issue comment feed read failed", turn_number, err)
         selection = empty
 
-    if reaction_kind != "":
-      # a reaction run gets the operator's branch for its continuation key
-      # or the key's built-in prompt, on every turn
-      prompt = build_reaction_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns, continuation_context)
-      if turn_number == 1:
-        presented = the IDs of every comment continuation_context carries, per review kind
-    else if turn_number == 1:
-      # presented holds, per review kind, the comment IDs this render showed
-      # the agent; a new run keeps a seeded render only when it contains
-      # every line of the unseeded one, in order
-      prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context)
-    else:
-      prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
-    // The block follows the render and precedes the text turn 1 appends
+    # The render of this turn takes the feed views of the selection it is given,
+    # so place_comment_block can render it with the views empty and filled.
+    # Whether park.comments comes from the feed depends on feed != null, never
+    # on the selection's content: with the feed off it stays the window.
+    render_turn = (sel) ->
+      feed_views = comment_feed_views(sel)         // new and earlier, each element with replacing
+      if reaction_kind != "":
+        # a reaction run gets the operator's branch for its continuation key
+        # or the key's built-in prompt, on every turn
+        prompt = build_reaction_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns, continuation_context, feed_views)
+        if turn_number == 1:
+          presented = the IDs of every comment continuation_context carries, per review kind
+      else if turn_number == 1:
+        park_view = the run's park hand-over, absent on any other run
+        if park_view is present and feed != null:
+          park_view.comments = sel.earlier followed by sel.new
+        # presented holds, per review kind, the comment IDs this render showed
+        # the agent; a new run keeps a seeded render only when it contains
+        # every line of the unseeded one, in order
+        prompt, presented = render_first_turn_prompt(workflow_template, issue, attempt, max_turns, continuation_context, park_view, feed_views)
+      else:
+        prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns, feed_views)
+      return prompt
+    // The block follows the placed render and precedes the text turn 1 appends
     // afterwards (tool advertisement, runtime status suffix); placed holds the
     // comments that changed the prompt, empty when selection is empty.
-    prompt, placed = place_comment_block(prompt, selection)
+    prompt, placed = place_comment_block(render_turn, selection)
     cancelled_at_ending = worker_ctx is done  // read immediately after the call, before any teardown below
     if prompt failed:
       agent_adapter.stop_session(session)
@@ -1007,6 +1017,22 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel, dispa
   })
 
   exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason, soft_stop_statement=pending_statement, handed_off_comments=presented)
+```
+
+`place_comment_block` decides whether the template placed the pending comments by comparing a render with the feed views empty and one with them filled (Section 12.1). The self-review review and fix turns call it with a render that ignores its argument, so the two renders match and the block is appended:
+
+```text
+function place_comment_block(render, selection):
+  if selection.new is empty and selection.earlier is empty:
+    return render(selection), []                      // one render, nothing placed
+  emptied, emptied_err = render(empty_selection)
+  filled, err = render(selection)                     // rendered last, so presented matches the prompt sent
+  if err != null:
+    return failed, []
+  placed = selection.earlier followed by selection.new
+  if filled is not blank and (emptied_err != null or filled != emptied):
+    return filled, placed                             // the template placed the comments
+  return filled + "\n\n" + comment_block(selection), placed
 ```
 
 ### 16.6 Worker Exit and Retry Handling

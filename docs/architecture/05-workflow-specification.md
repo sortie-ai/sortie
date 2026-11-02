@@ -745,11 +745,11 @@ No removal date or removal version is set for any deprecated form.
 
 #### 5.3.11 `comment_feed` (object, optional)
 
-The comment feed hands the agent every comment on its issue that the agent's conversation has not been given. A person steers a running agent by commenting on its issue; with the feed on, that comment reaches the agent at the start of its next turn, whatever started the run. With the feed off, prompts and tracker call volume are unchanged. The `tracker.comments` map is deprecated and unrelated: the feed neither reads it nor reuses it.
+The comment feed hands the agent every comment on its issue that the agent's conversation has not been given. A person steers a running agent by commenting on its issue; with the feed on, that comment reaches the agent at the start of its next turn, whatever started the run. With the feed off, prompts and tracker call volume are unchanged. The default is on, so upgrading turns the feed on for every workflow that does not set `enabled: false`, which changes prompts and adds comment reads. The first boundary of each issue after the feed turns on carries every comment in author scope, because no conversation has been given any. The `tracker.comments` map is deprecated and unrelated: the feed neither reads it nor reuses it.
 
 ```yaml
 comment_feed:
-  enabled: false        # default false until the placement change lands
+  enabled: true         # default true
   authors: members      # members (default) or all
   include_authors: []   # author identities delivered without a kind or access check
   exclude_authors: []   # author identities never delivered
@@ -758,7 +758,7 @@ comment_feed:
 Fields, all optional:
 
 - `enabled` (boolean)
-  - Activates the feed. Default: `false` until the placement change lands.
+  - Activates the feed. Default: `true`.
 - `authors` (string)
   - Exactly `members` or `all`. Default: `members`.
   - `members` delivers comments from people with write access to the project, plus every author listed in `include_authors`. On a forge (GitHub, Gitea, GitLab) the feed reads the author's access from the forge. On Jira and Linear commenting already requires project or workspace access, so `members` is every identified person there; on the file tracker it is every named author. A comment with no identifiable author is outside `members`.
@@ -792,27 +792,27 @@ An entry in either list matches the author identity the tracker reports, exactly
 
 **Sortie's own comments.** A comment that Sortie posts through the built-in `tracker_comment` destination is recorded by identity when it is posted and never comes back through the feed. Before a read's comments are filtered, the feed waits for the issue's `tracker_comment` posts still in flight to return, so a comment posted just before a retry cannot reach the agent as a person's. No other filter applies: no time window, text match, or credential identity, because an operator who runs Sortie with a personal token also comments from that account. A comment the agent posts with its own tools is delivered. Under a shared identity that is one repeated message in a continuing conversation and a report of earlier work in a new one; from an account of its own it is delivered until that account is listed in `exclude_authors`.
 
-**Placement.** The feed appends a block to the prompt after the operator's render (or the built-in reaction prompt) and before the text Sortie appends on the first turn of a run, the tool advertisement and the runtime status suffix. Self-review review and fix prompts receive the same block. The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first:
+**Placement.** Every render receives the `comment_feed` template variable (Section 12.1). At a boundary with pending comments the worker renders the prompt twice, once with the feed views empty and once with them filled, and compares the renders (Section 12.1 gives the rule). When the filled render is not blank and differs from the emptied one, or the emptied one fails, the template placed the comments: the prompt is sent unchanged and every pending comment counts as given. Otherwise the feed appends a block to the filled render, after the operator's render (or the built-in reaction prompt) and before the text Sortie appends on the first turn of a run, the tool advertisement and the runtime status suffix. A template that shows part of the feed, such as one view, a count, or a line pointing the agent at its tracker tool, marks every pending comment given. Self-review review and fix prompts have no operator template, so they always receive the block. The block has a group for earlier sessions and a group for new comments, each present only when it holds comments, earlier sessions first. Each body is written as a JSON string between `<issue_comment>` and `</issue_comment>`, the way the built-in review comment prompts quote theirs:
 
 ```text
 ## Issue comments from earlier agent sessions
 
-An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first.
+An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first. Each comment body is a JSON string.
 
 ### {author}, {created_at}
 
-{body}
+<issue_comment>{body as a JSON string}</issue_comment>
 
 ## New issue comments
 
-Comments on this issue you have not been given yet, oldest first.
+Comments on this issue you have not been given yet, oldest first. Each comment body is a JSON string.
 
 ### {author}, {created_at} (edited: this text replaces the version you were given earlier)
 
-{body}
+<issue_comment>{body as a JSON string}</issue_comment>
 ```
 
-The author is the name the tracker reports, or `unknown author` when it reports none; the creation time and the body are shown as read. The parenthesized edit mark appears only on a comment that replaces a version the conversation holds. Until the placement change lands, the feed always appends the block and the operator's template cannot place it. `.issue.comments` stays the raw comment list. A template that renders `.issue.comments` or `.park.comments` while the feed is on also receives the block, so those comments can appear twice.
+The author is the name the tracker reports, or `unknown author` when it reports none; the creation time is shown as read. The parenthesized edit mark appears only on a comment that replaces a version the conversation holds. `.issue.comments` stays the raw comment list and is outside the comparison, so a template that renders it also receives the block and those comments appear twice. With the feed on, `.park.comments` is the release run's pending comments, so a template that renders it places them and receives no block.
 
 **Read cost.** Each boundary makes at most one comment read, one request per page of comments. A first turn whose dispatch already read comments (the retry read, the park-release read, or the stage-hop read) reuses that read and makes none. Every other boundary reads from the point the run's previous read returned; a run's first read is a full read. Each tracker uses its cheapest read: GitHub a conditional request whose not-modified answer costs no rate limit, GitLab notes ordered by update time and read down to the first note older than the previous read, Gitea a server-side `since` filter, Linear a server-side update-time filter, and Jira newest-first pages compared by hash. On Jira an edit to a comment older than every comment a read reaches is not seen. The issue's own updated timestamp is not a change signal and is never consulted. Under `members` a forge author costs one access lookup until granted, a refused comment costs one more lookup for each new comment from the same author, and a grant is remembered for the life of the process, so an author whose access is revoked still counts until Sortie restarts. GitLab also looks up the author kind of a comment that a full read delivered, at most two requests per distinct author for the process. Neither an `include_authors` match nor `authors: all` makes a lookup.
 
@@ -860,12 +860,18 @@ Template input variables:
   - `statement` (string): the stop statement of the run the park follows; empty when that run declared none.
   - `parked_at` and `released_at` (strings): RFC 3339 times in UTC, whole seconds.
   - `gesture` (string): `label_removed` or `state_changed`.
-  - `comments` (list, never null): the comments created since the parked run's last prompt, oldest first, less every comment Sortie posted, each with `id`, `author`, `body`, and `created_at`. The window includes the second of that prompt and starts at the park time when the park records no last prompt (Section 17).
+  - `comments` (list, never null): each with `id`, `author`, `body`, and `created_at`, oldest first.
+    - Feed off: the comments created since the parked run's last prompt, less every comment Sortie posted. The window includes the second of that prompt and starts at the park time when the park records no last prompt (Section 17).
+    - Feed on: the release run's pending comments, those of `comment_feed.earlier` followed by those of `comment_feed.new`.
+- `comment_feed` (object)
+  - Always present, on every render; `new` and `earlier` are lists that are never null and are empty unless the render is the filled render of a boundary with pending comments, so a template that references them never fails.
+  - Each element of either list has `id`, `author`, `body`, `created_at`, and a boolean `replacing`: true when the comment replaces a version this conversation holds, and always false in `earlier`.
+  - `new` holds the comments no conversation on the issue was given and the edits to comments this conversation holds; `earlier` holds the comments an earlier conversation was given, at their current text, and is filled only in a new conversation. Placement follows Section 5.3.11.
 
 Define blocks and calls:
 
 - A prompt template calls the define blocks of every partial (§5.3.9) and its own with the built-in `template` action. The FuncMap gains no entry for it.
-- A define block executes with the value its call passes as dot, and `$` inside it is that value; the engine has no dynamic scoping. `{{ template "name" . }}` outside every `range` and `with` body passes the whole input data, `issue`, `attempt`, `run`, `stage`, `park`, and every continuation key included. A call without an argument passes nil, and any field reference in the block then fails the render.
+- A define block executes with the value its call passes as dot, and `$` inside it is that value; the engine has no dynamic scoping. `{{ template "name" . }}` outside every `range` and `with` body passes the whole input data, `issue`, `attempt`, `run`, `stage`, `park`, `comment_feed`, and every continuation key included. A call without an argument passes nil, and any field reference in the block then fails the render.
 - A define block executes under the same strict rules as the template that calls it: an unknown variable or function fails the render.
 - An undefined call, a name defined twice, and text outside a define block of a partial are `template_parse_error` at load, never at render. Each is located at the file and line that hold it.
 

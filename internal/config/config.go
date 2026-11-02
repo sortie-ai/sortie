@@ -1536,7 +1536,7 @@ func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
 // not a map. Every key is validated even when the feed is disabled, so
 // `sortie validate` checks the block offline.
 func buildCommentFeedConfig(raw map[string]any) (CommentFeedConfig, error) {
-	cfg := CommentFeedConfig{Authors: CommentFeedAuthorsMembers}
+	cfg := CommentFeedConfig{Enabled: true, Authors: CommentFeedAuthorsMembers}
 
 	block, exists := raw["comment_feed"]
 	if !exists || block == nil {
@@ -2081,7 +2081,7 @@ const (
 // entries match the comment author identity exactly and case-sensitively,
 // and an entry in both lists is excluded.
 type CommentFeedConfig struct {
-	// Enabled activates the feed. Default false.
+	// Enabled activates the feed. Default true.
 	Enabled bool
 
 	// Authors is the author scope. Default [CommentFeedAuthorsMembers].

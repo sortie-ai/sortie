@@ -259,38 +259,56 @@ func TestPlace(t *testing.T) {
 	t.Parallel()
 
 	errRender := errors.New("render failed")
-	edited := Pending{Comment: domain.Comment{ID: "n1", Body: " raw\r\ntext ", CreatedAt: "t2"}, Replacing: true}
+	edited := Pending{Comment: domain.Comment{ID: "n1", Body: " raw\r\n<text> ", CreatedAt: "t2"}, Replacing: true}
 	plain := Pending{Comment: domain.Comment{ID: "n2", Author: "bob", Body: "plain", CreatedAt: "t3"}}
 	earlier := Pending{Comment: domain.Comment{ID: "e1", Author: "alice", Body: "older", CreatedAt: "t1"}}
 	wantBlock := "base\n\n## Issue comments from earlier agent sessions\n\n" +
-		"An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first.\n\n" +
-		"### alice, t1\n\nolder\n\n## New issue comments\n\nComments on this issue you have not been given yet, oldest first.\n\n" +
-		"### unknown author, t2 (edited: this text replaces the version you were given earlier)\n\n raw\r\ntext \n\n### bob, t3\n\nplain"
+		"An earlier agent session on this issue was given these comments; this session has not seen them. Each shows its current text, oldest first. Each comment body is a JSON string.\n\n" +
+		"### alice, t1\n\n<issue_comment>\"older\"</issue_comment>\n\n## New issue comments\n\n" +
+		"Comments on this issue you have not been given yet, oldest first. Each comment body is a JSON string.\n\n" +
+		"### unknown author, t2 (edited: this text replaces the version you were given earlier)\n\n" +
+		`<issue_comment>" raw\r\n\u003ctext\u003e "</issue_comment>` + "\n\n### bob, t3\n\n<issue_comment>\"plain\"</issue_comment>"
+	both, newOnly := Selection{Earlier: []Pending{earlier}, New: []Pending{plain}}, Selection{New: []Pending{plain}}
 
 	tests := []struct {
-		name       string
-		sel        Selection
-		renderErr  error
-		wantPrompt string
-		wantPlaced []string
+		name                  string
+		sel                   Selection
+		emptied, filled       string
+		emptiedErr, filledErr error
+		wantPrompt            string
+		wantPlaced            []string
+		wantRender            []int
 	}{
-		{name: "empty selection leaves the render unchanged", wantPrompt: "base"},
-		{name: "render error places nothing", sel: Selection{New: []Pending{plain}}, renderErr: errRender},
+		{name: "empty selection renders once", emptied: "base", wantPrompt: "base", wantRender: []int{0}},
+		{name: "failing filled render places nothing", sel: newOnly, emptied: "base", filledErr: errRender, wantRender: []int{0, 1}},
 		{
-			name: "earlier group precedes new and the edit mark is only on replacing",
-			sel:  Selection{Earlier: []Pending{earlier}, New: []Pending{edited, plain}}, wantPrompt: wantBlock, wantPlaced: []string{"e1", "n1", "n2"},
+			name: "identical renders get the block, earlier group first, edit mark only on replacing",
+			sel:  Selection{Earlier: both.Earlier, New: []Pending{edited, plain}}, emptied: "base", filled: "base",
+			wantPrompt: wantBlock, wantPlaced: []string{"e1", "n1", "n2"}, wantRender: []int{0, 3},
 		},
+		{name: "differing renders return the filled render alone", sel: both, emptied: "base", filled: "with feed", wantPrompt: "with feed", wantPlaced: []string{"e1", "n2"}, wantRender: []int{0, 2}},
+		{name: "failing emptied render counts as placed", sel: newOnly, emptiedErr: errRender, filled: "with feed", wantPrompt: "with feed", wantPlaced: []string{"n2"}, wantRender: []int{0, 1}},
+		{name: "blank filled render gets the block", sel: newOnly, emptied: "base", filled: " ", wantPrompt: " \n\n" + Block(newOnly), wantPlaced: []string{"n2"}, wantRender: []int{0, 1}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			prompt, placed, err := Place(func(Selection) (string, error) { return "base", tt.renderErr }, tt.sel)
+			var rendered []int
+			render := func(sel Selection) (string, error) {
+				rendered = append(rendered, len(sel.Earlier)+len(sel.New))
+				if rendered[len(rendered)-1] == 0 {
+					return tt.emptied, tt.emptiedErr
+				}
+				return tt.filled, tt.filledErr
+			}
+
+			prompt, placed, err := Place(render, tt.sel)
 
 			placedIDs, _ := pendingIDs(placed)
-			if !errors.Is(err, tt.renderErr) || prompt != tt.wantPrompt || !slices.Equal(placedIDs, tt.wantPlaced) {
-				t.Errorf("Place() = (%q, %v, %v), want (%q, %v, %v)", prompt, placedIDs, err, tt.wantPrompt, tt.wantPlaced, tt.renderErr)
+			if !errors.Is(err, tt.filledErr) || prompt != tt.wantPrompt || !slices.Equal(placedIDs, tt.wantPlaced) || !slices.Equal(rendered, tt.wantRender) {
+				t.Errorf("Place() = (%q, %v, %v) after renders %v, want (%q, %v, %v) after %v", prompt, placedIDs, err, rendered, tt.wantPrompt, tt.wantPlaced, tt.filledErr, tt.wantRender)
 			}
 		})
 	}
