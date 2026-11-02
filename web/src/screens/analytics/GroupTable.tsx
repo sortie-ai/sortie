@@ -218,7 +218,7 @@ export function GroupTable<Row extends Group>({
               columnId="cost-per-succeeded"
               sort={sort}
               align="right"
-              help="Estimated cost per succeeded run"
+              title="Estimated cost per succeeded run"
               className={COLUMN_WIDTH.figure}
             >
               Per run

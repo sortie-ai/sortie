@@ -1,14 +1,11 @@
 import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "@/components/icons";
 import { Card } from "@/components/ui/card";
-import { HelpHint } from "@/components/ui/hint";
 import { cn } from "@/lib/cn";
 
 import type { TableSort } from "@/components/use-table-sort";
 import type { ComponentProps, FocusEvent, ReactNode, UIEvent } from "react";
 
-export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
-  /** The heading over the table, drawn as a title bar; leave it out when the table sits under a heading that covers more than the table. */
-  title?: ReactNode;
+export interface TableProps extends ComponentProps<"table"> {
   /** Keeps the table from narrowing below a width that fits its columns, so it scrolls sideways instead. */
   isWide?: boolean;
   isCompact?: boolean;
@@ -19,7 +16,8 @@ export interface TableProps extends Omit<ComponentProps<"table">, "title"> {
 /** Records where a second frozen column starts and how far a focused cell must stay from the leading edge to clear them all. */
 function measureFrozen(frame: HTMLDivElement) {
   const heads = [...frame.querySelectorAll("thead th")].slice(0, Number(frame.dataset.frozen));
-  const widths = heads.map((head) => (head as HTMLElement).offsetWidth);
+  const isFrozen = heads.length > 0 && getComputedStyle(heads[0]).position === "sticky";
+  const widths = heads.map((head) => (isFrozen ? (head as HTMLElement).offsetWidth : 0));
   frame.style.setProperty("--frozen-lead", `${widths[0] ?? 0}px`);
   frame.style.setProperty("--frozen-width", `${widths.reduce((sum, width) => sum + width, 0)}px`);
 }
@@ -39,7 +37,6 @@ function onFrozenFocus(event: FocusEvent<HTMLDivElement>) {
 
 /** Every other prop reaches the `<table>`. A look a table needs that the parts below lack is added to them, never drawn on a screen. */
 export function Table({
-  title,
   isWide = false,
   isCompact = false,
   frozenColumns,
@@ -47,7 +44,7 @@ export function Table({
   ...props
 }: TableProps) {
   return (
-    <Card title={title}>
+    <Card>
       <div
         className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
         data-frozen={frozenColumns}
@@ -80,10 +77,16 @@ export function TableHeader({ children }: TableHeaderProps) {
   );
 }
 
-/** Renders one body. A table holds several when it groups its rows. */
+/** Renders one body. A table holds several when it groups its rows; a rule sets each off, and a table without a head lets the frame draw its top. */
 export function TableBody({ className, ...props }: ComponentProps<"tbody">) {
   return (
-    <tbody className={cn("divide-y divide-line border-t border-line", className)} {...props} />
+    <tbody
+      className={cn(
+        "divide-y divide-line-solid border-t border-line-solid first:border-t-0",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
@@ -102,7 +105,7 @@ export function TableRow({ look = "plain", className, ...props }: TableRowProps)
   return (
     <tr
       className={cn(
-        "outline-focus-ring transition-colors duration-(--duration-feedback) hover:bg-state-hover focus-visible:outline-2 focus-visible:-outline-offset-2",
+        "outline-focus-ring transition-[background-color] duration-(--duration-feedback) hover:bg-state-hover focus-visible:outline-2 focus-visible:-outline-offset-2",
         ROW_LOOK[look],
         className,
       )}
@@ -138,8 +141,6 @@ export function TableHead({ align = "left", title, className, children }: TableH
 export interface SortableHeadProps extends TableHeadProps {
   columnId: string;
   sort: TableSort;
-  /** A note behind a question-mark icon after the header, for a definition too long for the header itself. */
-  help?: string;
 }
 
 export function SortableHead({
@@ -147,7 +148,6 @@ export function SortableHead({
   sort,
   align = "left",
   title,
-  help,
   className,
   children,
 }: SortableHeadProps) {
@@ -181,11 +181,6 @@ export function SortableHead({
         {children}
         <Arrow className={cn("size-3", direction === undefined && "text-line-strong")} />
       </button>
-      {help === undefined ? undefined : (
-        <span className="ml-xxs inline-flex align-middle">
-          <HelpHint hint={help} label="About this column" />
-        </span>
-      )}
     </th>
   );
 }
@@ -193,12 +188,12 @@ export function SortableHead({
 const CELL_LOOK = {
   text: "",
   muted: "text-ink-muted",
-  number: "text-right",
-  "number-muted": "text-right text-ink-muted",
+  number: "text-right tabular-nums",
+  "number-muted": "text-right text-ink-muted tabular-nums",
 } as const;
 
 export interface TableCellProps extends ComponentProps<"td"> {
-  /** `number` right-aligns a figure; `muted` and `number-muted` quiet a cell that holds nothing worth reading, such as a zero. */
+  /** `number` right-aligns a figure in tabular digits; `muted` and `number-muted` quiet an empty cell, such as a zero. */
   look?: keyof typeof CELL_LOOK;
   /** A muted fact after the content on its line, such as the reason beside a count. */
   aside?: ReactNode;
@@ -219,7 +214,7 @@ export function TableCell({
   return (
     <td
       className={cn(
-        "px-md py-sm align-baseline tabular-nums",
+        "px-md py-sm align-baseline",
         isWrapping ? "whitespace-normal" : "whitespace-nowrap",
         CELL_LOOK[look],
         className,

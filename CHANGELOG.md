@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
 - The attention and next-step sentences of the dashboard and the JSON API say "bot review comments" throughout, where some said "review bot comments".
 - The dashboard sets names such as rules, agent kinds, models and skills in a monospace face, and writes every cost with two decimals, including $100 and more.
+- Every dashboard page opens with the same header, a title with a standfirst that says in a sentence what the page shows, and sets its sections off as panels with titles of their own. The issue page and the session page take the same form.
 
 ### Fixed
 
