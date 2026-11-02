@@ -235,8 +235,11 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 
 	baseLogger := slog.Default().With(slog.String("component", "claude-adapter"))
 
+	// The project directory is named after the runtime's physical working
+	// directory, which a remote host's symlinks can make differ from the
+	// workspace path; a session id is unique across project directories.
 	journalOf := func(id string) agentcore.RuntimePath {
-		return journalFile(journalDir(target.WorkspacePath), id+".jsonl")
+		return journalFile("*", id+".jsonl")
 	}
 	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID,
 		agentcore.RuntimeFileProbe(target, agentcore.ReadTimeout(params.AgentConfig), journalOf), baseLogger)

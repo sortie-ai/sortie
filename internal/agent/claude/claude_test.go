@@ -117,6 +117,25 @@ func TestStartSession_ResumedSessionDeliversTheModelOnEveryTurn(t *testing.T) {
 	}
 }
 
+func TestStartSession_ContinuesASessionJournaledUnderAnotherPhysicalPath(t *testing.T) {
+	// Not parallel: the held session is staged under CLAUDE_CONFIG_DIR through t.Setenv.
+	adapter, _ := NewClaudeCodeAdapter()
+	const resumeID = "resume-1234-5678-abcd-ef0123456789"
+	stageHeldSession(t, "/private/remote/physical/workspace", resumeID)
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:   t.TempDir(),
+		AgentConfig:     domain.AgentConfig{Command: fakeClaude(t, t.TempDir(), agenttest.Output{})},
+		ResumeSessionID: resumeID,
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	if !session.CarriedHistory || session.ID != resumeID {
+		t.Errorf("StartSession() = {ID: %q, CarriedHistory: %v}, want {%q, true}", session.ID, session.CarriedHistory, resumeID)
+	}
+}
+
 func TestSessionContinuity(t *testing.T) {
 	// Not parallel: the held session is staged under CLAUDE_CONFIG_DIR through t.Setenv.
 	adapter, _ := NewClaudeCodeAdapter()
