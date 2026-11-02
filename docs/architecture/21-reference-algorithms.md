@@ -1327,6 +1327,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
         state = schedule_retry(state, issue_id, attempt, {
           identifier: running_entry.identifier,
           error: format("worker exited: %reason"),
+          session_id: worker_result.unstarted_resume_id,
           due_at: max(hold.resets_at, now() + backoff_delay(attempt)),
           trigger: "usage_limit",
           usage_limit_notified: true
@@ -1336,6 +1337,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
       state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
         identifier: running_entry.identifier,
         error: format("worker exited: %reason"),
+        session_id: worker_result.unstarted_resume_id,
         usage_limit_notified: refused                  // a refusal with no usable reset keeps the ordinary backoff
       })
     # else: the retry slot (Section 7.5) is occupied, so this exit defers

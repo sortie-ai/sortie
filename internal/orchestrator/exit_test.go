@@ -1058,12 +1058,13 @@ func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	turnTimeoutErr := &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"}
 
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:       "ISSUE-2",
-		Identifier:    "ISSUE-2-ident",
-		ExitKind:      WorkerExitError,
-		Error:         turnTimeoutErr,
-		AgentAdapter:  "mock",
-		WorkspacePath: "/tmp/ws",
+		IssueID:           "ISSUE-2",
+		Identifier:        "ISSUE-2-ident",
+		ExitKind:          WorkerExitError,
+		Error:             turnTimeoutErr,
+		UnstartedResumeID: "prev-sess",
+		AgentAdapter:      "mock",
+		WorkspacePath:     "/tmp/ws",
 	}, params)
 
 	if _, ok := state.Running["ISSUE-2"]; ok {
@@ -1084,6 +1085,9 @@ func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	}
 	if retryEntry.Attempt != 1 {
 		t.Errorf("retry Attempt = %d, want 1", retryEntry.Attempt)
+	}
+	if retryEntry.SessionID != "prev-sess" {
+		t.Errorf("retry SessionID = %q, want the unstarted resume id %q", retryEntry.SessionID, "prev-sess")
 	}
 	if !strings.Contains(retryEntry.Error, "worker exited:") {
 		t.Errorf("retry Error = %q, want to contain %q", retryEntry.Error, "worker exited:")

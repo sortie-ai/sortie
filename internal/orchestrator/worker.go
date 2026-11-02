@@ -106,6 +106,10 @@ type WorkerResult struct {
 	// returned when the worker exits on it; else nil.
 	StartupError error
 
+	// UnstartedResumeID is the session an exit before session start was
+	// asked to resume; else empty.
+	UnstartedResumeID string
+
 	// CancelCause is the worker context's cancellation cause on a cancelled
 	// exit; nil otherwise.
 	CancelCause error
@@ -778,6 +782,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	reported := false
 
 	var acceptedSessionID string
+	var sessionStarted bool
 	var lastPromptAt time.Time
 
 	// cancelledAtEnding is read right after the call that last ended a run attempt.
@@ -800,6 +805,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			result.CancelCause = context.Cause(ctx)
 		}
 		result.SessionID = acceptedSessionID
+		if !sessionStarted {
+			result.UnstartedResumeID = deps.ResumeSessionID
+		}
 		result.LastPromptAt = lastPromptAt
 		result.UsageByModel = maps.Clone(localUsageByModel)
 		result.UsageProvenance = slices.Clone(localProvenance)
@@ -879,7 +887,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var turnsStarted int
 	var observedIssueState string
 	var session domain.Session
-	var sessionStarted bool
 	var mcpConfigPath string
 	var sessionStartedAt time.Time
 	var handoffEvidenceBaseline *workspace.HandoffEvidenceBaseline
