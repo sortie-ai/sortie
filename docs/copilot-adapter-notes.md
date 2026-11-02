@@ -26,12 +26,14 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
-A resume of a session the runtime cannot find fails the turn and never starts a new conversation in its place. That holds for an ID that never existed, a deleted session directory, and a session whose `events.jsonl` was deleted. The process exits 1, stdout is empty with no `result` line, and stderr reads `Error: No session, task, or name matched '<uuid>'`. The `sessionId` of a `result` equals the requested ID either way, so it tells nothing. A journal that is present but holds a line that does not parse resumes with exit 0 and no history, which only a hand edit has produced: a turn killed mid-reply left every line valid. Sortie does not check the journal before a resume. To reproduce, seed a session under a fresh UUID, resume it, then resume a UUID that never existed:
+A resume of a session the runtime cannot find fails the turn and never starts a new conversation in its place. That holds for an ID that never existed, a deleted session directory, and a session whose `events.jsonl` was deleted. The process exits 1, stdout is empty with no `result` line, and stderr reads `Error: No session, task, or name matched '<uuid>'`. To reproduce, seed a session under a fresh UUID and resume it, resume a UUID that never existed, then delete the seeded session's directory and resume it again:
 
 ```sh
 copilot -p "Remember the word PELICAN. Reply only OK." --output-format json -s --no-ask-user --allow-all --session-id <uuid>
 copilot -p "What word did I ask you to remember? Reply NONE if you do not know." --output-format json -s --no-ask-user --allow-all --resume <uuid>
 copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resume <unused-uuid>; echo "exit $?"
+rm -r ~/.copilot/session-state/<uuid>
+copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resume <uuid>; echo "exit $?"
 ```
 
 The adapter opens the runtime's session-state tree only by a known ID, and the shared read validates that ID against a path-segment character set before any file opens or process starts. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.

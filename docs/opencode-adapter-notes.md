@@ -65,10 +65,12 @@ The export runs after the reap, on a context that outlives the turn's cancellati
 
 A session ID is server-generated and learned from the first envelope that carries one. The adapter adopts it, and a later envelope carrying a different ID is treated as a fault that fails the turn rather than a thing to reconcile.
 
-`--session <id>` continues the session or, when no session has that ID, creates a new empty one under it. The run exits 0, every envelope carries the requested ID, and nothing in the stream marks the replacement; the different-ID check never fires. The signal comes before the turn: `opencode session export <id>` of a missing session exits 1 with `Session not found: <id>` on stderr, and the adapter already runs that export when a continued session starts. Any other export failure, such as a timeout or a lost SSH connection, says nothing about the session. Resuming from a directory other than the one that created the session carries its history. To reproduce, seed a session in an empty directory and take `<session-id>` from the `sessionID` of its output, delete it, then export and resume it:
+`--session <id>` continues the session or, when no session has that ID, creates a new empty one under it. The run exits 0, every envelope carries the requested ID, and nothing in the stream marks the replacement; the different-ID check never fires. The signal comes before the turn: `opencode session export <id>` of a missing session exits 1 with `Session not found: <id>` on stderr, and the adapter already runs that export when a continued session starts. Any other export failure, such as a timeout or a lost SSH connection, says nothing about the session. Resuming from a directory other than the one that created the session carries its history. To reproduce, seed a session in an empty directory and take `<session-id>` from the `sessionID` of its output, resume it from a second empty directory, then delete it and export and resume it:
 
 ```sh
 echo "Remember the word PELICAN. Reply only OK." | opencode run --standalone --format json
+cd <second-empty-dir>
+echo "What word did I ask you to remember? Reply NONE if you do not know." | opencode run --standalone --format json --session <session-id>
 opencode session delete --standalone <session-id>
 opencode session export --standalone <session-id>; echo "exit $?"
 echo "What word did I ask you to remember? Reply NONE if you do not know." | opencode run --standalone --format json --session <session-id>; echo "exit $?"
