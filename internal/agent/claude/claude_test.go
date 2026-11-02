@@ -25,23 +25,14 @@ import (
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-// sequentialOutputScenario is the fake runtime scenario a two-turn
-// session drives: the first invocation on a given marker file returns
-// one [agenttest.Output], every later invocation on the same marker
-// returns another.
 const sequentialOutputScenario = "claude.sequentialOutput"
 
-// sequentialOutputParams parameterizes sequentialOutputScenario.
 type sequentialOutputParams struct {
 	MarkerPath string
 	First      agenttest.Output
 	Then       agenttest.Output
 }
 
-// scenarioSequentialOutput implements sequentialOutputScenario: it
-// creates MarkerPath on its first invocation and returns First, then
-// returns Then on every later invocation that finds the marker already
-// present.
 func scenarioSequentialOutput(_ []string, params sequentialOutputParams) int {
 	out := params.Then
 	if _, err := os.Stat(params.MarkerPath); err != nil {
@@ -79,8 +70,12 @@ func TestNewClaudeCodeAdapter(t *testing.T) {
 func startSettingsSession(t *testing.T, adapter domain.AgentAdapter, settings map[string]any, resumeID string) *sessionState {
 	t.Helper()
 
+	workspace := t.TempDir()
+	if resumeID != "" {
+		stageHeldSession(t, workspace, resumeID)
+	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   t.TempDir(),
+		WorkspacePath:   workspace,
 		AgentConfig:     domain.AgentConfig{Command: fakeClaude(t, t.TempDir(), agenttest.Output{})},
 		ResumeSessionID: resumeID,
 		Settings:        settings,
@@ -112,8 +107,7 @@ func TestStartSession_SettingsArePerSession(t *testing.T) {
 }
 
 func TestStartSession_ResumedSessionDeliversTheModelOnEveryTurn(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: the held session is staged under CLAUDE_CONFIG_DIR through t.Setenv.
 	adapter, _ := NewClaudeCodeAdapter()
 
 	state := startSettingsSession(t, adapter, map[string]any{"model": "model-m"}, "resume-1234-5678-abcd-ef0123456789")
@@ -121,6 +115,27 @@ func TestStartSession_ResumedSessionDeliversTheModelOnEveryTurn(t *testing.T) {
 	for turn := 1; turn <= 2; turn++ {
 		assertHasArgPair(t, buildArgs(state, turn, "p", state.passthrough), "--model", "model-m")
 	}
+}
+
+func TestSessionContinuity(t *testing.T) {
+	// Not parallel: the held session is staged under CLAUDE_CONFIG_DIR through t.Setenv.
+	adapter, _ := NewClaudeCodeAdapter()
+
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		t.Helper()
+
+		workspace := t.TempDir()
+		stageHeldSession(t, workspace, held)
+		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath:   workspace,
+			AgentConfig:     domain.AgentConfig{Command: fakeClaude(t, t.TempDir(), agenttest.Output{})},
+			ResumeSessionID: resumeID,
+		})
+		if err == nil {
+			t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+		}
+		return session, err
+	})
 }
 
 func TestRegistration(t *testing.T) {
@@ -142,8 +157,6 @@ func TestRegistration(t *testing.T) {
 func TestStartSession(t *testing.T) {
 	t.Parallel()
 
-	// Both subtests below fail during workspace resolution, before the
-	// command is ever looked up, so its value is unreached.
 	const existingCmd = "unused-command"
 
 	tests := []struct {
@@ -244,34 +257,11 @@ func TestStartSession_NewSession(t *testing.T) {
 	}
 }
 
-func TestStartSession_ResumeSession(t *testing.T) {
-	t.Parallel()
-
-	adapter, _ := NewClaudeCodeAdapter()
-	resumeID := "resume-1234-5678-abcd-ef0123456789"
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   t.TempDir(),
-		AgentConfig:     domain.AgentConfig{Command: fakeClaude(t, t.TempDir(), agenttest.Output{})},
-		ResumeSessionID: resumeID,
-	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-	if session.ID != resumeID {
-		t.Errorf("session ID = %q, want %q", session.ID, resumeID)
-	}
-	state := session.Internal.(*sessionState)
-	if !state.isContinuation {
-		t.Error("isContinuation = false, want true")
-	}
-}
-
 func TestStartSession_DefaultCommand(t *testing.T) {
 	t.Parallel()
 
 	adapter, _ := NewClaudeCodeAdapter()
 
-	// With empty command, defaults to "claude" which likely isn't on PATH in CI.
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{},
@@ -442,18 +432,19 @@ func TestBuildArgs(t *testing.T) {
 			for i := 0; i < len(tt.wantArgs); i++ {
 				found := false
 				for j := range got {
-					if got[j] == tt.wantArgs[i] {
-						// Check value arg too if there's a pair.
-						if i+1 < len(tt.wantArgs) && j+1 < len(got) && got[j+1] == tt.wantArgs[i+1] {
-							found = true
-							i++ // skip value
-							break
-						}
-						// Standalone flag.
-						if i+1 >= len(tt.wantArgs) || strings.HasPrefix(tt.wantArgs[i+1], "--") || tt.wantArgs[i+1] == "-p" {
-							found = true
-							break
-						}
+					if got[j] != tt.wantArgs[i] {
+						continue
+					}
+					valueMatches := i+1 < len(tt.wantArgs) && j+1 < len(got) && got[j+1] == tt.wantArgs[i+1]
+					if valueMatches {
+						found = true
+						i++
+						break
+					}
+					isStandaloneFlag := i+1 >= len(tt.wantArgs) || strings.HasPrefix(tt.wantArgs[i+1], "--") || tt.wantArgs[i+1] == "-p"
+					if isStandaloneFlag {
+						found = true
+						break
 					}
 				}
 				if !found {
@@ -483,11 +474,8 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 	}
 }
 
-// TestBuildArgs_DefaultConfigurationSkipsPermissions asserts that the full
-// configuration path, from an empty WORKFLOW.md claude-code sub-object
-// through buildArgs, passes --dangerously-skip-permissions. This is the
-// launch posture the refusal path in ParseLine assumes: no reply channel,
-// so every recognized request reads replyChannel = false.
+// observePermissionDenied relies on this flag leaving the runtime no reply
+// channel.
 func TestBuildArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -560,8 +548,8 @@ func TestParsePassthroughConfig(t *testing.T) {
 	t.Run("wrong non-string types ignored", func(t *testing.T) {
 		t.Parallel()
 		cfg, fault := parsePassthroughConfig(map[string]any{
-			"max_turns":      "five", // string instead of int
-			"max_budget_usd": "lots", // string instead of float
+			"max_turns":      "five",
+			"max_budget_usd": "lots",
 		})
 		if fault != nil {
 			t.Fatalf("parsePassthroughConfig: %v", fault)
@@ -577,7 +565,7 @@ func TestParsePassthroughConfig(t *testing.T) {
 	t.Run("wrong string type reports a fault", func(t *testing.T) {
 		t.Parallel()
 		_, fault := parsePassthroughConfig(map[string]any{
-			"model": 42, // int instead of string
+			"model": 42,
 		})
 		if fault == nil {
 			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
@@ -628,17 +616,11 @@ func TestStopSession_NilProc(t *testing.T) {
 	}
 }
 
-// fakeClaude creates a fake runtime executable in dir that behaves per
-// out and returns its path, for use as [domain.AgentConfig.Command].
 func fakeClaude(t *testing.T, dir string, out agenttest.Output) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, dir, "fake-claude", agenttest.OutputScenario, out)
 }
 
-// fakeSequentialClaude creates a fake runtime executable in dir that
-// returns first on its first invocation and then on every later
-// invocation, for use as [domain.AgentConfig.Command] across a
-// session's turns.
 func fakeSequentialClaude(t *testing.T, dir string, first, then agenttest.Output) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, dir, "fake-claude", sequentialOutputScenario, sequentialOutputParams{
@@ -726,8 +708,6 @@ func TestRunTurn_SuccessfulSession(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_APIDurationMS_Success verifies that the turn-completed event
-// carries APIDurationMS from the result's duration_api_ms field.
 func TestRunTurn_APIDurationMS_Success(t *testing.T) {
 	t.Parallel()
 
@@ -756,7 +736,6 @@ func TestRunTurn_APIDurationMS_Success(t *testing.T) {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	// Find the turn_completed event.
 	var found bool
 	for _, e := range events {
 		if e.Type == domain.EventTurnCompleted {
@@ -771,8 +750,6 @@ func TestRunTurn_APIDurationMS_Success(t *testing.T) {
 	}
 }
 
-// TestRunTurn_APIDurationMS_Error verifies that the turn-failed event
-// carries APIDurationMS from the result's duration_api_ms field.
 func TestRunTurn_APIDurationMS_Error(t *testing.T) {
 	t.Parallel()
 
@@ -798,7 +775,6 @@ func TestRunTurn_APIDurationMS_Error(t *testing.T) {
 		},
 	})
 
-	// Find the turn_failed event.
 	var found bool
 	for _, e := range events {
 		if e.Type == domain.EventTurnFailed {
@@ -813,8 +789,6 @@ func TestRunTurn_APIDurationMS_Error(t *testing.T) {
 	}
 }
 
-// TestRunTurn_APIDurationMS_ZeroWhenAbsent verifies that APIDurationMS
-// defaults to 0 when the result line omits duration_api_ms.
 func TestRunTurn_APIDurationMS_ZeroWhenAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -1019,6 +993,14 @@ func stageJournal(t *testing.T, configDir, cwd, sessionID, fixture string) {
 	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), loadFixture(t, fixture), 0o600); err != nil {
 		t.Fatalf("staging journal %s: %v", fixture, err)
 	}
+}
+
+func stageHeldSession(t *testing.T, workspace, sessionID string) {
+	t.Helper()
+
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	stageJournal(t, configDir, workspace, sessionID, "journal/fresh.jsonl")
 }
 
 func tokens(input, output, cacheRead, cacheWrite int64) domain.TokenUsage {
@@ -1310,7 +1292,6 @@ func TestRunTurn_MalformedOutput(t *testing.T) {
 		t.Errorf("ExitReason = %q", result.ExitReason)
 	}
 
-	// First event should be malformed.
 	if len(events) < 1 {
 		t.Fatal("no events received")
 	}
@@ -1323,7 +1304,6 @@ func TestRunTurn_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	// A runtime that hangs long enough for cancellation to fire.
 	script := fakeClaude(t, tmpDir, agenttest.Output{
 		Stdout: `{"type":"system","subtype":"init","session_id":"cancel-test","cwd":"/tmp"}
 `,
@@ -1350,7 +1330,6 @@ func TestRunTurn_ContextCancellation(t *testing.T) {
 			Prompt: "test",
 			OnEvent: func(e domain.AgentEvent) {
 				events = append(events, e)
-				// Cancel as soon as the init event arrives.
 				if e.Type == domain.EventSessionStarted {
 					cancel()
 				}
@@ -1375,9 +1354,6 @@ func TestRunTurn_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestRunTurn_ContextCancelledBeforeStart verifies that RunTurn emits
-// EventTurnCancelled and returns ErrTurnCancelled when the context is already
-// done before cmd.Start is called.
 func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
 	t.Parallel()
 
@@ -1394,7 +1370,7 @@ func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel before RunTurn
+	cancel()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
@@ -1432,8 +1408,6 @@ func TestRunTurn_PanicsOnNilOnEvent(t *testing.T) {
 	t.Parallel()
 
 	adapter, _ := NewClaudeCodeAdapter()
-	// OnEvent is nil, so RunTurn panics before this target is ever
-	// resolved or launched; its Command value is unreached.
 	session := domain.Session{
 		ID:       "panic-test",
 		Internal: &sessionState{target: agentcore.LaunchTarget{Command: "unused-command", WorkspacePath: t.TempDir()}},
@@ -1478,7 +1452,6 @@ func TestRunTurn_APIRetryEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Find the notification event for api_retry.
 	found := false
 	for _, e := range events {
 		if e.Type == domain.EventNotification && strings.Contains(e.Message, "API retry attempt") {
@@ -1577,13 +1550,7 @@ func TestRunTurn_UnknownEventType(t *testing.T) {
 	}
 }
 
-// TestRunTurn_PermissionDeniedContinuesTurn drives the wire shape observed
-// against a live claude CLI (v2.1.239): an undocumented system event with
-// subtype permission_denied and a tool_name field, produced when the
-// runtime denies a tool call on its own before the tool's own tool_result.
-// Because the tool named is not AskUserQuestion, this is a permission
-// request the runtime already refused, so the turn must continue rather
-// than end.
+// The event shape was captured from a live claude CLI (v2.1.239).
 func TestRunTurn_PermissionDeniedContinuesTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1629,14 +1596,8 @@ func TestRunTurn_PermissionDeniedContinuesTurn(t *testing.T) {
 	}
 }
 
-// TestRunTurn_PermissionDeniedAskUserQuestionEndsAttempt drives the
-// adapter's own classification logic, not an observed runtime ending: given
-// a system/permission_denied event naming the built-in AskUserQuestion
-// tool, the adapter infers a genuine question rather than a request for
-// consent to act (AskUserQuestion resolving through this same event shape
-// was never itself captured on a live transcript) and ends the attempt with
-// the human-input-required outcome and the "an answer to a question"
-// detail.
+// No live transcript shows AskUserQuestion denied through this event; the
+// test pins the adapter's own classification.
 func TestRunTurn_PermissionDeniedAskUserQuestionEndsAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -1666,7 +1627,6 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	// Runtime outputs no result event and exits 0.
 	script := fakeClaude(t, tmpDir, agenttest.Output{Stdout: `{"type":"system","subtype":"init","session_id":"noresult","cwd":"/tmp"}
 `})
 
@@ -1749,10 +1709,6 @@ func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_ToolActivityOnlyNoResultExitZero drives a stream carrying
-// completed tool activity and no assistant text at all, exiting zero
-// with no terminal result event, and pins that tool activity alone is
-// sufficient to report turn_completed.
 func TestRunTurn_ToolActivityOnlyNoResultExitZero(t *testing.T) {
 	t.Parallel()
 
@@ -1787,12 +1743,6 @@ func TestRunTurn_ToolActivityOnlyNoResultExitZero(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_AssistantAndToolNoUsageNoResultCompletes pins regression
-// coverage for claude: a stream carrying assistant text and completed
-// tool activity, no per-message usage object anywhere, and no terminal
-// result event, still reports turn_completed. The composed stream is
-// asserted to carry no usage object, so a future revert to a
-// token-count derivation fails this test rather than passing it.
 func TestRunTurn_AssistantAndToolNoUsageNoResultCompletes(t *testing.T) {
 	t.Parallel()
 
@@ -1840,13 +1790,6 @@ func TestRunTurn_AssistantAndToolNoUsageNoResultCompletes(t *testing.T) {
 	}
 }
 
-// TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus drives committed
-// testdata/ fixtures and pins that each field the claude WorkSignals
-// declaration sets true is observed by at least one of them:
-// tool_only_no_text.jsonl carries a tool call and no text block at all,
-// so its own shape attributes the observation to ToolActivity alone, and
-// full_session.jsonl's final assistant message carries a plain text
-// block, attributing an observation to AssistantOutput.
 func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
 	t.Parallel()
 
@@ -1954,7 +1897,6 @@ func TestStopSession_RunningProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start RunTurn in a goroutine.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1974,7 +1916,6 @@ func TestStopSession_RunningProcess(t *testing.T) {
 
 	<-started
 
-	// StopSession should terminate the process.
 	err = adapter.StopSession(context.Background(), session)
 	if err != nil {
 		t.Errorf("StopSession() error = %v", err)
@@ -2120,10 +2061,6 @@ func TestRunTurn_ToolResultInAssistantEvent(t *testing.T) {
 	}
 }
 
-// TestRunTurn_ToolResultErrorText verifies that when a tool call completes
-// with is_error: true, the EventToolResult Message contains the actual error
-// text from the tool_result content block, not the generic
-// "tool_result: <name>" placeholder.
 func TestRunTurn_ToolResultErrorText(t *testing.T) {
 	t.Parallel()
 
@@ -2186,8 +2123,6 @@ func TestRunTurn_ToolResultErrorText(t *testing.T) {
 	}
 }
 
-// TestToolResultText verifies the toolResultText helper correctly extracts
-// error text from various rawContentBlock shapes.
 func TestToolResultText(t *testing.T) {
 	t.Parallel()
 
@@ -2244,23 +2179,19 @@ func TestToolResultText(t *testing.T) {
 	}
 }
 
-// TestTruncateToolError verifies the truncateToolError helper enforces the
-// byte ceiling while preserving UTF-8 rune boundaries using the
-// first-line-plus-tail algorithm.
 func TestTruncateToolError(t *testing.T) {
 	t.Parallel()
 
-	// 172 CJK runes × 3 bytes = 516 bytes.
 	cjk := strings.Repeat("一", 172)
 
 	tests := []struct {
 		name     string
 		input    string
 		maxLen   int
-		wantLen  int    // expected len(result); 0 means check wantSame/wantHead/wantTail
-		wantSame bool   // true if result must equal input
-		wantHead string // if non-empty, result must start with this
-		wantTail string // if non-empty, result must end with this
+		wantLen  int
+		wantSame bool
+		wantHead string
+		wantTail string
 	}{
 		{
 			name:     "short_string",
@@ -2275,21 +2206,16 @@ func TestTruncateToolError(t *testing.T) {
 			wantSame: true,
 		},
 		{
-			// Pin to 512 to preserve as a boundary test. No newline in
-			// input, so tailBytes keeps the last 512 bytes.
 			name:    "600_ascii_bytes",
 			input:   strings.Repeat("a", 600),
 			maxLen:  512,
 			wantLen: 512,
 		},
 		{
-			// Pin to 512 to preserve CJK rune-boundary coverage.
-			// tailBytes(cjk, 512): 512 mod 3 = 1 (continuation byte),
-			// advances to next rune start: 510 bytes (170 full runes).
 			name:    "multibyte_mid_rune_boundary",
 			input:   cjk,
 			maxLen:  512,
-			wantLen: 510, // 170 full CJK runes × 3 bytes
+			wantLen: 510, // byte 512 from the end is mid-rune, so the tail starts one rune later
 		},
 		{
 			name:     "multiline_tail_preserving",
@@ -2317,7 +2243,6 @@ func TestTruncateToolError(t *testing.T) {
 			wantLen: 512,
 		},
 		{
-			// Tail lands mid-rune; tailBytes must advance to valid rune start.
 			name:     "multiline_tail_utf8_boundary",
 			input:    "Exit code 1\n" + strings.Repeat("一", 200) + "\nFAIL",
 			maxLen:   512,
@@ -2358,8 +2283,6 @@ func TestTruncateToolError(t *testing.T) {
 	}
 }
 
-// TestStripClaudeMarkup verifies that stripClaudeMarkup removes the
-// <tool_use_error> XML wrapper and ANSI escape sequences from error text.
 func TestStripClaudeMarkup(t *testing.T) {
 	t.Parallel()
 
@@ -2422,9 +2345,6 @@ func TestStripClaudeMarkup(t *testing.T) {
 	}
 }
 
-// TestProcessToolBlocks_XMLStripping verifies that processToolBlocks strips
-// the <tool_use_error> XML wrapper from tool error messages before emitting
-// events.
 func TestProcessToolBlocks_XMLStripping(t *testing.T) {
 	t.Parallel()
 
@@ -2467,14 +2387,9 @@ func TestProcessToolBlocks_XMLStripping(t *testing.T) {
 	}
 }
 
-// TestProcessToolBlocks_TailTruncation verifies that processToolBlocks
-// preserves the first line and the failure-bearing tail of large CLI output
-// within the maxToolErrorLen byte budget.
 func TestProcessToolBlocks_TailTruncation(t *testing.T) {
 	t.Parallel()
 
-	// Build a content string that exceeds 2048 bytes:
-	// "Exit code 2\n" + 80 ok-lines + "FAIL ...\n"
 	var b strings.Builder
 	b.WriteString("Exit code 2\n")
 	for range 80 {
@@ -2483,7 +2398,6 @@ func TestProcessToolBlocks_TailTruncation(t *testing.T) {
 	b.WriteString("FAIL github.com/example/fail_pkg 0.5s\n")
 	largeOutput := b.String()
 
-	// Wrap in JSON string for rawContentBlock.Content.
 	contentJSON, err := json.Marshal(largeOutput)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
@@ -2525,9 +2439,6 @@ func TestProcessToolBlocks_TailTruncation(t *testing.T) {
 	}
 }
 
-// TestRunTurn_ToolResultXMLWrappedError verifies end-to-end that an
-// XML-wrapped tool error from the Claude Code subprocess has its
-// <tool_use_error> envelope stripped before reaching the emitted event.
 func TestRunTurn_ToolResultXMLWrappedError(t *testing.T) {
 	t.Parallel()
 
@@ -2737,9 +2648,6 @@ func TestRunTurn_PerRequestAPIDurationMS_NoInitGuard(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrWarnOnExitCode127 verifies that when the subprocess
-// writes to stderr and exits with code 127, the stderr lines are
-// re-emitted at WARN level.
 func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -2777,9 +2685,6 @@ func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrWarnOnResultError verifies that when the subprocess
-// emits a result event with is_error:true, the stderr lines are
-// re-emitted at WARN level.
 func TestRunTurn_StderrWarnOnResultError(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -2815,9 +2720,6 @@ func TestRunTurn_StderrWarnOnResultError(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrWarnOnNonZeroExit verifies that when the subprocess
-// exits with a non-zero code (not 127) and no result event, the stderr
-// lines are re-emitted at WARN level.
 func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -2855,8 +2757,6 @@ func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrNoWarnOnSuccess verifies that when the subprocess
-// succeeds, stderr lines are not re-emitted at WARN level.
 func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -2894,10 +2794,6 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	}
 }
 
-// TestRunTurn_SuccessfulResultZeroOutputTokens pins that a successful
-// result event completes the turn even when this turn's output tokens
-// are zero, because a positive terminal report is authoritative and
-// never consults Work.
 func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
 	t.Parallel()
 
@@ -2935,11 +2831,6 @@ func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_WorkPredicateIsPerTurn pins that the work predicate reads
-// this turn's own output tokens, not the run cumulative. The first turn
-// produces output and completes; the second turn, on the same session,
-// produces none and must fail rather than inherit the first turn's
-// evidence.
 func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 	t.Parallel()
 
@@ -2985,10 +2876,6 @@ func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 	}
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
-// session's second turn, whose stream carries neither declared signal,
-// reports turn_failed even though the first turn on the same session
-// carried both assistant output and completed tool activity.
 func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 	t.Parallel()
 

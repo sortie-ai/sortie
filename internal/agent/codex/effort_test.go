@@ -45,11 +45,12 @@ func (r *recordingSession) recorded(t *testing.T, method string) []recordedFrame
 	return frames
 }
 
-func startRecordingSessionE(t *testing.T, adapter *CodexAdapter, settings map[string]any, resumeID string, verification bool) (*recordingSession, error) {
+func startRecordingSessionE(t *testing.T, adapter *CodexAdapter, fake recordFramesParams, settings map[string]any, resumeID string, verification bool) (*recordingSession, error) {
 	t.Helper()
 
 	recordPath := filepath.Join(t.TempDir(), "frames")
-	command := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioRecordFrames, recordFramesParams{RecordPath: recordPath})
+	fake.RecordPath = recordPath
+	command := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioRecordFrames, fake)
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:          t.TempDir(),
 		AgentConfig:            domain.AgentConfig{Command: command},
@@ -67,7 +68,7 @@ func startRecordingSessionE(t *testing.T, adapter *CodexAdapter, settings map[st
 func startRecordingSession(t *testing.T, adapter *CodexAdapter, settings map[string]any, resumeID string) *recordingSession {
 	t.Helper()
 
-	session, err := startRecordingSessionE(t, adapter, settings, resumeID, false)
+	session, err := startRecordingSessionE(t, adapter, recordFramesParams{}, settings, resumeID, false)
 	if err != nil {
 		t.Fatalf("StartSession(Settings=%v) error = %v", settings, err)
 	}
@@ -92,7 +93,7 @@ func codexEffortProbe(t *testing.T, settings map[string]any, verification, resum
 		resumeID = "thread-prior"
 	}
 	adapter := &CodexAdapter{}
-	session, err := startRecordingSessionE(t, adapter, settings, resumeID, verification)
+	session, err := startRecordingSessionE(t, adapter, recordFramesParams{}, settings, resumeID, verification)
 	if err != nil {
 		return nil, fmt.Errorf("StartSession: %w", err)
 	}

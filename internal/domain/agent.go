@@ -341,6 +341,12 @@ type Session struct {
 	// server, so the worker withholds the tool advertisement.
 	NoToolChannel bool
 
+	// CarriedHistory reports that the session continues, with its history, the
+	// conversation StartSessionParams.ResumeSessionID names. A session started
+	// without that identifier, or started new in place of it, reports false, and
+	// its ID is never that identifier.
+	CarriedHistory bool
+
 	// Internal holds adapter-specific state the orchestrator must not
 	// read or modify.
 	Internal any
@@ -357,8 +363,8 @@ type StartSessionParams struct {
 	AgentConfig AgentConfig
 
 	// ResumeSessionID, when non-empty, resumes the existing conversation
-	// from a previous worker attempt instead of starting fresh. Adapters
-	// without session continuity ignore it.
+	// from a previous worker attempt instead of starting fresh. The returned
+	// [Session.CarriedHistory] answers whether the adapter continued it.
 	ResumeSessionID string
 
 	// SSHHost, when non-empty, launches the agent on that host via SSH

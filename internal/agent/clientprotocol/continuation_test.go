@@ -5,66 +5,73 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-// resolveSessionOutcome bundles resolveSession's return values so a
-// test can hand them across a goroutine boundary on one channel.
-type resolveSessionOutcome struct {
+type startOutcome struct {
 	sessionID string
-	created   bool
+	carried   bool
 	raw       json.RawMessage
+	probed    bool
+	verdict   agentcore.ResumeVerdict
 	err       *domain.AgentError
 }
 
-// runResolveSessionAsync starts resolveSession on its own goroutine
-// with an empty workspace and no tool servers, neither of which any
-// case in this file depends on, and returns the channel its outcome
-// arrives on so the calling test can drive the simulated peer while
-// the call is in flight.
-func runResolveSessionAsync(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities) <-chan resolveSessionOutcome {
-	ch := make(chan resolveSessionOutcome, 1)
+func runStartAsync(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities) <-chan startOutcome {
+	ch := make(chan startOutcome, 1)
 	go func() {
-		sessionID, created, raw, err := resolveSession(ctx, state, resumeID, caps, "", nil)
-		ch <- resolveSessionOutcome{sessionID: sessionID, created: created, raw: raw, err: err}
+		var outcome startOutcome
+		probe := continuationProbe(state, caps, "", nil)
+		recording := agentcore.ResumeProbeFunc[json.RawMessage](func(ctx context.Context, id string) (continuationSignal, *domain.AgentError) {
+			signal, agentErr := probe.ProbeResume(ctx, id)
+			outcome.probed, outcome.verdict = true, signal.Verdict
+			return signal, agentErr
+		})
+
+		start, agentErr := agentcore.ResolveSessionStart(ctx, resumeID, recording, state.logger)
+		switch {
+		case agentErr != nil:
+			outcome.err = agentErr
+		case start.CarriedHistory():
+			outcome.sessionID, outcome.carried, outcome.raw = start.ResumeID(), true, start.Answer()
+		default:
+			outcome.sessionID, outcome.raw, outcome.err = createNewSession(ctx, state, "", nil)
+		}
+		ch <- outcome
 	}()
 	return ch
 }
 
-func assertCreated(t *testing.T, outcome resolveSessionOutcome, want bool) {
+func awaitStarted(t *testing.T, ch <-chan startOutcome, wantID string, wantCarried bool) startOutcome {
 	t.Helper()
-	if outcome.created != want {
-		t.Errorf("resolveSession() created = %v, want %v", outcome.created, want)
+
+	got := waittest.Receive(t, ch, "start outcome")
+	if got.err != nil {
+		t.Fatalf("start error = %v, want nil", got.err)
 	}
+	if got.sessionID != wantID || got.carried != wantCarried {
+		t.Errorf("start = {id %q, carried %v}, want {id %q, carried %v}", got.sessionID, got.carried, wantID, wantCarried)
+	}
+	return got
 }
 
-// capsAdvertisingLoad returns handshake-advertised capabilities that
-// select the session/load continuation route.
 func capsAdvertisingLoad() agentCapabilities {
 	loadSession := true
 	return agentCapabilities{LoadSession: &loadSession}
 }
 
-// capsAdvertisingResume returns handshake-advertised capabilities that
-// advertise session/resume and no session/load, so the resume route is
-// the one chooseContinuationMethod selects.
 func capsAdvertisingResume() agentCapabilities {
 	return agentCapabilities{SessionCapabilities: &sessionCapabilities{Resume: &sessionResumeCapabilities{}}}
 }
 
-// firstOutboundMethod decodes the very first line the pump wrote and
-// returns its method and raw id, failing t on a decode error. Unlike
-// outboundReader.awaitMethod, which discards lines for any other
-// method while scanning forward, this fails a test outright when an
-// earlier, unwanted line was written first.
 func firstOutboundMethod(t *testing.T, out *outboundReader) (method string, id json.RawMessage) {
 	t.Helper()
 	line := out.next(t)
@@ -75,12 +82,16 @@ func firstOutboundMethod(t *testing.T, out *outboundReader) (method string, id j
 	return h.Method, h.ID
 }
 
-// assertSessionContinuationEntry marks state's session id known, runs
-// one turn to completion, and fails t unless the once-per-session gap
-// notice's mention of the session continuation label matches wantGap.
-// A gap notice is guaranteed to fire regardless of the outcome under
-// test, because a local launch's stage-one record already carries
-// tokenCounts at gap.
+func answerNegativeControl(t *testing.T, out *outboundReader, inPw io.Writer) {
+	t.Helper()
+	respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+}
+
+func sendReplayChunk(t *testing.T, inPw io.Writer, sessionID, text string) {
+	t.Helper()
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"`+sessionID+`","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"`+text+`"}}}}`)
+}
+
 func assertSessionContinuationEntry(t *testing.T, state *sessionState, out *outboundReader, inPw io.Writer, wantGap bool) {
 	t.Helper()
 
@@ -94,6 +105,8 @@ func assertSessionContinuationEntry(t *testing.T, state *sessionState, out *outb
 		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
 	}
 
+	// tokenCounts starts at gap on a local launch, so the notice fires whatever
+	// the outcome under test.
 	notice := firstNotification(t, events)
 	gotGap := strings.Contains(notice.Message, capabilityLabelSessionContinuation)
 	if gotGap != wantGap {
@@ -101,9 +114,25 @@ func assertSessionContinuationEntry(t *testing.T, state *sessionState, out *outb
 	}
 }
 
-// TestChooseContinuationMethod confirms the fixed priority order:
-// session/load first when advertised, session/resume only
-// when load is not, and no continuation method when neither is.
+func assertUpdateReachesTurn(t *testing.T, state *sessionState, out *outboundReader, inPw io.Writer, sessionID, message string) {
+	t.Helper()
+
+	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: sessionID}})
+	var events []domain.AgentEvent
+	turnCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+	respondLine(t, inPw, out.awaitMethod(t, methodSessionPrompt), promptResponse{StopReason: stopReasonEndTurn})
+	if turnOutcome := waittest.Receive(t, turnCh, "turn outcome"); turnOutcome.err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", turnOutcome.err)
+	}
+
+	for _, ev := range events {
+		if ev.Type == domain.EventNotification && ev.Message == message {
+			return
+		}
+	}
+	t.Errorf("events = %+v, want the session/update naming %q to reach the turn", events, sessionID)
+}
+
 func TestChooseContinuationMethod(t *testing.T) {
 	t.Parallel()
 
@@ -134,324 +163,158 @@ func TestChooseContinuationMethod(t *testing.T) {
 	}
 }
 
-// TestResolveSessionEmptyResumeIDSkipsContinuation confirms that an
-// empty ResumeSessionID calls session/new alone, with no negative
-// control and no continuation method ever sent, even though the
-// handshake advertised one.
-func TestResolveSessionEmptyResumeIDSkipsContinuation(t *testing.T) {
-	t.Parallel()
+type continuationScript func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage)
 
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "", capsAdvertisingLoad())
-
-	method, id := firstOutboundMethod(t, out)
-	if method != methodSessionNew {
-		t.Fatalf("first outbound method = %q, want %q: an empty ResumeSessionID must call session/new alone", method, methodSessionNew)
+func rejects(method string, code int) continuationScript {
+	return func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+		answerNegativeControl(t, out, inPw)
+		respondErrorLine(t, inPw, out.awaitMethod(t, method), code, "rejected")
+		respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
 	}
-	respondLine(t, inPw, id, newSessionResponse{SessionID: sessionId("brand-new")})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "brand-new" {
-		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "brand-new")
-	}
-	assertCreated(t, outcome, true)
 }
 
-// TestResolveSessionLoadUnimplementedLowersAndFallsBack confirms that
-// a session/load call answered
-// with the negative control's own error code lowers the
-// sessionContinuation entry and falls back to a new session, without
-// failing the run.
-func TestResolveSessionLoadUnimplementedLowersAndFallsBack(t *testing.T) {
-	t.Parallel()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	respondErrorLine(t, inPw, loadID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil: a continuation the agent does not implement must not fail the run", outcome.err)
-	}
-	if outcome.sessionID != "fallback-session" {
-		t.Errorf("resolveSession() session id = %q, want %q: the fallback session/new's own identifier", outcome.sessionID, "fallback-session")
-	}
-	assertCreated(t, outcome, true)
-
-	assertSessionContinuationEntry(t, state, out, inPw, true)
-}
-
-// TestResolveSessionLoadRealFailureLowersAndFallsBack confirms that a
-// session/load call answered with an error other than
-// the negative control's own code is a real failure of that call, and
-// it still lowers the sessionContinuation entry and falls back, the
-// same as the unimplemented case, because the capability did not
-// deliver either way.
-func TestResolveSessionLoadRealFailureLowersAndFallsBack(t *testing.T) {
-	t.Parallel()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	respondErrorLine(t, inPw, loadID, -32000, "session store unavailable")
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil: a real continuation failure must still fall back rather than fail the run", outcome.err)
-	}
-	if outcome.sessionID != "fallback-session" {
-		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-	}
-	assertCreated(t, outcome, true)
-
-	assertSessionContinuationEntry(t, state, out, inPw, true)
-}
-
-// TestResolveSessionLoadSuccessNoReplayLowersAndFallsBack confirms
-// that a session/load response carrying success is not enough on its
-// own. With no chunk ever replayed for the loaded identifier, the
-// pump's own bounded wait elapses, the entry is lowered, and this
-// falls back to a new session exactly as a load error would.
-func TestResolveSessionLoadSuccessNoReplayLowersAndFallsBack(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		const noReplayReadTimeoutMS = 50
-
-		state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: noReplayReadTimeoutMS}, clientProtocolMaxLineBytes)
-		out := newOutboundReader(outPr)
-
-		outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-		probeID := out.awaitMethod(t, negativeControlMethod)
-		respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-		loadID := out.awaitMethod(t, methodSessionLoad)
-		respondLine(t, inPw, loadID, loadSessionResponse{})
-
-		newID := out.awaitMethod(t, methodSessionNew)
-		respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-		outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-		if outcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil: a load that replays nothing must not fail the run", outcome.err)
+func neverAnswers(method string) continuationScript {
+	return func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+		if method == negativeControlMethod {
+			out.awaitMethod(t, negativeControlMethod)
+		} else {
+			answerNegativeControl(t, out, inPw)
+			out.awaitMethod(t, method)
 		}
-		if outcome.sessionID != "fallback-session" {
-			t.Errorf("resolveSession() session id = %q, want %q: success with no observed replay must not be trusted", outcome.sessionID, "fallback-session")
-		}
-
-		// resolveLoad's wait and the pump's replay deadline share one read
-		// timeout, so resolveLoad can return before the pump has lowered
-		// the entry; the sleep lets the pump's deadline fire first.
-		time.Sleep(5 * noReplayReadTimeoutMS * time.Millisecond)
-		synctest.Wait()
-
-		assertSessionContinuationEntry(t, state, out, inPw, true)
-	})
+		respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
+	}
 }
 
-// TestResolveSessionLoadEarlyChunkDoesNotConfirmReplay confirms that a
-// chunk observed before the session/load control message names the
-// identifier being loaded cannot confirm a load that replays nothing:
-// only a chunk observed for that identifier once the load call is
-// actually in flight counts as replay.
-func TestResolveSessionLoadEarlyChunkDoesNotConfirmReplay(t *testing.T) {
+func TestContinuationOutcome(t *testing.T) {
 	t.Parallel()
 
-	synctest.Test(t, func(t *testing.T) {
-		const noReplayReadTimeoutMS = 50
-
-		state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: noReplayReadTimeoutMS}, clientProtocolMaxLineBytes)
-		out := newOutboundReader(outPr)
-
-		outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-		probeID := out.awaitMethod(t, negativeControlMethod)
-		sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"arrived before the load call was even sent"}}}}`)
-		respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-		loadID := out.awaitMethod(t, methodSessionLoad)
-		respondLine(t, inPw, loadID, loadSessionResponse{})
-
-		newID := out.awaitMethod(t, methodSessionNew)
-		respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-		outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-		if outcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-		}
-		if outcome.sessionID != "fallback-session" {
-			t.Errorf("resolveSession() session id = %q, want %q: a chunk observed before the load call must not confirm the load", outcome.sessionID, "fallback-session")
-		}
-
-		time.Sleep(5 * noReplayReadTimeoutMS * time.Millisecond)
-		synctest.Wait()
-
-		assertSessionContinuationEntry(t, state, out, inPw, true)
-	})
-}
-
-// TestResolveSessionLoadSuccessWithReplayConfirms confirms the
-// converse of the no-replay case: an agent_message_chunk observed for
-// the loaded identifier before the pump's bounded wait elapses
-// confirms the load, so resolveSession returns the loaded identifier
-// itself and never falls back to session/new.
-func TestResolveSessionLoadSuccessWithReplayConfirms(t *testing.T) {
-	t.Parallel()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed from history"}}}}`)
-	respondLine(t, inPw, loadID, loadSessionResponse{})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "prior-session" {
-		t.Errorf("resolveSession() session id = %q, want %q: observed replay must confirm the loaded session", outcome.sessionID, "prior-session")
-	}
-	assertCreated(t, outcome, false)
-
-	assertSessionContinuationEntry(t, state, out, inPw, false)
-}
-
-// TestResolveSessionResumeSuccessConfirmsWithoutReplay confirms that a
-// successful session/resume response alone confirms continuation, with
-// no replay requirement, so resolveSession returns the resumed
-// identifier at once and the entry is never lowered.
-func TestResolveSessionResumeSuccessConfirmsWithoutReplay(t *testing.T) {
-	t.Parallel()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingResume())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	resumeID := out.awaitMethod(t, methodSessionResume)
-	respondLine(t, inPw, resumeID, resumeSessionResponse{})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "prior-session" {
-		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
-	}
-	assertCreated(t, outcome, false)
-
-	assertSessionContinuationEntry(t, state, out, inPw, false)
-}
-
-// TestResolveSessionResumeFailureLowersAndFallsBack confirms a
-// session/resume error, like a session/load error, lowers the entry
-// and falls back to a new session rather than failing the run.
-func TestResolveSessionResumeFailureLowersAndFallsBack(t *testing.T) {
-	t.Parallel()
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingResume())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	resumeID := out.awaitMethod(t, methodSessionResume)
-	respondErrorLine(t, inPw, resumeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "fallback-session" {
-		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-	}
-
-	assertSessionContinuationEntry(t, state, out, inPw, true)
-}
-
-func TestResolveSessionReturnsTheOpeningCallsResultVerbatim(t *testing.T) {
-	t.Parallel()
+	const priorID = "prior-session"
+	unimplemented := jsonrpc.MethodNotFoundCode
 
 	tests := []struct {
-		name     string
-		resumeID string
-		caps     agentCapabilities
-		script   func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage)
+		name        string
+		resumeID    string
+		caps        agentCapabilities
+		script      continuationScript
+		wantCarried bool
+		wantVerdict agentcore.ResumeVerdict
+		wantLowered bool
 	}{
 		{
-			name: "session/new",
+			name: "no resume id calls session/new alone",
 			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
 				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
 			},
 		},
 		{
-			name:     "a confirmed session/load",
-			resumeID: "prior-session",
-			caps:     capsAdvertisingLoad(),
+			name:        "no route advertised replaces without any continuation call",
+			resumeID:    priorID,
+			wantVerdict: agentcore.ResumeReplaced,
 			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
-				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+				method, id := firstOutboundMethod(t, out)
+				if method != methodSessionNew {
+					t.Fatalf("first outbound method = %q, want %q", method, methodSessionNew)
+				}
+				respondLine(t, inPw, id, result)
+			},
+		},
+		{
+			name:        "load confirmed by replay carries",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantCarried: true,
+			wantVerdict: agentcore.ResumeCarried,
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				answerNegativeControl(t, out, inPw)
 				loadID := out.awaitMethod(t, methodSessionLoad)
-				sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
+				sendReplayChunk(t, inPw, priorID, "replayed")
 				respondLine(t, inPw, loadID, result)
 			},
 		},
 		{
-			name:     "session/resume",
-			resumeID: "prior-session",
-			caps:     capsAdvertisingResume(),
+			name:        "resume answered with a result carries without replay",
+			resumeID:    priorID,
+			caps:        capsAdvertisingResume(),
+			wantCarried: true,
+			wantVerdict: agentcore.ResumeCarried,
 			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
-				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
+				answerNegativeControl(t, out, inPw)
 				respondLine(t, inPw, out.awaitMethod(t, methodSessionResume), result)
 			},
 		},
 		{
-			name:     "the session/new a failed session/load falls back to",
-			resumeID: "prior-session",
-			caps:     capsAdvertisingLoad(),
+			name:        "load answered with the negative control's own code replaces",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeReplaced,
+			wantLowered: true,
+			script:      rejects(methodSessionLoad, unimplemented),
+		},
+		{
+			name:        "load answered with another error code replaces",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeReplaced,
+			wantLowered: true,
+			script:      rejects(methodSessionLoad, -32000),
+		},
+		{
+			name:        "resume answered with an error replaces",
+			resumeID:    priorID,
+			caps:        capsAdvertisingResume(),
+			wantVerdict: agentcore.ResumeReplaced,
+			wantLowered: true,
+			script:      rejects(methodSessionResume, unimplemented),
+		},
+		{
+			name:        "load answered without any replay is unknown",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeUnknown,
+			wantLowered: true,
 			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
-				respondErrorLine(t, inPw, out.awaitMethod(t, negativeControlMethod), jsonrpc.MethodNotFoundCode, "method not found")
-				respondErrorLine(t, inPw, out.awaitMethod(t, methodSessionLoad), -32000, "session store unavailable")
+				answerNegativeControl(t, out, inPw)
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionLoad), loadSessionResponse{})
 				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
 			},
+		},
+		{
+			name:        "a chunk seen before the load call does not confirm it",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeUnknown,
+			wantLowered: true,
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				probeID := out.awaitMethod(t, negativeControlMethod)
+				sendReplayChunk(t, inPw, priorID, "arrived before the load call was even sent")
+				respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionLoad), loadSessionResponse{})
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
+			},
+		},
+		{
+			name:        "negative control never answers is unknown",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeUnknown,
+			wantLowered: true,
+			script:      neverAnswers(negativeControlMethod),
+		},
+		{
+			name:        "load never answers is unknown",
+			resumeID:    priorID,
+			caps:        capsAdvertisingLoad(),
+			wantVerdict: agentcore.ResumeUnknown,
+			wantLowered: true,
+			script:      neverAnswers(methodSessionLoad),
+		},
+		{
+			name:        "resume never answers is unknown",
+			resumeID:    priorID,
+			caps:        capsAdvertisingResume(),
+			wantVerdict: agentcore.ResumeUnknown,
+			wantLowered: true,
+			script:      neverAnswers(methodSessionResume),
 		},
 	}
 
@@ -459,234 +322,108 @@ func TestResolveSessionReturnsTheOpeningCallsResultVerbatim(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-			out := newOutboundReader(outPr)
-			result := json.RawMessage(`{"sessionId":"opened","models":{"currentModelId":"scripted-model","availableModels":[]}}`)
+			// The fake clock keeps a slow runner from expiring the session/new
+			// answer, which shares the short read timeout.
+			synctest.Test(t, func(t *testing.T) {
+				state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 50}, clientProtocolMaxLineBytes)
+				out := newOutboundReader(outPr)
+				result := json.RawMessage(`{"sessionId":"fallback-session","models":{"currentModelId":"scripted-model","availableModels":[]}}`)
+				wantID := "fallback-session"
+				if tt.wantCarried {
+					wantID = priorID
+				}
 
-			outcomeCh := runResolveSessionAsync(context.Background(), state, tt.resumeID, tt.caps)
-			tt.script(t, out, inPw, result)
+				outcomeCh := runStartAsync(context.Background(), state, tt.resumeID, tt.caps)
+				tt.script(t, out, inPw, result)
 
-			outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-			if outcome.err != nil {
-				t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-			}
-			if !bytes.Equal(outcome.raw, result) {
-				t.Errorf("resolveSession() raw result = %s, want %s: the opening call's own bytes, including members the decoded struct lacks", outcome.raw, result)
-			}
+				got := awaitStarted(t, outcomeCh, wantID, tt.wantCarried)
+				if !bytes.Equal(got.raw, result) {
+					t.Errorf("start raw result = %s, want %s: the opening call's own bytes, including members the decoded struct lacks", got.raw, result)
+				}
+				if tt.resumeID != "" && got.verdict != tt.wantVerdict {
+					t.Errorf("continuation probe verdict = %v, want %v", got.verdict, tt.wantVerdict)
+				}
+				assertSessionContinuationEntry(t, state, out, inPw, tt.wantLowered)
+			})
 		})
 	}
 }
 
-// TestResolveSessionNegativeControlStreamEndFails confirms that a
-// stream end while the negative control is in flight fails resolveSession
-// with domain.ErrPortExit, the same as any other loss of the
-// subprocess, rather than being read as a method-not-found answer.
-func TestResolveSessionNegativeControlStreamEndFails(t *testing.T) {
+func TestStartNegativeControlStreamEndFails(t *testing.T) {
 	t.Parallel()
 
 	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 	out := newOutboundReader(outPr)
 
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+	outcomeCh := runStartAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
 
 	out.awaitMethod(t, negativeControlMethod)
 	if err := inPw.Close(); err != nil {
 		t.Fatalf("close the simulated agent stream: %v", err)
 	}
 
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err == nil {
-		t.Fatal("resolveSession() error = nil, want an error for a stream end during the negative control")
+	got := waittest.Receive(t, outcomeCh, "start outcome")
+	if got.err == nil {
+		t.Fatal("start error = nil, want an error for a stream end during the negative control")
 	}
-	if outcome.err.Kind != domain.ErrPortExit {
-		t.Errorf("resolveSession() error kind = %q, want %q", outcome.err.Kind, domain.ErrPortExit)
+	if got.err.Kind != domain.ErrPortExit {
+		t.Errorf("start error kind = %q, want %q", got.err.Kind, domain.ErrPortExit)
 	}
-	assertCreated(t, outcome, false)
+	if got.carried {
+		t.Error("start carried = true, want false for a failed start")
+	}
 }
 
-// TestResolveSessionCallTimeoutFallsBack confirms that a call that never
-// answers within the connection's own read timeout, whether it is the
-// negative control itself or the continuation method it gates, is
-// treated as an unconfirmed continuation: resolveSession falls back to
-// session/new in the same call and returns its identifier without
-// failing the run, the same as an explicit error response would. A
-// stream end is the one condition that still fails outright, pinned
-// separately above.
-func TestResolveSessionCallTimeoutFallsBack(t *testing.T) {
+func TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate(t *testing.T) {
 	t.Parallel()
 
-	const shortReadTimeoutMS = 50
+	const replayedMessage = "from the fallback session"
 
 	tests := []struct {
-		name               string
-		caps               agentCapabilities
-		answerProbe        bool
-		continuationMethod string
+		name   string
+		script continuationScript
 	}{
-		{name: "negative control never answers", caps: capsAdvertisingLoad(), answerProbe: false},
-		{name: "session/load never answers", caps: capsAdvertisingLoad(), answerProbe: true, continuationMethod: methodSessionLoad},
-		{name: "session/resume never answers", caps: capsAdvertisingResume(), answerProbe: true, continuationMethod: methodSessionResume},
+		{
+			name: "load rejected",
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				answerNegativeControl(t, out, inPw)
+				respondErrorLine(t, inPw, out.awaitMethod(t, methodSessionLoad), jsonrpc.MethodNotFoundCode, "method not found")
+				newID := out.awaitMethod(t, methodSessionNew)
+				sendReplayChunk(t, inPw, "fallback-session", replayedMessage)
+				respondLine(t, inPw, newID, result)
+			},
+		},
+		{
+			name: "load answered without any replay",
+			script: func(t *testing.T, out *outboundReader, inPw io.Writer, result json.RawMessage) {
+				answerNegativeControl(t, out, inPw)
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionLoad), loadSessionResponse{})
+				respondLine(t, inPw, out.awaitMethod(t, methodSessionNew), result)
+				sendReplayChunk(t, inPw, "fallback-session", replayedMessage)
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// The session/new answer shares the short read timeout, so only the
-			// bubble's fake clock keeps a slow runner from expiring it.
 			synctest.Test(t, func(t *testing.T) {
-				state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: shortReadTimeoutMS}, clientProtocolMaxLineBytes)
+				state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 50}, clientProtocolMaxLineBytes)
 				out := newOutboundReader(outPr)
 
-				outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", tt.caps)
+				outcomeCh := runStartAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+				tt.script(t, out, inPw, json.RawMessage(`{"sessionId":"fallback-session"}`))
 
-				probeID := out.awaitMethod(t, negativeControlMethod)
-				if tt.answerProbe {
-					respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-					out.awaitMethod(t, tt.continuationMethod)
-				}
+				got := awaitStarted(t, outcomeCh, "fallback-session", false)
 
-				newID := out.awaitMethod(t, methodSessionNew)
-				respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-				outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-				if outcome.err != nil {
-					t.Fatalf("resolveSession() error = %v, want nil: a call that never answers must fall back rather than fail the run", outcome.err)
-				}
-				if outcome.sessionID != "fallback-session" {
-					t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-				}
-
-				assertSessionContinuationEntry(t, state, out, inPw, true)
+				assertUpdateReachesTurn(t, state, out, inPw, got.sessionID, replayedMessage)
 			})
 		})
 	}
 }
 
-// TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate confirms
-// that once a session/load falls back to a fresh session, the
-// provisional identifier resolveLoad's own expectLoad control adopted
-// is cleared before the fallback session/new is even sent: a
-// session/update naming the fallback session, arriving before the
-// definitive sessionID control message StartSession would publish
-// after resolveSession returns, is queued for the next turn rather than
-// dropped as foreign.
-func TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate(t *testing.T) {
-	t.Parallel()
-
-	const replayedMessage = "from the fallback session"
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	respondErrorLine(t, inPw, loadID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fallback-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"`+replayedMessage+`"}}}}`)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "fallback-session" {
-		t.Fatalf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-	}
-
-	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: outcome.sessionID}})
-
-	var events []domain.AgentEvent
-	turnCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
-	promptID := out.awaitMethod(t, methodSessionPrompt)
-	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
-	turnOutcome := waittest.Receive(t, turnCh, "turn outcome")
-	if turnOutcome.err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", turnOutcome.err)
-	}
-
-	for _, ev := range events {
-		if ev.Type == domain.EventNotification && ev.Message == replayedMessage {
-			return
-		}
-	}
-	t.Errorf("events = %+v, want the session/update observed before the fallback session's identifier was confirmed to have reached the turn", events)
-}
-
-// TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpdate
-// confirms the no-replay counterpart of
-// TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate: a
-// session/load response carrying success but no replayed chunk still
-// clears the provisional identifier expectLoad adopted once the
-// pump's own bounded wait elapses, so a session/update naming the
-// fallback session, arriving once session/new has been answered,
-// reaches the turn rather than being dropped as foreign.
-func TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpdate(t *testing.T) {
-	t.Parallel()
-
-	const noReplayReadTimeoutMS = 50
-	const replayedMessage = "from the fallback session"
-
-	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: noReplayReadTimeoutMS}, clientProtocolMaxLineBytes)
-	out := newOutboundReader(outPr)
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	respondLine(t, inPw, loadID, loadSessionResponse{})
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fallback-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"`+replayedMessage+`"}}}}`)
-
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err != nil {
-		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-	}
-	if outcome.sessionID != "fallback-session" {
-		t.Fatalf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
-	}
-
-	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: outcome.sessionID}})
-
-	var events []domain.AgentEvent
-	turnCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
-	promptID := out.awaitMethod(t, methodSessionPrompt)
-	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
-	turnOutcome := waittest.Receive(t, turnCh, "turn outcome")
-	if turnOutcome.err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", turnOutcome.err)
-	}
-
-	for _, ev := range events {
-		if ev.Type == domain.EventNotification && ev.Message == replayedMessage {
-			return
-		}
-	}
-	t.Errorf("events = %+v, want the session/update observed once the fallback session/new was answered to have reached the turn", events)
-}
-
-// TestResolveLoadDefersUntilCreationMinuteElapses confirms the
-// same-minute guard: a session/load for an identifier this process
-// created in the current UTC minute does not reach the connection
-// before the guard's clock leaves that minute. This test must fail if
-// the prologue is removed from resolveLoad, since the guarded
-// session/load would then reach the connection immediately, inside the
-// check window below.
-//
-// It also covers, by way of assertSessionContinuationEntry, that once
-// the deferred load is confirmed by observed replay, the
-// sessionContinuation capability is not lowered, so the deferral
-// itself is not treated as a failed observation.
-func TestResolveLoadDefersUntilCreationMinuteElapses(t *testing.T) {
+func TestProbeLoadDefersUntilCreationMinuteElapses(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -699,80 +436,23 @@ func TestResolveLoadDefersUntilCreationMinuteElapses(t *testing.T) {
 		state.origins.now = func() time.Time { return fakeNow }
 		state.origins.record("", "prior-session")
 
-		outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+		outcomeCh := runStartAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
 
-		probeID := out.awaitMethod(t, negativeControlMethod)
-		respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+		answerNegativeControl(t, out, inPw)
 
 		waittest.Never(t, out.ch, deferralMS*time.Millisecond/2, "an outbound line before the guard's deferral elapsed")
 
 		loadID := out.awaitMethod(t, methodSessionLoad)
-		sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed from history"}}}}`)
+		sendReplayChunk(t, inPw, "prior-session", "replayed from history")
 		respondLine(t, inPw, loadID, loadSessionResponse{})
 
-		outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-		if outcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-		}
-		if outcome.sessionID != "prior-session" {
-			t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
-		}
+		awaitStarted(t, outcomeCh, "prior-session", true)
 
 		assertSessionContinuationEntry(t, state, out, inPw, false)
 	})
 }
 
-// TestResolveLoadDeferralLogsDebugRecord confirms the deferral's
-// exact log shape: a Debug record on state.logger with the pinned
-// deferral message and exactly the two typed attributes session_id
-// and wait_ms.
-func TestResolveLoadDeferralLogsDebugRecord(t *testing.T) {
-	t.Parallel()
-
-	const deferralMS = 200
-	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
-	fakeNow := boundary.Add(-deferralMS * time.Millisecond)
-
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes, logger)
-	out := newOutboundReader(outPr)
-	state.origins.now = func() time.Time { return fakeNow }
-	state.origins.record("", "prior-session")
-
-	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
-
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	loadID := out.awaitMethod(t, methodSessionLoad)
-	respondErrorLine(t, inPw, loadID, jsonrpc.MethodNotFoundCode, "method not found")
-
-	newID := out.awaitMethod(t, methodSessionNew)
-	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-	waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-
-	logged := buf.String()
-	if !strings.Contains(logged, "level=DEBUG") {
-		t.Fatalf("log output = %q, want a level=DEBUG record for the deferral", logged)
-	}
-	if !strings.Contains(logged, "session load deferred past the session's creation minute") {
-		t.Errorf("log output = %q, want the exact deferral message the spec pins", logged)
-	}
-	if !strings.Contains(logged, `session_id=prior-session`) {
-		t.Errorf("log output = %q, want a session_id=prior-session attribute", logged)
-	}
-	if !strings.Contains(logged, "wait_ms=") {
-		t.Errorf("log output = %q, want a wait_ms attribute", logged)
-	}
-}
-
-// TestResolveLoadNoDeferralWhenNotInCreationMinute confirms that a
-// session/load for an identifier with no ledger entry, and one recorded
-// in an earlier UTC minute, both reach the connection with no delay the
-// guard added.
-func TestResolveLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
+func TestProbeLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -803,44 +483,29 @@ func TestResolveLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
 				out := newOutboundReader(outPr)
 				tt.setUp(state.origins)
 
-				outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+				outcomeCh := runStartAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
 
-				probeID := out.awaitMethod(t, negativeControlMethod)
-				respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+				answerNegativeControl(t, out, inPw)
 
 				start := time.Now()
-				line := out.next(t)
+				method, loadID := firstOutboundMethod(t, out)
 				if elapsed := time.Since(start); elapsed != 0 {
 					t.Errorf("session/load reached the connection after %v, want at once: the guard must not delay this case", elapsed)
 				}
-				var h wireHeader
-				if err := json.Unmarshal(line, &h); err != nil {
-					t.Fatalf("decode line %s: %v", line, err)
-				}
-				if h.Method != methodSessionLoad {
-					t.Fatalf("first outbound method after the negative control = %q, want %q", h.Method, methodSessionLoad)
+				if method != methodSessionLoad {
+					t.Fatalf("first outbound method after the negative control = %q, want %q", method, methodSessionLoad)
 				}
 
-				sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed from history"}}}}`)
-				respondLine(t, inPw, h.ID, loadSessionResponse{})
+				sendReplayChunk(t, inPw, "prior-session", "replayed from history")
+				respondLine(t, inPw, loadID, loadSessionResponse{})
 
-				outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-				if outcome.err != nil {
-					t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-				}
-				if outcome.sessionID != "prior-session" {
-					t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
-				}
+				awaitStarted(t, outcomeCh, "prior-session", true)
 			})
 		})
 	}
 }
 
-// TestResolveResumeIgnoresCreationLedger confirms that a session/resume
-// reaches the connection with no delay the guard added, even when the
-// ledger holds a current-minute entry for the same identifier. The
-// guard is scoped to session/load alone.
-func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
+func TestProbeResumeIgnoresCreationLedger(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -851,10 +516,9 @@ func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
 		state.origins.now = func() time.Time { return deepInMinute }
 		state.origins.record("", "prior-session")
 
-		outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingResume())
+		outcomeCh := runStartAsync(context.Background(), state, "prior-session", capsAdvertisingResume())
 
-		probeID := out.awaitMethod(t, negativeControlMethod)
-		respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+		answerNegativeControl(t, out, inPw)
 
 		start := time.Now()
 		resumeID := out.awaitMethod(t, methodSessionResume)
@@ -863,22 +527,11 @@ func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
 		}
 		respondLine(t, inPw, resumeID, resumeSessionResponse{})
 
-		outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-		if outcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
-		}
-		if outcome.sessionID != "prior-session" {
-			t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
-		}
+		awaitStarted(t, outcomeCh, "prior-session", true)
 	})
 }
 
-// TestResolveLoadContextCancelDuringDeferralReturnsPortExit confirms
-// that when the caller's context ends while the deferral is being
-// spent, no session/load and no session/new reaches the connection,
-// and resolveSession returns a domain.AgentError of kind
-// domain.ErrPortExit.
-func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
+func TestStartFailsCancelledWhenContextEndsDuringLoadDeferral(t *testing.T) {
 	t.Parallel()
 
 	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
@@ -890,37 +543,26 @@ func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
 	state.origins.record("", "prior-session")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	outcomeCh := make(chan resolveSessionOutcome, 1)
-	go func() {
-		sessionID, created, _, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
-		outcomeCh <- resolveSessionOutcome{sessionID: sessionID, created: created, err: err}
-	}()
+	outcomeCh := runStartAsync(ctx, state, "prior-session", capsAdvertisingLoad())
 
-	probeID := out.awaitMethod(t, negativeControlMethod)
-	respondErrorLine(t, inPw, probeID, jsonrpc.MethodNotFoundCode, "method not found")
+	answerNegativeControl(t, out, inPw)
 
 	cancel()
 
-	outcome := waittest.Receive(t, outcomeCh, "resolveSession() outcome")
-	if outcome.err == nil {
-		t.Fatal("resolveSession() error = nil, want a port-exit error for a context ended during the deferral")
+	got := waittest.Receive(t, outcomeCh, "start outcome")
+	if got.err == nil {
+		t.Fatal("start error = nil, want a cancelled start for a context ended during the deferral")
 	}
-	if outcome.err.Kind != domain.ErrPortExit {
-		t.Errorf("resolveSession() error kind = %q, want %q", outcome.err.Kind, domain.ErrPortExit)
+	if got.err.Kind != domain.ErrTurnCancelled {
+		t.Errorf("start error kind = %q, want %q", got.err.Kind, domain.ErrTurnCancelled)
 	}
-	if outcome.sessionID != "" {
-		t.Errorf("resolveSession() session id = %q, want empty on a cancelled deferral", outcome.sessionID)
+	if got.sessionID != "" {
+		t.Errorf("start session id = %q, want empty on a cancelled deferral", got.sessionID)
 	}
 
 	waittest.Never(t, out.ch, 50*time.Millisecond, "an outbound session/load or session/new after the context ended during the deferral")
 }
 
-// TestFallbackSessionRecordedIsGuardedOnLaterLoad confirms that the
-// identifier a fallback session/new creates is recorded in the
-// shared ledger, so a later attempt loading it, on another session
-// sharing the same *sessionOrigins the way ClientProtocolAdapter's own
-// value is shared across sessions, is guarded exactly as a
-// first-attempt session would be.
 func TestFallbackSessionRecordedIsGuardedOnLaterLoad(t *testing.T) {
 	t.Parallel()
 
@@ -934,24 +576,13 @@ func TestFallbackSessionRecordedIsGuardedOnLaterLoad(t *testing.T) {
 		firstOut := newOutboundReader(firstOutPr)
 		firstState.origins = origins
 
-		firstOutcomeCh := runResolveSessionAsync(context.Background(), firstState, "prior-session", capsAdvertisingLoad())
+		firstOutcomeCh := runStartAsync(context.Background(), firstState, "prior-session", capsAdvertisingLoad())
 
-		firstProbeID := firstOut.awaitMethod(t, negativeControlMethod)
-		respondErrorLine(t, firstInPw, firstProbeID, jsonrpc.MethodNotFoundCode, "method not found")
+		answerNegativeControl(t, firstOut, firstInPw)
+		respondErrorLine(t, firstInPw, firstOut.awaitMethod(t, methodSessionLoad), jsonrpc.MethodNotFoundCode, "method not found")
+		respondLine(t, firstInPw, firstOut.awaitMethod(t, methodSessionNew), newSessionResponse{SessionID: sessionId("fallback-session")})
 
-		firstLoadID := firstOut.awaitMethod(t, methodSessionLoad)
-		respondErrorLine(t, firstInPw, firstLoadID, jsonrpc.MethodNotFoundCode, "method not found")
-
-		firstNewID := firstOut.awaitMethod(t, methodSessionNew)
-		respondLine(t, firstInPw, firstNewID, newSessionResponse{SessionID: sessionId("fallback-session")})
-
-		firstOutcome := waittest.Receive(t, firstOutcomeCh, "resolveSession() outcome")
-		if firstOutcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil", firstOutcome.err)
-		}
-		if firstOutcome.sessionID != "fallback-session" {
-			t.Fatalf("resolveSession() session id = %q, want %q", firstOutcome.sessionID, "fallback-session")
-		}
+		awaitStarted(t, firstOutcomeCh, "fallback-session", false)
 
 		recordedAt, known := origins.createdAt("", "fallback-session")
 		if !known {
@@ -965,23 +596,16 @@ func TestFallbackSessionRecordedIsGuardedOnLaterLoad(t *testing.T) {
 		secondOut := newOutboundReader(secondOutPr)
 		secondState.origins = origins
 
-		secondOutcomeCh := runResolveSessionAsync(context.Background(), secondState, "fallback-session", capsAdvertisingLoad())
+		secondOutcomeCh := runStartAsync(context.Background(), secondState, "fallback-session", capsAdvertisingLoad())
 
-		secondProbeID := secondOut.awaitMethod(t, negativeControlMethod)
-		respondErrorLine(t, secondInPw, secondProbeID, jsonrpc.MethodNotFoundCode, "method not found")
+		answerNegativeControl(t, secondOut, secondInPw)
 
 		waittest.Never(t, secondOut.ch, deferralMS*time.Millisecond/2, "session/load for the fallback session before the guard's deferral elapsed")
 
 		secondLoadID := secondOut.awaitMethod(t, methodSessionLoad)
-		sendLine(t, secondInPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fallback-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
+		sendReplayChunk(t, secondInPw, "fallback-session", "replayed")
 		respondLine(t, secondInPw, secondLoadID, loadSessionResponse{})
 
-		secondOutcome := waittest.Receive(t, secondOutcomeCh, "resolveSession() outcome")
-		if secondOutcome.err != nil {
-			t.Fatalf("resolveSession() error = %v, want nil", secondOutcome.err)
-		}
-		if secondOutcome.sessionID != "fallback-session" {
-			t.Errorf("resolveSession() session id = %q, want %q", secondOutcome.sessionID, "fallback-session")
-		}
+		awaitStarted(t, secondOutcomeCh, "fallback-session", true)
 	})
 }

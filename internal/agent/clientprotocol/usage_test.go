@@ -145,12 +145,10 @@ func TestNoLedgerSessionEndingWithoutAReplyReportsSpendOccurred(t *testing.T) {
 	}
 }
 
-// modelReachedMarker is distinctive so a barrier keying on it cannot be
-// satisfied by the capability notice, which carries the same event type.
 const modelReachedMarker = "model-reached"
 
-// The pump records that the turn reached the model before it emits a chunk's
-// liveness notification, so seeing that event means the record is set.
+// chunkBarrier relies on the pump recording that the turn reached the model
+// before it emits a chunk's liveness notification.
 func chunkBarrier(events *[]domain.AgentEvent) (func(domain.AgentEvent), <-chan struct{}) {
 	reached := make(chan struct{})
 	var once sync.Once
@@ -180,8 +178,8 @@ func modelReachedTurn(t *testing.T, state *sessionState, inPw io.Writer, out *ou
 	return promptID, outcomeCh
 }
 
-// The inbox's single order puts the pump's answer to this control message
-// behind every item queued before it.
+// awaitPumpObserved relies on the inbox's single order: the pump answers this
+// control message only after every item queued before it.
 func awaitPumpObserved(t *testing.T, state *sessionState) {
 	t.Helper()
 
@@ -270,14 +268,14 @@ func TestNewSessionLedgerReadsRecordsOnEveryLaunch(t *testing.T) {
 	tests := []struct {
 		name      string
 		target    agentcore.LaunchTarget
-		created   bool
+		carried   bool
 		wantReads int
 		wantOK    bool
 	}{
-		{"local continued session", agentcore.LaunchTarget{Command: "agent"}, false, 1, true},
-		{"local created session", agentcore.LaunchTarget{Command: "agent"}, true, 0, true},
-		{"remote continued session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, false, 1, true},
-		{"remote created session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, true, 0, true},
+		{"local continued session", agentcore.LaunchTarget{Command: "agent"}, true, 1, true},
+		{"local created session", agentcore.LaunchTarget{Command: "agent"}, false, 0, true},
+		{"remote continued session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, true, 1, true},
+		{"remote created session", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "agent"}, false, 0, true},
 	}
 
 	for _, tt := range tests {
@@ -293,7 +291,7 @@ func TestNewSessionLedgerReadsRecordsOnEveryLaunch(t *testing.T) {
 			state := &sessionState{logger: discardLogger(), target: tt.target}
 			live := spendReading(100, 20, 0, "", "")
 
-			ledger := newSessionLedger(t.Context(), state, decl, tt.created, nil)
+			ledger := newSessionLedger(t.Context(), state, decl, tt.carried, nil)
 
 			if ledger == nil {
 				t.Fatalf("newSessionLedger(%+v) = nil, want a ledger built from the declaration's live and records sources", tt.target)
@@ -307,9 +305,9 @@ func TestNewSessionLedgerReadsRecordsOnEveryLaunch(t *testing.T) {
 			}
 
 			history := usage.RecordsRead{OK: true, Readings: []usage.SpendReading{spendReading(10, 2, 0, "model-a", "u1")}}
-			boundary := newSessionLedger(t.Context(), state, decl, tt.created, nil).Settle(usage.TurnEnd{Replied: true, ModelReached: true}, nil, history)
-			if boundary.Figure != tt.created {
-				t.Errorf("newSessionLedger(%+v, created %v) counts a record that is on the host at session start = %v, want %v", tt.target, tt.created, boundary.Figure, tt.created)
+			boundary := newSessionLedger(t.Context(), state, decl, tt.carried, nil).Settle(usage.TurnEnd{Replied: true, ModelReached: true}, nil, history)
+			if boundary.Figure != !tt.carried {
+				t.Errorf("newSessionLedger(%+v, carried %v) counts a record that is on the host at session start = %v, want %v", tt.target, tt.carried, boundary.Figure, !tt.carried)
 			}
 
 			read := readSessionRecords(t.Context(), state, decl)

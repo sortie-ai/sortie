@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // runtimeCommand describes a runtime subcommand run on the session's host
@@ -34,6 +36,36 @@ func (s *sessionState) readExport(ctx context.Context, sessionID string) ([]usag
 		return nil, err
 	}
 	return sessionexport.Parse(out, sessionID)
+}
+
+// ProbeResume reads the export of the session resumeID names. Only an export
+// that names the session confirms it, and its readings come back as the
+// answer so the start reads no second export. The bound is derived here from
+// the start context, so reaching it is an unanswered check and never an ended
+// start.
+func (s *sessionState) ProbeResume(ctx context.Context, resumeID string) (agentcore.ResumeSignal[usage.RecordsRead], *domain.AgentError) {
+	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(s.agentConfig))
+	defer cancel()
+
+	readings, err := s.readExport(readCtx, resumeID)
+	if err != nil {
+		return agentcore.ResumeSignal[usage.RecordsRead]{Verdict: exportFailureVerdict(readCtx, err), Cause: err}, nil
+	}
+	return agentcore.ResumeSignal[usage.RecordsRead]{
+		Verdict: agentcore.ResumeCarried,
+		Answer:  usage.RecordsRead{Readings: readings, OK: true},
+	}, nil
+}
+
+// exportFailureVerdict classifies a failed export. The bound is checked first
+// because an export killed at it exits non-zero like a missing session, and
+// a lost SSH connection wraps neither error that marks a missing one.
+func exportFailureVerdict(readCtx context.Context, err error) agentcore.ResumeVerdict {
+	if readCtx.Err() == nil &&
+		(errors.Is(err, agentcore.ErrHostCommandFailed) || errors.Is(err, sessionexport.ErrOtherSession)) {
+		return agentcore.ResumeReplaced
+	}
+	return agentcore.ResumeUnknown
 }
 
 // readRecords reads the export of the session and of every child session the

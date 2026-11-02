@@ -40,6 +40,43 @@ func requireAgentError(t *testing.T, err error, wantKind domain.AgentErrorKind) 
 	}
 }
 
+func TestStartSession_ConnectionLostDuringResumeFailsLikeDuringStart(t *testing.T) {
+	t.Parallel()
+
+	failureKind := func(fake recordFramesParams, resumeID string) domain.AgentErrorKind {
+		_, err := startRecordingSessionE(t, &CodexAdapter{}, fake, nil, resumeID, false)
+		var agentErr *domain.AgentError
+		if !errors.As(err, &agentErr) {
+			t.Fatalf("StartSession(resume %q, exit on %q) error = %v, want *domain.AgentError", resumeID, fake.ExitOn, err)
+		}
+		return agentErr.Kind
+	}
+
+	duringStart := failureKind(recordFramesParams{ExitOn: "thread/start"}, "")
+	duringResume := failureKind(recordFramesParams{ExitOn: "thread/resume"}, "thread-prior")
+
+	if duringResume != duringStart {
+		t.Errorf("StartSession(connection lost during thread/resume) kind = %q, want %q as during thread/start", duringResume, duringStart)
+	}
+}
+
+func TestSessionContinuity(t *testing.T) {
+	t.Parallel()
+
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		t.Helper()
+
+		started, err := startRecordingSessionE(t, &CodexAdapter{}, recordFramesParams{HeldThread: held}, nil, resumeID, false)
+		if err != nil {
+			return domain.Session{}, err
+		}
+		if resumeID == held && len(started.recorded(t, "thread/start")) != 0 {
+			t.Errorf("StartSession(resume %q) sent thread/start for a carried session, want only thread/resume", resumeID)
+		}
+		return started.session, nil
+	})
+}
+
 func TestNewCodexAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -204,8 +241,8 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	}
 }
 
-// Done never closes, so a test can make ctx.Err() report cancellation
-// without racing RunTurn's own <-ctx.Done() select case.
+// atomicErrContext's Done never closes, so a test can make ctx.Err()
+// report cancellation without racing RunTurn's own <-ctx.Done() case.
 type atomicErrContext struct {
 	context.Context
 	cancelled *atomic.Bool
@@ -250,6 +287,13 @@ func newInterruptedStatusState(t *testing.T, stdin io.Writer) *sessionState {
 	}()
 
 	return state
+}
+
+// deliverTurnCompleted is serialized with RunTurn's Take through the
+// inbox mutex, so everything the test did before it, the cancellation
+// flag included, is visible when RunTurn reads ctx.Err().
+func deliverTurnCompleted(state *sessionState, params string) {
+	state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(params)})
 }
 
 func onEventSignalingSessionStarted(onEvent func(domain.AgentEvent), started chan<- struct{}) func(domain.AgentEvent) {
@@ -317,12 +361,7 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 				cancelled.Store(true)
 			}
 
-			// Put and the RunTurn loop's Take are both serialized through
-			// the inbox's own mutex, so everything the test did above,
-			// including setting the cancellation flag, is visible once
-			// RunTurn takes this item and reads ctx.Err() while handling
-			// it.
-			state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"interrupted"}}`)})
+			deliverTurnCompleted(state, `{"turn":{"id":"turn-001","status":"interrupted"}}`)
 
 			got := <-outcomeCh
 			result, err := got.result, got.err
@@ -332,11 +371,6 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 	}
 }
 
-// TestRunTurn_CompletedNotificationUnderCancelledContext pins the
-// cancelled-context mapping table: whatever status word (or absence of
-// one) the runtime reports in a turn/completed notification once the
-// orchestrator has already cancelled the turn, the disposition is a
-// cancellation carrying a message that names both facts.
 func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 	t.Parallel()
 
@@ -398,12 +432,7 @@ func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 
 			cancelled.Store(true)
 
-			// Put and the RunTurn loop's Take are both serialized through
-			// the inbox's own mutex, so everything the test did above,
-			// including setting the cancellation flag, is visible once
-			// RunTurn takes this item and reads ctx.Err() while handling
-			// it.
-			state.inbox.Put(jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(tt.params)})
+			deliverTurnCompleted(state, tt.params)
 
 			got := <-outcomeCh
 			result, err := got.result, got.err
@@ -420,11 +449,6 @@ func turnFailedFixture(codexErrorInfo string) string {
 	return `{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"failed","error":{"message":"token expired","codexErrorInfo":` + codexErrorInfo + `}}}}` + "\n"
 }
 
-// TestRunTurn_FailedOrUnrecognizedStatus pins that a failed status with
-// no turn.error object, and any status other than completed,
-// interrupted, and failed, both produce turn_failed with a non-nil
-// error and the message "turn <status>", unchanged from before the
-// shared decision.
 func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
 	t.Parallel()
 
@@ -655,10 +679,6 @@ func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StdoutParseFailure pins that a stdout line that fails to
-// parse produces the same text on both the emitted event and the
-// returned error, prefixed "stdout read error: ", and preserves the
-// underlying parse error on the unwrap chain.
 func TestRunTurn_StdoutParseFailure(t *testing.T) {
 	t.Parallel()
 
@@ -696,11 +716,8 @@ func TestRunTurn_StdoutParseFailure(t *testing.T) {
 	}
 }
 
-// entrySignalingWriter wraps an io.Writer and closes done the instant
-// Write is entered, before delegating to the wrapped writer. Unlike
-// signalingWriter, which signals once Write returns, this lets a test
-// observe that a write has been parked inside a call that never
-// returns on its own.
+// entrySignalingWriter closes done when Write is entered, not when it
+// returns like signalingWriter, so a test sees a write that never returns.
 type entrySignalingWriter struct {
 	w    io.Writer
 	once sync.Once
@@ -716,15 +733,11 @@ func (s *entrySignalingWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-// TestStopSession_ReturnsWhileWriteParked checks that StopSession
-// returns while another goroutine is parked writing on the session's
-// connection, proving that closeConn's call to conn.Close does not
-// wait for that write. The fixture leaves no process handle and no
-// wait channel, and readerDone already closed, so no other bounded
-// wait in StopSession can substitute for that proof.
 func TestStopSession_ReturnsWhileWriteParked(t *testing.T) {
 	t.Parallel()
 
+	// No process, no wait channel and readerDone already closed: no other
+	// bounded wait in StopSession can mask a Close that waits for the write.
 	pr, pw := io.Pipe()
 	sig := newEntrySignalingWriter(pw)
 
@@ -763,46 +776,25 @@ func TestStopSession_ReturnsWhileWriteParked(t *testing.T) {
 	}
 }
 
-// handlerParkedOutcome is what a test's own goroutine running RunTurn
-// sends back once that call returns.
 type handlerParkedOutcome struct {
 	result domain.TurnResult
 	err    error
 }
 
 const (
-	// scenarioBurstDuringTurnOpening answers the handshake, then on
-	// turn/start writes a burst in one write, the turn/start response,
-	// and turn/completed, and keeps reading its own standard input: the
-	// runtime stays alive and healthy throughout.
 	scenarioBurstDuringTurnOpening = "burst-turn-opening"
-
-	// scenarioBurstBetweenTurns completes one turn normally, then writes
-	// a burst in one write, creates a marker file at its params' Marker
-	// path, and waits for the next turn/start before answering it.
-	scenarioBurstBetweenTurns = "burst-between-turns"
-
-	// scenarioHandshakeBurstLogin writes a burst, then
-	// account/login/completed, before ever answering account/login/start.
-	scenarioHandshakeBurstLogin = "handshake-burst-login"
-
-	// scenarioHandshakeBurstThread writes a burst, then thread/started,
-	// before ever answering thread/start.
-	scenarioHandshakeBurstThread = "handshake-burst-thread"
-
-	scenarioRecordFrames = "record-frames"
+	scenarioBurstBetweenTurns      = "burst-between-turns"
+	scenarioHandshakeBurstLogin    = "handshake-burst-login"
+	scenarioHandshakeBurstThread   = "handshake-burst-thread"
+	scenarioRecordFrames           = "record-frames"
 )
 
-// burstCount is a burst of at least 4096 notifications totaling at
-// least 1 MiB, written in one write. Any bounded hand-off parks on it,
-// and it fills every platform's pipe buffer.
+// burstCount notifications, at least 4096 and 1 MiB in one write, park
+// any bounded hand-off and fill every platform's pipe buffer.
 const burstCount = 27000
 
-// fakeScenarios maps every scenario name a fake runtime in this
-// package can serve to the [agenttest.Scenario] that implements it.
-// Files whose scenarios only run on unix add to this map from their
-// own init, since package-level variables are initialized before any
-// init function runs regardless of which file declares them.
+// fakeScenarios gains unix-only scenarios from those files' init:
+// package variables are initialized before any init runs.
 var fakeScenarios = map[string]agenttest.Scenario{
 	scenarioBurstDuringTurnOpening: agenttest.Typed(func(_ []string, _ struct{}) int {
 		return serveBurstDuringTurnOpening(newFakeAppServerScanner(), os.Stdout)
@@ -825,7 +817,6 @@ func TestMain(m *testing.M) {
 	agenttest.Main(m, fakeScenarios)
 }
 
-// burstBetweenTurnsParams parameterizes scenarioBurstBetweenTurns.
 type burstBetweenTurnsParams struct {
 	MarkerPath string `json:"markerPath,omitempty"`
 }
@@ -834,6 +825,8 @@ type recordFramesParams struct {
 	RecordPath        string   `json:"recordPath"`
 	ConfigReadServers []string `json:"configReadServers,omitempty"`
 	ConfigReadFails   bool     `json:"configReadFails,omitempty"`
+	HeldThread        string   `json:"heldThread,omitempty"`
+	ExitOn            string   `json:"exitOn,omitempty"`
 }
 
 func answerConfigRead(out io.Writer, id json.RawMessage, params recordFramesParams) bool {
@@ -862,6 +855,9 @@ func serveRecordFrames(client *bufio.Scanner, out io.Writer, params recordFrames
 		if json.Unmarshal(client.Bytes(), &frame) != nil {
 			return 1
 		}
+		if params.ExitOn != "" && frame.Method == params.ExitOn {
+			return 0
+		}
 		var result, completed any
 		switch frame.Method {
 		case "config/read":
@@ -870,6 +866,12 @@ func serveRecordFrames(client *bufio.Scanner, out io.Writer, params recordFrames
 			}
 			continue
 		case "thread/start", "thread/resume":
+			if frame.Method == "thread/resume" && params.HeldThread != "" && frame.Params.ThreadID != params.HeldThread {
+				if !writeJSON(out, map[string]any{"id": frame.ID, "error": map[string]any{"code": -32002, "message": "thread not found"}}) {
+					return 1
+				}
+				continue
+			}
 			result, completed = map[string]any{"thread": map[string]any{"id": "fake-thread-1"}}, rpcNotification{Method: "thread/started"}
 		case "turn/start":
 			id := fmt.Sprintf("t%d", turn)
@@ -885,42 +887,35 @@ func serveRecordFrames(client *bufio.Scanner, out io.Writer, params recordFrames
 	return 0
 }
 
-// fakeAppServer builds a fake runtime executable serving scenario with
-// no parameters, and returns its path.
 func fakeAppServer(t *testing.T, scenario string) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, t.TempDir(), "codex", scenario, struct{}{})
 }
 
-// newFakeAppServerScanner returns a scanner over this process's own
-// standard input, sized for the notification bursts a scenario writes.
 func newFakeAppServerScanner() *bufio.Scanner {
 	client := bufio.NewScanner(os.Stdin)
 	client.Buffer(make([]byte, 0, 4096), 1024*1024)
 	return client
 }
 
-// fakeFrame is the part of an incoming JSON-RPC frame a scenario acts
-// on: the id it echoes back in a reply, absent on a notification.
 type fakeFrame struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
+	Params struct {
+		ThreadID string `json:"threadId"`
+	} `json:"params"`
 }
 
-// rpcResult is a JSON-RPC response frame.
 type rpcResult struct {
 	ID     json.RawMessage `json:"id"`
 	Result any             `json:"result"`
 }
 
-// rpcNotification is a JSON-RPC notification frame.
 type rpcNotification struct {
 	Method string `json:"method"`
 	Params any    `json:"params,omitempty"`
 }
 
-// nextFrame reports the client's next frame, or false once the client
-// has stopped sending.
 func nextFrame(client *bufio.Scanner) (fakeFrame, bool) {
 	if !client.Scan() {
 		return fakeFrame{}, false
@@ -932,8 +927,6 @@ func nextFrame(client *bufio.Scanner) (fakeFrame, bool) {
 	return frame, true
 }
 
-// writeJSON encodes v as one JSON-RPC frame and writes it to out,
-// reporting whether the client is still reading it.
 func writeJSON(out io.Writer, v any) bool {
 	line, err := json.Marshal(v)
 	if err != nil {
@@ -943,9 +936,6 @@ func writeJSON(out io.Writer, v any) bool {
 	return err == nil
 }
 
-// answerPreThreadHandshake replies to initialize and to account/read,
-// consuming the initialized notification between them: the exchange
-// every scenario shares before it diverges.
 func answerPreThreadHandshake(client *bufio.Scanner, out io.Writer) bool {
 	initialize, ok := nextFrame(client)
 	if !ok {
@@ -966,9 +956,6 @@ func answerPreThreadHandshake(client *bufio.Scanner, out io.Writer) bool {
 	return writeJSON(out, rpcResult{ID: accountRead.ID, Result: struct{}{}})
 }
 
-// fillerNotifications returns burstCount notifications as one string,
-// so a caller delivers the whole burst in a single write the way a
-// runtime flooding its output does.
 func fillerNotifications() string {
 	var fill strings.Builder
 	for i := range burstCount {
@@ -982,11 +969,6 @@ func fillerNotifications() string {
 	return fill.String()
 }
 
-// serveBurstDuringTurnOpening answers the handshake and thread/start,
-// then on the turn/start call writes burstCount notifications in one
-// write, followed by the turn/start response and turn/completed, and
-// keeps reading its own standard input rather than exiting: the
-// runtime stays alive and healthy for the whole exchange.
 func serveBurstDuringTurnOpening(client *bufio.Scanner, out io.Writer) int {
 	if !answerPreThreadHandshake(client, out) {
 		return 1
@@ -1021,11 +1003,6 @@ func serveBurstDuringTurnOpening(client *bufio.Scanner, out io.Writer) int {
 	return 0
 }
 
-// serveBurstBetweenTurns answers the handshake, thread/start, and one
-// full turn, then writes burstCount notifications in one write,
-// creates a marker file at markerPath when non-empty, and waits for
-// the next turn/start before answering it and keeping its own
-// standard input open.
 func serveBurstBetweenTurns(client *bufio.Scanner, out io.Writer, markerPath string) int {
 	if !answerPreThreadHandshake(client, out) {
 		return 1
@@ -1077,10 +1054,6 @@ func serveBurstBetweenTurns(client *bufio.Scanner, out io.Writer, markerPath str
 	return 0
 }
 
-// serveHandshakeBurstLogin answers initialize and account/read, then on
-// account/login/start writes burstCount notifications in one write,
-// followed by account/login/completed reporting success, and only then
-// answers the account/login/start call itself.
 func serveHandshakeBurstLogin(client *bufio.Scanner, out io.Writer) int {
 	if !answerPreThreadHandshake(client, out) {
 		return 1
@@ -1115,9 +1088,6 @@ func serveHandshakeBurstLogin(client *bufio.Scanner, out io.Writer) int {
 	return 0
 }
 
-// serveHandshakeBurstThread answers the handshake, then on thread/start
-// writes burstCount notifications in one write, followed by
-// thread/started, and only then answers the thread/start call itself.
 func serveHandshakeBurstThread(client *bufio.Scanner, out io.Writer) int {
 	if !answerPreThreadHandshake(client, out) {
 		return 1
@@ -1141,8 +1111,6 @@ func serveHandshakeBurstThread(client *bufio.Scanner, out io.Writer) int {
 	return 0
 }
 
-// waitChOpen reports whether state.waitCh is still open, without
-// blocking.
 func waitChOpen(state *sessionState) bool {
 	select {
 	case <-state.waitCh:
@@ -1152,7 +1120,6 @@ func waitChOpen(state *sessionState) bool {
 	}
 }
 
-// countBlankPings reports how many events carry an empty notification.
 func countBlankPings(events []domain.AgentEvent) int {
 	var n int
 	for _, e := range events {
@@ -1163,13 +1130,7 @@ func countBlankPings(events []domain.AgentEvent) int {
 	return n
 }
 
-// TestRunTurn_BurstDuringTurnOpeningNoLongerHangs drives a fake runtime
-// that stays alive throughout and, on turn/start, writes burstCount
-// notifications in one write before the turn/start response and
-// turn/completed. RunTurn must complete rather than wait on the
-// orchestrator's own stall or turn timeout, with the runtime's own
-// process still unreaped throughout.
-func TestRunTurn_BurstDuringTurnOpeningNoLongerHangs(t *testing.T) {
+func TestRunTurn_BurstDuringTurnOpeningDoesNotHang(t *testing.T) {
 	t.Parallel()
 
 	command := fakeAppServer(t, scenarioBurstDuringTurnOpening)
@@ -1214,13 +1175,7 @@ func TestRunTurn_BurstDuringTurnOpeningNoLongerHangs(t *testing.T) {
 	}
 }
 
-// TestRunTurn_BurstBetweenTurnsNoLongerHangs drives a fake runtime that
-// completes one turn normally, then, with no turn in flight, writes
-// burstCount notifications in one write and creates a marker file
-// before waiting for the next turn/start. The marker must appear well
-// before the second turn is even started, and the second turn must then
-// satisfy the same properties as the turn-opening burst.
-func TestRunTurn_BurstBetweenTurnsNoLongerHangs(t *testing.T) {
+func TestRunTurn_BurstBetweenTurnsDoesNotHang(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1324,10 +1279,8 @@ func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T)
 			}
 			t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 
-			// A lost thread/started is accepted silently once the read
-			// timeout expires and yields the same thread ID, so waiting
-			// the timeout out is the only trace it leaves. A timer never
-			// fires early, so a regression always reaches the bound.
+			// A lost thread/started is accepted silently at the read
+			// timeout, so waiting it out is the only trace it leaves.
 			if elapsed >= readTimeout {
 				t.Fatalf("StartSession() took %v, want less than the %v read timeout: it waited the timeout out, so the awaited notification was lost to the burst", elapsed, readTimeout)
 			}
@@ -1335,16 +1288,7 @@ func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T)
 	}
 }
 
-// TestStartSession_LocalLaunchIgnoresSSHEnvNames asserts that a local
-// launch (no SSHHost) completes the same way whether or not
-// StartSessionParams.SSHEnvNames names a set variable: StartSession's
-// local branch never consults it. This reddens if that branch starts
-// treating a non-empty SSHEnvNames as a signal to take the remote
-// path, which would prepend an unwanted preamble ahead of the
-// handshake's first request and break the fake app-server's JSON
-// decoding of it.
 func TestStartSession_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
-	// Not parallel: sets the carried variable via t.Setenv.
 	const varName = "SORTIE_CODEX_STARTSESSION_LOCAL_INVARIANCE"
 	t.Setenv(varName, "should-never-reach-a-local-launch")
 

@@ -37,12 +37,10 @@ type capabilityRecord struct {
 	agentVersion        capabilityState
 }
 
-// newCapabilityRecord builds a session's capability record with its stage-one
-// states.
-//
-// tokenCounts never reaches protocol because the protocol's stable line carries
-// no spend counter; a session with a spend ledger raises it to ours at the
-// handshake. toolServers starts at protocol: the opening notice lowers it.
+// newCapabilityRecord returns a session's capability record as it stands before
+// the handshake. tokenCounts never reaches protocol because the protocol's
+// stable line carries no spend counter; a session with a spend ledger raises it
+// to ours at the handshake. The opening notice lowers toolServers.
 func newCapabilityRecord() *capabilityRecord {
 	return &capabilityRecord{
 		toolServers:         capabilityProtocol,
@@ -85,12 +83,11 @@ func (r capabilityRecord) gapNotice() (string, bool) {
 
 // advertisesSessionContinuation reports whether caps advertises session/load or
 // session/resume. It defers to [chooseContinuationMethod] so the handshake's
-// lowering decision and resolveSession's routing decision cannot disagree.
+// lowering decision and continuationProbe's routing decision cannot disagree.
 func advertisesSessionContinuation(caps agentCapabilities) bool {
 	return chooseContinuationMethod(caps) != continuationNone
 }
 
-// advertisesSessionClose reports whether caps advertises session/close.
 func advertisesSessionClose(caps agentCapabilities) bool {
 	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Close != nil
 }

@@ -401,6 +401,18 @@ func (l *Ledger) SessionCreated() {
 	}
 }
 
+// BeginSession sets the history boundary at session start: a session that
+// carried no history is created empty, and one that did takes its boundary from
+// history. A nil history leaves the boundary unknown.
+func (l *Ledger) BeginSession(carried bool, history func() RecordsRead) {
+	switch {
+	case !carried:
+		l.SessionCreated()
+	case history != nil:
+		l.Boundary(history())
+	}
+}
+
 // NeedsRecords reports whether Settle needs a records read for a turn that
 // ended as end with the live reading live. It changes no state. A read is also
 // needed while an earlier interrupted turn may have left requests uncounted,

@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	effortProbeModel = "provider/model"
+	effortProbeModel   = "provider/model"
+	effortProbeSession = "ses_probe"
 
 	scenarioVersionMarker = "opencode.versionmarker"
 )
@@ -72,11 +73,15 @@ func opencodeEffortProbe() agenttest.EffortProbe {
 		config := maps.Clone(settings)
 		config["model"] = effortProbeModel
 		dir := t.TempDir()
-		command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: "2.0.18"})
+		command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{
+			Version: "2.0.18",
+			WhenArg: "export",
+			Stdout:  `{"info":{"id":"` + effortProbeSession + `"},"messages":[]}`,
+		})
 		adapter, _ := NewOpenCodeAdapter()
 		resumeID := ""
 		if resumed {
-			resumeID = "ses_probe"
+			resumeID = effortProbeSession
 		}
 		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 			WorkspacePath:          dir,
@@ -93,7 +98,7 @@ func opencodeEffortProbe() agenttest.EffortProbe {
 		carried := make([]string, 0, turns)
 		for turn := 1; turn <= turns; turn++ {
 			if turn > 1 {
-				state.sessionID = "ses_probe"
+				state.sessionID = effortProbeSession
 			}
 			args := buildRunArgs(state, state.passthrough)
 			_, suffix, _ := strings.Cut(flagValue(args, "--model"), "#")

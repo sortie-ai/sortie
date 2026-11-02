@@ -78,10 +78,17 @@ func javaHashAbs(units []uint16) int64 {
 // journalPath names a file under the runtime's project directory for this
 // session, on whichever host runs the session.
 func (s *sessionState) journalPath(segments ...string) agentcore.RuntimePath {
+	return journalFile(s.journalDir, segments...)
+}
+
+// journalFile names a file under the runtime's project directory journalDir.
+// The session-start presence check and every journal read build their paths
+// here, so both resolve the runtime home the same way.
+func journalFile(journalDir string, segments ...string) agentcore.RuntimePath {
 	return agentcore.RuntimePath{
 		HomeVar:     "CLAUDE_CONFIG_DIR",
 		HomeDefault: []string{".claude"},
-		Segments:    append([]string{"projects", s.journalDir}, segments...),
+		Segments:    append([]string{"projects", journalDir}, segments...),
 	}
 }
 

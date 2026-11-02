@@ -11,6 +11,7 @@
 package opencode
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -33,7 +34,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "opencode"
 
 // usageSources: each step_finish report carries one request's token counts,
@@ -70,6 +70,8 @@ func init() {
 
 var _ domain.AgentAdapter = (*OpenCodeAdapter)(nil)
 
+// OpenCodeAdapter satisfies [domain.AgentAdapter] for the OpenCode CLI. One
+// instance serves all concurrent sessions.
 type OpenCodeAdapter struct{}
 
 type sessionState struct {
@@ -86,13 +88,11 @@ type sessionState struct {
 	// ledger settles every turn; built in StartSession and never reset.
 	ledger *usage.Ledger
 
-	// fork owns the turn subprocess lifecycle. Built by newForkSession.
 	fork *agentcore.ForkPerTurnSession
 
 	// turnConfigContent is the inline configuration document every turn
 	// carries through OPENCODE_CONFIG_CONTENT. Never empty, because the
-	// document always carries the title-agent switch. Set once in
-	// StartSession and never mutated after.
+	// document always carries the title-agent switch.
 	turnConfigContent string
 
 	credentialVerification bool
@@ -113,7 +113,6 @@ type sessionState struct {
 	// order.
 	children []childSession
 
-	// runtimeErrorAtMS is the timestamp of the event runtimeError came from.
 	runtimeErrorAtMS int64
 }
 
@@ -161,7 +160,6 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		target:                 target,
 		agentConfig:            params.AgentConfig,
 		passthrough:            pt,
-		sessionID:              params.ResumeSessionID,
 		baseLogger:             baseLogger,
 		tools:                  tools,
 		usage:                  agentcore.NewTurnEndUsage(),
@@ -176,13 +174,13 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		return domain.Session{}, versionErr
 	}
 
-	if params.ResumeSessionID == "" {
-		ledger.SessionCreated()
-	} else {
-		readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(params.AgentConfig))
-		ledger.Boundary(state.readRecords(readCtx))
-		cancel()
+	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID, state, baseLogger)
+	if startErr != nil {
+		_ = tools.Close()
+		return domain.Session{}, startErr
 	}
+	state.sessionID = start.ResumeID()
+	ledger.BeginSession(start.CarriedHistory(), start.Answer)
 
 	var mcp []byte
 	if tools.Configured() {
@@ -201,10 +199,11 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 	state.fork = newForkSession(state)
 
 	return domain.Session{
-		ID:            state.sessionID,
-		AgentPID:      "",
-		Internal:      state,
-		NoToolChannel: tools.NoToolChannel(),
+		ID:             state.sessionID,
+		AgentPID:       "",
+		Internal:       state,
+		NoToolChannel:  tools.NoToolChannel(),
+		CarriedHistory: start.CarriedHistory(),
 	}, nil
 }
 
@@ -434,12 +433,9 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 		if readings := freeLimitReadings(event.Error, event.Timestamp); len(readings) > 0 {
 			agentcore.EmitUsageWindows(emit, now, usage.Windows(freeLimitSource, readings, now))
 		}
-		// One failure can surface as two error events: the actionable
-		// diagnostic the session publishes, and the generic placeholder
-		// the run command reports when the failure is not in its API
-		// error schema. Their order on the stream is not guaranteed, so
-		// keep whichever event carries detail rather than whichever
-		// arrives last.
+		// One failure can surface as two error events, the session's
+		// diagnostic and the run command's generic placeholder, in either
+		// order; keep the one that carries detail.
 		if s.runtimeError == nil || !isMaskedServerError(rawRunErrorMessage(event.Error)) {
 			s.runtimeError = event.Error
 			s.runtimeErrorAtMS = event.Timestamp
@@ -579,19 +575,12 @@ func toolDuration(partTime rawPartTime) int64 {
 	return partTime.End - partTime.Start
 }
 
-// rawRunErrorMessage returns the first non-empty of runErr's message or
-// type, falling back to a generic message when neither carries text.
 func rawRunErrorMessage(runErr *rawRunError) string {
+	const unknown = "opencode reported an unknown error"
 	if runErr == nil {
-		return "opencode reported an unknown error"
+		return unknown
 	}
-	if runErr.Message != "" {
-		return runErr.Message
-	}
-	if runErr.Type != "" {
-		return runErr.Type
-	}
-	return "opencode reported an unknown error"
+	return cmp.Or(runErr.Message, runErr.Type, unknown)
 }
 
 // maskedServerErrorMessage is the placeholder opencode emits on the run
@@ -599,8 +588,6 @@ func rawRunErrorMessage(runErr *rawRunError) string {
 // failure, hiding the underlying cause from the JSON events.
 const maskedServerErrorMessage = "Unexpected server error. Check server logs for details."
 
-// isMaskedServerError reports whether message carries no failure detail
-// beyond opencode's generic server-error placeholder.
 func isMaskedServerError(message string) bool {
 	return strings.TrimSpace(message) == maskedServerErrorMessage
 }

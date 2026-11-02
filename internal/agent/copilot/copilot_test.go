@@ -25,24 +25,16 @@ import (
 
 var copilotUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
-// turnCounterScenario names the fake runtime scenario that answers its
-// first invocation with a fixed stdout payload and every later
-// invocation with nothing, tracked by a marker file's existence. It
-// pins a per-turn signal that a session's second turn must not inherit
-// from its first.
-const turnCounterScenario = "copilot.turn-counter"
+const firstTurnOnlyScenario = "copilot.turn-counter"
 
-// turnCounterOutput parameterizes turnCounterScenario.
-type turnCounterOutput struct {
+type firstTurnOnlyOutput struct {
 	CounterFile string
 	Stdout      string
 }
 
-// fakeScenarios collects every non-default fake-runtime scenario this
-// package's tests register. Platform-specific test files add their own
-// entries via init.
+// Other test files of this package add their scenarios here from init.
 var fakeScenarios = map[string]agenttest.Scenario{
-	turnCounterScenario: agenttest.Typed(runTurnCounterScenario),
+	firstTurnOnlyScenario: agenttest.Typed(runFirstTurnOnlyScenario),
 }
 
 func TestMain(m *testing.M) {
@@ -57,7 +49,7 @@ func TestMain(m *testing.M) {
 	agenttest.Main(m, fakeScenarios)
 }
 
-func runTurnCounterScenario(_ []string, params turnCounterOutput) int {
+func runFirstTurnOnlyScenario(_ []string, params firstTurnOnlyOutput) int {
 	if _, err := os.Stat(params.CounterFile); err == nil {
 		return 0
 	}
@@ -68,26 +60,20 @@ func runTurnCounterScenario(_ []string, params turnCounterOutput) int {
 	return agenttest.Output{Stdout: params.Stdout}.Run()
 }
 
-// firstTurnOnlyBinary returns a fake copilot runtime that writes stdout
-// on its first invocation and produces no output on every later
-// invocation.
 func firstTurnOnlyBinary(t *testing.T, stdout string) string {
 	t.Helper()
 	dir := t.TempDir()
-	return agenttest.FakeRuntime(t, dir, "copilot", turnCounterScenario, turnCounterOutput{
+	return agenttest.FakeRuntime(t, dir, "copilot", firstTurnOnlyScenario, firstTurnOnlyOutput{
 		CounterFile: filepath.Join(dir, "turn-count"),
 		Stdout:      stdout,
 	})
 }
 
-// fakeCopilotBinary creates a fake copilot runtime that exits 0 for any
-// invocation (including the --version canary check).
 func fakeCopilotBinary(t *testing.T) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{})
 }
 
-// requireAgentError asserts err is a *domain.AgentError with the given Kind.
 func requireAgentError(t *testing.T, err error, wantKind domain.AgentErrorKind) {
 	t.Helper()
 	if err == nil {
@@ -114,9 +100,22 @@ func TestNewCopilotAdapter(t *testing.T) {
 	}
 }
 
+func stageHeldSession(t *testing.T, sessionID string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	path := filepath.Join(home, "session-state", sessionID, "events.jsonl")
+	if err := errors.Join(os.MkdirAll(filepath.Dir(path), 0o755), os.WriteFile(path, nil, 0o600)); err != nil {
+		t.Fatalf("staging journal %q: %v", path, err)
+	}
+}
+
 func startSettingsSession(t *testing.T, adapter domain.AgentAdapter, settings map[string]any, resumeID string) *sessionState {
 	t.Helper()
 
+	if resumeID != "" {
+		stageHeldSession(t, resumeID)
+	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   t.TempDir(),
 		AgentConfig:     domain.AgentConfig{Command: fakeCopilotBinary(t)},
@@ -130,8 +129,6 @@ func startSettingsSession(t *testing.T, adapter domain.AgentAdapter, settings ma
 }
 
 func TestStartSession_SettingsArePerSession(t *testing.T) {
-	t.Parallel()
-
 	adapter, _ := NewCopilotAdapter()
 	first := startSettingsSession(t, adapter, map[string]any{
 		"model": "gpt-5", "effort": "high", "max_autopilot_continues": float64(15), "agent": "custom",
@@ -239,8 +236,6 @@ func TestStartSession(t *testing.T) {
 }
 
 func TestStartSession_NewSession(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, _ := NewCopilotAdapter()
@@ -254,8 +249,6 @@ func TestStartSession_NewSession(t *testing.T) {
 		t.Fatalf("StartSession() error = %v", err)
 	}
 
-	// The adapter assigns a v4 UUID session ID itself in StartSession,
-	// so it is never empty and no launch falls back to --continue.
 	if !copilotUUIDPattern.MatchString(session.ID) {
 		t.Errorf("session.ID = %q, want a v4 UUID", session.ID)
 	}
@@ -268,10 +261,7 @@ func TestStartSession_NewSession(t *testing.T) {
 		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, session.ID)
 	}
 	if state.target.WorkspacePath != workspace {
-		// t.TempDir() may return a path through a symlink; compare with os.Stat.
-		if state.target.WorkspacePath != filepath.Clean(workspace) {
-			t.Errorf("state.target.WorkspacePath = %q, want %q", state.target.WorkspacePath, workspace)
-		}
+		t.Errorf("state.target.WorkspacePath = %q, want %q", state.target.WorkspacePath, workspace)
 	}
 	if state.isContinuation {
 		t.Error("state.isContinuation = true, want false for a new session")
@@ -281,47 +271,26 @@ func TestStartSession_NewSession(t *testing.T) {
 	}
 }
 
-func TestStartSession_ResumeSessionID(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-
+func TestSessionContinuity(t *testing.T) {
 	adapter, _ := NewCopilotAdapter()
-	fakeBin := fakeCopilotBinary(t)
-	const resumeID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
 
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   t.TempDir(),
-		AgentConfig:     domain.AgentConfig{Command: fakeBin},
-		ResumeSessionID: resumeID,
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		stageHeldSession(t, held)
+		params := domain.StartSessionParams{WorkspacePath: t.TempDir(), AgentConfig: domain.AgentConfig{Command: fakeCopilotBinary(t)}, ResumeSessionID: resumeID}
+		return adapter.StartSession(context.Background(), params)
 	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-
-	if session.ID != resumeID {
-		t.Errorf("session.ID = %q, want %q", session.ID, resumeID)
-	}
-
-	state := session.Internal.(*sessionState)
-	if state.copilotSessionID != resumeID {
-		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, resumeID)
-	}
 }
 
 func TestStartSession_DefaultCommand(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, _ := NewCopilotAdapter()
-	// Empty command falls back to "copilot". In CI, copilot is likely
-	// absent, so ErrAgentNotFound is expected. If copilot is installed,
-	// the session may succeed; either outcome is acceptable.
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{},
 	})
 	if err == nil {
-		return // copilot is on PATH, which is fine
+		return // a host with copilot installed starts the session
 	}
 	requireAgentError(t, err, domain.ErrAgentNotFound)
 }
@@ -389,11 +358,7 @@ func TestPlaceMCPConfig(t *testing.T) {
 	}
 }
 
-// TestStartSession_SSHHostWhitespaceOnly verifies that a whitespace-only
-// SSHHost value is trimmed to empty and the session falls through to the
-// local subprocess path, not SSH mode.
 func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, _ := NewCopilotAdapter()
@@ -403,7 +368,7 @@ func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: workspace,
 		AgentConfig:   domain.AgentConfig{Command: fakeBin},
-		SSHHost:       "   ", // whitespace-only: must be treated as local (no SSH host)
+		SSHHost:       "   ",
 	})
 	if err != nil {
 		t.Fatalf("StartSession(SSHHost=%q) error = %v", "   ", err)
@@ -418,8 +383,6 @@ func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
 	}
 }
 
-// fakeCopilotBinaryWithOutput creates a fake copilot runtime that
-// writes content to stdout and exits with the given exit code.
 func fakeCopilotBinaryWithOutput(t *testing.T, content string, exitCode int) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{
@@ -428,8 +391,6 @@ func fakeCopilotBinaryWithOutput(t *testing.T, content string, exitCode int) str
 	})
 }
 
-// newTestSession starts a session backed by fakeCopilotBinary.
-// The caller must set GH_TOKEN (or another auth env var) before calling.
 func newTestSession(t *testing.T, workspace string) (domain.AgentAdapter, domain.Session) {
 	t.Helper()
 	adapter, err := NewCopilotAdapter()
@@ -446,7 +407,6 @@ func newTestSession(t *testing.T, workspace string) (domain.AgentAdapter, domain
 	return adapter, session
 }
 
-// loadTestFixture reads a testdata fixture file and returns its content.
 func loadTestFixture(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
@@ -456,7 +416,6 @@ func loadTestFixture(t *testing.T, name string) string {
 	return string(data)
 }
 
-// hasEventType returns true if any event in events matches typ.
 func hasEventType(events []domain.AgentEvent, typ domain.AgentEventType) bool {
 	for _, e := range events {
 		if e.Type == typ {
@@ -466,8 +425,17 @@ func hasEventType(events []domain.AgentEvent, typ domain.AgentEventType) bool {
 	return false
 }
 
-// findEventByType returns the first event matching typ and true, or a zero
-// value and false when no matching event exists.
+func assertNoTokenUsageAfter(t *testing.T, events []domain.AgentEvent, terminal domain.AgentEventType) {
+	t.Helper()
+	at := slices.IndexFunc(events, func(e domain.AgentEvent) bool { return e.Type == terminal })
+	if at < 0 {
+		return
+	}
+	if slices.ContainsFunc(events[at+1:], func(e domain.AgentEvent) bool { return e.Type == domain.EventTokenUsage }) {
+		t.Errorf("phantom EventTokenUsage emitted after %s", terminal)
+	}
+}
+
 func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (domain.AgentEvent, bool) {
 	for _, e := range events {
 		if e.Type == typ {
@@ -478,11 +446,9 @@ func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (dom
 }
 
 func TestRunTurn_HappyPath(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
-	// A journal read resolves the real user home otherwise, and a session id
-	// collision with an unrelated on-disk journal would leak a real model name
-	// into the AssertModelReported("") expectation below.
+	// A journal read resolves the real user home otherwise, and a journal
+	// there under the same session id would leak real usage into the turn.
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -507,7 +473,6 @@ func TestRunTurn_HappyPath(t *testing.T) {
 	if result.SessionID != wantSessionID {
 		t.Errorf("result.SessionID = %q, want %q", result.SessionID, wantSessionID)
 	}
-	// Session ID captured from result event for subsequent turns.
 	if state.copilotSessionID != wantSessionID {
 		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, wantSessionID)
 	}
@@ -521,10 +486,8 @@ func TestRunTurn_HappyPath(t *testing.T) {
 		}
 	}
 
-	// EventTurnCompleted must carry APIDurationMS from result.totalApiDurationMs.
-	// simple_session.jsonl has totalApiDurationMs: 6866.
 	if e, ok := findEventByType(events, domain.EventTurnCompleted); ok {
-		const wantAPIDurationMS int64 = 6866
+		const wantAPIDurationMS int64 = 6866 // simple_session.jsonl's totalApiDurationMs
 		if e.APIDurationMS != wantAPIDurationMS {
 			t.Errorf("EventTurnCompleted.APIDurationMS = %d, want %d", e.APIDurationMS, wantAPIDurationMS)
 		}
@@ -532,17 +495,7 @@ func TestRunTurn_HappyPath(t *testing.T) {
 		t.Error("EventTurnCompleted not found in events")
 	}
 
-	// No phantom EventTokenUsage should follow the final turn-completion event.
-	for i, e := range events {
-		if e.Type == domain.EventTurnCompleted {
-			for _, after := range events[i+1:] {
-				if after.Type == domain.EventTokenUsage {
-					t.Error("phantom EventTokenUsage emitted after EventTurnCompleted")
-				}
-			}
-			break
-		}
-	}
+	assertNoTokenUsageAfter(t, events, domain.EventTurnCompleted)
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 		Terminal:     agentcore.TerminalSuccess,
@@ -555,7 +508,6 @@ func TestRunTurn_HappyPath(t *testing.T) {
 }
 
 func TestRunTurn_ExitCode127(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -574,7 +526,6 @@ func TestRunTurn_ExitCode127(t *testing.T) {
 }
 
 func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -625,10 +576,6 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 	}
 }
 
-// TestRunTurn_SingleSignalNoTerminalCompletes drives a stream carrying
-// only one of the two declared signals, exiting zero with no terminal
-// result event, and pins that each signal alone is sufficient to report
-// turn_completed.
 func TestRunTurn_SingleSignalNoTerminalCompletes(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
@@ -666,12 +613,6 @@ func TestRunTurn_SingleSignalNoTerminalCompletes(t *testing.T) {
 	}
 }
 
-// TestRunTurn_NoOutputTokensNoResultCompletes pins a regression fixture:
-// a stream carrying assistant output and completed tool activity, no
-// per-message output-token field anywhere, and no terminal result
-// event, still reports turn_completed. The fixture itself is asserted to
-// carry no output-token field, so a future revert to token-count
-// derivation fails this test rather than passing it.
 func TestRunTurn_NoOutputTokensNoResultCompletes(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
@@ -700,13 +641,6 @@ func TestRunTurn_NoOutputTokensNoResultCompletes(t *testing.T) {
 	}
 }
 
-// TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus drives the committed
-// testdata/ corpus and pins that each field the copilot WorkSignals
-// declaration sets true is observed by at least one committed fixture:
-// simple_session.jsonl carries assistant content and no tool call record
-// at all, and tool_only_no_assistant_content.jsonl carries a tool call and
-// no assistant.message record at all, so each fixture's own shape
-// attributes the observation to a single field.
 func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
@@ -742,10 +676,6 @@ func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
 	})
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
-// session's second turn, whose stream carries neither declared signal,
-// reports turn_failed even though the first turn on the same session
-// carried both assistant output and completed tool activity.
 func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
@@ -838,14 +768,12 @@ func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
 }
 
 func TestRunTurn_ContextCancelled(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
-	// state.target.Command is fakeCopilotBinary: exits 0 immediately, no output.
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel before RunTurn
+	cancel()
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
@@ -859,7 +787,6 @@ func TestRunTurn_ContextCancelled(t *testing.T) {
 }
 
 func TestRunTurn_MalformedLines(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -880,7 +807,6 @@ func TestRunTurn_MalformedLines(t *testing.T) {
 }
 
 func TestRunTurn_ToolUseEvents(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -928,7 +854,6 @@ func TestRunTurn_ToolUseEvents(t *testing.T) {
 // With --no-ask-user every recognized request is a permission request with
 // no reply channel, so the runtime's own refusal must not end the turn.
 func TestRunTurn_ToolDeniedContinuesTurn(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	const deniedJSONL = `{"type":"tool.execution_complete","data":{"toolCallId":"tc-1","toolName":"bash","success":false,"error":{"code":"denied","message":"denied by policy"}}}
@@ -964,10 +889,8 @@ func TestRunTurn_ToolDeniedContinuesTurn(t *testing.T) {
 }
 
 func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
-	// JSONL with a result event reporting a non-zero exit code.
 	const failResultJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"cc990fc2-1234-5678-9abc-def012345678","exitCode":1,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1030,7 +953,6 @@ func runFailedTurn(t *testing.T, adapter domain.AgentAdapter, session domain.Ses
 }
 
 func TestRunTurn_SessionErrorMessageIsFailureReason(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	longMessage := strings.Repeat("provider detail ", 512)
@@ -1096,7 +1018,6 @@ func TestRunTurn_SessionErrorMessageIsFailureReason(t *testing.T) {
 }
 
 func TestRunTurn_SessionErrorEmitsBlankPing(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1120,7 +1041,6 @@ func TestRunTurn_SessionErrorEmitsBlankPing(t *testing.T) {
 }
 
 func TestRunTurn_SessionErrorMessageDoesNotLeakIntoNextTurn(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1143,14 +1063,9 @@ func TestRunTurn_SessionErrorMessageDoesNotLeakIntoNextTurn(t *testing.T) {
 	}
 }
 
-// TestRunTurn_TurnFailed_APIDurationMS verifies that EventTurnFailed carries
-// APIDurationMS from the result event's totalApiDurationMs field, and that no
-// phantom EventTokenUsage follows it.
 func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
-	// Result event with non-zero totalApiDurationMs and a non-zero exit code.
 	const failJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"cc990fc2-1234-5678-9abc-def012345678","exitCode":1,"usage":{"premiumRequests":2,"totalApiDurationMs":5000,"sessionDurationMs":9000}}`
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1164,7 +1079,6 @@ func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
 
 	requireAgentError(t, err, domain.ErrTurnFailed)
 
-	// EventTurnFailed must carry APIDurationMS from the result event.
 	e, ok := findEventByType(events, domain.EventTurnFailed)
 	if !ok {
 		t.Fatal("EventTurnFailed not delivered")
@@ -1174,30 +1088,16 @@ func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
 		t.Errorf("EventTurnFailed.APIDurationMS = %d, want %d", e.APIDurationMS, wantAPIDurationMS)
 	}
 
-	// No phantom EventTokenUsage should follow EventTurnFailed.
-	for i, ev := range events {
-		if ev.Type == domain.EventTurnFailed {
-			for _, after := range events[i+1:] {
-				if after.Type == domain.EventTokenUsage {
-					t.Error("phantom EventTokenUsage emitted after EventTurnFailed")
-				}
-			}
-			break
-		}
-	}
+	assertNoTokenUsageAfter(t, events, domain.EventTurnFailed)
 }
 
-// TestRunTurn_ContextCancelledBeforeStart verifies that RunTurn emits
-// EventTurnCancelled and returns ErrTurnCancelled when the context is already
-// done before cmd.Start is called.
 func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel before RunTurn
+	cancel()
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
@@ -1206,27 +1106,11 @@ func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
 			events = append(events, e)
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error on pre-cancelled context, got nil")
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("error type = %T, want *domain.AgentError", err)
-	}
-	if agentErr.Kind != domain.ErrTurnCancelled {
-		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnCancelled)
-	}
+	requireAgentError(t, err, domain.ErrTurnCancelled)
 	if result.ExitReason != domain.EventTurnCancelled {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
 	}
-	var foundCancel bool
-	for _, e := range events {
-		if e.Type == domain.EventTurnCancelled {
-			foundCancel = true
-			break
-		}
-	}
-	if !foundCancel {
+	if !hasEventType(events, domain.EventTurnCancelled) {
 		t.Error("EventTurnCancelled not delivered on pre-cancelled context")
 	}
 }
@@ -1238,7 +1122,6 @@ func TestStopSession_NilProc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
-	// Bare session with no running subprocess (proc == nil).
 	session := domain.Session{
 		Internal: &sessionState{
 			target: agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
@@ -1250,10 +1133,8 @@ func TestStopSession_NilProc(t *testing.T) {
 }
 
 func TestStopSession_TerminatesProcess(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
-	// Fake runtime that blocks until it is killed.
 	hangBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{Hang: true})
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1276,19 +1157,15 @@ func TestStopSession_TerminatesProcess(t *testing.T) {
 		})
 	}()
 
-	// Wait until RunTurn has started the subprocess.
 	waittest.Receive(t, processStarted, "process start")
 
 	if err := adapter.StopSession(context.Background(), session); err != nil {
 		t.Fatalf("StopSession() error = %v", err)
 	}
 
-	// Verify RunTurn unblocked after StopSession terminated the process.
 	waittest.Receive(t, runDone, "RunTurn return after StopSession")
 }
 
-// fakeCopilotBinaryWithStderrAndExit creates a fake copilot runtime
-// that writes stderrLine to stderr and exits with exitCode.
 func fakeCopilotBinaryWithStderrAndExit(t *testing.T, stderrLine string, exitCode int) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, t.TempDir(), "copilot", agenttest.OutputScenario, agenttest.Output{
@@ -1297,9 +1174,6 @@ func fakeCopilotBinaryWithStderrAndExit(t *testing.T, stderrLine string, exitCod
 	})
 }
 
-// TestRunTurn_StderrWarnOnExitCode127 verifies that when the subprocess
-// writes to stderr and exits with code 127, the stderr lines are
-// re-emitted at WARN level.
 func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -1327,9 +1201,6 @@ func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrWarnOnNonZeroExit verifies that when the subprocess
-// writes to stderr and exits non-zero (not 127) without a result event,
-// the stderr lines are re-emitted at WARN level.
 func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -1357,8 +1228,6 @@ func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
 	}
 }
 
-// TestRunTurn_StderrNoWarnOnSuccess verifies that when the subprocess
-// succeeds, stderr lines are not re-emitted at WARN level.
 func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 	spy := agenttest.InstallLogSpy(t)
@@ -1393,7 +1262,6 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 const streamCheckpointLine = `{"type":"session.usage_checkpoint","data":{"accountingSnapshot":{"modelMetrics":{"claude-sonnet-5":{"usage":{"inputTokens":193011,"outputTokens":596,"cacheReadTokens":154053,"cacheWriteTokens":38948,"reasoningTokens":149}}}}}}`
 
 func TestAssertUsageReporting(t *testing.T) {
-	// No t.Parallel(): t.Setenv is incompatible with it.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
@@ -1419,7 +1287,6 @@ func TestAssertUsageReporting(t *testing.T) {
 }
 
 func TestRunTurn_UnnormalizableCheckpointSupersedesEarlierOne(t *testing.T) {
-	// No t.Parallel(): t.Setenv is incompatible with it.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
@@ -1438,12 +1305,7 @@ func TestRunTurn_UnnormalizableCheckpointSupersedesEarlierOne(t *testing.T) {
 	}
 }
 
-// TestRunTurn_SuccessfulResultZeroOutputTokens pins that a successful
-// result event completes the turn even when this turn's own output
-// tokens are zero, because a positive terminal report is authoritative
-// and never consults Work.
 func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	const successJSONL = `{"type":"session.task_complete","data":{"summary":"done","success":true}}
@@ -1471,12 +1333,7 @@ func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_SuccessMessageStaysEmpty is the regression pin for the
-// success-message mapping: copilot's result event carries no completion
-// text, so the emitted turn_completed event's message stays empty
-// unchanged, even on a turn that produced real assistant output.
 func TestRunTurn_SuccessMessageStaysEmpty(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
@@ -1504,13 +1361,7 @@ func TestRunTurn_SuccessMessageStaysEmpty(t *testing.T) {
 	}
 }
 
-// TestRunTurn_WorkPredicateIsPerTurn pins that the work predicate reads
-// this turn's own output tokens, not the run cumulative. The first turn
-// produces output and completes; the second turn, on the same session,
-// produces none and must fail rather than inherit the first turn's
-// evidence.
 func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1538,16 +1389,7 @@ func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 	requireAgentError(t, err, domain.ErrPortExit)
 }
 
-// TestRunTurn_CompleteVersusIncompleteDisposition drives the two endings
-// the autopilot continuation ceiling makes indistinguishable at the exit
-// code and process-exit level: a stream that reports session.task_complete
-// before its terminal result, and a stream that reaches the same
-// exitCode:0 result without ever reporting it. Both pin their disposition
-// against agentcore.DecideTurn, and the test additionally asserts the two
-// ExitReason values differ, since a discriminator that both endings
-// satisfy would defeat the point of the fix.
 func TestRunTurn_CompleteVersusIncompleteDisposition(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 	t.Setenv("COPILOT_HOME", t.TempDir())
 
@@ -1592,12 +1434,7 @@ func TestRunTurn_CompleteVersusIncompleteDisposition(t *testing.T) {
 	}
 }
 
-// TestRunTurn_TaskCompleteSuccessFalse pins the session.task_complete
-// "success: false" ending: it surfaces as a domain.ErrTurnFailed carrying
-// completionFailureMessage's rendering of the report's own summary, not
-// the generic zero-work or non-zero-exit message.
 func TestRunTurn_TaskCompleteSuccessFalse(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	const summary = "ran into a blocker"
@@ -1623,12 +1460,7 @@ func TestRunTurn_TaskCompleteSuccessFalse(t *testing.T) {
 	}, result, err)
 }
 
-// TestRunTurn_TaskCompleteSuccessKeyAbsent pins the adapter-level ending
-// for a session.task_complete report whose payload carries no success key
-// at all: the turn completes, since the parsed *bool stays nil and the
-// adapter's default success posture applies.
 func TestRunTurn_TaskCompleteSuccessKeyAbsent(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	const stream = `{"type":"session.task_complete","data":{"summary":"all set"}}
@@ -1651,21 +1483,9 @@ func TestRunTurn_TaskCompleteSuccessKeyAbsent(t *testing.T) {
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{Terminal: agentcore.TerminalSuccess}, result, err)
 }
 
-// TestRunTurn_IncompleteEndingLogsContinuationCounts pins the diagnostic
-// attributes on the adapter's own "copilot turn ended without a
-// task-completion report" warning: autopilot_continuations_observed
-// counts the isAutopilotContinuation lines this turn actually saw, and
-// max_autopilot_continues reports the session's effective ceiling.
-//
-// agenttest.LogSpy only extracts the "line" attribute it was built for
-// (see TestLogSpy_Handle_OtherAttrsIgnored in that package) and has no
-// way to report other attributes' values, so this test installs its own
-// buffer-backed slog.TextHandler as the default logger instead, the
-// pattern this project's own testing guidance documents for asserting on
-// structured log output.
 func TestRunTurn_IncompleteEndingLogsContinuationCounts(t *testing.T) {
-	// No t.Parallel() at the top level: installs a global slog default;
-	// t.Setenv is also incompatible with t.Parallel.
+	// No t.Parallel(): installs a global slog default. agenttest.LogSpy
+	// reports only the "line" attribute, and this test reads others.
 	var logOutput bytes.Buffer
 	previousDefault := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))

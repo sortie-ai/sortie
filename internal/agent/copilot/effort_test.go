@@ -31,6 +31,7 @@ func copilotEffortProbe(t *testing.T, settings map[string]any, verification, res
 	resumeID := ""
 	if resumed {
 		resumeID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
+		stageHeldSession(t, resumeID)
 	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:          t.TempDir(),
@@ -52,7 +53,6 @@ func copilotEffortProbe(t *testing.T, settings map[string]any, verification, res
 }
 
 func TestEffortForwarding(t *testing.T) {
-	t.Parallel()
 
 	agenttest.AssertEffortForwarding(t, copilotEffortProbe)
 }

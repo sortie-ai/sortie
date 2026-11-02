@@ -49,6 +49,7 @@ const (
 	conformanceContinuedAt = iota + 1
 	conformanceControlAt
 	conformanceResumedAt
+	conformanceUnheldAt
 )
 
 const (
@@ -359,7 +360,7 @@ type conformanceContinuationState struct {
 }
 
 func conformanceContinuationRun() conformanceContinuationState {
-	const originID, controlID = "session-origin", "session-control"
+	const originID, controlID, unheldRequested, unheldID = "session-origin", "session-control", "session-unheld-requested", "session-unheld"
 	started := func(id string) []domain.AgentEvent {
 		return []domain.AgentEvent{{Type: domain.EventSessionStarted, SessionID: id}}
 	}
@@ -371,19 +372,22 @@ func conformanceContinuationRun() conformanceContinuationState {
 		"nonce-p1 nonce-a1 nonce-p2",
 		"nonce-p3",
 		"nonce-p1 nonce-a1 nonce-p2 nonce-a2 nonce-p4",
+		"nonce-p5",
 	}
 	var exchanges []Exchange
 	for step, body := range requests {
 		exchanges = append(exchanges, Exchange{Seq: step + 1, Kind: ExchangeTurn, Method: "POST", Path: "/v1/messages", Step: step, Body: []byte(body)})
 	}
+	origin, control, resumed, unheld := domain.Session{ID: originID}, domain.Session{ID: controlID}, domain.Session{ID: originID, CarriedHistory: true}, domain.Session{ID: unheldID}
 	return conformanceContinuationState{
 		turns: []continuedTurn{
-			{role: roleOrigin, prompt: "nonce-p1", answer: "nonce-a1", result: result(originID), events: started(originID)},
-			{role: roleOrigin, prompt: "nonce-p2", answer: "nonce-a2", result: result(originID)},
-			{role: roleControl, prompt: "nonce-p3", answer: "nonce-a3", result: result(controlID), events: started(controlID)},
-			{role: roleResumed, prompt: "nonce-p4", answer: "nonce-a4", result: result(originID), events: started(originID)},
+			{role: roleOrigin, session: origin, promptMarker: "nonce-p1", answerMarker: "nonce-a1", result: result(originID), events: started(originID)},
+			{role: roleOrigin, session: origin, promptMarker: "nonce-p2", answerMarker: "nonce-a2", result: result(originID)},
+			{role: roleControl, session: control, promptMarker: "nonce-p3", answerMarker: "nonce-a3", result: result(controlID), events: started(controlID)},
+			{role: roleResumed, session: resumed, resumeID: originID, promptMarker: "nonce-p4", answerMarker: "nonce-a4", result: result(originID), events: started(originID)},
+			{role: roleUnheld, session: unheld, resumeID: unheldRequested, promptMarker: "nonce-p5", answerMarker: "nonce-a5", result: result(unheldID), events: started(unheldID)},
 		},
-		resumed:   domain.Session{ID: originID},
+		resumed:   resumed,
 		exchanges: exchanges,
 	}
 }
@@ -669,9 +673,16 @@ func TestConformancePropertyContinuation(t *testing.T) {
 			want: []string{"control turn"},
 		},
 		{
-			name:   "no turn exchange for the resumed entry",
-			mutate: func(s *conformanceContinuationState) { s.exchanges = s.exchanges[:conformanceResumedAt] },
-			want:   []string{"resumed script entry 3: no turn exchange"},
+			name:   "unheld session reporting carried history",
+			mutate: func(s *conformanceContinuationState) { s.turns[conformanceUnheldAt].session.CarriedHistory = true },
+			want:   []string{"unheld session: Session.CarriedHistory = true, want false"},
+		},
+		{
+			name: "no turn exchange for the resumed entry",
+			mutate: func(s *conformanceContinuationState) {
+				s.exchanges = slices.Delete(s.exchanges, conformanceResumedAt, conformanceUnheldAt)
+			},
+			want: []string{"resumed script entry 3: no turn exchange"},
 		},
 		{
 			name:   "measured first turn carrying the flag",
@@ -1123,17 +1134,17 @@ func TestConformancePropertyRuntimeGone(t *testing.T) {
 			},
 		},
 		{
-			name:   "R-1: no process id reported",
+			name:   "no process id reported",
 			mutate: func(s *conformanceGoneState) { s.run.Session.AgentPID = "" },
 			want:   []string{"AgentPID"},
 		},
 		{
-			name:   "R-3: reported process still answers, and so does its snapshot entry",
+			name:   "reported process still answers, and so does its snapshot entry",
 			mutate: func(s *conformanceGoneState) { s.remaining[pid] = "process 4242" },
 			want:   []string{"reported process 4242", "4242"},
 		},
 		{
-			name: "R-4: a request is still held",
+			name: "a request is still held",
 			mutate: func(s *conformanceGoneState) {
 				s.td.stillHeld = []Exchange{{Seq: 1, Method: "POST", Path: "/v1/messages", Kind: ExchangeHeld}}
 			},
@@ -1141,22 +1152,22 @@ func TestConformancePropertyRuntimeGone(t *testing.T) {
 			also: []string{holdEndBound.String()},
 		},
 		{
-			name:   "R-5: reported process missing from the snapshot",
+			name:   "reported process missing from the snapshot",
 			mutate: func(s *conformanceGoneState) { s.td.aliveWhileHeld = []int{pid + 1} },
 			want:   []string{strconv.Itoa(pid)},
 		},
 		{
-			name:   "R-5: a snapshot process outside the reported ones still answers",
+			name:   "a snapshot process outside the reported ones still answers",
 			mutate: func(s *conformanceGoneState) { s.remaining[pid+1] = "process 4243" },
 			want:   []string{strconv.Itoa(pid + 1)},
 		},
 		{
-			name:   "R-6: a launch record is not released",
+			name:   "a launch record is not released",
 			mutate: func(s *conformanceGoneState) { s.td.heldLaunches[0] = func() (bool, error) { return false, nil } },
 			want:   []string{launchtest.ErrNotReleased.Error()},
 		},
 		{
-			name: "R-6: a launch record is released with a cleanup error",
+			name: "a launch record is released with a cleanup error",
 			mutate: func(s *conformanceGoneState) {
 				s.td.heldLaunches[0] = func() (bool, error) { return true, errConformanceCleanup }
 			},

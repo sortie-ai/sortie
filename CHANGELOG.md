@@ -9,10 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
+- When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 
 ### Fixed
 
 - The first prompt after a person releases a parked issue no longer repeats the agent's stop statement through Sortie's own stop comment, and it includes comments written while the parked run's last turn was still running. ([#1582](https://github.com/sortie-ai/sortie/issues/1582))
+- Claude Code and Copilot CLI runs no longer fail on every retry when the agent's earlier session has been deleted or has expired; the agent starts a new session instead. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 
 ## [1.31.0] - 2026-10-31
 

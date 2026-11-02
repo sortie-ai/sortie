@@ -9,6 +9,7 @@ package mock
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-// usageSources: the mock reports the counts its configuration sets as a
-// running total since its session state began.
+// usageSources declares the configured counts as a running total since the
+// session state began.
 var usageSources = usage.Sources{Live: usage.Source{
 	Category: usage.SourceOutput,
 	Strategy: usage.StrategyLive,
@@ -41,7 +42,6 @@ func init() {
 
 const usageLimitOutcome = "usage_limit"
 
-// Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*MockAdapter)(nil)
 
 // MockAdapter is a configurable agent adapter for testing. It emits
@@ -95,39 +95,25 @@ type mockToolCall struct {
 	Error      bool
 }
 
-// NewMockAdapter creates a [MockAdapter]. Every settings key is optional
-// with a safe default; an empty block produces a mock that starts
-// successfully, emits 3 notifications plus token_usage and turn_completed
-// per turn, and stops cleanly.
+// NewMockAdapter creates a [MockAdapter]. Every settings key is optional;
+// an empty block starts a session that emits three notifications,
+// token_usage and turn_completed per turn and stops cleanly.
 //
-// Accepted settings keys: session_id, agent_pid, start_error,
-// turn_outcomes, events_per_turn, input_tokens_per_turn,
-// output_tokens_per_turn, turn_delay_ms, stop_error,
-// report_token_usage, usage_limit_resets_at. input_tokens_per_turn counts all input including
-// cache reads, so cache_read_tokens_per_turn is a subset of it rather
-// than an addition to it. The adapter reports run-cumulative counts by
-// construction: each turn's contribution accrues onto the totals of
-// every prior turn in the same session.
-// report_token_usage defaults to true; when false, the adapter emits no
-// token_usage event, leaves [domain.TurnResult] Usage at the zero
-// value, and reports UsageMeasured false, simulating a runtime that
-// reported nothing: a turn that served output then carries
-// SpendUnaccounted, an amount unknown. The error outcome does not carry
-// it, because its terminal event bypasses the shared disposition. A
-// verification session's turn emits no event, consumes no turn_outcomes
-// entry, and fails with credential_error when it is set.
-//
-// turn_outcomes entries are completed, failed, cancelled, error,
-// input_required, incomplete, and usage_limit. A usage_limit turn
-// fails with [domain.ErrUsageLimit], accrues no usage because a refused
-// request bills nothing, and carries the reset instant from
-// usage_limit_resets_at (RFC 3339; absent or unparseable gives a zero
-// instant).
+// Token counts are cumulative over the session, and input_tokens_per_turn
+// already includes cache_read_tokens_per_turn. With report_token_usage false
+// the mock reports no usage, so a turn that served output, other than an
+// error outcome, carries SpendUnaccounted. The turn_outcomes entries are
+// completed, failed, cancelled, error, input_required, incomplete and
+// usage_limit; a usage_limit turn fails with [domain.ErrUsageLimit], accrues
+// nothing, and carries the RFC 3339 reset instant from usage_limit_resets_at.
+// A verification session's turn emits no event, consumes no turn_outcomes
+// entry, and fails with credential_error when it is set. A session resumes
+// only its configured session_id; any other resume starts a new session that
+// keeps that id.
 func NewMockAdapter() (domain.AgentAdapter, error) {
 	return &MockAdapter{}, nil
 }
 
-// parseSettings reads a session's settings block.
 func parseSettings(config map[string]any) mockSettings {
 	m := mockSettings{
 		sessionID:           "mock-session-001",
@@ -210,7 +196,7 @@ func parseSettings(config map[string]any) mockSettings {
 // StartSession returns a canned [domain.Session] or an error when the
 // session's settings carry start_error. Validates that
 // [domain.StartSessionParams.WorkspacePath] is non-empty.
-func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+func (m *MockAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	settings := parseSettings(params.Settings)
 	if settings.startError != "" {
 		return domain.Session{}, &domain.AgentError{
@@ -226,10 +212,22 @@ func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSession
 		}
 	}
 
+	probe := agentcore.ResumeProbeFunc[struct{}](func(_ context.Context, resumeID string) (agentcore.ResumeSignal[struct{}], *domain.AgentError) {
+		if resumeID == settings.sessionID {
+			return agentcore.ResumeSignal[struct{}]{Verdict: agentcore.ResumeCarried}, nil
+		}
+		return agentcore.ResumeSignal[struct{}]{Verdict: agentcore.ResumeReplaced}, nil
+	})
+	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID, probe, slog.Default())
+	if startErr != nil {
+		return domain.Session{}, startErr
+	}
+
 	return domain.Session{
-		ID:       settings.sessionID,
-		AgentPID: settings.agentPID,
-		Internal: &mockSessionState{mockSettings: settings, credentialVerification: params.CredentialVerification},
+		ID:             settings.sessionID,
+		AgentPID:       settings.agentPID,
+		CarriedHistory: start.CarriedHistory(),
+		Internal:       &mockSessionState{mockSettings: settings, credentialVerification: params.CredentialVerification},
 	}, nil
 }
 
@@ -263,34 +261,18 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		return result, nil
 	}
 
-	// Critical section: read and advance turn state.
-	m.mu.Lock()
-	currentIndex := m.turnIndex
-	m.turnIndex++
-	outcome := state.outcomeAt(currentIndex)
-	if state.reportTokenUsage && outcome != usageLimitOutcome {
-		state.accrueTurnUsage()
-	}
-	cumulative := state.usage
-	m.mu.Unlock()
+	outcome, cumulative := m.advanceTurn(state)
 
-	// Artificial delay (outside lock).
-	if state.turnDelayMS > 0 {
-		timer := time.NewTimer(time.Duration(state.turnDelayMS) * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCancelled,
-				Timestamp: time.Now().UTC(),
-				Message:   "context cancelled",
-			})
-			return domain.TurnResult{
-				SessionID:  session.ID,
-				ExitReason: domain.EventTurnCancelled,
-			}, ctx.Err()
-		}
+	if !waitTurnDelay(ctx, state.turnDelayMS) {
+		params.OnEvent(domain.AgentEvent{
+			Type:      domain.EventTurnCancelled,
+			Timestamp: time.Now().UTC(),
+			Message:   "context cancelled",
+		})
+		return domain.TurnResult{
+			SessionID:  session.ID,
+			ExitReason: domain.EventTurnCancelled,
+		}, ctx.Err()
 	}
 
 	params.OnEvent(domain.AgentEvent{
@@ -396,6 +378,34 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	return result, agentErr
 }
 
+// advanceTurn takes the next turn's outcome and accrues its usage, returning
+// the session's cumulative usage after the turn.
+func (m *MockAdapter) advanceTurn(state *mockSessionState) (string, domain.TokenUsage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	outcome := state.outcomeAt(m.turnIndex)
+	m.turnIndex++
+	if state.reportTokenUsage && outcome != usageLimitOutcome {
+		state.accrueTurnUsage()
+	}
+	return outcome, state.usage
+}
+
+// waitTurnDelay waits delayMS and reports false when ctx ends first.
+func waitTurnDelay(ctx context.Context, delayMS int) bool {
+	if delayMS <= 0 {
+		return true
+	}
+	timer := time.NewTimer(time.Duration(delayMS) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // turnSpend is the spend evidence of a turn that served output: its amount
 // is settled when the mock reports usage and unknown when it does not. A
 // usage_limit turn was refused, so it spent nothing.
@@ -434,9 +444,7 @@ func (m *MockAdapter) StopSession(_ context.Context, session domain.Session) err
 	return nil
 }
 
-// outcomeAt returns the outcome string for the given turn index.
-// Falls back to "completed" when the index exceeds the configured
-// turn_outcomes slice.
+// outcomeAt returns "completed" past the end of the configured turn_outcomes.
 func (s mockSettings) outcomeAt(index int) string {
 	if index < len(s.turnOutcomes) {
 		return s.turnOutcomes[index]

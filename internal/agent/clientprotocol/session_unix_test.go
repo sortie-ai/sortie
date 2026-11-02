@@ -35,9 +35,8 @@ func startTestSession(ctx context.Context, a *ClientProtocolAdapter, params doma
 	return startSession(ctx, a, params, agentcore.NewTurnEndUsage())
 }
 
-// syncBuffer is a bytes.Buffer guarded by a mutex, for a logger a
-// background release goroutine writes to concurrently with the test
-// goroutine reading it.
+// syncBuffer backs a logger a background release goroutine writes to while
+// the test reads it.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -258,7 +257,6 @@ func TestStartSessionLocalRelayDelivery(t *testing.T) {
 }
 
 func TestStartSessionRemoteRuntimeWithoutHTTPDeclaresToolServersGap(t *testing.T) {
-	// Not parallel: sets PATH via t.Setenv.
 	dir := t.TempDir()
 	sshDir := t.TempDir()
 	workspace := t.TempDir()
@@ -405,11 +403,8 @@ func TestStartSessionRejectsMalformedMCPConfig(t *testing.T) {
 	})
 }
 
-// mcpHandshakeThenGracefulExitScript installs a TERM handler that waits
-// delaySeconds and writes evidencePath, then answers the handshake. The handler
-// is installed before the handshake so there is no window in which the default
-// disposition applies: a caller signals only after startSession has returned,
-// which cannot happen until the handshake is answered.
+// mcpHandshakeThenGracefulExitScript traps TERM before answering the
+// handshake, so no signal can arrive while the default disposition applies.
 func mcpHandshakeThenGracefulExitScript(evidencePath, delaySeconds string) string {
 	return `trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
 while IFS= read -r line; do
@@ -489,8 +484,8 @@ func TestStartSessionLocalWorkspaceIsSymlink(t *testing.T) {
 	}
 }
 
-// stderrThenExitScript writes marker to stderr and exits without answering
-// stdin, so initialize fails against a closed connection rather than a timeout.
+// stderrThenExitScript exits without answering, so initialize fails against a
+// closed connection rather than a timeout.
 func stderrThenExitScript(marker string) string {
 	return `printf '%s\n' '` + marker + `' 1>&2
 exit 1
@@ -528,21 +523,14 @@ func TestStartSessionEmitsCollectedStderrAtWarnOnFailedInitialize(t *testing.T) 
 	}
 }
 
-// mcpHandshakeWithDetachedChildScript backgrounds a helper under setsid, a new
-// session and group leader that escapes the group SetGroupCancel placed this
-// script in.
 func mcpHandshakeWithDetachedChildScript(pidFile string) string {
 	return mcpHandshakeWithChildScript("setsid ", pidFile)
 }
 
-// mcpHandshakeWithGroupChildScript leaves one idle child inside the script's
-// process group, so teardown's group-directed termination reaches it.
 func mcpHandshakeWithGroupChildScript(pidFile string) string {
 	return mcpHandshakeWithChildScript("", pidFile)
 }
 
-// mcpHandshakeWithChildScript builds both of the above; launcher decides whether
-// the child keeps the script's process group or leaves it.
 func mcpHandshakeWithChildScript(launcher, pidFile string) string {
 	return launcher + `sh -c 'echo $$ >"` + pidFile + `"; while :; do sleep 0.05; done' </dev/null >/dev/null 2>&1 &
 while IFS= read -r line; do
@@ -560,9 +548,8 @@ while :; do sleep 0.05; done
 `
 }
 
-// initThenStderrExitScript answers initialize, writes marker to stderr, and
-// exits before session/new, so the failure arrives from resolveSession rather
-// than doInitialize.
+// initThenStderrExitScript exits before session/new, so the failure arrives
+// from resolveSession rather than doInitialize.
 func initThenStderrExitScript(marker string) string {
 	return `while IFS= read -r line; do
   case "$line" in
@@ -576,7 +563,28 @@ done
 `
 }
 
-func TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession(t *testing.T) {
+func TestSessionContinuity(t *testing.T) {
+	t.Parallel()
+
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		t.Helper()
+
+		agentPath := agenttest.FakeRuntime(t, t.TempDir(), "agent", scenarioProtocolAgent, protocolAgentParams{Handshake: true, HeldSession: held})
+		ctx := waittest.CleanupContext(t)
+		session, err := startTestSession(ctx, &ClientProtocolAdapter{}, domain.StartSessionParams{
+			WorkspacePath:   t.TempDir(),
+			AgentConfig:     domain.AgentConfig{Command: agentPath},
+			ResumeSessionID: resumeID,
+		})
+		if err != nil {
+			return domain.Session{}, err
+		}
+		t.Cleanup(func() { _ = stopSession(ctx, session) })
+		return session, nil
+	})
+}
+
+func TestStartSessionEmitsCollectedStderrAtWarnOnFailedNewSession(t *testing.T) {
 	// No t.Parallel(): installs a process-wide slog default.
 
 	const marker = "distinguishing-stderr-line-resolve-failure"
@@ -600,7 +608,7 @@ func TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession(t *testing
 
 	output := buf.String()
 	if !strings.Contains(output, marker) {
-		t.Errorf("startSession() on failed resolveSession did not log the collected stderr line %q at Warn: %s", marker, output)
+		t.Errorf("startSession() on failed session/new did not log the collected stderr line %q at Warn: %s", marker, output)
 	}
 	if !strings.Contains(output, "level=WARN") {
 		t.Errorf("startSession()'s collected stderr line was logged below Warn: %s", output)
@@ -667,10 +675,9 @@ func TestStopSessionDoesNotReachEscapedProcessGroupMember(t *testing.T) {
 	}
 }
 
-// stderrThenExitWithDetachedHolderScript backgrounds a setsid descendant that
-// inherits this script's stdout handle, then exits before answering initialize.
-// The runtime is gone, but the escaped descendant keeps the output pipe from
-// reaching EOF, so a handshake call is still in flight when the release gives up.
+// stderrThenExitWithDetachedHolderScript leaves an escaped descendant holding
+// stdout, so the pipe never reaches EOF and a handshake call is still in
+// flight when the release gives up.
 func stderrThenExitWithDetachedHolderScript(marker, pidFile string) string {
 	return `setsid sh -c 'echo $$ > ` + pidFile + `; sleep 3600' 2>/dev/null &
 while [ ! -s ` + pidFile + ` ]; do sleep 0.01; done
@@ -679,8 +686,8 @@ exit 7
 `
 }
 
-// No t.Parallel(): installs a process-wide slog default.
 func TestStartSessionHandshakeAbandonedByEscapedDescendantFailsWithPortExit(t *testing.T) {
+	// No t.Parallel(): installs a process-wide slog default.
 	agenttest.RequireSetsid(t)
 
 	const marker = "distinguishing-stderr-line-handshake-abandoned"
@@ -725,9 +732,8 @@ func TestStartSessionHandshakeAbandonedByEscapedDescendantFailsWithPortExit(t *t
 	}
 }
 
-// hasWarnStderrLineRecord reports whether one log line carries level=WARN,
-// msg="agent stderr", and line=marker together. The collector logs the same
-// line at Debug, so the three checks must hold on one record, not anywhere.
+// hasWarnStderrLineRecord matches all three fields on one record because the
+// collector also logs the same line at Debug.
 func hasWarnStderrLineRecord(output, marker string) bool {
 	for line := range strings.SplitSeq(output, "\n") {
 		if strings.Contains(line, "level=WARN") &&
@@ -739,9 +745,8 @@ func hasWarnStderrLineRecord(output, marker string) bool {
 	return false
 }
 
-// handshakeThenExitWithDetachedHolderScript answers the two startup calls, then
-// spawns a setsid descendant that inherits this script's stdout handle and
-// exits, so the runtime is gone while its descendant still holds the write end.
+// handshakeThenExitWithDetachedHolderScript exits after the handshake while an
+// escaped descendant still holds the stdout write end.
 func handshakeThenExitWithDetachedHolderScript(pidFile string) string {
 	return `while IFS= read -r line; do
   case "$line" in
@@ -801,9 +806,9 @@ func TestStopSessionReturnsBoundedAfterReleaseAbandonsOnARealSubprocess(t *testi
 	}
 }
 
-// promptThenExitWithDetachedHolderScript answers the two startup calls, then on
-// the first session/prompt spawns a setsid descendant holding this script's
-// stdout handle and exits, so a turn is in flight when the runtime is gone.
+// promptThenExitWithDetachedHolderScript exits on the first session/prompt
+// while an escaped descendant holds stdout, so a turn is in flight when the
+// runtime is gone.
 func promptThenExitWithDetachedHolderScript(pidFile string) string {
 	return `while IFS= read -r line; do
   case "$line" in
@@ -877,10 +882,8 @@ func TestRunTurnEndsBoundedWhenRuntimeExitsWithEscapedDescendantHoldingOutput(t 
 	}
 }
 
-// sshStandInEnvPath returns a PATH directory holding a symlink to sh, and to dd
-// when includeDD is set. An isolated directory matters because a real sh and dd
-// usually share one directory, so reusing it for the no-dd case would resolve
-// dd anyway.
+// sshStandInEnvPath builds an isolated directory because a real sh and dd
+// usually share one, which would resolve dd in the no-dd case anyway.
 func sshStandInEnvPath(t *testing.T, includeDD bool) string {
 	t.Helper()
 
@@ -907,7 +910,6 @@ func sshStandInEnvPath(t *testing.T, includeDD bool) string {
 }
 
 func TestStartSessionSSH_CarriesEnvironmentVariable(t *testing.T) {
-	// Not parallel: sets PATH and the carried variable via t.Setenv.
 	dir := t.TempDir()
 	sshDir := t.TempDir()
 
@@ -950,8 +952,7 @@ func TestStartSessionSSH_CarriesEnvironmentVariable(t *testing.T) {
 }
 
 func TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T) {
-	// Not parallel: installs a process-wide slog default and sets PATH
-	// and the carried variable via t.Setenv.
+	// No t.Parallel(): installs a process-wide slog default.
 	const ddMissingMessage = "sortie: dd is required on the remote host to receive environment variables"
 
 	dir := t.TempDir()
@@ -1009,10 +1010,9 @@ func TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T) {
 	}
 }
 
-// captureCwdAndFirstLineThenHandshakeScript captures, ahead of the handshake,
-// the working directory and the raw bytes of the first stdin line. A remote
-// launch would land its preamble ahead of initialize on that first line and
-// would never set cmd.Dir, so both are observable signs the wrong branch ran.
+// captureCwdAndFirstLineThenHandshakeScript records the working directory
+// and the first stdin line: a remote launch would put its preamble on that
+// line and never set cmd.Dir, so both expose the wrong branch.
 func captureCwdAndFirstLineThenHandshakeScript(cwdPath, firstLinePath string) string {
 	return `pwd > '` + cwdPath + `'
 first='` + firstLinePath + `'
@@ -1035,7 +1035,6 @@ done
 }
 
 func TestStartSessionLocalLaunchIgnoresSSHEnvNames(t *testing.T) {
-	// Not parallel: sets the carried variable via t.Setenv.
 	const varName = "CLIENTPROTOCOL_TEST_LOCAL_INVARIANCE"
 	t.Setenv(varName, "should-never-reach-a-local-launch")
 
@@ -1314,7 +1313,7 @@ func TestNewSessionLedgerIsALowerBoundWhenARequestGoesUnrecorded(t *testing.T) {
 			decl, _ := additionAdapter().declarations.Get("addition")
 			decl.UnrecordedRequests = func(session json.RawMessage) bool { return string(session) == unrecordedResult }
 
-			ledger := newSessionLedger(t.Context(), state, decl, true, json.RawMessage(tt.session))
+			ledger := newSessionLedger(t.Context(), state, decl, false, json.RawMessage(tt.session))
 
 			settlement := ledger.Settle(usage.TurnEnd{Replied: true, ModelReached: true}, &live, usage.RecordsRead{})
 			if settlement.Complete != tt.wantComplete {
