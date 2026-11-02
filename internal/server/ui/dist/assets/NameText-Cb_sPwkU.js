@@ -1,1 +1,0 @@
-import{r as e}from"./react-AyOTluXZ.js";import{z as t}from"./Panel-Csjs6sLw.js";import{et as n}from"./index-DtHALsHw.js";var r=e();function i({name:e,label:i=e}){return(0,r.jsx)(`span`,{className:t(i===e&&`font-mono leading-none`),children:(0,r.jsx)(n,{text:i})})}export{i as t};
