@@ -824,20 +824,31 @@ func TestMigrate_Migration022_HandedOffCommentsStartEmpty(t *testing.T) {
 	}
 }
 
-func TestMigrate_Migration022_PrimaryKeyRejectsDuplicateComment(t *testing.T) {
+func TestMigrate_GivenCommentsStartEmpty(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
 	s := openTestStore(t)
-	migrateOrFatal(t, s)
-	const insert = `INSERT INTO reaction_handoffs (issue_id, kind, comment_id) VALUES ('ISS-1', 'review', 'c1')`
-	if _, err := s.db.ExecContext(context.Background(), insert); err != nil {
-		t.Fatalf("first insert: %v", err)
+	migrateToVersion(t, s, 51)
+	if err := s.AddPostedComment(ctx, "ISS-PRE", "c1"); err != nil {
+		t.Fatalf("AddPostedComment on a store before the upgrade: %v", err)
 	}
 
-	_, err := s.db.ExecContext(context.Background(), insert)
+	migrateOrFatal(t, s)
 
-	if err == nil {
-		t.Error("duplicate (issue_id, kind, comment_id) insert = nil error, want a primary key violation")
+	var rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM given_comments`).Scan(&rows); err != nil {
+		t.Fatalf("count given_comments: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("given_comments row count after upgrade = %d, want 0", rows)
+	}
+	posted, err := s.ListPostedComments(ctx, "ISS-PRE")
+	if err != nil {
+		t.Fatalf("ListPostedComments(ISS-PRE) after upgrade: %v", err)
+	}
+	if !reflect.DeepEqual(posted, []string{"c1"}) {
+		t.Errorf("ListPostedComments(ISS-PRE) after upgrade = %v, want [c1]", posted)
 	}
 }
 
