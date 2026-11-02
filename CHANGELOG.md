@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Removed
 
 - The dashboard's rail no longer has a field that filters the screens; the command palette finds them.
+- Overview's Active section no longer has a List and Pipeline switch, and the Pipeline no longer links to Overview; `L` and the rail move between them.
 
 ### Fixed
 

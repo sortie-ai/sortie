@@ -69,15 +69,19 @@ export function AttentionItem({
         rowStyles(isLook, isOpenable),
       )}
     >
-      <p className="flex min-w-0 flex-wrap items-baseline gap-x-sm gap-y-xxs">
+      <p className="col-span-2 flex items-baseline justify-between gap-x-md max-md:col-span-1">
         <strong
-          className={cn(
-            "text-body-md font-bold whitespace-nowrap",
-            isCritical ? "text-error" : "text-warning",
-          )}
+          className={cn("text-body-md font-bold", isCritical ? "text-error" : "text-warning")}
         >
           <ServedText text={item.reason_text} />
         </strong>
+        <span
+          className={cn("text-body-sm whitespace-nowrap tabular-nums", secondLineColor(isLook))}
+        >
+          {item.since === null ? undefined : fmtAgo(item.since, now)}
+        </span>
+      </p>
+      <p className="flex min-w-0 flex-wrap items-baseline gap-x-sm gap-y-xxs">
         {item.issue_title ? (
           <span className="text-body-md font-medium text-ink">{item.issue_title}</span>
         ) : undefined}
@@ -95,12 +99,7 @@ export function AttentionItem({
       <p className={cn("text-body-sm", secondLineColor(isLook))}>
         <ServedText text={item.clears_text} />
       </p>
-      <div className="col-start-2 row-span-3 row-start-1 flex flex-col items-end justify-between gap-xs max-md:col-start-1 max-md:row-span-1 max-md:row-start-auto max-md:flex-row-reverse max-md:items-center max-md:justify-end">
-        <span
-          className={cn("text-body-sm whitespace-nowrap tabular-nums", secondLineColor(isLook))}
-        >
-          {item.since === null ? undefined : fmtAgo(item.since, now)}
-        </span>
+      <div className="col-start-2 row-span-3 row-start-2 flex items-end justify-end max-md:col-start-1 max-md:row-span-1 max-md:row-start-auto max-md:mt-xs max-md:justify-start">
         <span className="flex flex-wrap gap-xs">
           <Button
             variant="primary"

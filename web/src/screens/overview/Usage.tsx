@@ -1,6 +1,8 @@
-import { BudgetMeter } from "@/components/BudgetMeter";
+import { BudgetMeter, FigureLine } from "@/components/BudgetMeter";
 import { Parts } from "@/components/Parts";
+import { MONO } from "@/components/ui/mono";
 import { fmtAmount, fmtPercent, fmtUtcStamp, parseInstant } from "@/lib/format";
+import { Panel } from "@/components/Panel";
 
 import { SpendBudget, spendWindows } from "./SpendBudget";
 
@@ -47,9 +49,6 @@ function UsageWindowBlock({ window, memberReportedAt, now }: UsageWindowBlockPro
   const hasBar = amount !== null || used !== null;
   const isBarAlert = hasBar && (status === "warning" || status === "exhausted");
   const parts: string[] = [];
-  if (isBarAlert && statusWords !== undefined) {
-    parts.push(statusWords);
-  }
   parts.push(resetsAt === null ? "Reset time not reported" : `Resets ${fmtUtcStamp(resetsAt)}`);
   if (reportedAt !== memberReportedAt && isStale(reportedAt, now)) {
     parts.push(`Reported ${fmtUtcStamp(reportedAt)}`);
@@ -64,10 +63,7 @@ function UsageWindowBlock({ window, memberReportedAt, now }: UsageWindowBlockPro
           text={`${fmtAmount(amount.used)} of ${fmtAmount(amount.limit)} ${amount.unit}`}
         />
       ) : used === null ? (
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-sm text-body-md">
-          <span className="text-ink">{label}</span>
-          <span className="text-ink-body">{statusWords ?? "Status not reported"}</span>
-        </div>
+        <FigureLine name={label}>{statusWords ?? "Status not reported"}</FigureLine>
       ) : (
         <BudgetMeter
           name={label}
@@ -76,9 +72,13 @@ function UsageWindowBlock({ window, memberReportedAt, now }: UsageWindowBlockPro
           text={`${fmtPercent(used / 100)} used`}
         />
       )}
-      <p className="text-body-sm text-ink-muted">
-        <Parts parts={parts} />
-      </p>
+      {/* The alert sits under the figure it qualifies, so every window's line opens with its reset. */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-sm text-body-sm">
+        <Parts parts={parts} className="text-balance text-ink-muted" />
+        {isBarAlert && statusWords !== undefined ? (
+          <span className="text-warning">{statusWords}</span>
+        ) : undefined}
+      </div>
     </div>
   );
 }
@@ -92,9 +92,11 @@ interface UsageKindBlockProps {
 
 function UsageKindBlock({ kind, usage, windows, now }: UsageKindBlockProps) {
   return (
-    <div className="flex flex-col gap-sm rounded-lg border border-line bg-canvas p-md">
+    <div className="flex flex-col gap-sm rounded-xl border border-line bg-canvas p-md">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-sm text-body-md">
-        <h3 className="font-medium text-ink">{kind}</h3>
+        <h3 className="font-medium text-ink">
+          <span className={MONO}>{kind}</span>
+        </h3>
         {isStale(usage.reported_at, now) ? (
           <span className="text-body-sm text-ink-muted">
             Reported {fmtUtcStamp(usage.reported_at)}
@@ -134,8 +136,7 @@ export function Usage({ ceiling, rateLimits, kinds, now }: UsageProps) {
     return undefined;
   }
   return (
-    <section className="flex flex-col gap-sm">
-      <h2 className="font-heading text-h7 font-semibold text-ink">Usage</h2>
+    <Panel title="Usage">
       <div className="grid gap-md md:grid-cols-2">
         {hasBudget ? (
           <SpendBudget ceiling={ceiling} isEstimateNoted={reported.length > 0} />
@@ -144,6 +145,6 @@ export function Usage({ ceiling, rateLimits, kinds, now }: UsageProps) {
           <UsageKindBlock key={kind} kind={kind} usage={usage} windows={windows} now={now} />
         ))}
       </div>
-    </section>
+    </Panel>
   );
 }

@@ -1,9 +1,10 @@
-import { StandingMark } from "@/components/Lane";
+import { MarkSlot } from "@/components/Lane";
 import { Parts } from "@/components/Parts";
+import { MONO } from "@/components/ui/mono";
 import { cn } from "@/lib/cn";
 import { fmtClock, parseInstant } from "@/lib/format";
 import { timeCell } from "@/lib/active-rows";
-import { rowStyles, secondLineColor } from "@/lib/rows";
+import { ROW_GRID, rowStyles, secondLineColor } from "@/lib/rows";
 import { stateWord } from "@/lib/run-status";
 
 import { activeNavKey } from "./rows";
@@ -23,23 +24,28 @@ export interface ActiveRowProps {
 export function ActiveRow({ row, now, isSelected, showSelection, onOpen }: ActiveRowProps) {
   const isLook = isSelected && showSelection;
   const hasTitle = row.title !== null;
-  const meta = [hasTitle ? row.displayKey : null, row.route, row.agentKind].filter(
-    (part) => part !== null,
-  );
+  const meta = [
+    hasTitle ? row.displayKey : null,
+    row.route === null ? null : (
+      <span key="route" className={MONO}>
+        {row.route}
+      </span>
+    ),
+    row.agentKind === null ? null : (
+      <span key="agent" className={MONO}>
+        {row.agentKind}
+      </span>
+    ),
+  ].filter((part) => part !== null);
   const base = parseInstant(row.timeBase);
 
   return (
     <li
       data-nav-key={activeNavKey(row.issueId)}
       onClick={() => onOpen(row)}
-      className={cn(
-        "grid grid-cols-[auto_minmax(0,1fr)] gap-x-sm gap-y-xxs px-md py-sm md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] md:gap-x-md wrap-anywhere",
-        rowStyles(isLook, true),
-      )}
+      className={cn(ROW_GRID, rowStyles(isLook, true, row.mark === "needs"))}
     >
-      <span className="flex w-(--size-icon) items-center justify-center self-center">
-        <StandingMark marker={row.mark} />
-      </span>
+      <MarkSlot marker={row.mark} />
       <div className="min-w-0">
         <p className="text-body-md font-medium text-ink">{row.title ?? row.displayKey}</p>
         {meta.length === 0 ? undefined : (

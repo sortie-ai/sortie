@@ -89,10 +89,7 @@ function OverviewBody({ state }: OverviewBodyProps) {
   const tally = useTallyQuery(midnight);
   const isFirstRun = useFirstRunQuery();
   const isFetching = useIsFetching() > 0;
-  const [selection, setSelection] = useState({
-    key: null as string | null,
-    index: 0,
-  });
+  const [selection, setSelection] = useState({ key: null as string | null, index: 0 });
   const [showSelection, setShowSelection] = useState(false);
 
   const rows = useMemo(() => activeRows(state), [state]);
@@ -297,57 +294,66 @@ function OverviewBody({ state }: OverviewBodyProps) {
     tallySummary === undefined ? undefined : tallyLine(tallySummary, endedAll.length, hasCost);
 
   return (
-    <div className="flex flex-col gap-xl">
-      {view.isFirstRun === undefined && unacknowledged.length === 0 ? undefined : (
-        <Headline headline={buildHeadline(view.state, view.isFirstRun === true)} />
-      )}
-      {unacknowledged.length > 0 ? (
-        <AttentionList
-          items={unacknowledged}
+    // The header stands as far above the first panel as on every screen; the panels keep wider gaps.
+    <div className="flex flex-col">
+      <Headline
+        headline={
+          view.isFirstRun === undefined && unacknowledged.length === 0
+            ? undefined
+            : buildHeadline(view.state, view.isFirstRun === true)
+        }
+      />
+      <div className="flex flex-col gap-xl">
+        {unacknowledged.length > 0 ? (
+          <AttentionList
+            items={unacknowledged}
+            now={view.now}
+            selectedKey={selectedKey}
+            showSelection={showSelection}
+            pending={actions.pending}
+            onOpen={(item) =>
+              selectAndOpen(attentionNavKey(item.id), item.issue_identifier || null)
+            }
+            onAcknowledge={(item) => void actions.acknowledge(item)}
+            onAction={actions.runAction}
+          />
+        ) : view.isFirstRun === false && condition(view.state) !== "degraded" ? (
+          <CalmState
+            allClear={condition(view.state) === "clear"}
+            runningSince={(view.state.running ?? []).map((entry) => entry.started_at)}
+            maxAgents={config?.agent.max_concurrent_agents}
+            ended={endedAll}
+            terminalStates={config?.tracker.terminal_states ?? []}
+            runs={view.tally?.summary}
+            now={view.now}
+          />
+        ) : undefined}
+        <Usage
+          ceiling={view.state.spend_ceiling}
+          rateLimits={view.state.rate_limits}
+          kinds={config ? usageByKind(config).map(([kind]) => kind) : []}
+          now={view.now}
+        />
+        <ActiveList
+          rows={view.rows}
+          visibleRows={visibleRows}
+          config={config}
           now={view.now}
           selectedKey={selectedKey}
           showSelection={showSelection}
-          pending={actions.pending}
-          onOpen={(item) => selectAndOpen(attentionNavKey(item.id), item.issue_identifier || null)}
-          onAcknowledge={(item) => void actions.acknowledge(item)}
-          onAction={actions.runAction}
+          onOpen={(row) => selectAndOpen(activeNavKey(row.issueId), row.identifier)}
         />
-      ) : view.isFirstRun === false && condition(view.state) !== "degraded" ? (
-        <CalmState
-          allClear={condition(view.state) === "clear"}
-          runningSince={(view.state.running ?? []).map((entry) => entry.started_at)}
-          maxAgents={config?.agent.max_concurrent_agents}
-          ended={endedAll}
-          terminalStates={config?.tracker.terminal_states ?? []}
-          runs={view.tally?.summary}
-          now={view.now}
+        <HeldList rows={view.state.held ?? []} count={view.state.counts.held} now={view.now} />
+        <EndedToday
+          rows={endedAll}
+          unreadIds={endedUnreadIds}
+          empty={endedEmpty(view)}
+          tally={tallyParts}
+          selectedKey={selectedKey}
+          showSelection={showSelection}
+          onOpen={(issue) => selectAndOpen(endedNavKey(issue.issueId), issue.identifier)}
         />
-      ) : undefined}
-      <Usage
-        ceiling={view.state.spend_ceiling}
-        rateLimits={view.state.rate_limits}
-        kinds={config ? usageByKind(config).map(([kind]) => kind) : []}
-        now={view.now}
-      />
-      <ActiveList
-        rows={view.rows}
-        visibleRows={visibleRows}
-        config={config}
-        now={view.now}
-        selectedKey={selectedKey}
-        showSelection={showSelection}
-        onOpen={(row) => selectAndOpen(activeNavKey(row.issueId), row.identifier)}
-      />
-      <HeldList rows={view.state.held ?? []} count={view.state.counts.held} now={view.now} />
-      <EndedToday
-        rows={endedAll}
-        unreadIds={endedUnreadIds}
-        empty={endedEmpty(view)}
-        tally={tallyParts}
-        selectedKey={selectedKey}
-        showSelection={showSelection}
-        onOpen={(issue) => selectAndOpen(endedNavKey(issue.issueId), issue.identifier)}
-      />
+      </div>
     </div>
   );
 }
