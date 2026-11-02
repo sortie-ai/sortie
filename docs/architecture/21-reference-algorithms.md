@@ -192,6 +192,7 @@ on_tick(state, once):
       # either holds the issue and keeps the release, so no run starts on a
       # partial view.
       release = state.park_releases[issue.id]
+      posted = []
       if release != null:
         comments, err = tracker.fetch_issue_comments(issue.id)
         if err != null:
