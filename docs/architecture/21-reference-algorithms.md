@@ -215,7 +215,7 @@ on_tick(state, once):
       # A candidate that holds a standing escalation is read against the
       # handoff state before it is claimed (Section 16.3).
       state = end_outside_handoff(state, issue.id, issue.state)
-      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release)
+      state = dispatch_issue(issue, state, attempt=null, continuation_context=seed, release=release, posted=posted)
       if release != null and issue.id in state.running:
         consume_park_release(state, issue.id)            // deletes the pending release and its row
       if once != null:
@@ -530,7 +530,7 @@ function reconcile_review_comments(state):
 ### 16.4 Dispatch One Issue
 
 ```text
-function dispatch_issue(issue, state, attempt, release):
+function dispatch_issue(issue, state, attempt, release, posted):
   (agent_kind, template_id, rule_name) = resolve_rule(
     issue, state.dispatch_cfg, hop_route_of(state, issue.id),
     state.default_agent_kind, state.default_template_id
