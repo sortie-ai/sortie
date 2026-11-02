@@ -164,7 +164,7 @@ func geminiCliInventoryAgreementJournalLines(t *testing.T) []string {
 		RecordedAt: "2026-01-01T00:00:03Z",
 		Derivation: evidence.DerivationRecognizer,
 		Launch: &evidence.LaunchRecord{
-			Argv:           []string{"gemini", "--output-format", "json", "--prompt", "Reply with the phrase from earlier in this conversation and no other text."},
+			Argv:           []string{"gemini", "--output-format", "json", "--prompt", "What phrase did I ask you to remember? Reply with that phrase only."},
 			Nonce:          "SORTIE-NONCE-1234",
 			PriorSessionID: "25857ffd-24ad-45f4-853e-7aca46b2acf3",
 			Outcome:        evidence.LaunchOutcomeCompleted,

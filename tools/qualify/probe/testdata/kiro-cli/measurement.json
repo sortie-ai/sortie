@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "profile_digest": "7841fa2bb9bd5c6af0209bf51b91be42a2c81e8aa851af6b8ca385e310413856",
-  "measured_at": "2026-09-28",
+  "profile_digest": "00af275549f4f65c57f61fe27d1c31f570ba6749c277e4f2b77ee0da2ba94119",
+  "measured_at": "2026-11-02",
   "expectation": {
     "Verdict": "qualified",
     "Conformance": "not_qualified",
@@ -80,6 +80,6 @@
   },
   "requested_model": "claude-haiku-4.5",
   "observed_model": null,
-  "provenance_digest": "03af28fd23914355907ef90798b53245c08282ace5f9eab3af374e74decce7de",
+  "provenance_digest": "e7732468894b4018f95b5484ba247f0c68745d99f6024401cb14762d56d8ea70",
   "evaluator_version": 2
 }

@@ -1,60 +1,60 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-10-29T16:39:54Z",
-  "profile_digest": "27dc656261f9876f6ee5c757894d2a6070bca85d8c62dd8a938aa754e5b99244",
-  "collector_digest": "0cf8b00c120efe6f291b8431039e0a119c5bb9362e7390e0978b925b4be2b1bd",
+  "observed_at": "2026-11-02T09:10:56Z",
+  "profile_digest": "2f09c13a9bababd9902b0d16cbb7e0c435e397df3e0695ac7861ea2692e4fffe",
+  "collector_digest": "18494c2a1c2423cd1faf9e502c958e7b6d42f09c06866b71b99fa2cb16e4b521",
   "evidence_file": "evidence.jsonl",
-  "evidence_digest": "b83771af58b085eefee10760ee413f15ea2762a3d6ceb4b8bae8ffee2b8e3d08",
-  "requested_model": "google/gemini-2.5-flash-lite",
+  "evidence_digest": "08de4b6a447d5f8b845cce690905c24256767c0e81d38656a8d6f356fdddd14e",
+  "requested_model": "google/gemini-3.5-flash",
   "protocol_version": 1,
   "session_agents": {
-    "ses_e77764e45fferfHzG4hJSO9mgX": {
+    "ses_e6475d47cffedxfkxid8OTN9Ez": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77765f1effeyH29XBWWPtviRQ": {
+    "ses_e6475fd02ffeEJFPbfMV2BPUl7": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77766a2affe6x8CKvDnZPf1WR": {
+    "ses_e647609caffebrtLkqETshsnBv": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77774267ffeQgrVTwn1xx4olt": {
+    "ses_e647757bdffeL3N1S44J3H5G3b": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e777752f2ffeKheVzE09in1PQS": {
+    "ses_e64777ef9ffeC9zw0etkkdEgHn": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77775f88ffedO3T7JZniu4mTc": {
+    "ses_e6477a2c7ffe3Xgg6eZejBXdzs": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77776cbbffeK5O53SRJfTbXP0": {
+    "ses_e6477b2b6ffe9jRw6pyRrJV57k": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e777776ebffeh7CDeiJGJEl3ar": {
+    "ses_e6477c4d3ffeKudnKh4FNcZpVJ": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77778167ffeh6jcYPurW0yvVV": {
+    "ses_e6477e58dffe5rUKcF44eJ7m1j": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e77778cddffeCSaUiCbLn2D4KW": {
+    "ses_e647805f0ffe8KxAH7IUdoDZDb": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e777798c6ffe6alayXkXrHX6TK": {
+    "ses_e64781bcaffeIxPXTSxeRxDOs8": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     },
-    "ses_e7777b6a2ffeMggCq1EHaMQWF5": {
+    "ses_e64795039ffeQAGaJF5p9neDAa": {
       "name": "OpenCode",
-      "version": "2.1.4"
+      "version": "2.2.5"
     }
   },
   "credential_mode": {}

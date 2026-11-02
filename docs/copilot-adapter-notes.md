@@ -26,6 +26,16 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
+A resume of a session the runtime cannot find fails the turn and never starts a new conversation in its place. That holds for an ID that never existed, a deleted session directory, and a session whose `events.jsonl` was deleted. The process exits 1, stdout is empty with no `result` line, and stderr reads `Error: No session, task, or name matched '<uuid>'`. To reproduce, seed a session under a fresh UUID and resume it, resume a UUID that never existed, then delete the seeded session's directory and resume it again:
+
+```sh
+copilot -p "Remember the word PELICAN. Reply only OK." --output-format json -s --no-ask-user --allow-all --session-id <uuid>
+copilot -p "What word did I ask you to remember? Reply NONE if you do not know." --output-format json -s --no-ask-user --allow-all --resume <uuid>
+copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resume <unused-uuid>; echo "exit $?"
+rm -r ~/.copilot/session-state/<uuid>
+copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resume <uuid>; echo "exit $?"
+```
+
 The adapter opens the runtime's session-state tree only by a known ID, and the shared read validates that ID against a path-segment character set before any file opens or process starts. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.
 
 ## Preflight, and the fake-binary trap
@@ -185,7 +195,7 @@ An endpoint failure is a declared outcome on the protocol surface and not induci
 - native_stream_json turn_disposition: Not observed: not_observed
 - native_stream_json retry_classification: Not observed: not_observed
 - native_stream_json token_ceiling: Observed: usable
-- native_stream_json session_continuation: Observed: gap
+- native_stream_json session_continuation: Observed: usable
 
 A case that was induced and that the surface reported no outcome for keeps its obligation. It counts against that surface; it is not forgiven.
 
@@ -220,7 +230,7 @@ The notice depends on the model id. `claude-sonnet-4.5` is known to the installe
 
 ## Native headless observations
 
-`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn ran in the same session as the seed. It answered with the seed's reply instead of the stored phrase, so recall is not shown on this surface and the row grades as a gap.
+`copilot -p <prompt> --output-format json` emits JSON Lines on stdout. The terminal is a `result` event that carries `exitCode` and `sessionId`. A later launch resumes the session with `--resume <session id>`, and the recall turn runs in the same session as the seed and returns the phrase the seed asked it to remember. A recall prompt that asks for "the phrase from earlier" lets a small model answer with its own earlier reply, `STORED`, which reads as lost history; the profile asks which phrase it was told to remember.
 
 The CLI offers no single-document JSON output, so the profile declares the plain-JSON surface absent. The run corroborated the declaration.
 

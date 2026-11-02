@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "profile_digest": "7f0b29afccb02851f9cd373210ac0e7316082d4114524afbb531bee6c7919039",
-  "measured_at": "2026-09-28",
+  "profile_digest": "ebfb218aa4b557bab805fa7693f87b0b35849eabb24a552f4d20a69d77a28e58",
+  "measured_at": "2026-11-02",
   "expectation": {
     "Verdict": "qualified",
     "Conformance": "qualified",
@@ -105,6 +105,6 @@
   },
   "requested_model": "gemini-3.5-flash",
   "observed_model": null,
-  "provenance_digest": "0fb548656cc18cfeed3c9bca1756ffc2086e1840da219798a11fbbb879369aa7",
+  "provenance_digest": "16eb5f35b18553cd63112f9fbca2ec0c95acd6d9810e9a0d90b44624ff867f63",
   "evaluator_version": 2
 }

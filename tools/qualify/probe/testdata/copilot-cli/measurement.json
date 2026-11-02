@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "profile_digest": "4cd570809d5b0e9e3a4de7734fdfeeb0bf4fb377daa1a27fdd4e975dfb52aee4",
-  "measured_at": "2026-10-30",
+  "profile_digest": "b7546553aebaf7c02ec462b9cea2e8945ee258f0517a14c8963691bdc55782a5",
+  "measured_at": "2026-11-02",
   "expectation": {
     "Verdict": "unmeasured",
     "Conformance": "unmeasured",
@@ -63,7 +63,7 @@
       {
         "Surface": "native_stream_json",
         "Capability": "session_continuation",
-        "Grade": "gap",
+        "Grade": "usable",
         "Label": "Observed:"
       }
     ],
@@ -86,6 +86,6 @@
   },
   "requested_model": "mai-code-1.1-flash",
   "observed_model": null,
-  "provenance_digest": "6b73d4746e284baaec4c48243121bb2b94126d58cc13112db74da4996f752b5c",
+  "provenance_digest": "f01cbe368f96917f48fc06b269bd1707ea3c78e3d4d0df5661dd0ac0517b92cb",
   "evaluator_version": 2
 }

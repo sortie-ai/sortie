@@ -2,13 +2,13 @@
 
 Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/opencode`.
 
-Last updated: October 2026
+Last updated: November 2026
 
-Eligibility: not_qualified
+Eligibility: unmeasured
 
-Product conformance: not_qualified
+Product conformance: unmeasured
 
-Both verdicts fail on one row: protocol session continuation is a gap below the native reference. In the recorded capture the recall turn kept the session identifier, but its answer did not contain the phrase the seed turn asked the runtime to remember (`same_session_without_recall`). The previous capture of the same profile recorded `confirmed_same_session` for that row. Several load-bearing rows are also unmeasured: permission handling, where the runtime raised no permission request under the asking posture; the policy precondition, where no refusal was answered; the human-input case of protocol retry classification, where no request of either class was raised; and native turn disposition, where the success turn ended with no recognized terminal. Protocol runtime failure is not observed either: the refused-model inducer yields a completed turn, because the runtime replaces an unresolvable model id with its default model. Product conformance is also blocked by session continuation, and waits on permission handling, the policy precondition, the human-input case, and protocol runtime failure. The protocol `limit_reached` case stays unmeasured because the prompt channel cannot carry a request big enough to reach the runtime's limit.
+Neither verdict is a failure: no measured row puts the protocol surface below the native reference. Both are unmeasured because several load-bearing rows were not measured: permission handling, where the runtime raised no permission request under the asking posture; the policy precondition, where no refusal was answered; the human-input case of protocol retry classification, where no request of either class was raised; and protocol runtime failure, where the refused-model inducer yields a completed turn because the runtime replaces an unresolvable model id with its default model. Product conformance waits on permission handling, the policy precondition, the human-input case, and protocol runtime failure. The protocol `limit_reached` case stays unmeasured because the prompt channel cannot carry a request big enough to reach the runtime's limit.
 
 This file is checked against the tracked measurement under `tools/qualify/probe/testdata/opencode/`. Changing a grade row below fails the staleness gate until a fresh run replaces that measurement.
 
@@ -61,13 +61,20 @@ The first-event deadline is the larger of the read timeout and `agentcore.Creden
 
 The export runs after the reap, on a context that outlives the turn's cancellation, through the shared host-command operation the usage-limits pull also uses, locally or over the session's SSH launch. `agentcore.ReadTimeout` of the agent configuration bounds a turn's whole read: the session's export and one export per subagent session. A session that continues runs one more export when it starts, under the same bound. A slow export delays the turn's result, never the stop.
 
-## Session identity and the dir-scoped resume
+## Session identity and resume
 
 A session ID is server-generated and learned from the first envelope that carries one. The adapter adopts it, and a later envelope carrying a different ID is treated as a fault that fails the turn rather than a thing to reconcile.
 
-Resume is scoped to the directory the session was created in. Resuming a valid session ID from another directory does not error: the process exits zero and prints nothing. Sortie then reports an early exit with status 0 and empty stderr, which looks like a runtime that never answered, not like a resume that did not match.
+`--session <id>` continues the session or, when no session has that ID, creates a new empty one under it. The run exits 0, every envelope carries the requested ID, and nothing in the stream marks the replacement; the different-ID check never fires. The signal comes before the turn: `opencode session export <id>` of a missing session exits 1 with `Session not found: <id>` on stderr, and the adapter already runs that export when a continued session starts. Any other export failure, such as a timeout or a lost SSH connection, says nothing about the session. Resuming from a directory other than the one that created the session carries its history. To reproduce, seed a session in an empty directory and take `<session-id>` from the `sessionID` of its output, resume it from a second empty directory, then delete it and export and resume it:
 
-The adapter cannot hit this, because every turn runs in the issue workspace. Tests can: a resume test whose second turn runs in a fresh temporary directory never exercises resume. Run both turns in the same workspace.
+```sh
+echo "Remember the word PELICAN. Reply only OK." | opencode run --standalone --format json
+cd <second-empty-dir>
+echo "What word did I ask you to remember? Reply NONE if you do not know." | opencode run --standalone --format json --session <session-id>
+opencode session delete --standalone <session-id>
+opencode session export --standalone <session-id>; echo "exit $?"
+echo "What word did I ask you to remember? Reply NONE if you do not know." | opencode run --standalone --format json --session <session-id>; echo "exit $?"
+```
 
 Sessions are persisted in one global database under the user's home directory, not in a per-project store inside the workspace. Isolation between concurrent issues comes from distinct server-generated IDs, not from separate storage, and removing a workspace reclaims none of it.
 
@@ -182,7 +189,6 @@ Every tool-server call is reported under one runtime-chosen name, not the tool's
 The live tests in `integration_test.go` are gated on `SORTIE_OPENCODE_TEST=1` and skip cleanly without it. The other `SORTIE_OPENCODE_*` variables they read are described in that file. Traps:
 
 - A first launch on a clean machine runs database migrations before the first event, and the free hosted model can be slow to answer. Give the suite a generous read timeout.
-- A test that resumes a session must run both turns in the same workspace.
 - The scripted-model case isolates `HOME` and the XDG directories, so a version-manager shim that reads `HOME` fails to start. Name the binary by an absolute path.
 - OpenCode 2.x offers MCP tools only inside code mode, and it offers a server's tools only from the request after the tool listing. A scripted endpoint has to script an `execute` call and wait for the listing before it answers.
 
@@ -198,11 +204,11 @@ A stored provider login authenticates a run. Every grade on this page was measur
 
 ## Load-bearing capability observations
 
-Protocol session continuation blocks both verdicts: it is a gap where the native stream is usable. Permission handling, the human-input case on the protocol surface, the runtime failure case on the protocol surface, and the success turn on the native stream stay unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
+Session continuation is usable on both surfaces. Permission handling, the human-input case on the protocol surface, and the runtime failure case on the protocol surface stay unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
 
 No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's session export, the same source the native kind settles from. The ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at 53750 token(s) ... token budget hold"). The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
-The native stream carries no token figure on its terminal either. `opencode run --format json` has no terminal envelope: the captured stream ended with a `text` event or with nothing. In that run a `step_finish` event carried tokens only on a tool step, so the final text step of the turn reported none; current releases always print one for that step. Turn disposition on this surface is not observed for that reason: the success turn ended with no end-of-turn terminal the profile can recognize, so there is no disposition to grade.
+The native stream carries no token figure on its terminal either: `opencode run --format json` has no terminal envelope, and a `step_finish` event closes each step. The success turn is recognized. Turn disposition on this surface stays not observed because the runtime failure case ended with no recognized error terminal.
 
 Retry classification on the native stream is a gap because the run stream has no human-input terminal. The case was induced and the surface reported no outcome, so it counts against the surface. On the protocol surface the same case is not observed, because no request of either class was raised under the posture the probe ran in.
 
@@ -216,7 +222,7 @@ Permission handling is not observed. Under the asking posture the runtime raised
 - protocol retry_classification: Not observed: not_observed
 - protocol token_ceiling: Observed: gap
 - protocol tool_server_delivery: Observed: usable
-- protocol session_continuation: Observed: gap
+- protocol session_continuation: Observed: usable
 - protocol permission_handling: Not observed: not_observed
 - native_stream_json turn_disposition: Not observed: not_observed
 - native_stream_json retry_classification: Observed: gap
@@ -241,7 +247,7 @@ The title agent makes a billed request that no exported message records. With th
 
 On the release the qualification ran on, the usage-limits pull fails: the `experimental.usage.limits` call does not exist on that release, and the session logs the pull as unsupported. The turn is unaffected. The usage limits section above describes the command on releases that have it.
 
-Session continuation is proven only by the recall answer: a successful load alone does not show that the history came back. On the native stream, resuming through `--session` returned the phrase the seed asked the runtime to remember. On the protocol surface of the recorded capture, the recall turn ran under the seed's own session identifier but its answer did not contain the phrase, which grades as `same_session_without_recall`. The previous capture of the same profile recorded `confirmed_same_session` on the protocol surface.
+Session continuation is proven only by the recall answer: a successful load alone does not show that the history came back. On the native stream, resuming through `--session` returned the phrase the seed asked the runtime to remember. On the protocol surface the recall turn runs under the seed's own session identifier and returns the phrase too. A recall prompt that asks for "the phrase from earlier" lets a small model answer with its own earlier reply, `STORED`, which reads as lost history; the profile asks which phrase it was told to remember.
 
 ## Native headless observations
 
@@ -271,6 +277,5 @@ The containment boundary held under measurement: every launch ran inside the run
 Windows live qualification is unobserved.
 
 - native_stream_json turn_disposition runtime_failure: fixture_induction_failed
-- native_stream_json turn_disposition success: fixture_induction_failed
 - protocol retry_classification human_input: fixture_induction_failed
 - protocol turn_disposition runtime_failure: fixture_induction_failed

@@ -86,6 +86,16 @@ A subscription usage limit arrives as a `rate_limit_event` whose `rate_limit_inf
 
 `claude-code.session_persistence: false` cannot hold in a Sortie workflow: preflight refuses the configuration before the run starts. The adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag reads the session file that `session_persistence: false` prevents Claude Code from writing. A maintainer who sees the refusal named `agent.kind.session_resume` should look for `session_persistence: false` in the `claude-code` block.
 
+A resume of a session the runtime cannot find fails the turn and never starts a new conversation in its place. That holds for an ID that never existed and for a session whose journal was deleted. The process exits 1, stderr reads `No conversation found with session ID: <id>`, and stdout holds one `result` with `is_error` true, `subtype` `error_during_execution`, and `num_turns` 0, with no `system/init` before it. The `session_id` the stream reports equals the requested one either way, so it tells nothing. A resumed turn that emits `system/init` carried its history. To reproduce, seed a session under a fresh UUID and resume it, resume a UUID that never existed, then delete the seeded session's journal under the runtime's project directory for the workspace and resume it again:
+
+```sh
+claude -p "Remember the word PELICAN. Reply only OK." --output-format stream-json --verbose --model haiku --session-id <uuid> </dev/null
+claude -p "What word did I ask you to remember? Reply NONE if you do not know." --output-format stream-json --verbose --model haiku --resume <uuid> </dev/null
+claude -p "Reply OK." --output-format stream-json --verbose --model haiku --resume <unused-uuid> </dev/null; echo "exit $?"
+rm ~/.claude/projects/<project-dir>/<uuid>.jsonl
+claude -p "Reply OK." --output-format stream-json --verbose --model haiku --resume <uuid> </dev/null; echo "exit $?"
+```
+
 ## Sortie's own tools
 
 The worker generates one MCP configuration file per session, declaring the Sortie tool server and carrying the per-session variables it needs. This CLI accepts exactly one such config path, which is why an operator-supplied config cannot simply be passed alongside ours: the worker merges the two, and a name collision on our reserved server key fails the attempt rather than silently overwriting. That merged file is also where credentials for the tool server come from: the worker copies every `SORTIE_`-prefixed variable out of its own process environment into the config's env block, which is how a workflow's `$SORTIE_*` credential indirection resolves inside the tool server. Treat that file as carrying secrets, not just plumbing. On a local launch the runtime receives a file derived from it: the derived file names an operator header value by the environment variable that carries it instead of holding the value, and it keeps the env block, so it carries the same secrets. On an SSH launch no file is passed: the runtime receives an inline declaration of Sortie's tool server, by the address of the launch's reverse forward with the bearer carried by environment variable name, marked to load upfront, beside the operator's HTTP servers. Operator stdio servers are left out, and the env block never leaves the orchestrator host.
