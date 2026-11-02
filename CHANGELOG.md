@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
 - When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 - With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- The attention and next-step sentences of the dashboard and the JSON API say "bot review comments" throughout, where some said "review bot comments".
 
 ### Fixed
 

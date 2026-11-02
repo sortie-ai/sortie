@@ -332,11 +332,11 @@ var table = map[string]parts{
 	},
 	"attn_escalated_bot_review": {
 		reason: "Bot review escalated on #{{.PR}}",
-		why: ifTrigger(orchestrator.EscalationTriggerTriage) + "Sortie escalated review bot comments on PR #{{.PR}}" + triageAsked + "." +
+		why: ifTrigger(orchestrator.EscalationTriggerTriage) + "Sortie escalated bot review comments on PR #{{.PR}}" + triageAsked + "." +
 			"{{else}}Sortie used " + triesOfMax + " bot review fix runs on PR #{{.PR}}, " +
-			"and the pull request still holds review bot comments on its code that no Sortie run was given.{{end}}",
-		clears: "Clears when " + ifTrigger(orchestrator.EscalationTriggerTriage) + "the review bot comments on PR #{{.PR}} change" +
-			"{{else}}no review bot comment on the code of PR #{{.PR}} is left that no Sortie run was given{{end}}, when the pull request merges or closes" +
+			"and the pull request still holds bot review comments on its code that no Sortie run was given.{{end}}",
+		clears: "Clears when " + ifTrigger(orchestrator.EscalationTriggerTriage) + "the bot review comments on PR #{{.PR}} change" +
+			"{{else}}no bot review comment on the code of PR #{{.PR}} is left that no Sortie run was given{{end}}, when the pull request merges or closes" +
 			onBudget(", when Sortie restarts with `reactions.bot_review.max_continuation_turns` above {{count .Tries}}") +
 			", or when " + terminalExit + ".",
 	},
@@ -468,7 +468,7 @@ var table = map[string]parts{
 	"next_if_review_comments": {condition: "{{if .Settle}}When the new review comments on " + thePR + " settle" + inNext +
 		"{{else}}If a check" + inNext + " finds new review comments on " + thePR + "{{end}}"},
 	"next_if_bot_comments": {condition: "If a check" + inNext + " finds " +
-		"{{if .Spent}}a new review bot comment on the code of " + thePR + "{{else}}new review bot comments on " + thePR + "{{end}}"},
+		"{{if .Spent}}a new bot review comment on the code of " + thePR + "{{else}}new bot review comments on " + thePR + "{{end}}"},
 	"next_if_merge_conflict": {condition: "If a check" + inNext + " finds a new merge conflict on " + thePR},
 	"next_when_merge_ready": {condition: "When a check" + inNext + " finds that " + thePR + " " +
 		"{{if .RequireCI}}passes CI and meets its other merge conditions{{else}}meets its merge conditions{{end}}"},
