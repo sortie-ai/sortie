@@ -30,6 +30,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -47,6 +48,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*GiteaAdapter)(nil)
 var _ domain.CommentChangeReader = (*GiteaAdapter)(nil)
+var _ domain.CommentAuthorAccessReader = (*GiteaAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 50 items per page this
 // allows up to 10,000 results before the adapter stops and returns what it has.
@@ -65,6 +67,7 @@ type GiteaAdapter struct {
 	queryFilter url.Values // parsed tracker.query_filter; nil or empty when unset
 	log         *slog.Logger
 	metrics     domain.Metrics
+	access      *scmcore.WriteAccessCache
 }
 
 // NewGiteaAdapter creates a [GiteaAdapter] from adapter configuration and runs a
@@ -171,6 +174,7 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		queryFilter: filter,
 		log:         slog.Default(),
 	}
+	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 
 	warnUnrecognizedFilterKeys(adapter.log, filter)
 	if hasNonEmptyLabel(filter["labels"]) {

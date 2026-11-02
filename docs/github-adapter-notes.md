@@ -110,6 +110,14 @@ The job log is one stream. Nothing in a line names its step, so the step has to 
 
 **The list route is paginated.** The confirming read walks the link header at the route's maximum page size, because an issue carrying more labels than one page would otherwise hide the label from the check.
 
+## Comment author write access
+
+**Read `permission`, not `role_name`.** The collaborator permission route, `GET /repos/{owner}/{repo}/collaborators/{login}/permission`, reports the legacy base roles in `permission`: a maintainer reads as `write` and a triager as `read`. The newer role name sits beside it in `role_name`, but the adapter grants on `permission` being `admin` or `write` and treats every other value, the empty string included, as a refusal.
+
+**A non-collaborator and an unknown login both refuse.** A non-collaborator answers `200` with `read`, a bot account such as `dependabot[bot]` answers `200` with `none`, and an unknown login answers `404`. None of them is a failure, so the adapter answers false for each.
+
+**The route needs push access.** A token whose account lacks push access to the repository gets `403` with "Must have push access to view collaborator permission", whatever login it asks about. The client reports a `403` that is not a rate limit as an auth error, and the lookup returns it as a failure, never as a refusal, so the caller can tell a token that cannot ask from an author who was refused. No classic scope or fine-grained permission is documented for the route.
+
 ## The merge write path
 
 **A repeated merge is not an error.** Merging a pull request that the first call already merged returns success with the existing merge commit. GitHub short-circuits once merged and stops evaluating the head-SHA precondition, so even a stale expected head still succeeds. The reconcile loop records the duplicate as success through its normal path. Do not add an "already merged" guard in front of the call; it would be redundant and would introduce its own race.

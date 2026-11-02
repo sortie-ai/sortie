@@ -2272,68 +2272,38 @@ func TestTransitionIssue_GetIssueError(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 }
 
-func TestNewGitHubAdapter_ETagCacheSizeDefault(t *testing.T) {
+func TestNewGitHubAdapter_ETagCacheSize(t *testing.T) {
 	t.Parallel()
 
-	a := mustAdapter(t, validConfig("http://localhost"))
-	if a.etagCache.maxSize != 1000 {
-		t.Errorf("etagCache.maxSize = %d, want 1000 (default)", a.etagCache.maxSize)
+	tests := []struct {
+		name  string
+		value any
+		set   bool
+		want  int
+	}{
+		{name: "absent uses the default", want: 1000},
+		{name: "custom int", value: 50, set: true, want: 50},
+		{name: "zero disables the cache", value: 0, set: true, want: 0},
+		{name: "float64 from JSON decoding", value: float64(75), set: true, want: 75},
+		{name: "non-numeric falls back to the default", value: "not a number", set: true, want: 1000},
+		{name: "negative falls back to the default", value: -5, set: true, want: 1000},
 	}
-}
 
-func TestNewGitHubAdapter_ETagCacheSizeCustom(t *testing.T) {
-	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	cfg := validConfig("http://localhost")
-	cfg["etag_cache_size"] = 50
-	a := mustAdapter(t, cfg)
-	if a.etagCache.maxSize != 50 {
-		t.Errorf("etagCache.maxSize = %d, want 50", a.etagCache.maxSize)
-	}
-}
+			cfg := validConfig("http://localhost")
+			if tt.set {
+				cfg["etag_cache_size"] = tt.value
+			}
 
-func TestNewGitHubAdapter_ETagCacheSizeZero(t *testing.T) {
-	t.Parallel()
+			a := mustAdapter(t, cfg)
 
-	cfg := validConfig("http://localhost")
-	cfg["etag_cache_size"] = 0
-	a := mustAdapter(t, cfg)
-	if a.etagCache.maxSize != 0 {
-		t.Errorf("etagCache.maxSize = %d, want 0 (disabled)", a.etagCache.maxSize)
-	}
-}
-
-func TestNewGitHubAdapter_ETagCacheSizeFloat64(t *testing.T) {
-	t.Parallel()
-
-	// encoding/json deserializes integers as float64; verify the adapter handles it.
-	cfg := validConfig("http://localhost")
-	cfg["etag_cache_size"] = float64(75)
-	a := mustAdapter(t, cfg)
-	if a.etagCache.maxSize != 75 {
-		t.Errorf("etagCache.maxSize = %d, want 75 (float64 key)", a.etagCache.maxSize)
-	}
-}
-
-func TestNewGitHubAdapter_ETagCacheSizeInvalid(t *testing.T) {
-	t.Parallel()
-
-	cfg := validConfig("http://localhost")
-	cfg["etag_cache_size"] = "not a number"
-	a := mustAdapter(t, cfg)
-	if a.etagCache.maxSize != 1000 {
-		t.Errorf("etagCache.maxSize = %d, want 1000 (invalid falls back to default)", a.etagCache.maxSize)
-	}
-}
-
-func TestNewGitHubAdapter_ETagCacheSizeNegative(t *testing.T) {
-	t.Parallel()
-
-	cfg := validConfig("http://localhost")
-	cfg["etag_cache_size"] = -5
-	a := mustAdapter(t, cfg)
-	if a.etagCache.maxSize != 1000 {
-		t.Errorf("etagCache.maxSize = %d, want 1000 (negative falls back to default)", a.etagCache.maxSize)
+			if a.etagCache.maxSize != tt.want {
+				t.Errorf("etagCache.maxSize for etag_cache_size=%v = %d, want %d", tt.value, a.etagCache.maxSize, tt.want)
+			}
+		})
 	}
 }
 

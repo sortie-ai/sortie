@@ -27,6 +27,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -45,6 +46,8 @@ func init() {
 var (
 	_ domain.TrackerAdapter      = (*GitHubAdapter)(nil)
 	_ domain.CommentChangeReader = (*GitHubAdapter)(nil)
+
+	_ domain.CommentAuthorAccessReader = (*GitHubAdapter)(nil)
 )
 
 // maxPages is the upper bound on paginated fetches. At 50 items per
@@ -63,6 +66,7 @@ type GitHubAdapter struct {
 	metrics     domain.Metrics
 	etagCache   *etagCache
 	model       *issuekit.LabelStateModel
+	access      *scmcore.WriteAccessCache
 }
 
 // NewGitHubAdapter creates a [GitHubAdapter] from adapter configuration.
@@ -153,7 +157,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	return &GitHubAdapter{
+	adapter := &GitHubAdapter{
 		StateSource: source,
 		client:      newGitHubClient(endpoint, apiKey, userAgent),
 		owner:       owner,
@@ -161,7 +165,9 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		queryFilter: queryFilter,
 		etagCache:   newETagCache(etagCacheSize),
 		model:       issuekit.NewLabelStateModel(source, slog.Default()),
-	}, nil
+	}
+	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
+	return adapter, nil
 }
 
 // FetchCandidateIssues returns the open issues that carry a label of a

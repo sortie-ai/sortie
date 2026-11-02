@@ -267,3 +267,19 @@ type CommentChangeReader interface {
 	// when it discards the result before then.
 	FetchIssueCommentChanges(ctx context.Context, issueID string, since CommentReadPoint) (CommentChanges, error)
 }
+
+// CommentAuthorAccessReader is the optional capability a tracker adapter
+// implements when anyone who can read a project may comment on it.
+type CommentAuthorAccessReader interface {
+	// CommentAuthorCanWrite reports whether the author of c has write
+	// access to the configured project: true is granted, false with a nil
+	// error is refused, and false with an error is a failed lookup. It
+	// reads c.AuthorID and c.ID only.
+	//
+	// An adapter remembers a grant for its lifetime and a refusal for
+	// that comment only; an edit keeps the comment's ID, so an edited
+	// comment is not asked about again. An empty AuthorID is refused
+	// without a request. The error is [ErrTrackerAuth] when the token
+	// cannot ask, and nothing is remembered on error.
+	CommentAuthorCanWrite(ctx context.Context, c Comment) (bool, error)
+}
