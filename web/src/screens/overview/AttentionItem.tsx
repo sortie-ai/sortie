@@ -1,5 +1,6 @@
 import { keyTip } from "@/app/key-tips";
 import { ExternalLinkIcon } from "@/components/icons";
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { ServedText } from "@/components/ServedText";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { linkActionOf } from "@/components/use-attention-actions";
@@ -83,13 +84,23 @@ export function AttentionItem({
       </p>
       <p className="flex min-w-0 flex-wrap items-baseline gap-x-sm gap-y-xxs">
         {item.issue_title ? (
-          <span className="text-body-md font-medium text-ink">{item.issue_title}</span>
+          <span className="text-body-md font-medium text-ink">
+            {item.issue_identifier ? (
+              <IssueTitleLink identifier={item.issue_identifier}>{item.issue_title}</IssueTitleLink>
+            ) : (
+              item.issue_title
+            )}
+          </span>
         ) : undefined}
         {key ? (
           <span
             className={cn("text-body-sm whitespace-nowrap tabular-nums", secondLineColor(isLook))}
           >
-            {key}
+            {item.issue_identifier && !item.issue_title ? (
+              <IssueTitleLink identifier={item.issue_identifier}>{key}</IssueTitleLink>
+            ) : (
+              key
+            )}
           </span>
         ) : undefined}
       </p>

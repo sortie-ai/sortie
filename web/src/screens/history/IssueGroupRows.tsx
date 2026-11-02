@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { useHistoryRunsQuery } from "@/api/queries";
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { NotedFigure } from "@/components/NotedFigure";
 import { NameText } from "@/components/NameText";
 import { Parts } from "@/components/Parts";
@@ -284,14 +285,9 @@ export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
           <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-sm">
             <MarkSlot marker={standing.marker} />
             <p className="text-body-md font-medium text-ink wrap-anywhere max-md:self-baseline">
-              <Link
-                to={link.to}
-                state={link.state}
-                onClick={(event) => event.stopPropagation()}
-                className="rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
+              <IssueTitleLink identifier={group.issue_identifier}>
                 <ServedText text={title} />
-              </Link>
+              </IssueTitleLink>
             </p>
             <p className="col-span-2 col-start-2 text-body-sm text-ink-muted wrap-anywhere">
               <Parts

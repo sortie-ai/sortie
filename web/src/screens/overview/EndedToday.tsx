@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { MarkSlot } from "@/components/Lane";
 import { NotedFigure } from "@/components/NotedFigure";
 import { Parts } from "@/components/Parts";
@@ -133,7 +134,9 @@ function EndedRow({ issue, isUnread, isSelected, showSelection, onOpen }: EndedR
       <MarkSlot marker={marker} />
       <div className="min-w-0">
         <p className={cn("text-body-md text-ink", isUnread ? "font-bold" : "font-medium")}>
-          {issue.title ?? issue.displayKey}
+          <IssueTitleLink identifier={issue.identifier}>
+            {issue.title ?? issue.displayKey}
+          </IssueTitleLink>
         </p>
         {meta.length === 0 ? undefined : (
           <p className={cn("text-body-sm tabular-nums", secondLineColor(isLook))}>

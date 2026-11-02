@@ -1,6 +1,7 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 
 import { ChevronDownIcon } from "@/components/icons";
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { Lane } from "@/components/Lane";
 import { Parts } from "@/components/Parts";
 import { MONO } from "@/components/ui/mono";
@@ -47,7 +48,11 @@ export function LaneRow({ lane, variant, isSelected, showSelection, onOpen }: La
       )}
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-sm [grid-area:ident]">
-        <span className="text-body-md font-medium text-ink">{lane.title ?? lane.displayKey}</span>
+        <span className="text-body-md font-medium text-ink">
+          <IssueTitleLink identifier={lane.identifier}>
+            {lane.title ?? lane.displayKey}
+          </IssueTitleLink>
+        </span>
         <Parts
           className={cn("text-body-sm", secondLineColor(isLook))}
           parts={[

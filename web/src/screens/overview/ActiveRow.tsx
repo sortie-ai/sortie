@@ -1,3 +1,4 @@
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { MarkSlot } from "@/components/Lane";
 import { Parts } from "@/components/Parts";
 import { MONO } from "@/components/ui/mono";
@@ -47,7 +48,9 @@ export function ActiveRow({ row, now, isSelected, showSelection, onOpen }: Activ
     >
       <MarkSlot marker={row.mark} />
       <div className="min-w-0">
-        <p className="text-body-md font-medium text-ink">{row.title ?? row.displayKey}</p>
+        <p className="text-body-md font-medium text-ink">
+          <IssueTitleLink identifier={row.identifier}>{row.title ?? row.displayKey}</IssueTitleLink>
+        </p>
         {meta.length === 0 ? undefined : (
           <p className={cn("text-body-sm tabular-nums", secondLineColor(isLook))}>
             <Parts parts={meta} />
