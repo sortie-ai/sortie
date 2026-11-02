@@ -194,6 +194,10 @@ esac
 cat '`+runPath+`'`+tail)
 }
 
+func emptyExport(id string) exportFile {
+	return exportFile{session: id, body: []byte(`{"info":{"id":"` + id + `"},"messages":[]}`)}
+}
+
 func serveExports(t *testing.T, dir string, files []exportFile) {
 	t.Helper()
 	for _, f := range files {
@@ -247,7 +251,9 @@ func TestStartSession_SettingsArePerSession(t *testing.T) {
 	t.Parallel()
 
 	a, _ := NewOpenCodeAdapter()
-	script := fakeMinimalRuntime(t)
+	dir := t.TempDir()
+	script := writeExportServingScript(t, dir, "simple_turn.jsonl", false)
+	serveExports(t, dir, []exportFile{emptyExport("ses_prior")})
 
 	first := mustStartSessionWith(t, a, t.TempDir(), script, map[string]any{"model": "provider/model-a", "allowed_tools": []any{"read"}}).Internal.(*sessionState)
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
@@ -327,26 +333,56 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 	}
 }
 
-func TestStartSession_ResumeSession(t *testing.T) {
+func TestSessionContinuity(t *testing.T) {
 	t.Parallel()
 
-	a, _ := NewOpenCodeAdapter()
-	resumeID := "ses_resume123"
-	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   t.TempDir(),
-		AgentConfig:     domain.AgentConfig{Command: fakeMinimalRuntime(t)},
-		ResumeSessionID: resumeID,
-	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		t.Helper()
 
-	state := session.Internal.(*sessionState)
-	if state.sessionID != resumeID {
-		t.Errorf("sessionID = %q, want %q", state.sessionID, resumeID)
+		dir := t.TempDir()
+		script := writeExportServingScript(t, dir, "simple_turn.jsonl", false)
+		serveExports(t, dir, []exportFile{emptyExport(held)})
+		a, _ := NewOpenCodeAdapter()
+
+		session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath:   dir,
+			AgentConfig:     domain.AgentConfig{Command: script},
+			ResumeSessionID: resumeID,
+		})
+		if err == nil {
+			t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
+		}
+		return session, err
+	})
+}
+
+func TestStartSession_SlowExportStartsNewSession(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := writeOpenCodeScript(t, dir, "case \"$1\" in\n  session) exec sleep 1000;;\nesac")
+	a, _ := NewOpenCodeAdapter()
+	type started struct {
+		session domain.Session
+		err     error
 	}
-	if session.ID != resumeID {
-		t.Errorf("session.ID = %q, want %q", session.ID, resumeID)
+	done := make(chan started, 1)
+
+	go func() {
+		session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath:   dir,
+			AgentConfig:     domain.AgentConfig{Command: script, ReadTimeoutMS: 500},
+			ResumeSessionID: "ses_slow",
+		})
+		done <- started{session, err}
+	}()
+	got := waittest.Receive(t, done, "StartSession")
+
+	if got.err != nil {
+		t.Fatalf("StartSession(resume=%q) error = %v, want nil", "ses_slow", got.err)
+	}
+	if got.session.CarriedHistory || got.session.ID != "" {
+		t.Errorf("StartSession(resume=%q) = {CarriedHistory: %v, ID: %q}, want {false, %q}", "ses_slow", got.session.CarriedHistory, got.session.ID, "")
 	}
 }
 
@@ -455,7 +491,8 @@ func TestRunTurn_SessionIDMismatch(t *testing.T) {
 
 	a, _ := NewOpenCodeAdapter()
 	tmpDir := t.TempDir()
-	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
+	script := writeExportServingScript(t, tmpDir, "simple_turn.jsonl", false)
+	serveExports(t, tmpDir, []exportFile{emptyExport("ses_expected")})
 
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   tmpDir,
@@ -877,7 +914,7 @@ func TestRunTurn_SpendFromCapturedTurns(t *testing.T) {
 		{"failed export leaves a turn with a final step report complete", "live_tool_turn_final_report.jsonl", "", nil, nil, turnSpend{518, 42, false, live, ""}, false, false},
 		{"text-only turn settles from the export", "live_text_turn.jsonl", "", nil, []exportFile{history}, turnSpend{17693, 20, false, records, servedModel}, false, false},
 		{"resumed session counts none of its history", "live_tool_turn.jsonl", captureSession, []exportFile{history}, []exportFile{historyAndToolTurn}, turnSpend{36542, 175, false, records, servedModel}, false, false},
-		{"failed start read never counts the history", "live_tool_turn.jsonl", captureSession, nil, []exportFile{historyAndToolTurn}, turnSpend{17780, 174, true, live, ""}, false, false},
+		{"unconfirmed resume starts a new session that counts its whole export", "live_tool_turn.jsonl", captureSession, nil, []exportFile{toolTurn}, turnSpend{36542, 175, false, records, servedModel}, false, false},
 		{"subagent turn counts the child's records once", "live_subagent_turn.jsonl", "", nil, []exportFile{parent, child}, turnSpend{52565, 192, false, records, servedModel}, false, false},
 		{"failed child export leaves the turn a lower bound", "live_subagent_turn.jsonl", "", nil, []exportFile{parent}, turnSpend{36322, 191, true, records, servedModel}, false, false},
 		{"failed subagent call leaves the turn a lower bound", "live_subagent_failed_turn.jsonl", "", nil, []exportFile{exportOf(t, "live_subagent_failed_export.json")}, turnSpend{36394, 96, true, records, servedModel}, false, false},

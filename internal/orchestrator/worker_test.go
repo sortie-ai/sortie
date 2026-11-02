@@ -1651,6 +1651,37 @@ func TestRunWorkerAttempt(t *testing.T) {
 		}
 	})
 
+	t.Run("failed_start_keeps_resume_id_for_retry", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := defaultWorkerConfig(t.TempDir())
+		ec := newExitCapture()
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(context.Context, domain.StartSessionParams) (domain.Session, error) {
+					return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "connection lost"}
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			ResumeSessionID:        "prev-sess-123",
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitError {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
+		}
+		if result.UnstartedResumeID != "prev-sess-123" {
+			t.Errorf("UnstartedResumeID = %q, want %q", result.UnstartedResumeID, "prev-sess-123")
+		}
+	})
+
 	t.Run("panic_after_workspace_calls_finish", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("after_run hook uses touch command")

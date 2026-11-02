@@ -17,11 +17,9 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 )
 
-// Scenario names for every Go fake runtime this package's tests
-// launch through [agenttest.FakeRuntime]. Registered into
-// fakeRuntimeScenarios below.
 const (
 	scenarioProtocolAgent = "clientprotocol.protocol-agent"
 	scenarioParkedAgent   = "clientprotocol.parked-agent"
@@ -38,20 +36,13 @@ func init() {
 	fakeRuntimeScenarios[scenarioSSHStandIn] = agenttest.Typed(runSSHStandIn)
 }
 
-// sshStandInParams configures [runSSHStandIn]: path is the PATH value
-// its dropped-environment child receives.
 type sshStandInParams struct {
 	PATH string
 }
 
-// runSSHStandIn is a stand-in "ssh" runtime: it ignores every argument
-// ahead of the last one, the remote command sshutil.BuildSSHLaunch
-// produced, and runs that command through sh -c with its own
-// environment dropped and replaced by params.PATH alone, and its
-// standard input, output, and error inherited. Dropping the
-// environment is what proves a carried variable reaches the remote
-// command only through the SSH session's standard input, never
-// through this process's own inherited environment.
+// runSSHStandIn runs the remote command, the last argument, through sh -c.
+// The environment is dropped to PATH alone so a carried variable can reach
+// the command only through the session's standard input.
 func runSSHStandIn(args []string, params sshStandInParams) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "ssh stand-in: no arguments")
@@ -80,8 +71,6 @@ func runSSHStandIn(args []string, params sshStandInParams) int {
 	return 0
 }
 
-// gracefulMode selects how a protocolAgent scenario reacts to the
-// catchable termination signal.
 type gracefulMode string
 
 const (
@@ -91,77 +80,41 @@ const (
 	gracefulDelayed   gracefulMode = "delayed"
 )
 
-// protocolAgentParams configures [runProtocolAgent], the fake agent
-// used by every clientprotocol test that needs a real subprocess
-// speaking (or refusing to speak) the wire handshake. Only the fields
-// a given fixture cares about need to be set; the rest keep their
-// zero value.
 type protocolAgentParams struct {
-	// ExitImmediately makes the process exit(0) before anything else
-	// runs.
 	ExitImmediately bool
-
-	// StderrImmediate, if non-empty, is written to standard error and
-	// the process exits(1) before reading or answering anything.
 	StderrImmediate string
 
-	// Handshake makes the process answer the two calls startSession
-	// makes before returning: initialize (always id 1, since it is
-	// the connection's first call) and session/new (always id 2).
+	// Handshake answers initialize as id 1 and session/new as id 2, the
+	// order startSession calls them in.
 	Handshake              bool
 	IncludeMCPCapabilities bool
 	CaptureSessionNewPath  string
+	StderrOnInit           string
 
-	// StderrOnInit, if non-empty, is written to standard error
-	// immediately after answering initialize, and the process
-	// exits(1) without ever seeing session/new.
-	StderrOnInit string
-
-	// Graceful selects the process's reaction to the catchable
-	// termination signal; GracefulDelay and EvidencePath apply only
-	// to gracefulDelayed.
 	Graceful      gracefulMode
 	GracefulDelay time.Duration
 	EvidencePath  string
 
-	// ChildPath and ChildDetachedPath, at most one of which is set,
-	// name an already-built fake runtime this process spawns once
-	// setup completes: ChildPath stays in this process's own group,
-	// ChildDetachedPath starts a new session and escapes it.
-	// ChildPIDPath, if set, records the spawned child's pid as this
-	// process observed it.
 	ChildPath         string
 	ChildDetachedPath string
 	ChildPIDPath      string
 
-	// ReadyPath, if set, is touched once setup (signal handling and
-	// any child spawn) completes and before the handshake loop or
-	// the idle wait begins, so a caller that signals the process
-	// does not race its own startup.
+	// ReadyPath is touched once signal handling and any child are set up,
+	// so a test that signals the process does not race its startup.
 	ReadyPath string
 
-	// EnvCaptureNames and EnvCapturePath, when both set, append one
-	// JSON object per process start to EnvCapturePath, mapping each
-	// named variable to its value in this start's environment (empty
-	// string if unset), so a test can read back what each of several
-	// process starts carried.
 	EnvCaptureNames []string
 	EnvCapturePath  string
 
-	// RespondPrompts makes the process answer every session/prompt
-	// with an end_turn stop reason once session/new has been
-	// answered, instead of idling right after the handshake.
 	RespondPrompts bool
+
+	// HeldSession is the one identifier session/resume succeeds for; any
+	// other gets the error a runtime that never stored the session sends.
+	HeldSession string
 }
 
-// runProtocolAgent is the fake agent scenario every clientprotocol
-// unix test builds through [agenttest.FakeRuntime] with a
-// protocolAgentParams tailored to what it needs. It never uses a
-// shell: signal handling is syscall.SIGTERM via os/signal, and a
-// detached child escapes this process's group via
-// syscall.SysProcAttr.Setsid rather than the external setsid binary,
-// which keeps the fixture portable to platforms where that binary is
-// absent.
+// runProtocolAgent avoids a shell and the external setsid binary so the
+// fixture also runs where that binary is absent.
 func runProtocolAgent(_ []string, params protocolAgentParams) int {
 	if len(params.EnvCaptureNames) > 0 && params.EnvCapturePath != "" {
 		if err := appendEnvCapture(params.EnvCapturePath, params.EnvCaptureNames); err != nil {
@@ -207,8 +160,6 @@ func runProtocolAgent(_ []string, params protocolAgentParams) int {
 	return 0
 }
 
-// appendEnvCapture appends one JSON object to path, mapping each of names
-// to its value in this process's environment.
 func appendEnvCapture(path string, names []string) error {
 	capture := make(map[string]string, len(names))
 	for _, name := range names {
@@ -221,13 +172,8 @@ func appendEnvCapture(path string, names []string) error {
 	return appendCaptureLine(path, data)
 }
 
-// runHandshakeLoop reads JSON-RPC lines from standard input and answers
-// initialize and session/new exactly as startSession expects, applying
-// params' capture and early-exit behavior. It returns exit=true when
-// the process must stop right away with code; exit=false once the
-// handshake (and, with params.RespondPrompts, every prompt) has been
-// answered, or standard input has closed, and the caller should fall
-// through to idling.
+// runHandshakeLoop returns exit=true when the process must stop with code,
+// and exit=false when the caller should fall through to idling.
 func runHandshakeLoop(params protocolAgentParams) (code int, exit bool) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
@@ -243,7 +189,7 @@ func runHandshakeLoop(params protocolAgentParams) (code int, exit bool) {
 
 		switch header.Method {
 		case methodInitialize:
-			if err := respondInitialize(params.IncludeMCPCapabilities); err != nil {
+			if err := respondInitializeHolding(params.IncludeMCPCapabilities, params.HeldSession); err != nil {
 				fmt.Fprintf(os.Stderr, "protocol agent: respond initialize: %v\n", err)
 				return 2, true
 			}
@@ -258,13 +204,23 @@ func runHandshakeLoop(params protocolAgentParams) (code int, exit bool) {
 					return 2, true
 				}
 			}
-			if err := respondSessionNew(); err != nil {
+			if err := respondSessionNewTo(idAsInt(header.ID)); err != nil {
 				fmt.Fprintf(os.Stderr, "protocol agent: respond session/new: %v\n", err)
 				return 2, true
 			}
 			sessionCreated = true
 			if !params.RespondPrompts {
 				return 0, false
+			}
+		case negativeControlMethod:
+			if err := respondError(idAsInt(header.ID), jsonrpc.MethodNotFoundCode); err != nil {
+				fmt.Fprintf(os.Stderr, "protocol agent: respond negative control: %v\n", err)
+				return 2, true
+			}
+		case methodSessionResume:
+			if err := respondResume(params.HeldSession, line, idAsInt(header.ID)); err != nil {
+				fmt.Fprintf(os.Stderr, "protocol agent: respond session/resume: %v\n", err)
+				return 2, true
 			}
 		case methodSessionPrompt:
 			if !sessionCreated {
@@ -285,16 +241,9 @@ func runHandshakeLoop(params protocolAgentParams) (code int, exit bool) {
 	return 0, false
 }
 
-// installGraceful arms mode's reaction to SIGTERM. gracefulNone
-// installs nothing, leaving the default disposition (process
-// termination) in place, matching a fake agent with no signal trap of
-// its own.
 func installGraceful(mode gracefulMode, delay time.Duration, evidencePath string) {
 	switch mode {
 	case gracefulIgnore:
-		// The Go equivalent of a shell "trap '' TERM": the process
-		// becomes permanently immune to the signal, not just for one
-		// delivery.
 		signal.Ignore(syscall.SIGTERM)
 	case gracefulImmediate:
 		armGracefulHandler(func() { os.Exit(0) })
@@ -308,8 +257,6 @@ func installGraceful(mode gracefulMode, delay time.Duration, evidencePath string
 	}
 }
 
-// armGracefulHandler runs handle once, the first time this process
-// receives SIGTERM.
 func armGracefulHandler(handle func()) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM)
@@ -319,10 +266,6 @@ func armGracefulHandler(handle func()) {
 	}()
 }
 
-// spawnChild starts path as a child process, and records its pid to
-// pidPath if pidPath is non-empty. detached puts the child in a new
-// session via Setsid, escaping this process's own group; otherwise the
-// child inherits it. Returns a non-zero scenario exit code on failure.
 func spawnChild(path, pidPath string, detached bool) int {
 	cmd := exec.Command(path) //nolint:gosec // path is a fake runtime this scenario built
 	if detached {
@@ -342,32 +285,68 @@ func spawnChild(path, pidPath string, detached bool) int {
 	return 0
 }
 
-// respondInitialize writes the initialize response startSession
-// expects, using the pinned schema's own generated types.
 func respondInitialize(includeMCPCapabilities bool) error {
+	return respondInitializeHolding(includeMCPCapabilities, "")
+}
+
+func respondInitializeHolding(includeMCPCapabilities bool, held string) error {
 	resp := initializeResponse{ProtocolVersion: 1}
+	if includeMCPCapabilities || held != "" {
+		resp.AgentCapabilities = &agentCapabilities{}
+	}
 	if includeMCPCapabilities {
 		httpSupported := true
-		resp.AgentCapabilities = &agentCapabilities{MCPCapabilities: &mcpCapabilities{HTTP: &httpSupported}}
+		resp.AgentCapabilities.MCPCapabilities = &mcpCapabilities{HTTP: &httpSupported}
+	}
+	if held != "" {
+		resp.AgentCapabilities.SessionCapabilities = &sessionCapabilities{Resume: &sessionResumeCapabilities{}}
 	}
 	return writeJSONLine(os.Stdout, outboundResponse{JSONRPC: "2.0", ID: 1, Result: resp})
 }
 
-// respondSessionNew writes the session/new response startSession
-// expects.
 func respondSessionNew() error {
-	return writeJSONLine(os.Stdout, outboundResponse{JSONRPC: "2.0", ID: 2, Result: newSessionResponse{SessionID: "sess-1"}})
+	return respondSessionNewTo(2)
 }
 
-// outboundResponse is the envelope a fake agent wraps a result in.
+func respondSessionNewTo(id int) error {
+	return writeJSONLine(os.Stdout, outboundResponse{JSONRPC: "2.0", ID: id, Result: newSessionResponse{SessionID: "sess-1"}})
+}
+
+func respondResume(held string, line []byte, id int) error {
+	var request struct {
+		Params resumeSessionRequest `json:"params"`
+	}
+	if err := json.Unmarshal(line, &request); err != nil {
+		return err
+	}
+	if string(request.Params.SessionID) != held {
+		return respondError(id, sessionNotFoundCode)
+	}
+	return writeJSONLine(os.Stdout, outboundResponse{JSONRPC: "2.0", ID: id, Result: resumeSessionResponse{}})
+}
+
+const sessionNotFoundCode = -32002
+
+type outboundError struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Error   struct {
+		Code int `json:"code"`
+	} `json:"error"`
+}
+
+func respondError(id, code int) error {
+	response := outboundError{JSONRPC: "2.0", ID: id}
+	response.Error.Code = code
+	return writeJSONLine(os.Stdout, response)
+}
+
 type outboundResponse struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int    `json:"id"`
 	Result  any    `json:"result"`
 }
 
-// outboundRequest is the envelope a fake agent wraps an
-// agent-initiated call in.
 type outboundRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int    `json:"id"`
@@ -375,13 +354,10 @@ type outboundRequest struct {
 	Params  any    `json:"params"`
 }
 
-// writeJSONLine marshals v to w followed by a newline.
 func writeJSONLine(w io.Writer, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
-// appendCaptureLine appends line, followed by a newline, to path,
-// creating it if necessary.
 func appendCaptureLine(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // path is under t.TempDir()
 	if err != nil {
@@ -396,12 +372,6 @@ func appendCaptureLine(path string, line []byte) error {
 	return err
 }
 
-// parkedAgentParams configures [runParkedAgent], the fake agent used
-// by the parked-teardown fixture. ReaderHelperPath and
-// WriterHelperPath name already-built fake runtimes that detach into
-// their own session and hold, respectively, the standard-input read
-// end and the standard-output write end open; StderrHelperPath, when
-// set, does the same for standard error.
 type parkedAgentParams struct {
 	ReaderHelperPath string
 	WriterHelperPath string
@@ -409,14 +379,8 @@ type parkedAgentParams struct {
 	OptionSize       int
 }
 
-// runParkedAgent hands this process's standard input, standard
-// output, and (if configured) standard error to detached helper
-// processes before writing a session/request_permission request whose
-// selected option carries an identifier of at least OptionSize bytes,
-// followed by a second, distinct request nothing ever answers, then
-// idling. Each helper escapes this process's own group via Setsid, so
-// killing that group later leaves the pipe ends they hold open still
-// held, exactly as the fixture requires.
+// runParkedAgent hands its standard streams to helpers in their own
+// sessions, so killing this process's group leaves the pipe ends held open.
 func runParkedAgent(_ []string, params parkedAgentParams) int {
 	readerCmd := exec.Command(params.ReaderHelperPath) //nolint:gosec // path is a fake runtime this scenario built
 	readerCmd.Stdin = os.Stdin
@@ -463,10 +427,6 @@ func runParkedAgent(_ []string, params parkedAgentParams) int {
 	return 0
 }
 
-// writeParkedRequests writes the parked-teardown fixture's two
-// agent-initiated requests: a session/request_permission whose
-// selected option identifier is optionSize bytes long, and a
-// fs/read_text_file request nothing ever answers.
 func writeParkedRequests(w io.Writer, optionSize int) error {
 	title := "work"
 	permissionReq := requestPermissionRequest{
@@ -482,26 +442,18 @@ func writeParkedRequests(w io.Writer, optionSize int) error {
 	return writeJSONLine(w, outboundRequest{JSONRPC: "2.0", ID: 2, Method: methodFsReadTextFile, Params: struct{}{}})
 }
 
-// hugeOptionID returns a selected-option identifier of exactly size
-// bytes: at least four mebibytes, so no pipe buffer can hold the reply
-// that echoes it back.
 func hugeOptionID(size int) string {
 	return strings.Repeat("x", size)
 }
 
-// boundedReaderParams configures [runBoundedReader].
 type boundedReaderParams struct {
 	PIDPath  string
 	DonePath string
 	BufSize  int
 }
 
-// runBoundedReader records its own pid, performs exactly one bounded
-// read of up to BufSize bytes from standard input and discards it,
-// writes DonePath as durable evidence that read happened, and idles
-// holding standard input's read end open without consuming any more
-// of it. The one bounded read, combined with a reply many times larger
-// than BufSize, is what parks a subsequent write from the other end.
+// runBoundedReader reads once and then holds standard input open unread,
+// so a reply many times larger than BufSize parks its writer.
 func runBoundedReader(_ []string, params boundedReaderParams) int {
 	if err := writePIDFile(params.PIDPath); err != nil {
 		fmt.Fprintf(os.Stderr, "bounded reader: %v\n", err)
@@ -520,14 +472,10 @@ func runBoundedReader(_ []string, params boundedReaderParams) int {
 	return 0
 }
 
-// holdOpenParams configures [runHoldOpen].
 type holdOpenParams struct {
 	PIDPath string
 }
 
-// runHoldOpen records its own pid and idles, holding whichever
-// standard stream the caller wired to it open without ever writing to
-// or reading from it.
 func runHoldOpen(_ []string, params holdOpenParams) int {
 	if err := writePIDFile(params.PIDPath); err != nil {
 		fmt.Fprintf(os.Stderr, "hold open: %v\n", err)
@@ -537,7 +485,6 @@ func runHoldOpen(_ []string, params holdOpenParams) int {
 	return 0
 }
 
-// writePIDFile records this process's own pid to path.
 func writePIDFile(path string) error {
 	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)
 }

@@ -96,10 +96,8 @@ func init() {
 
 var _ domain.AgentAdapter = (*CopilotAdapter)(nil)
 
-// CopilotAdapter satisfies [domain.AgentAdapter] by managing Copilot
-// CLI subprocesses. One adapter instance serves all concurrent
-// sessions; per-session state is held in [sessionState] via the
-// [domain.Session] Internal field.
+// CopilotAdapter satisfies [domain.AgentAdapter] for the Copilot CLI. One
+// instance serves all concurrent sessions.
 type CopilotAdapter struct{}
 
 type sessionState struct {
@@ -129,7 +127,7 @@ type sessionState struct {
 	ledger *usage.Ledger
 
 	// Per-turn scan state, owned by the ParseLine and OnFinalize hooks and
-	// reset at the top of each RunTurn.
+	// cleared by resetTurn.
 	inFlight *agentcore.ToolTracker
 	work     *agentcore.WorkObserver
 
@@ -141,8 +139,6 @@ type sessionState struct {
 
 	turnCompletionSummary string
 
-	// turnErrorMessage is the failure reason when the result event reports a
-	// failed exit.
 	turnErrorMessage string
 
 	// turnRefusal is the first session error of the turn that is a usage-limit
@@ -158,7 +154,6 @@ type sessionState struct {
 	// turnReading is the turn's last usage checkpoint; nil when it saw none.
 	turnReading *usage.SpendReading
 
-	// turnReplied is true when the result event reported exit code 0.
 	turnReplied bool
 
 	// turnAborted is true when the runtime reported the turn aborted. The
@@ -203,20 +198,17 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		}
 	}
 
-	copilotSessionID := params.ResumeSessionID
-	if copilotSessionID == "" {
-		uuid, uuidErr := agentcore.NewUUIDv4()
-		if uuidErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "could not generate a session id",
-				Err:     uuidErr,
-			}
-		}
-		copilotSessionID = uuid
-	}
-
 	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
+
+	probe := agentcore.RuntimeFileProbe(target, agentcore.ReadTimeout(params.AgentConfig), sessionstate.JournalPath)
+	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID, probe, baseLogger)
+	if startErr != nil {
+		return domain.Session{}, startErr
+	}
+	copilotSessionID, idErr := start.AssignedID()
+	if idErr != nil {
+		return domain.Session{}, idErr
+	}
 
 	ledger, err := usage.NewLedger(usageSources.Live, usageSources.Records)
 	if err != nil {
@@ -252,7 +244,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		agentConfig:            params.AgentConfig,
 		baseLogger:             baseLogger,
 		mcpConfigPath:          mcpConfigPath,
-		isContinuation:         params.ResumeSessionID != "",
+		isContinuation:         start.CarriedHistory(),
 		credentialVerification: params.CredentialVerification,
 		usage:                  agentcore.NewTurnEndUsage(),
 		ledger:                 ledger,
@@ -260,13 +252,11 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		reducedVerificationContext: params.ReducedVerificationContext(),
 	}
 
-	if params.ResumeSessionID == "" {
-		ledger.SessionCreated()
-	} else {
+	ledger.BeginSession(start.CarriedHistory(), func() usage.RecordsRead {
 		readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(params.AgentConfig))
-		ledger.Boundary(state.readJournal(readCtx))
-		cancel()
-	}
+		defer cancel()
+		return state.readJournal(readCtx)
+	})
 
 	hooks := agentcore.ForkPerTurnHooks{
 		Tools:         tools,
@@ -496,17 +486,16 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
 
-	// The adapter sets no TurnEnv hook, so a turn runs with the host
-	// environment and a nil env reads exactly that.
 	hooks.PullWindows = usage.NewPuller(quota.Source, agentcore.AuxiliaryTimeout(params.AgentConfig), params.CredentialVerification, copilotPull(target)).Pull
 	hooks.RefusalWindowReset = func() bool { return state.turnRefusal != nil && state.turnRefusal.QuotaWindow }
 
 	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 
 	return domain.Session{
-		ID:            copilotSessionID,
-		Internal:      state,
-		NoToolChannel: tools.NoToolChannel(),
+		ID:             copilotSessionID,
+		Internal:       state,
+		NoToolChannel:  tools.NoToolChannel(),
+		CarriedHistory: start.CarriedHistory(),
 	}, nil
 }
 
@@ -522,25 +511,28 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		return domain.TurnResult{}, fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
 
-	// state.usage is run-cumulative and deliberately not reset.
-	state.inFlight = agentcore.NewToolTracker()
-	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
-	state.turnCompletionSeen = false
-	state.turnCompletionSuccess = false
-	state.turnCompletionSummary = ""
-	state.turnErrorMessage = ""
-	state.turnRefusal = nil
-	state.turnContinuations = 0
-	state.turnResultSeen = false
-	state.turnReading = nil
-	state.turnReplied = false
-	state.turnAborted = false
-
+	state.resetTurn()
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }
 
-// StopSession terminates a running Copilot CLI subprocess gracefully by
-// delegating to the session's [agentcore.ForkPerTurnSession].
+func (s *sessionState) resetTurn() {
+	s.inFlight = agentcore.NewToolTracker()
+	s.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
+	s.turnCompletionSeen = false
+	s.turnCompletionSuccess = false
+	s.turnCompletionSummary = ""
+	s.turnErrorMessage = ""
+	s.turnRefusal = nil
+	s.turnContinuations = 0
+	s.turnResultSeen = false
+	s.turnReading = nil
+	s.turnReplied = false
+	s.turnAborted = false
+}
+
+// StopSession terminates the session's running Copilot CLI subprocess and,
+// for a credential verification session, deletes the session the run
+// created.
 func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {

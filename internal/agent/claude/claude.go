@@ -7,6 +7,7 @@
 package claude
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -85,18 +86,11 @@ func init() {
 	})
 }
 
-// Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*ClaudeCodeAdapter)(nil)
 
-// ansiEscapeRE matches VT100/ANSI CSI SGR escape sequences emitted by CLI
-// tools for color and formatting (e.g. \x1b[31m, \x1b[0m). Compiled once at
-// program startup; applied inside stripClaudeMarkup.
+// ansiEscapeRE matches the ANSI color and formatting sequences CLI tools
+// write into their output.
 var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-// ClaudeCodeAdapter satisfies [domain.AgentAdapter] by managing Claude
-// Code CLI subprocesses. One adapter instance serves all concurrent
-// sessions; per-session state is held in [sessionState] via the
-// [domain.Session] Internal field.
 
 // syntheticModel is the model Claude Code stamps on a message it writes
 // itself, such as an API error or an interruption notice. It names no model,
@@ -105,11 +99,12 @@ const syntheticModel = "<synthetic>"
 
 const authenticationFailedError = "authentication_failed"
 
+// ClaudeCodeAdapter implements [domain.AgentAdapter] for the Claude Code CLI.
+// One instance serves all concurrent sessions.
 type ClaudeCodeAdapter struct{}
 
-// sessionState is adapter-internal state stored in [domain.Session]
-// Internal. It tracks the Claude Code session ID and per-turn scan
-// state across turns.
+// sessionState is the adapter's per-session state, held in
+// [domain.Session] Internal.
 type sessionState struct {
 	target          agentcore.LaunchTarget
 	claudeSessionID string
@@ -125,11 +120,8 @@ type sessionState struct {
 
 	reducedVerificationContext bool
 
-	// forkSession owns the subprocess lifecycle for this session.
 	forkSession *agentcore.ForkPerTurnSession
-
-	// ledger counts the session's spend from the stream and the journal.
-	ledger *usage.Ledger
+	ledger      *usage.Ledger
 
 	// journalDir is the journal's project directory name: the working
 	// directory the runtime reports, or the workspace path before it has.
@@ -138,19 +130,15 @@ type sessionState struct {
 	// subagents holds the task ids the stream named, in first-seen order.
 	subagents []string
 
-	// acc holds the session's run-cumulative token usage. Constructed
-	// once in StartSession and never reset between turns.
+	// acc holds the run-cumulative token usage; it outlives every turn.
 	acc *agentcore.RunUsage
 
 	// usageMeasured reports whether a turn of this session has settled a
 	// figure. A streamed request does not set it: its output count is the
 	// request's opening count, so a turn that ends unsettled is unknown.
-	// Monotone: set true once and never cleared.
 	usageMeasured bool
 
-	// Per-turn scan state owned by the ParseLine and OnFinalize hook
-	// closures. Reset at the top of each RunTurn call before delegating
-	// to forkSession.
+	// The fields below hold one turn's scan state; resetTurn clears them.
 	turnReplied      bool
 	turnMembers      []json.RawMessage
 	apiCallStart     time.Time
@@ -158,29 +146,35 @@ type sessionState struct {
 	inFlight         *agentcore.ToolTracker
 	work             *agentcore.WorkObserver
 
-	// humanInputEnds and humanInputDetail record a recognized request that
-	// only a person could answer, observed in ParseLine on a
-	// system/permission_denied event whose [agentcore.RefusalPosture] read
-	// EndAttempt true. OnFinalize applies the consequence, ahead of its
-	// normal disposition logic, because ParseLine runs while the
-	// subprocess is still active and cannot itself call
-	// [agentcore.FinalizeTurn].
+	// ParseLine records a request only a person could answer and OnFinalize
+	// ends the attempt on it, because ParseLine runs while the subprocess
+	// is still live and cannot finalize the turn itself.
 	humanInputEnds   bool
 	humanInputDetail string
 
-	// authRefused records an assistant event reporting a refused login,
-	// observed in ParseLine and applied in OnFinalize to a failed result.
 	authRefused bool
 
-	// rateLimit is the latest rate_limit_event of the turn, observed in
-	// ParseLine and read in OnFinalize to tell a subscription refusal from
-	// an API-key 429.
+	// rateLimit is the turn's latest rate_limit_event; it tells a
+	// subscription refusal from an API-key 429.
 	rateLimit *rawRateLimitInfo
 
 	// effortReported records that the session has already logged the
 	// runtime's report of an unrecognized effort value. Touched only from
 	// the OnFinalize hook.
 	effortReported bool
+}
+
+func (s *sessionState) resetTurn() {
+	s.turnReplied = false
+	s.turnMembers = nil
+	s.apiCallStart = time.Time{}
+	s.emittedAPITiming = false
+	s.inFlight = agentcore.NewToolTracker()
+	s.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
+	s.humanInputEnds = false
+	s.humanInputDetail = ""
+	s.authRefused = false
+	s.rateLimit = nil
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -217,21 +211,16 @@ func NewClaudeCodeAdapter() (domain.AgentAdapter, error) {
 	return &ClaudeCodeAdapter{}, nil
 }
 
-// askUserQuestionTool is the built-in Claude Code tool name that carries a
-// genuine question to a person. A system/permission_denied event naming it
-// is a request for human input rather than a request for consent to act,
-// even though the runtime resolves both through the same denial mechanism.
+// askUserQuestionTool is the built-in tool through which the model asks a
+// person a question.
 const askUserQuestionTool = "AskUserQuestion"
 
-// detailAnswerToQuestion names, for the operator, the specific ask behind
-// a recognized request for human input, appended to
-// [agentcore.RefusalPosture]'s notice stem and to the turn's terminal
-// message.
+// detailAnswerToQuestion tells the operator what a recognized request for
+// human input asked for.
 const detailAnswerToQuestion = "an answer to a question"
 
-// StartSession parses the session's settings, validates the workspace path,
-// resolves the claude binary, and initializes per-session state. No
-// subprocess is spawned; that happens in [ClaudeCodeAdapter.RunTurn].
+// StartSession validates the settings and the workspace and resolves the
+// command. It spawns no subprocess; each [ClaudeCodeAdapter.RunTurn] does.
 func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	pt, fault := parsePassthroughConfig(params.Settings)
 	if fault != nil {
@@ -245,21 +234,22 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 		target.WithheldEnv = []string{effortEnvName}
 	}
 
-	isContinuation := false
-	sessionUUID := ""
-	if params.ResumeSessionID != "" {
-		sessionUUID = params.ResumeSessionID
-		isContinuation = true
-	} else {
-		uuid, uuidErr := agentcore.NewUUIDv4()
-		if uuidErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "could not generate a session id",
-				Err:     uuidErr,
-			}
-		}
-		sessionUUID = uuid
+	baseLogger := slog.Default().With(slog.String("component", "claude-adapter"))
+
+	// The project directory is named after the runtime's physical working
+	// directory, which a remote host's symlinks can make differ from the
+	// workspace path; a session id is unique across project directories.
+	journalOf := func(id string) agentcore.RuntimePath {
+		return journalFile("*", id+".jsonl")
+	}
+	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID,
+		agentcore.RuntimeFileProbe(target, agentcore.ReadTimeout(params.AgentConfig), journalOf), baseLogger)
+	if startErr != nil {
+		return domain.Session{}, startErr
+	}
+	sessionUUID, idErr := start.AssignedID()
+	if idErr != nil {
+		return domain.Session{}, idErr
 	}
 
 	ledger, ledgerErr := usage.NewLedger(usageSources.Live, usageSources.Records)
@@ -270,8 +260,6 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 			Err:     ledgerErr,
 		}
 	}
-
-	baseLogger := slog.Default().With(slog.String("component", "claude-adapter"))
 
 	tools, toolsErr := agentcore.ResolveToolDelivery(ctx, params, target, registry.MCPDialectMCPServersJSONAlwaysLoad, baseLogger)
 	if toolsErr != nil {
@@ -295,26 +283,24 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 	state := &sessionState{
 		target:                 target,
 		claudeSessionID:        sessionUUID,
-		isContinuation:         isContinuation,
+		isContinuation:         start.CarriedHistory(),
 		passthrough:            pt,
 		agentConfig:            params.AgentConfig,
 		baseLogger:             baseLogger,
 		mcpConfigPath:          mcpConfigPath,
 		credentialVerification: params.CredentialVerification,
 		ledger:                 ledger,
-		journalDir:             journalDir(target.WorkspacePath),
+		journalDir:             cmp.Or(heldJournalDir(start.Answer()), journalDir(target.WorkspacePath)),
 		acc:                    agentcore.NewRunUsage(),
 
 		reducedVerificationContext: params.ReducedVerificationContext(),
 	}
 
-	if isContinuation {
+	ledger.BeginSession(start.CarriedHistory(), func() usage.RecordsRead {
 		readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(params.AgentConfig))
-		ledger.Boundary(state.readJournal(readCtx))
-		cancel()
-	} else {
-		ledger.SessionCreated()
-	}
+		defer cancel()
+		return state.readJournal(readCtx)
+	})
 
 	hooks := agentcore.ForkPerTurnHooks{
 		Tools:         tools,
@@ -341,30 +327,11 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 						state.journalDir = journalDir(event.Cwd)
 					}
 					agentcore.EmitSessionStarted(emit, pid, state.claudeSessionID)
-					// The first API call is imminent. Start the monotonic timer.
 					state.apiCallStart = time.Now()
 				case "api_retry":
 					agentcore.EmitNotification(emit, formatAPIRetry(event))
 				case "permission_denied":
-					// The runtime resolved this request on its own: --dangerously-
-					// skip-permissions (or a validated bypassPermissions mode)
-					// exposes no reply channel, so replyChannel is false on every
-					// row this event reads. AskUserQuestion is the one built-in
-					// tool that carries a genuine question rather than a request
-					// for consent to act; every other tool name is a permission
-					// request.
-					class := agentcore.ClassPermission
-					detail := ""
-					if event.ToolName == askUserQuestionTool {
-						class = agentcore.ClassHumanInput
-						detail = detailAnswerToQuestion
-					}
-					posture := agentcore.DecideHumanRequest(class, false, agentcore.AnswerRuntimeRefused)
-					if posture.EndAttempt {
-						state.humanInputEnds = true
-						state.humanInputDetail = detail
-					}
-					agentcore.EmitNotification(emit, posture.NoticeWithDetail(detail))
+					state.observePermissionDenied(event.ToolName, emit)
 				case "task_started", "task_progress", "task_notification":
 					// A sub-agent task event proves the model served this turn
 					// output; its usage figure is a context size, not spend.
@@ -384,56 +351,17 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 				if event.ErrorField == authenticationFailedError {
 					state.authRefused = true
 				}
-				if len(event.Message) > 0 {
-					var meta rawAssistantMessageMeta
-					if err := json.Unmarshal(event.Message, &meta); err == nil {
-						if meta.Model != "" && meta.Model != syntheticModel {
-							spend.MarkModelReached()
-						}
-						if reading, ok := requestReading(meta); ok {
-							provisional, isNew := state.ledger.ObserveRequest(reading)
-							snapshot := state.acc.SetTurnProvisional(provisional)
-
-							// Claude Code repeats one message id across every
-							// streamed event of the same model request; only the
-							// id's first sighting represents a new API request.
-							if isNew {
-								tokenEvt := domain.AgentEvent{
-									Type:         domain.EventTokenUsage,
-									Timestamp:    now,
-									Usage:        snapshot,
-									UsageByModel: state.acc.ByModel(),
-									Model:        reading.Model,
-								}
-								if !state.apiCallStart.IsZero() {
-									dur := time.Since(state.apiCallStart).Milliseconds()
-									if dur <= 0 {
-										dur = 1 // clamp so the orchestrator accumulates this measurement
-									}
-									tokenEvt.APIDurationMS = dur
-									state.apiCallStart = time.Time{}
-									state.emittedAPITiming = true
-								}
-								emit(tokenEvt)
-							}
-						}
-					}
+				state.observeAssistantMessage(event.Message, now, emit, spend)
+				if slices.ContainsFunc(event.contentBlocks(), isAssistantText) {
+					state.work.ObserveAssistantOutput()
 				}
-				for _, block := range event.contentBlocks() {
-					if block.Type == "text" && block.Text != "" {
-						state.work.ObserveAssistantOutput()
-						break
-					}
-				}
-				// ToolTracker.Begin stores time.Now() internally, so no separate
-				// monotonic timestamp is needed before calling processToolBlocks.
 				processToolBlocks(event.contentBlocks(), state.inFlight, state.work, now, emit)
 				agentcore.EmitNotification(emit, summarizeAssistant(event))
 
 			case "user":
 				// Claude Code emits tool results as user-role messages.
 				processToolBlocks(event.contentBlocks(), state.inFlight, state.work, now, emit)
-				state.apiCallStart = time.Now() // next API call is imminent
+				state.apiCallStart = time.Now()
 
 			case "result":
 				captured := event
@@ -481,9 +409,8 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 				return result, agentErr
 			}
 
-			// A recognized request that only a person could answer, observed
-			// in ParseLine, overrides the turn's normal success/failure
-			// disposition regardless of how the subprocess exited.
+			// A request only a person could answer ends the attempt however the
+			// subprocess exited.
 			if state.humanInputEnds {
 				evidence := agentcore.HumanInputEvidence(state.humanInputDetail)
 				meta := agentcore.TurnMeta{
@@ -507,8 +434,7 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 
 			var turnAPIDuration int64
 			if lastResult != nil {
-				// Use turn-level duration_api_ms only when no per-request
-				// API timing was emitted, to avoid double-counting.
+				// Per-request timings already cover the turn's duration_api_ms.
 				if !state.emittedAPITiming {
 					turnAPIDuration = lastResult.DurationAPI
 				}
@@ -542,21 +468,20 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, params domain.Star
 
 			return finalize(ev, meta)
 		},
-		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
 	}
 
 	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 
 	return domain.Session{
-		ID:            sessionUUID,
-		Internal:      state,
-		NoToolChannel: tools.NoToolChannel(),
+		ID:             sessionUUID,
+		Internal:       state,
+		NoToolChannel:  tools.NoToolChannel(),
+		CarriedHistory: start.CarriedHistory(),
 	}, nil
 }
 
-// RunTurn executes one agent turn by delegating to the session's
-// [agentcore.ForkPerTurnSession]. Per-turn scan state is reset before
-// delegation so each turn starts with a fresh accumulator and clean state.
+// RunTurn runs one turn in a fresh subprocess. It panics when
+// params.OnEvent is nil.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
@@ -570,20 +495,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		}
 	}
 
-	// Reset per-turn scan state before delegation. state.acc, state.ledger,
-	// and state.subagents are constructed once in StartSession and carry the
-	// run's usage across turns, so they are not reset here.
-	state.turnReplied = false
-	state.turnMembers = nil
-	state.apiCallStart = time.Time{}
-	state.emittedAPITiming = false
-	state.inFlight = agentcore.NewToolTracker()
-	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
-	state.humanInputEnds = false
-	state.humanInputDetail = ""
-	state.authRefused = false
-	state.rateLimit = nil
-
+	state.resetTurn()
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }
 
@@ -610,8 +522,7 @@ func usageLimitOf(result *rawEvent, info *rawRateLimitInfo) *domain.UsageLimit {
 	return limit
 }
 
-// StopSession terminates a running Claude Code subprocess gracefully by
-// delegating to the session's [agentcore.ForkPerTurnSession].
+// StopSession gracefully terminates the session's running subprocess, if any.
 func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
@@ -623,19 +534,12 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 	return state.forkSession.Stop(ctx)
 }
 
-// maxToolErrorLen is the maximum byte budget for [domain.AgentEvent.Message]
-// when a tool_result block carries is_error: true. Output that exceeds this
-// limit is formatted as first-line-plus-tail: the first line of the error
-// output is preserved (typically an exit-code header), followed by the
-// omission marker "\n...\n", followed by the last bytes of the remaining
-// output, ensuring that CLI failure lines at the tail are always visible.
+// maxToolErrorLen is the byte budget of a failed tool call's event message.
 const maxToolErrorLen = 2048
 
-// toolResultText extracts a human-readable string from a tool_result
-// content block. It handles the two shapes emitted by Claude Code:
-// a plain JSON string and an array of typed content objects. Returns
-// an empty string when neither shape matches or when both Text and
-// Content are empty.
+// toolResultText returns the text of a tool_result block, whose content
+// Claude Code writes either as a JSON string or as an array of typed
+// objects, or "" when it carries none.
 func toolResultText(block rawContentBlock) string {
 	if block.Text != "" {
 		return block.Text
@@ -661,14 +565,8 @@ func toolResultText(block rawContentBlock) string {
 	return ""
 }
 
-// stripClaudeMarkup removes Claude Code-specific markup from a raw error
-// string before it reaches [domain.AgentEvent.Message]. First, if s is
-// wrapped in a <tool_use_error>…</tool_use_error> envelope (Claude Code's
-// internal error protocol), the outermost wrapper is stripped and the inner
-// content is kept; inner angle brackets are left intact. Then, ANSI SGR
-// escape sequences (e.g. \x1b[31m…\x1b[0m) are removed so that structured
-// log fields contain plain text that grep can match directly. If neither
-// condition applies the original string is returned unchanged.
+// stripClaudeMarkup removes the outer <tool_use_error> envelope and the ANSI
+// color codes from a tool error, so log fields hold text grep can match.
 func stripClaudeMarkup(s string) string {
 	s = strings.TrimSpace(s)
 	const open = "<tool_use_error>"
@@ -679,11 +577,8 @@ func stripClaudeMarkup(s string) string {
 	return ansiEscapeRE.ReplaceAllString(s, "")
 }
 
-// tailBytes returns the last n bytes of s aligned to a valid UTF-8 rune
-// boundary. If len(s) <= n, s is returned unchanged. When the n-byte suffix
-// begins mid-rune, start is advanced past the continuation bytes so the
-// result always starts on a rune boundary; the result may be up to 3 bytes
-// shorter than n in that case.
+// tailBytes returns at most the last n bytes of s, starting on a rune
+// boundary.
 func tailBytes(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -695,18 +590,9 @@ func tailBytes(s string, n int) string {
 	return s[start:]
 }
 
-// truncateToolError returns s within maxLen bytes, preserving the most useful
-// content for operator log inspection. When s fits in maxLen it is returned
-// unchanged. For longer strings the algorithm is first-line-plus-tail: the
-// first line of s (up to the first '\n') is kept as a header, for CLI tools
-// this is typically an exit-code line such as "Exit code 2". The omission
-// marker "\n...\n" separates the header from the tail, and the remaining byte
-// budget is filled by the last bytes of s after the first line, so that
-// failure lines at the tail (e.g. "FAIL pkg 0.5s") are always included.
-//
-// When no newline is present, or when the first line alone exceeds the budget,
-// tailBytes(s, maxLen) is returned instead. All truncation respects UTF-8 rune
-// boundaries.
+// truncateToolError fits s into maxLen bytes. It keeps the first line, where
+// CLI tools put the exit code, and the tail, where they put the failing lines,
+// and keeps only the tail when the first line alone does not fit.
 func truncateToolError(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -725,12 +611,9 @@ func truncateToolError(s string, maxLen int) string {
 	return firstLine + sep + tail
 }
 
-// processToolBlocks scans content blocks for tool_use and tool_result
-// entries. tool_use blocks are registered in inFlight; tool_result
-// blocks are correlated against inFlight and emitted as
-// [domain.EventToolResult] via onEvent. The wallTime parameter is the
-// wall-clock timestamp written into emitted events. work observes tool
-// activity at either block, because a requested call counts at any
+// processToolBlocks tracks each tool call from its tool_use block and emits
+// a [domain.EventToolResult] stamped wallTime at its tool_result block. Both
+// blocks count as tool activity, because a requested call is work at any
 // point in its life, not only at completion.
 func processToolBlocks(
 	blocks []rawContentBlock,
@@ -768,4 +651,68 @@ func processToolBlocks(
 			})
 		}
 	}
+}
+
+// observePermissionDenied handles a tool call the runtime refused on its own.
+// The launch flags leave the runtime no reply channel, so the request is
+// already refused; only AskUserQuestion asks a genuine question, every other
+// tool asks for consent to act.
+func (s *sessionState) observePermissionDenied(toolName string, emit func(domain.AgentEvent)) {
+	class := agentcore.ClassPermission
+	detail := ""
+	if toolName == askUserQuestionTool {
+		class = agentcore.ClassHumanInput
+		detail = detailAnswerToQuestion
+	}
+	posture := agentcore.DecideHumanRequest(class, false, agentcore.AnswerRuntimeRefused)
+	if posture.EndAttempt {
+		s.humanInputEnds = true
+		s.humanInputDetail = detail
+	}
+	agentcore.EmitNotification(emit, posture.NoticeWithDetail(detail))
+}
+
+// observeAssistantMessage records the model and the usage of an assistant
+// message and emits a token-usage event for each new model request.
+func (s *sessionState) observeAssistantMessage(message json.RawMessage, now time.Time, emit func(domain.AgentEvent), spend *agentcore.TurnSpend) {
+	if len(message) == 0 {
+		return
+	}
+	var meta rawAssistantMessageMeta
+	if json.Unmarshal(message, &meta) != nil {
+		return
+	}
+	if meta.Model != "" && meta.Model != syntheticModel {
+		spend.MarkModelReached()
+	}
+	reading, ok := requestReading(meta)
+	if !ok {
+		return
+	}
+	provisional, isNew := s.ledger.ObserveRequest(reading)
+	snapshot := s.acc.SetTurnProvisional(provisional)
+	// Claude Code repeats one message id on every streamed event of a
+	// request, so only the id's first sighting is a new request.
+	if !isNew {
+		return
+	}
+	tokenEvt := domain.AgentEvent{
+		Type:         domain.EventTokenUsage,
+		Timestamp:    now,
+		Usage:        snapshot,
+		UsageByModel: s.acc.ByModel(),
+		Model:        reading.Model,
+	}
+	if !s.apiCallStart.IsZero() {
+		// The orchestrator skips a zero duration, so a sub-millisecond call
+		// counts as one.
+		tokenEvt.APIDurationMS = max(time.Since(s.apiCallStart).Milliseconds(), 1)
+		s.apiCallStart = time.Time{}
+		s.emittedAPITiming = true
+	}
+	emit(tokenEvt)
+}
+
+func isAssistantText(block rawContentBlock) bool {
+	return block.Type == "text" && block.Text != ""
 }

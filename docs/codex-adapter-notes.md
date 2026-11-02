@@ -24,7 +24,7 @@ Everything downstream follows from the process outliving the turn. There is no p
 
 The handshake requests the experimental capability, but the adapter registers no client-side tools on thread start. Sortie's tools reach the agent through the MCP tool server described below.
 
-Resume is a soft path. When resuming a thread fails, the adapter logs a warning and starts a fresh thread rather than failing the session. That keeps a run alive at the cost of a real trap: a session that looks resumed may be a new thread with no history at all, and nothing downstream distinguishes the two. Check the log before concluding that the model forgot something.
+Resume is a soft path. When the app server answers `thread/resume` with an error response, or gives no answer within the read bound, the adapter starts a fresh thread rather than failing the session. That keeps a run alive at the cost of a real trap: a session that looks resumed may be a new thread with no history at all. The session reports that it carried no history, and the shared warning names the requested id and the verdict. A `thread/resume` that loses the app-server connection fails the start instead of starting a new thread.
 
 ## Turns, cancellation, and what an interrupt means
 

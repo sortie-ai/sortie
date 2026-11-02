@@ -22,7 +22,7 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 ## Session identity, and why turn one is different
 
-`StartSession` mints a v4 UUID for every new session before any turn runs and returns it as `domain.Session.ID`. The first turn passes `--session-id <uuid>`, and every later turn passes `--resume <uuid>`. A session handed back after a restart uses `--resume <uuid>` from its first turn.
+`StartSession` mints a v4 UUID for every session that does not continue an earlier one, before any turn runs, and returns it as `domain.Session.ID`. The first turn of such a session passes `--session-id <uuid>`, and every later turn passes `--resume <uuid>`. A resumed session whose journal is present continues under the requested ID and passes `--resume <uuid>` from its first turn.
 
 No launch ever passes `--continue`. That flag resumes the most recent session in the home directory, whichever directory created it, so it could continue another issue's conversation or a credential-verification session.
 
@@ -35,6 +35,8 @@ copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resum
 rm -r ~/.copilot/session-state/<uuid>
 copilot -p "Reply OK." --output-format json -s --no-ask-user --allow-all --resume <uuid>; echo "exit $?"
 ```
+
+Because the runtime fails a resume it cannot find, the adapter checks that `session-state/<uuid>/events.jsonl` is present before a resumed session's first turn, and starts a new session when it is absent: the first turn passes `--session-id` with a new UUID, never `--resume` and never the requested ID, and the shared warning logs `resume_verdict=replaced`. A lost SSH connection during the check fails the start instead, and the retry resumes the same session. The check finds the runtime's home the way the journal read does, so `COPILOT_HOME` belongs in the environment Sortie runs in, or on the remote host for an SSH launch. A value set only inside the agent command, such as a `COPILOT_HOME=...` prefix of an SSH remote command, is not seen, and every resume then starts a new session.
 
 The adapter opens the runtime's session-state tree only by a known ID, and the shared read validates that ID against a path-segment character set before any file opens or process starts. Both properties are security boundaries, not stylistic choices. The journal's location, the ID rule, and the read size and line caps live in `internal/agent/copilot/sessionstate`, which the protocol kind imports too.
 

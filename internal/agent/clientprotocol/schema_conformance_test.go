@@ -15,28 +15,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-// This file validates the generated wire types, the messages the
-// adapter itself writes (strict direction), and the messages the
-// adapter reads from captured fixtures (weak direction) against
-// the pinned schema artifact. It runs without executing the generator:
-// it reads wire_gen.go's own definition-to-Go-type mapping table rather
-// than restating it.
-
-// schemaAssetsDir is the directory holding the pinned schema artifact
-// and its provenance file, relative to this package's own directory.
 const schemaAssetsDir = "testdata/schema-v1.28.0"
 
-// assertProvenance asserts that every asset line PROVENANCE.txt records
-// (the form "<path> <byte-count> sha256:<hex>") matches the file it
-// names, both in byte count and in sha256, so a copy in the tree cannot
-// silently drift from the release it claims to be. It fails unless
-// exactly two asset lines were found and checked, matching the two
-// pinned assets this directory vendors.
+// assertProvenance checks each "<path> <byte-count> sha256:<hex>" line of
+// PROVENANCE.txt against the file it names, so a vendored copy cannot
+// drift from the release it claims to be.
 func assertProvenance(t *testing.T, dir string) {
 	t.Helper()
 
@@ -82,9 +71,6 @@ func assertProvenance(t *testing.T, dir string) {
 	}
 }
 
-// loadSchemaDefs reads and decodes the pinned schema artifact and
-// returns its top-level $defs object, the map every definition name in
-// wire_gen.go's wireTypeByDefinition table resolves through.
 func loadSchemaDefs(t *testing.T, dir string) map[string]any {
 	t.Helper()
 
@@ -105,20 +91,14 @@ func loadSchemaDefs(t *testing.T, dir string) map[string]any {
 	return defs
 }
 
-// definition looks up name in defs, reporting its presence.
 func definition(defs map[string]any, name string) (map[string]any, bool) {
 	d, ok := defs[name].(map[string]any)
 	return d, ok
 }
 
-// goTypeRegistry maps every Go type name wire_gen.go's
-// wireTypeByDefinition table names for a plain-object-form definition
-// to its reflect.Type, so the test can inspect that type's json tags.
-// Go has no way to resolve a type by name string at runtime other than
-// a literal reference, so this table is necessary scaffolding rather
-// than a restatement of the generator's own mapping: the mapping this
-// test consumes is wireTypeByDefinition itself, read directly from
-// wire_gen.go below.
+// goTypeRegistry exists because Go cannot resolve a type from its name at
+// runtime; the definition-to-type mapping itself is read from
+// wireTypeByDefinition.
 var goTypeRegistry = map[string]reflect.Type{
 	"agentAuthCapabilities":                    reflect.TypeFor[agentAuthCapabilities](),
 	"agentCapabilities":                        reflect.TypeFor[agentCapabilities](),
@@ -206,13 +186,9 @@ var goTypeRegistry = map[string]reflect.Type{
 	"usageUpdate":                              reflect.TypeFor[usageUpdate](),
 }
 
-// isPlainObjectForm reports whether def is a definition the generator
-// emits as a plain struct mirroring its own declared properties: type
-// "object" with a properties map, and neither a oneOf nor a discriminator
-// (which mark a union form instead). SessionConfigOption
-// is the one definition at the pin that declares both a base properties
-// map and a discriminator; it is excluded here because the generator
-// emits it as a tagged-remainder union struct, not a properties mirror.
+// isPlainObjectForm rejects a definition with a discriminator even when it
+// also declares properties: the generator emits that form (SessionConfigOption)
+// as a union struct, not a properties mirror.
 func isPlainObjectForm(def map[string]any) bool {
 	if t, _ := def["type"].(string); t != "object" {
 		return false
@@ -229,17 +205,12 @@ func isPlainObjectForm(def map[string]any) bool {
 	return true
 }
 
-// structFieldInfo is what assertStructMirrorsDefinition needs to know
-// about one generated struct field's JSON wire shape.
 type structFieldInfo struct {
 	isPointer    bool
 	hasOmitEmpty bool
 	isRawMessage bool
 }
 
-// structJSONFields indexes typ's fields by their declared JSON name.
-// It fails t if two fields declare the same name, which would make the
-// wire shape ambiguous.
 func structJSONFields(t *testing.T, typ reflect.Type) map[string]structFieldInfo {
 	t.Helper()
 
@@ -272,12 +243,9 @@ func structJSONFields(t *testing.T, typ reflect.Type) map[string]structFieldInfo
 	return out
 }
 
-// assertStructMirrorsDefinition compares a generated struct against the
-// definition it mirrors: every JSON name typ declares must exist among
-// def's own properties, every name in def's required list must be a
-// non-pointer, non-omitempty field on typ, and every other field must be
-// a pointer carrying omitempty, with _meta exempted into the
-// json.RawMessage form the generator emits it as.
+// assertStructMirrorsDefinition requires every JSON name of typ to be a
+// property of def, every required property to be a plain field, and every
+// optional one a pointer with omitempty; _meta is a json.RawMessage instead.
 func assertStructMirrorsDefinition(t *testing.T, defName, goTypeName string, def map[string]any, typ reflect.Type) {
 	t.Helper()
 
@@ -334,8 +302,6 @@ func assertStructMirrorsDefinition(t *testing.T, defName, goTypeName string, def
 	}
 }
 
-// assertSetsEqual fails t on any member present in one set and absent
-// from the other, naming label and the offending member.
 func assertSetsEqual(t *testing.T, label string, schemaSet, goSet map[string]bool) {
 	t.Helper()
 	for v := range schemaSet {
@@ -350,9 +316,8 @@ func assertSetsEqual(t *testing.T, label string, schemaSet, goSet map[string]boo
 	}
 }
 
-// assertPlainEnumMatches checks a closed value set in the plain form:
-// defName's oneOf members are each a string schema carrying its own
-// const, and that set of consts must equal goSet exactly.
+// assertPlainEnumMatches checks the form where each oneOf member carries
+// its own const.
 func assertPlainEnumMatches(t *testing.T, defs map[string]any, defName string, goSet map[string]bool) {
 	t.Helper()
 
@@ -383,10 +348,8 @@ func assertPlainEnumMatches(t *testing.T, defs map[string]any, defName string, g
 	assertSetsEqual(t, defName, schemaSet, goSet)
 }
 
-// assertTaggedEnumMatches checks a closed value set in the tagged form:
-// defName declares a discriminator named tagProperty,
-// and each of its oneOf members' const sits one level down, at
-// properties.<tagProperty>.const, not on the member itself.
+// assertTaggedEnumMatches checks the form where each oneOf member's const
+// sits at properties.<tagProperty>.const.
 func assertTaggedEnumMatches(t *testing.T, defs map[string]any, defName, tagProperty string, goSet map[string]bool) {
 	t.Helper()
 
@@ -426,13 +389,9 @@ func assertTaggedEnumMatches(t *testing.T, defs map[string]any, defName, tagProp
 	assertSetsEqual(t, defName, schemaSet, goSet)
 }
 
-// conformanceChecker validates a decoded JSON value against a schema
-// definition. In strict mode (the client's own written request
-// bodies) an undeclared property fails; in the weaker read-direction
-// mode (messages the client reads) an undeclared property is recorded
-// in undeclared and does not fail. A required property absent, a JSON
-// type disagreement, or a value outside a const-constrained set always
-// fails, in both modes.
+// conformanceChecker fails an undeclared property only in strict mode, for
+// what the client writes; for what it reads, the property is recorded in
+// undeclared so a newer runtime's additions do not fail the check.
 type conformanceChecker struct {
 	defs       map[string]any
 	strict     bool
@@ -444,10 +403,8 @@ func (c *conformanceChecker) fail(format string, args ...any) {
 	c.violations = append(c.violations, fmt.Sprintf(format, args...))
 }
 
-// check validates value against schema at path, resolving $ref and a
-// one-element allOf to the definition they name. A $ref or an allOf
-// this function cannot resolve fails rather than silently accepting
-// the value.
+// check fails on a $ref or allOf it cannot resolve rather than accepting
+// the value unchecked.
 func (c *conformanceChecker) check(schema map[string]any, value any, path string) {
 	if ref, hasRef := schema["$ref"]; hasRef {
 		refStr, ok := ref.(string)
@@ -540,17 +497,13 @@ func (c *conformanceChecker) check(schema map[string]any, value any, path string
 		}
 	default:
 		if !hasType {
-			// No type, const, oneOf, or discriminator: an
-			// intentionally unconstrained schema (rawInput,
-			// rawOutput at the pin), so any value is accepted.
+			// rawInput and rawOutput are deliberately unconstrained.
 			return
 		}
 		c.fail("%s: schema declares unhandled type %q", path, typ)
 	}
 }
 
-// checkObject validates value as an object against schema's own
-// properties and required list.
 func (c *conformanceChecker) checkObject(schema map[string]any, value any, path string) {
 	m, ok := value.(map[string]any)
 	if !ok {
@@ -581,8 +534,6 @@ func (c *conformanceChecker) checkObject(schema map[string]any, value any, path 
 	}
 }
 
-// checkArray validates each element of value against schema's items
-// schema.
 func (c *conformanceChecker) checkArray(schema map[string]any, value any, path string) {
 	arr, ok := value.([]any)
 	if !ok {
@@ -598,8 +549,6 @@ func (c *conformanceChecker) checkArray(schema map[string]any, value any, path s
 	}
 }
 
-// checkEnum validates value as a string against oneOf's declared
-// consts, the plain closed-value-set form.
 func (c *conformanceChecker) checkEnum(oneOf []any, value any, path string) {
 	s, ok := value.(string)
 	if !ok {
@@ -618,11 +567,6 @@ func (c *conformanceChecker) checkEnum(oneOf []any, value any, path string) {
 	c.fail("%s = %q, not among the definition's declared const values", path, s)
 }
 
-// checkDiscriminated validates value as an object whose discriminator
-// property selects one oneOf member, then validates value against that
-// member merged with the definition it references through allOf. A
-// discriminator value matching no member fails, since it is a value
-// outside the definition's own const-constrained set.
 func (c *conformanceChecker) checkDiscriminated(schema map[string]any, disc map[string]any, value any, path string) {
 	propName, _ := disc["propertyName"].(string)
 	m, ok := value.(map[string]any)
@@ -650,10 +594,6 @@ func (c *conformanceChecker) checkDiscriminated(schema map[string]any, disc map[
 	c.fail("%s: %s = %q is not among the definition's declared discriminator values", path, propName, tagVal)
 }
 
-// mergeMember merges a discriminated union member's own properties and
-// required list with those of the definition its allOf names, so the
-// merged schema is one checkObject can validate the full variant
-// against in one pass.
 func (c *conformanceChecker) mergeMember(member map[string]any) map[string]any {
 	props := map[string]any{}
 	var required []any
@@ -690,9 +630,8 @@ func (c *conformanceChecker) mergeMember(member map[string]any) map[string]any {
 	return map[string]any{"properties": props, "required": required}
 }
 
-// schemaType reports schema's own "type" as a single string, taking
-// the first non-null entry when "type" is a list (the nullable-field
-// form). ok is false when no type is declared at all.
+// schemaType takes the first non-null entry of a list-form "type", the
+// nullable-field form.
 func schemaType(schema map[string]any) (typ string, ok bool) {
 	switch t := schema["type"].(type) {
 	case string:
@@ -707,8 +646,6 @@ func schemaType(schema map[string]any) (typ string, ok bool) {
 	return "", false
 }
 
-// schemaTypeListContains reports whether schema's own "type" names
-// want, whether "type" is a bare string or a list.
 func schemaTypeListContains(schema map[string]any, want string) bool {
 	switch t := schema["type"].(type) {
 	case string:
@@ -723,9 +660,6 @@ func schemaTypeListContains(schema map[string]any, want string) bool {
 	return false
 }
 
-// checkStrict validates value against defName in the strict direction:
-// every required property present, no undeclared property, every
-// const-constrained value inside its declared set.
 func checkStrict(defs map[string]any, defName string, value any) []string {
 	def, ok := definition(defs, defName)
 	if !ok {
@@ -736,10 +670,6 @@ func checkStrict(defs map[string]any, defName string, value any) []string {
 	return c.violations
 }
 
-// checkWeak validates value against defName in the weaker read
-// direction: a required property absent, a type disagreement, or a
-// value outside a const-constrained set fails; an undeclared property
-// is recorded in undeclared instead of failing.
 func checkWeak(defs map[string]any, defName string, value any) (violations, undeclared []string) {
 	def, ok := definition(defs, defName)
 	if !ok {
@@ -750,7 +680,6 @@ func checkWeak(defs map[string]any, defName string, value any) (violations, unde
 	return c.violations, c.undeclared
 }
 
-// containsSuffix reports whether any entry of list ends with suffix.
 func containsSuffix(list []string, suffix string) bool {
 	for _, s := range list {
 		if strings.HasSuffix(s, suffix) {
@@ -760,8 +689,6 @@ func containsSuffix(list []string, suffix string) bool {
 	return false
 }
 
-// requestParams decodes raw, one full JSON-RPC request line, and
-// returns the generic value its "params" member carries.
 func requestParams(t *testing.T, raw []byte) any {
 	t.Helper()
 
@@ -778,8 +705,6 @@ func requestParams(t *testing.T, raw []byte) any {
 	return params
 }
 
-// responseResult decodes raw, one full JSON-RPC response line, and
-// returns the generic value its "result" member carries.
 func responseResult(t *testing.T, raw []byte) any {
 	t.Helper()
 
@@ -796,8 +721,16 @@ func responseResult(t *testing.T, raw []byte) any {
 	return result
 }
 
-// nextRequestLine reads the next line out, asserting it names
-// wantMethod, and returns its raw bytes and id.
+func probeAsync(t *testing.T, probe agentcore.ResumeProbe[json.RawMessage]) <-chan continuationSignal {
+	t.Helper()
+	ch := make(chan continuationSignal, 1)
+	go func() {
+		signal, _ := probe.ProbeResume(t.Context(), "prior-session")
+		ch <- signal
+	}()
+	return ch
+}
+
 func nextRequestLine(t *testing.T, out *outboundReader, wantMethod string) (raw []byte, id json.RawMessage) {
 	t.Helper()
 
@@ -812,10 +745,6 @@ func nextRequestLine(t *testing.T, out *outboundReader, wantMethod string) (raw 
 	return raw, hdr.ID
 }
 
-// TestSchemaConformance validates the generated types against the
-// pinned artifact without executing the generator, validates the
-// adapter's own written request bodies against it strictly, and
-// validates captured fixtures against it in the weaker read direction.
 func TestSchemaConformance(t *testing.T) {
 	dir := schemaAssetsDir
 	assertProvenance(t, dir)
@@ -957,34 +886,22 @@ func TestSchemaConformance(t *testing.T) {
 
 		loadState, loadOutPr, loadInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 		loadOut := newOutboundReader(loadOutPr)
-		loadCtx, cancelLoad := context.WithCancel(context.Background())
-		t.Cleanup(cancelLoad)
-		loadOutcomeCh := make(chan resolveSessionOutcome, 1)
-		go func() {
-			sessionID, _, _, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
-			loadOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
-		}()
+		loadOutcomeCh := probeAsync(t, continuationProbe(loadState, capsAdvertisingLoad(), "", servers))
 		loadProbeID := loadOut.awaitMethod(t, negativeControlMethod)
 		respondErrorLine(t, loadInPw, loadProbeID, jsonrpc.MethodNotFoundCode, "method not found")
 		loadRaw, loadReqID := nextRequestLine(t, loadOut, methodSessionLoad)
 		sendLine(t, loadInPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
 		respondLine(t, loadInPw, loadReqID, loadSessionResponse{})
-		waittest.Receive(t, loadOutcomeCh, "resolveSession() outcome")
+		waittest.Receive(t, loadOutcomeCh, "continuation probe")
 
 		resumeState, resumeOutPr, resumeInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 		resumeOut := newOutboundReader(resumeOutPr)
-		resumeCtx, cancelResume := context.WithCancel(context.Background())
-		t.Cleanup(cancelResume)
-		resumeOutcomeCh := make(chan resolveSessionOutcome, 1)
-		go func() {
-			sessionID, _, _, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
-			resumeOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
-		}()
+		resumeOutcomeCh := probeAsync(t, continuationProbe(resumeState, capsAdvertisingResume(), "", servers))
 		resumeProbeID := resumeOut.awaitMethod(t, negativeControlMethod)
 		respondErrorLine(t, resumeInPw, resumeProbeID, jsonrpc.MethodNotFoundCode, "method not found")
 		resumeRaw, resumeReqID := nextRequestLine(t, resumeOut, methodSessionResume)
 		respondLine(t, resumeInPw, resumeReqID, resumeSessionResponse{})
-		waittest.Receive(t, resumeOutcomeCh, "resolveSession() outcome")
+		waittest.Receive(t, resumeOutcomeCh, "continuation probe")
 
 		closeState, closeOutPr, closeInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 		closeOut := newOutboundReader(closeOutPr)

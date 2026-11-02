@@ -3,6 +3,7 @@ package clientprotocol
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -17,10 +18,7 @@ import (
 // assumed apart.
 const negativeControlMethod = "_sortie.dev/probe/unimplemented"
 
-// continuationMethod is the route resolveSession chooses from the
-// handshake's advertised capabilities, in fixed order: session/load
-// when advertised, otherwise session/resume when advertised, otherwise
-// no continuation method at all.
+// continuationMethod is the route continuationProbe takes to continue a session.
 type continuationMethod uint8
 
 const (
@@ -29,7 +27,8 @@ const (
 	continuationResume
 )
 
-// chooseContinuationMethod picks the continuation route caps allows.
+// chooseContinuationMethod picks the continuation route caps allows, preferring
+// session/load over session/resume.
 func chooseContinuationMethod(caps agentCapabilities) continuationMethod {
 	if caps.LoadSession != nil && *caps.LoadSession {
 		return continuationLoad
@@ -72,66 +71,42 @@ func sendNegativeControl(ctx context.Context, state *sessionState) (negativeCont
 	return negativeControlVerdict{}, nil
 }
 
-// resolveSession creates or continues the session: session/new alone
-// when resumeID is empty or the handshake advertised no continuation
-// method, otherwise the advertised route, confirmed against the
-// negative control and, for a load, against observed replay, falling
-// back to session/new within this same call whenever continuation is
-// not confirmed. It returns the identifier of the session the agent
-// actually holds, which is the loaded identifier only when the load
-// route was confirmed, whether session/new created it, and the raw
-// result of the call that opened the session.
-func resolveSession(ctx context.Context, state *sessionState, resumeID string, caps agentCapabilities, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
-	if resumeID == "" {
-		return createNewSession(ctx, state, cwd, servers)
-	}
+// continuationSignal is the continuation probe's answer: the raw result of the
+// call that continued the session, when it did.
+type continuationSignal = agentcore.ResumeSignal[json.RawMessage]
 
-	method := chooseContinuationMethod(caps)
-	if method == continuationNone {
-		return createNewSession(ctx, state, cwd, servers)
-	}
-
-	control, agentErr := sendNegativeControl(ctx, state)
-	if agentErr != nil {
-		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, nil, agentErr
+// continuationProbe returns the probe of the continuation route caps
+// advertises. Only a confirmed call is [agentcore.ResumeCarried]; a call that
+// fails other than by timeout fails the start, as any other handshake call does.
+func continuationProbe(state *sessionState, caps agentCapabilities, cwd string, servers []mcpServer) agentcore.ResumeProbe[json.RawMessage] {
+	return agentcore.ResumeProbeFunc[json.RawMessage](func(ctx context.Context, resumeID string) (continuationSignal, *domain.AgentError) {
+		method := chooseContinuationMethod(caps)
+		if method == continuationNone {
+			return continuationSignal{Verdict: agentcore.ResumeReplaced}, nil
 		}
-		state.logger.Warn("continuation negative control timed out", slog.String("method", negativeControlMethod))
-		return unconfirmedFallback(ctx, state, cwd, servers)
-	}
 
-	switch method {
-	case continuationLoad:
-		return resolveLoad(ctx, state, resumeID, cwd, servers, control)
-	case continuationResume:
-		return resolveResume(ctx, state, resumeID, cwd, servers, control)
-	default:
-		return createNewSession(ctx, state, cwd, servers)
-	}
+		control, agentErr := sendNegativeControl(ctx, state)
+		if agentErr != nil {
+			return failedContinuationCall(state, agentErr, negativeControlMethod)
+		}
+
+		if method == continuationLoad {
+			return probeLoad(ctx, state, resumeID, cwd, servers, control)
+		}
+		return probeResume(ctx, state, resumeID, cwd, servers, control)
+	})
 }
 
-// resolveLoad attempts session/load for resumeID. A response carrying
-// an error lowers sessionContinuation and falls back at once. A
-// successful response is not enough on its own: the pump must observe
-// at least one chunk replayed for resumeID, before the response
-// returns or within the connection's own read timeout after it, or the
-// entry is lowered and this falls back the same way. A call that times
-// out waiting for any response at all is treated the same as one that
-// answered with an error: the capability is not confirmed, not the
-// run.
-func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, json.RawMessage, *domain.AgentError) {
-	if createdAt, known := state.origins.createdAt(cwd, resumeID); known {
-		if wait := loadDeferral(createdAt, state.origins.clock()); wait > 0 {
-			state.logger.Debug("session load deferred past the session's creation minute",
-				slog.String("session_id", resumeID), slog.Int64("wait_ms", wait.Milliseconds()))
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return "", false, nil, &domain.AgentError{Kind: domain.ErrPortExit, Message: "context ended before the deferred session load reached the agent connection", Err: ctx.Err()}
-			}
-		}
+// probeLoad attempts session/load for resumeID. A response carrying an error
+// lowers sessionContinuation and replaces the session. A successful response
+// is not enough on its own: the pump must observe at least one chunk replayed
+// for resumeID, before the response returns or within the connection's own
+// read timeout after it, or the session is not confirmed. A call that times
+// out waiting for any response at all is treated as unconfirmed, not as a
+// failed run.
+func probeLoad(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (continuationSignal, *domain.AgentError) {
+	if err := awaitCreationMinuteEnd(ctx, state, cwd, resumeID); err != nil {
+		return continuationSignal{Cause: err}, nil
 	}
 
 	state.inbox.Put(pumpItem{control: &pumpControl{expectLoad: resumeID}})
@@ -142,15 +117,10 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 		Cwd: cwd, MCPServers: servers, SessionID: sessionId(resumeID),
 	})
 	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
-		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, nil, agentErr
-		}
-		state.logger.Warn("continuation call timed out", slog.String("method", methodSessionLoad))
-		return unconfirmedFallback(ctx, state, cwd, servers)
+		return failedContinuationCall(state, agentErr, methodSessionLoad)
 	}
 	if resp.Error != nil {
-		logContinuationFailure(state, methodSessionLoad, resp.Error.Code, control)
-		return unconfirmedFallback(ctx, state, cwd, servers)
+		return rejectedContinuationCall(state, methodSessionLoad, resp.Error.Code, control)
 	}
 
 	reply := make(chan bool, 1)
@@ -161,19 +131,42 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 	select {
 	case confirmed := <-reply:
 		if confirmed {
-			return resumeID, false, resp.Result, nil
+			return continuationSignal{Verdict: agentcore.ResumeCarried, Answer: resp.Result}, nil
 		}
-		return createNewSession(ctx, state, cwd, servers)
+		return continuationSignal{Cause: fmt.Errorf("%s replayed no history", methodSessionLoad)}, nil
 	case <-timer.C:
-		return unconfirmedFallback(ctx, state, cwd, servers)
+		lowerSessionContinuation(state)
+		return continuationSignal{Cause: fmt.Errorf("%s replayed no history within the read timeout", methodSessionLoad)}, nil
 	}
 }
 
-// resolveResume attempts session/resume for resumeID. No replay is
-// expected: a successful response alone confirms it. A response
-// carrying an error, or a timeout waiting for any response at all,
-// lowers sessionContinuation and falls back.
-func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, bool, json.RawMessage, *domain.AgentError) {
+// awaitCreationMinuteEnd waits until the UTC minute this adapter created
+// resumeID in has ended, and returns ctx's error if ctx ends first.
+func awaitCreationMinuteEnd(ctx context.Context, state *sessionState, cwd, resumeID string) error {
+	createdAt, known := state.origins.createdAt(cwd, resumeID)
+	if !known {
+		return nil
+	}
+	wait := loadDeferral(createdAt, state.origins.clock())
+	if wait <= 0 {
+		return nil
+	}
+	state.logger.Debug("session load deferred past the session's creation minute",
+		slog.String("session_id", resumeID), slog.Int64("wait_ms", wait.Milliseconds()))
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// probeResume attempts session/resume for resumeID. No replay is expected: a
+// successful response alone confirms it. A response carrying an error, or a
+// timeout waiting for any response at all, lowers sessionContinuation.
+func probeResume(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (continuationSignal, *domain.AgentError) {
 	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
 
@@ -185,57 +178,66 @@ func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd strin
 		Cwd: cwd, MCPServers: wireServers, SessionID: sessionId(resumeID),
 	})
 	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
-		if agentErr.Kind != domain.ErrResponseTimeout {
-			return "", false, nil, agentErr
-		}
-		state.logger.Warn("continuation call timed out", slog.String("method", methodSessionResume))
-		return unconfirmedFallback(ctx, state, cwd, servers)
+		return failedContinuationCall(state, agentErr, methodSessionResume)
 	}
 	if resp.Error != nil {
-		logContinuationFailure(state, methodSessionResume, resp.Error.Code, control)
-		return unconfirmedFallback(ctx, state, cwd, servers)
+		return rejectedContinuationCall(state, methodSessionResume, resp.Error.Code, control)
 	}
-	return resumeID, false, resp.Result, nil
+	return continuationSignal{Verdict: agentcore.ResumeCarried, Answer: resp.Result}, nil
 }
 
-// unconfirmedFallback lowers sessionContinuation through the pump's
-// own mutation path and creates a fresh session with session/new. It
-// is the outcome required whenever a continuation call, or the
-// negative control that precedes it, does not confirm the entry: an
-// explicit error response or a timeout waiting for one. The fallback
-// itself never fails the run on its own account.
-func unconfirmedFallback(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
+// failedContinuationCall maps a continuation call that failed to the probe's
+// answer. A timeout lowers sessionContinuation and leaves the verdict unknown.
+// Any other failure ends the start with the early-exit report the call
+// observed, else the call's own error.
+func failedContinuationCall(state *sessionState, agentErr *domain.AgentError, method string) (continuationSignal, *domain.AgentError) {
+	if agentErr.Kind != domain.ErrResponseTimeout {
+		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
+			return continuationSignal{}, report
+		}
+		return continuationSignal{}, agentErr
+	}
+	state.logger.Debug("continuation call timed out", slog.String("method", method))
+	lowerSessionContinuation(state)
+	return continuationSignal{Cause: fmt.Errorf("%s timed out", method)}, nil
+}
+
+// rejectedContinuationCall maps an error response to a continuation call. An
+// error code matching the negative control's own establishes the method as
+// genuinely unimplemented; any other code is a real failure of that call.
+// Neither distinction changes the outcome: both lower sessionContinuation and
+// replace the session.
+func rejectedContinuationCall(state *sessionState, method string, code int, control negativeControlVerdict) (continuationSignal, *domain.AgentError) {
+	if control.matches(code) {
+		state.logger.Debug("continuation method not implemented", slog.String("method", method))
+	} else {
+		state.logger.Debug("continuation call failed", slog.String("method", method), slog.Int("code", code))
+	}
+	lowerSessionContinuation(state)
+	return continuationSignal{
+		Verdict: agentcore.ResumeReplaced,
+		Cause:   fmt.Errorf("%s answered with error code %d", method, code),
+	}, nil
+}
+
+// lowerSessionContinuation lowers sessionContinuation through the pump's own
+// mutation path, the outcome required whenever a continuation call, or the
+// negative control that precedes it, does not confirm the entry.
+func lowerSessionContinuation(state *sessionState) {
 	state.inbox.Put(pumpItem{control: &pumpControl{query: &replayQuery{}}})
-	return createNewSession(ctx, state, cwd, servers)
 }
 
-// createNewSession creates a fresh session with session/new: the route
-// taken when no continuation is attempted, none is advertised, or the
-// one attempted is not confirmed. A failure here is reported exactly
-// as it would have been had continuation never been attempted; the
-// fallback itself never fails the run on its own account.
-func createNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, bool, json.RawMessage, *domain.AgentError) {
+// createNewSession creates a fresh session with session/new: the route taken
+// for every session that does not continue another. A failure here is reported
+// exactly as it would have been had continuation never been attempted.
+func createNewSession(ctx context.Context, state *sessionState, cwd string, servers []mcpServer) (string, json.RawMessage, *domain.AgentError) {
 	resp, raw, agentErr := doNewSession(ctx, state, cwd, servers)
 	if agentErr != nil {
-		return "", false, nil, agentErr
+		return "", nil, agentErr
 	}
 	// A verification session is never resumed.
 	if !state.credentialVerification {
 		state.origins.record(cwd, string(resp.SessionID))
 	}
-	return string(resp.SessionID), true, raw, nil
-}
-
-// logContinuationFailure records that a continuation call did not
-// confirm its capability. An error code matching the negative
-// control's own establishes the method as genuinely unimplemented; any
-// other code is a real failure of that call. Neither distinction
-// changes the outcome: both lower the capability entry and fall back
-// to a fresh session.
-func logContinuationFailure(state *sessionState, method string, code int, control negativeControlVerdict) {
-	if control.matches(code) {
-		state.logger.Debug("continuation method not implemented", slog.String("method", method))
-		return
-	}
-	state.logger.Warn("continuation call failed", slog.String("method", method), slog.Int("code", code))
+	return string(resp.SessionID), raw, nil
 }

@@ -16,18 +16,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 )
 
-// errConnectionLost is the sentinel a startup handshake step's returned
-// error carries, recoverable with errors.Is, when the app-server
-// connection ended without answering: a Call or Notify failure that is
-// neither a cancelled nor an elapsed context, or the login wait seeing
-// the inbox close or a scanner error.
+// errConnectionLost marks a startup handshake error, for errors.Is, when
+// the app-server connection ended without answering.
 var errConnectionLost = errors.New("codex: connection lost during startup")
 
-// connectionLossErr wraps a handshake step's own error so errors.Is
-// recognizes errConnectionLost while Error() renders exactly the
-// wrapped error's own text: a caller that falls through to today's
-// transport message, because the runtime stayed alive past the
-// observation grace, must see it unchanged.
+// connectionLossErr renders exactly the wrapped error's text: when the
+// runtime outlives the early-exit observation, the caller reports that
+// text unchanged.
 type connectionLossErr struct {
 	err error
 }
@@ -37,8 +32,7 @@ func (e *connectionLossErr) Unwrap() error        { return e.err }
 func (e *connectionLossErr) Is(target error) bool { return target == errConnectionLost }
 
 // wrapConnectionLoss marks err as a connection loss unless it is a
-// cancelled or elapsed context, which are not: the caller already
-// knows why the request ended in either case.
+// cancelled or elapsed context, whose cause the caller already knows.
 func wrapConnectionLoss(err error) error {
 	if err == nil {
 		return nil
@@ -92,10 +86,9 @@ func initializeHandshake(ctx context.Context, state *sessionState) error {
 	return nil
 }
 
-// authenticateIfNeeded checks the app-server auth state and performs
-// API key login if needed. logger reports a message observed while
-// waiting for the login to complete; the thread id is not yet known at
-// this point in the handshake, so logger carries no session scope.
+// authenticateIfNeeded logs in with CODEX_API_KEY when the app-server
+// holds no account and the key is set. logger carries no session scope:
+// no thread exists yet.
 func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog.Logger) error {
 	readCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
@@ -112,10 +105,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 		return fmt.Errorf("account/read unmarshal: %w", err)
 	}
 
-	// Account is non-null when the app-server already has valid
-	// credentials. The JSON null literal unmarshals to a nil
-	// RawMessage.
-	if len(acct.Account) > 0 && string(acct.Account) != "null" {
+	if hasAccount(acct) {
 		return nil
 	}
 
@@ -140,8 +130,14 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 		}
 		return agentcore.CredentialRefusedError(text, nil)
 	}
+	return awaitLoginCompleted(ctx, state, logger)
+}
 
-	// Wait for account/login/completed notification.
+func hasAccount(acct accountResult) bool {
+	return len(acct.Account) > 0 && string(acct.Account) != "null"
+}
+
+func awaitLoginCompleted(ctx context.Context, state *sessionState, logger *slog.Logger) error {
 	deadline := time.After(agentcore.ReadTimeout(state.agentConfig))
 	for {
 		select {
@@ -236,12 +232,9 @@ func readConfiguredServerIDs(ctx context.Context, state *sessionState, logger *s
 	return slices.Sorted(maps.Keys(result.Config.MCPServers))
 }
 
-// startThread sends thread/start and waits for the thread/started
-// notification. Returns the thread ID, the effective model the response
-// reported, and the path it reported for the thread on disk; model and
-// path are empty when the response omitted them, which is never an
-// error. logger reports a message observed while waiting for that
-// notification, scoped to the thread id this call resolves.
+// startThread starts a thread and returns its id, plus the effective
+// model and on-disk path the response reported; an omitted model or
+// path is empty, never an error.
 func startThread(ctx context.Context, state *sessionState, pt passthroughConfig, logger *slog.Logger) (threadID string, model string, path string, err error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
@@ -292,43 +285,52 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	if threadID == "" {
 		return "", "", "", fmt.Errorf("thread/start returned empty thread ID")
 	}
-	threadLogger := logging.WithSession(logger, threadID)
+	if err := awaitThreadStarted(ctx, state, logging.WithSession(logger, threadID)); err != nil {
+		return "", "", "", err
+	}
+	return threadID, result.Model, result.path(), nil
+}
 
-	// Wait for thread/started notification.
+// awaitThreadStarted fails only when ctx ends: some app-server versions
+// never send thread/started, so the deadline and a closed stream accept
+// the thread without it.
+func awaitThreadStarted(ctx context.Context, state *sessionState, logger *slog.Logger) error {
 	deadline := time.After(agentcore.ReadTimeout(state.agentConfig))
 	for {
 		select {
 		case <-ctx.Done():
-			return "", "", "", ctx.Err()
+			return ctx.Err()
 		case <-deadline:
-			// Accept the thread ID even without the notification.
-			// Some app-server versions may not emit it.
-			return threadID, result.Model, result.path(), nil
+			return nil
 		case <-state.inbox.Ready():
 			msg, ok := state.inbox.Take()
 			if !ok {
-				return threadID, result.Model, result.path(), nil
+				return nil
 			}
 			if msg.Kind == jsonrpc.KindStreamEnd {
-				threadLogger.Debug("scanner error waiting for thread/started", slog.Any("error", msg.Err))
-				return threadID, result.Model, result.path(), nil
+				logger.Debug("scanner error waiting for thread/started", slog.Any("error", msg.Err))
+				return nil
 			}
 			if msg.Kind == jsonrpc.KindMalformed {
 				continue
 			}
 			if msg.Kind == jsonrpc.KindNotification && msg.Method == "thread/started" {
-				return threadID, result.Model, result.path(), nil
+				return nil
 			}
-			handleOutOfTurnMessage(state, msg, threadLogger)
+			handleOutOfTurnMessage(state, msg, logger)
 		}
 	}
 }
 
-// resumeThread sends thread/resume for an existing thread. It returns
-// the effective model and the thread's on-disk path the response
-// reported. A response whose result fails to unmarshal does not turn a
-// successful resume into a failure: it returns an empty model and path
-// and a nil error.
+// errResumeRejected marks resumeThread's error, for errors.Is, when the
+// app-server answered thread/resume with an error response.
+var errResumeRejected = errors.New("thread/resume error")
+
+// resumeThread resumes threadID and returns the effective model and
+// on-disk path the response reported, both empty when its result does
+// not decode: that does not fail a successful resume. An error response
+// wraps errResumeRejected, a lost connection errConnectionLost, and an
+// elapsed read bound context.DeadlineExceeded.
 func resumeThread(ctx context.Context, state *sessionState, threadID string) (model, path string, err error) {
 	callCtx, cancel := context.WithTimeout(ctx, agentcore.ReadTimeout(state.agentConfig))
 	defer cancel()
@@ -339,7 +341,7 @@ func resumeThread(ctx context.Context, state *sessionState, threadID string) (mo
 		return "", "", wrapConnectionLoss(fmt.Errorf("thread/resume: %w", callErr))
 	}
 	if resp.Error != nil {
-		return "", "", fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", "", fmt.Errorf("%w: code=%d message=%s", errResumeRejected, resp.Error.Code, resp.Error.Message)
 	}
 
 	var result threadResult
@@ -349,11 +351,9 @@ func resumeThread(ctx context.Context, state *sessionState, threadID string) (mo
 	return result.Model, result.path(), nil
 }
 
-// buildSandboxPolicy constructs the sandboxPolicy for turn/start.
-// writableRoots defaults to the workspace path and networkAccess
-// defaults to false. Operator overrides from TurnSandboxPolicy
-// (WORKFLOW.md turn_sandbox_policy) are merged on top and may
-// replace any key, including writableRoots and networkAccess.
+// buildSandboxPolicy returns turn/start's sandboxPolicy. The operator's
+// turn_sandbox_policy may replace any key, writableRoots and
+// networkAccess included.
 func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]any {
 	if state.credentialVerification {
 		return map[string]any{
@@ -380,10 +380,8 @@ func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]an
 	return policy
 }
 
-// normalizeSandbox maps user-friendly camelCase sandbox values from
-// WORKFLOW.md to the kebab-case wire format expected by the app-server
-// thread/start sandbox field. Values already in kebab-case are passed
-// through unchanged.
+// normalizeSandbox maps a camelCase WORKFLOW.md sandbox value to the
+// kebab-case thread/start expects; any other value passes unchanged.
 func normalizeSandbox(s string) string {
 	switch s {
 	case "workspaceWrite":
@@ -399,9 +397,8 @@ func normalizeSandbox(s string) string {
 	}
 }
 
-// denormalizeSandbox maps kebab-case sandbox values to the camelCase wire
-// format expected by the app-server turn/start sandboxPolicy.type field.
-// Values already in camelCase are passed through unchanged.
+// denormalizeSandbox maps a kebab-case sandbox value to the camelCase
+// turn/start sandboxPolicy.type expects; any other value passes unchanged.
 func denormalizeSandbox(s string) string {
 	switch s {
 	case "workspace-write":

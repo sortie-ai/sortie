@@ -137,8 +137,8 @@ type Binding struct {
 	ReportedModelPrefix string
 
 	// Spend opts the binding into the usage component's contract and names the
-	// provenance of each spend source its runtime declares; nil runs the
-	// assertions a kind ran before its accounting moved onto the component.
+	// provenance of each spend source its runtime declares; nil skips the
+	// scenarios and checks that contract adds.
 	Spend *SpendSources
 }
 
@@ -316,8 +316,9 @@ type CustomTurn struct {
 // credential outside its header, a refused call that does not reach the model
 // as one errored tool result, an interrupted turn or session stop that overruns
 // its bound or leaves a process behind, a resumed or fresh session that sends
-// the wrong history, or a credential-verification session that carries more
-// agent context than its declaration allows.
+// the wrong history, a session that misreports its carried history or keeps an
+// id its runtime does not hold, or a credential-verification session that
+// carries more agent context than its declaration allows.
 //
 // It sets environment variables for the rest of the test, so it must not be
 // called from a test that uses t.Parallel.
@@ -1008,24 +1009,28 @@ const (
 	roleOrigin  sessionRole = "origin"
 	roleControl sessionRole = "control"
 	roleResumed sessionRole = "resumed"
+	roleUnheld  sessionRole = "unheld"
 )
 
 type continuedTurn struct {
-	role      sessionRole
-	prompt    string // the marker the turn's prompt carries
-	answer    string // the marker the turn's scripted answer carries
-	result    domain.TurnResult
-	events    []domain.AgentEvent
-	exchanges []Exchange // everything the endpoint served to the turn's session until the turn returned
+	role             sessionRole
+	session          domain.Session
+	resumeID         string
+	promptMarker     string
+	answerMarker     string
+	result           domain.TurnResult
+	events           []domain.AgentEvent
+	sessionExchanges []Exchange
 }
 
 // The script entries of the continuation scenario that its checks single out.
-// The run order is the origin's two turns, the control's, then the resumed
-// session's.
+// The run order is the origin's two turns, the control's, the resumed
+// session's, then the unheld session's.
 const (
 	continuedEntry = 1
 	controlEntry   = 2
 	resumedEntry   = 3
+	unheldEntry    = 4
 )
 
 // continuation holds what every session of the continuation scenario shares.
@@ -1051,6 +1056,7 @@ var continuationUsage = [...]Usage{
 	{Prompt: 347, Candidates: 23, Thoughts: 9, CachedContent: 71, CacheWrite: 37},
 	{Prompt: 373, Candidates: 29, Thoughts: 11, CachedContent: 79, CacheWrite: 43},
 	{Prompt: 389, Candidates: 31, Thoughts: 6, CachedContent: 83, CacheWrite: 47},
+	{Prompt: 397, Candidates: 37, Thoughts: 12, CachedContent: 89, CacheWrite: 53},
 }
 
 func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
@@ -1059,12 +1065,12 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 	if remote != nil {
 		skipUnlessSSHVariant(t, b)
 	}
-	roles := []sessionRole{roleOrigin, roleOrigin, roleControl, roleResumed}
+	roles := []sessionRole{roleOrigin, roleOrigin, roleControl, roleResumed, roleUnheld}
 	turns := make([]continuedTurn, len(roles))
 	script := make([]Response, len(roles))
 	for i, role := range roles {
-		turns[i] = continuedTurn{role: role, prompt: "nonce-" + randomHex(t, 8), answer: "nonce-" + randomHex(t, 8)}
-		script[i] = answerResponse(b, "Noted "+turns[i].answer+".")
+		turns[i] = continuedTurn{role: role, promptMarker: "nonce-" + randomHex(t, 8), answerMarker: "nonce-" + randomHex(t, 8)}
+		script[i] = answerResponse(b, "Noted "+turns[i].answerMarker+".")
 		if b.Spend != nil {
 			script[i].Usage = continuationUsage[i]
 		}
@@ -1091,13 +1097,19 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 	originID := turns[continuedEntry].result.SessionID
 	_, controlEvents := c.drive(t, roleControl, "", turns[controlEntry:resumedEntry])
 	resumedFrom := len(c.server.Exchanges())
-	resumed, resumedEvents := c.drive(t, roleResumed, originID, turns[resumedEntry:])
+	resumed, resumedEvents := c.drive(t, roleResumed, originID, turns[resumedEntry:unheldEntry])
+	resumedTo := len(c.server.Exchanges())
+	unheldID, err := agentcore.NewUUIDv4()
+	if err != nil {
+		t.Fatalf("NewUUIDv4() error = %v", err)
+	}
+	_, unheldEvents := c.drive(t, roleUnheld, unheldID, turns[unheldEntry:])
 
 	run := Run{
 		Environment: Environment{Remote: remote != nil},
 		Session:     resumed,
 		Result:      turns[resumedEntry].result,
-		Events:      slices.Concat(originEvents, controlEvents, resumedEvents),
+		Events:      slices.Concat(originEvents, controlEvents, resumedEvents, unheldEvents),
 		Exchanges:   c.server.Exchanges(),
 		Settings:    b.Passthrough,
 	}
@@ -1114,7 +1126,7 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 					Environment: run.Environment,
 					Result:      turn.result,
 					Events:      turn.events,
-					Exchanges:   turn.exchanges,
+					Exchanges:   turn.sessionExchanges,
 					Settings:    b.Passthrough,
 				}, fmt.Sprintf("%s entry %d", turn.role, entry), agenttest.AssertLiveUsageCase)
 			})
@@ -1131,7 +1143,7 @@ func runContinuation(t *testing.T, b Binding, remote *remoteLaunch) {
 		if !resumedResult.UsageMeasured {
 			return
 		}
-		if want := served(run.Exchanges[resumedFrom:], turnAndAuxiliary, b); resumedResult.Usage != want {
+		if want := served(run.Exchanges[resumedFrom:resumedTo], turnAndAuxiliary, b); resumedResult.Usage != want {
 			t.Errorf("resumed turn Result.Usage = %+v, want %+v, the sum of every answer served to the resumed session", resumedResult.Usage, want)
 		}
 	})
@@ -1195,12 +1207,14 @@ func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, tu
 		// command, and one may leave a message opening with a slash or a question
 		// mark out of a loaded history.
 		result, runErr := c.adapter.RunTurn(ctx, session, domain.RunTurnParams{
-			Prompt:  "Note the code " + turns[i].prompt + " and reply with a short acknowledgment.",
+			Prompt:  "Note the code " + turns[i].promptMarker + " and reply with a short acknowledgment.",
 			OnEvent: events.collect,
 		})
+		turns[i].session = session
+		turns[i].resumeID = resumeID
 		turns[i].result = result
 		turns[i].events = events.snapshot()[before:]
-		turns[i].exchanges = c.server.Exchanges()[sessionStart:]
+		turns[i].sessionExchanges = c.server.Exchanges()[sessionStart:]
 		if runErr != nil || result.ExitReason != domain.EventTurnCompleted {
 			t.Fatalf("%s session turn %d: RunTurn() error = %v, ExitReason = %q, want nil and %q%s",
 				role, i+1, runErr, result.ExitReason, domain.EventTurnCompleted, exchangeLines(c.server.Exchanges()))
@@ -2394,9 +2408,8 @@ func checkFoldedOutcome(v *findings, run Run) {
 
 // checkExhaustedExchanges accepts more than one request beyond the script: a
 // runtime may resend a rejected request, such as once more without an
-// optional feature.
-// A folding runtime reports no endpoint failure, so folded skips only the
-// checks that the failure reached the caller.
+// optional feature. A folding runtime reports no endpoint failure, so folded
+// skips only the checks that the failure reached the caller.
 func checkExhaustedExchanges(v *findings, run Run, call Exchange, exhausted []Exchange, nonce string, failures []string, folded bool) {
 	if !folded {
 		checkEndpointFailureReported(v, run, exhausted[len(exhausted)-1].Answer.Text)
@@ -2557,7 +2570,7 @@ func reportedProcessIDs(run Run) []string {
 }
 
 // continuationViolations checks a continuation run whose turns[i] answered
-// script entry i, in run order: origin, origin, control, resumed.
+// script entry i, in run order: origin, origin, control, resumed, unheld.
 //
 // A non-nil spend leaves every turn's completeness to the provenance property,
 // which compares it with the completeness the binding expects.
@@ -2569,6 +2582,7 @@ func continuationViolations(turns []continuedTurn, resumed domain.Session, excha
 	v := &findings{property: "continuation"}
 
 	checkContinuationIdentifiers(v, turns, resumed)
+	checkCarriedHistory(v, turns)
 	for entry, turn := range turns {
 		ex, ok := turnExchangeOf(exchanges, entry)
 		if !ok {
@@ -2638,6 +2652,25 @@ func checkContinuationIdentifiers(v *findings, turns []continuedTurn, resumed do
 	}
 }
 
+func checkCarriedHistory(v *findings, turns []continuedTurn) {
+	for _, entry := range []int{0, controlEntry, resumedEntry, unheldEntry} {
+		turn := turns[entry]
+		if want := turn.role == roleResumed; turn.session.CarriedHistory != want {
+			v.add("%s session: Session.CarriedHistory = %t, want %t", turn.role, turn.session.CarriedHistory, want)
+		}
+	}
+
+	unheld := turns[unheldEntry]
+	if unheld.session.ID == unheld.resumeID {
+		v.add("%s session: Session.ID = %q, want an id other than the one it requested", roleUnheld, unheld.session.ID)
+	}
+	origin := turns[continuedEntry].result.SessionID
+	if got := unheld.result.SessionID; got == "" || got == unheld.resumeID || got == origin {
+		v.add("%s turn: Result.SessionID = %q, want a non-empty id other than the requested %q and the origin's %q",
+			roleUnheld, got, unheld.resumeID, origin)
+	}
+}
+
 type marker struct {
 	label string
 	text  string
@@ -2645,12 +2678,12 @@ type marker struct {
 
 // requestMarkers lists the origin markers the request answering entry must
 // carry and those it must not: the continued and the resumed request replay
-// the origin's earlier turns, and the control request sees none of them.
+// the origin's earlier turns, and the control and unheld requests see none of them.
 func requestMarkers(turns []continuedTurn, entry int) (wanted, forbidden []marker) {
 	switch entry {
 	case continuedEntry:
 		return originMarkers(turns[:continuedEntry]), nil
-	case controlEntry:
+	case controlEntry, unheldEntry:
 		return nil, originMarkers(turns[:controlEntry])
 	case resumedEntry:
 		return originMarkers(turns[:controlEntry]), nil
@@ -2662,8 +2695,8 @@ func originMarkers(turns []continuedTurn) []marker {
 	var markers []marker
 	for i, turn := range turns {
 		markers = append(markers,
-			marker{label: fmt.Sprintf("%s turn %d prompt marker", turn.role, i+1), text: turn.prompt},
-			marker{label: fmt.Sprintf("%s turn %d answer marker", turn.role, i+1), text: turn.answer})
+			marker{label: fmt.Sprintf("%s turn %d prompt marker", turn.role, i+1), text: turn.promptMarker},
+			marker{label: fmt.Sprintf("%s turn %d answer marker", turn.role, i+1), text: turn.answerMarker})
 	}
 	return markers
 }

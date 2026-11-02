@@ -1512,6 +1512,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					IssueIdentity:      issueIdentityOf(entry.Issue),
 					Trigger:            triggerError,
 					UsageLimitNotified: usageRefused,
+					SessionID:          workerResult.UnstartedResumeID,
 				}
 				if usageWaits {
 					retry.DelayMS = 0

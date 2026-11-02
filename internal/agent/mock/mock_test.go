@@ -257,7 +257,6 @@ func TestRunTurn_DefaultSuccess(t *testing.T) {
 		t.Errorf("Usage = %+v, want {100 50 150}", result.Usage)
 	}
 
-	// Verify event sequence: session_started, 3×notification, token_usage, turn_completed.
 	wantTypes := []domain.AgentEventType{
 		domain.EventSessionStarted,
 		domain.EventNotification,
@@ -275,25 +274,19 @@ func TestRunTurn_DefaultSuccess(t *testing.T) {
 		}
 	}
 
-	// Verify token_usage event carries correct usage.
 	tokenEvt := (*events)[4]
 	if tokenEvt.Usage.InputTokens != 100 || tokenEvt.Usage.OutputTokens != 50 || tokenEvt.Usage.TotalTokens != 150 {
 		t.Errorf("token event Usage = %+v, want {100 50 150}", tokenEvt.Usage)
 	}
 }
 
-// TestRunTurn_SecondTurnEmitsSessionStarted verifies that session_started
-// is emitted on every turn, not just the first. Real adapters (Claude Code)
-// spawn a fresh subprocess per turn and emit session_started at startup.
 func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
 	adapter, sess := mustStartMock(t, nil)
 
-	// First turn: consume.
 	adapter.RunTurn(context.Background(), sess, defaultParams()) //nolint:errcheck // test setup
 
-	// Second turn: collect events.
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -320,7 +313,6 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 
 	adapter, sess := mustStartMock(t, nil)
 
-	// Token usage is cumulative across turns.
 	wantUsage := []domain.TokenUsage{
 		{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
 		{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
@@ -740,7 +732,7 @@ func TestRunTurn_ContextCancellation(t *testing.T) {
 	events := collectEvents(&params)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	_, err := adapter.RunTurn(ctx, sess, params)
 	if !errors.Is(err, context.Canceled) {
@@ -769,7 +761,6 @@ func TestRunTurn_CustomEventsPerTurn(t *testing.T) {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	// With 0 notifications: session_started + token_usage + turn_completed = 3.
 	wantTypes := []domain.AgentEventType{
 		domain.EventSessionStarted,
 		domain.EventTokenUsage,
@@ -829,8 +820,6 @@ func TestStopSession(t *testing.T) {
 	}
 }
 
-// TestNewMockAdapter_ExtendedConfigKeys verifies that the new
-// cache_read_tokens_per_turn and model_name config keys are parsed.
 func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {
 	t.Parallel()
 
@@ -846,8 +835,6 @@ func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {
 	}
 }
 
-// TestRunTurn_ExtendedTokenFields verifies that token_usage events include
-// CacheReadTokens and Model, and that cumulative accumulation works.
 func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 	t.Parallel()
 
@@ -859,7 +846,6 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 		"events_per_turn":            0,
 	})
 
-	// Turn 1: cumulative cache_read = 200.
 	params1 := defaultParams()
 	events1 := collectEvents(&params1)
 	if _, err := adapter.RunTurn(context.Background(), sess, params1); err != nil {
@@ -883,7 +869,6 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 		t.Errorf("turn 1 Model = %q, want %q", tokenEv1.Model, "test-model")
 	}
 
-	// Turn 2: cumulative cache_read = 400.
 	params2 := defaultParams()
 	events2 := collectEvents(&params2)
 	if _, err := adapter.RunTurn(context.Background(), sess, params2); err != nil {
@@ -905,8 +890,6 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 	}
 }
 
-// TestNewMockAdapter_TimingConfig verifies parsing of api_duration_ms
-// and tool_calls configuration keys.
 func TestNewMockAdapter_TimingConfig(t *testing.T) {
 	t.Parallel()
 
@@ -931,8 +914,6 @@ func TestNewMockAdapter_TimingConfig(t *testing.T) {
 	}
 }
 
-// TestRunTurn_APIDurationMS_OnTokenUsage verifies that the token_usage
-// event carries APIDurationMS when api_duration_ms is configured.
 func TestRunTurn_APIDurationMS_OnTokenUsage(t *testing.T) {
 	t.Parallel()
 
@@ -957,8 +938,6 @@ func TestRunTurn_APIDurationMS_OnTokenUsage(t *testing.T) {
 	t.Error("no token_usage event found")
 }
 
-// TestRunTurn_APIDurationMS_ZeroByDefault verifies that APIDurationMS
-// is 0 on token_usage events when api_duration_ms is not configured.
 func TestRunTurn_APIDurationMS_ZeroByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -981,9 +960,6 @@ func TestRunTurn_APIDurationMS_ZeroByDefault(t *testing.T) {
 	t.Error("no token_usage event found")
 }
 
-// TestRunTurn_ToolCalls_EmitsToolResultEvents verifies that configured
-// tool_calls produce tool_result events with correct ToolName and
-// ToolDurationMS.
 func TestRunTurn_ToolCalls_EmitsToolResultEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1018,8 +994,6 @@ func TestRunTurn_ToolCalls_EmitsToolResultEvents(t *testing.T) {
 	}
 }
 
-// TestRunTurn_NoToolCalls_NoToolResultEvents verifies that no tool_result
-// events are emitted when tool_calls is not configured.
 func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1038,8 +1012,6 @@ func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
 	}
 }
 
-// TestRunTurn_ToolCalls_ErrorField verifies that the error field in
-// tool_calls config is parsed and emitted as ToolError on the event.
 func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
 	t.Parallel()
 
@@ -1074,11 +1046,7 @@ func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
 	}
 }
 
-// The verification flag belongs to the session, not the adapter: a
-// working session started after a verification session must not change
-// how the verification turn runs, and the verification turn consumes
-// no turn_outcomes entry.
-func TestRunTurn_CredentialVerification(t *testing.T) {
+func TestRunTurn_CredentialVerificationIsPerSessionAndConsumesNoOutcome(t *testing.T) {
 	t.Parallel()
 
 	settings := map[string]any{"turn_outcomes": []any{"failed"}}
@@ -1135,5 +1103,21 @@ func TestMockAdapter_CredentialVerificationConformance(t *testing.T) {
 			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work", Settings: map[string]any{"credential_error": "refused"}},
 			Want:    credentialtest.WantUnverified,
 		},
+	})
+}
+
+func TestSessionContinuity(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter()
+
+	agenttest.AssertSessionContinuity(t, func(t *testing.T, held, resumeID string) (domain.Session, error) {
+		t.Helper()
+
+		return adapter.StartSession(t.Context(), domain.StartSessionParams{
+			WorkspacePath:   "/tmp/work",
+			ResumeSessionID: resumeID,
+			Settings:        map[string]any{"session_id": held},
+		})
 	})
 }

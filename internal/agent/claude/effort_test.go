@@ -30,8 +30,12 @@ func claudeEffortProbe(t *testing.T, settings map[string]any, verification, resu
 		resumeID = "resume-1234-5678-abcd-ef0123456789"
 	}
 	command := agenttest.FakeRuntime(t, t.TempDir(), "fake-claude", agenttest.OutputScenario, agenttest.Output{})
+	workspace := t.TempDir()
+	if resumed {
+		stageHeldSession(t, workspace, resumeID)
+	}
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:          t.TempDir(),
+		WorkspacePath:          workspace,
 		AgentConfig:            domain.AgentConfig{Command: command},
 		CredentialVerification: verification,
 		ResumeSessionID:        resumeID,
@@ -50,7 +54,6 @@ func claudeEffortProbe(t *testing.T, settings map[string]any, verification, resu
 }
 
 func TestEffortForwarding(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: the resumed probe stages its journal under CLAUDE_CONFIG_DIR through t.Setenv.
 	agenttest.AssertEffortForwarding(t, claudeEffortProbe)
 }

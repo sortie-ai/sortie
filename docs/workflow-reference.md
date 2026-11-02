@@ -5132,7 +5132,7 @@ Present as a key on every render, so `{{ .park }}` and `{{ if .park }}` render u
 
 A comment is in `.park.comments` when its creation time is at or after the second in which the parked run sent its last prompt, that second included. That window keeps a comment written while the parked run's last turn was running, which is often the answer the park waits for. A park that records no last prompt starts the window at the park time, truncated to the whole second. A comment whose creation time cannot be read is included, and when no start time exists every comment is. Every comment Sortie posted is left out whatever its time, so the stop comment Sortie posts to the tracker is not in the list and the statement reaches the run once, through `.park.statement`. Comments the agent posted with its own tracker tools are included. `.issue.comments` carries every comment of the issue, Sortie's own included, on every turn of that run.
 
-The run resumes the agent session of the run the park follows when that run had no reaction and ended normally, and the agent kind and template are the ones that run used. Otherwise it starts a new session, and `.park.statement` still tells it why the run stopped. When the comments or the record of the comments Sortie posted cannot be read, Sortie does not start the run: the issue waits for the next poll and appears under `held` with the reason `park_comments_unread`.
+The run resumes the agent session of the run the park follows when that run had no reaction and ended normally and the agent still holds that session, and the agent kind and template are the ones that run used. Otherwise, including when the agent no longer holds the session, it starts a new session, and `.park.statement` still tells it why the run stopped. When the comments or the record of the comments Sortie posted cannot be read, Sortie does not start the run: the issue waits for the next poll and appears under `held` with the reason `park_comments_unread`.
 
 ```markdown
 {{ if .park }}A person released this issue ({{ .park.gesture }}). You stopped earlier: {{ .park.statement }}
@@ -5411,7 +5411,7 @@ The prompt template supports three distinct modes within a single file. Workflow
 | **First run**         | `0`            | `false`               | Full task instructions, context gathering steps.              |
 | **Continuation turn** | same as turn 1 | `true`                | Resume guidance — review state, pick up where left off.       |
 | **Retry after error** | integer `>= 1` | `false`               | Diagnostic steps — check prior failure, approach differently. |
-| **First run after a released park** | `0` | `false` | `park` is set on turn 1 only. The run continues the agent's earlier session where the parked run recorded one and the agent kind can resume it; answer the comments in `park.comments`. |
+| **First run after a released park** | `0` | `false` | `park` is set on turn 1 only. The run continues the agent's earlier session where the parked run recorded one and the agent still holds it, and otherwise starts a new session; answer the comments in `park.comments`. |
 
 **Template pattern:**
 

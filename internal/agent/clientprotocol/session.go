@@ -36,7 +36,6 @@ const clientProtocolMaxLineBytes = 10 * 1024 * 1024
 // no error for a version mismatch and leaves the disconnect to the client.
 const pinnedProtocolVersion = 1
 
-// errorCodeAuthRequired is the protocol's "Authentication required" code.
 const errorCodeAuthRequired = -32000
 
 // sessionState is this adapter's session state, reached through
@@ -73,9 +72,7 @@ type sessionState struct {
 	stopOnce sync.Once
 	pumpDone chan struct{}
 
-	// closeSessionID is written once on the StartSession goroutine, after
-	// resolveSession returns, and stays zero when the handshake advertises no
-	// teardown method.
+	// closeSessionID stays zero when the handshake advertises no teardown method.
 	closeSessionID string
 
 	closeMethod string
@@ -111,7 +108,6 @@ type sessionState struct {
 	// the reap; a non-positive adapter value resolves to procutil.DefaultDrainGrace.
 	drainGrace time.Duration
 
-	// release gives the reader up to drainGrace to end on its own.
 	release *procutil.OutputRelease
 
 	// usage is not safe for concurrent use; the pump goroutine is its only user
@@ -402,8 +398,6 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		Logger:     state.logger,
 	})
 
-	// The pump is state.caps' sole mutator once started; nothing here may touch
-	// it afterward.
 	state.caps = newCapabilityRecord()
 	state.usage = usage
 
@@ -411,15 +405,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	// state; what the handshake learns reaches it as control messages.
 	go runPump(state)
 
-	teardownOnFailure := func() {
-		graceCtx, cancel := context.WithTimeout(ctx, grace)
-		defer cancel()
-		runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
-	}
-
 	initResp, agentErr := doInitialize(ctx, state)
 	if agentErr != nil {
-		teardownOnFailure()
+		teardownWithinStopGrace(ctx, state)
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
 		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
 			return domain.Session{}, report
@@ -432,23 +420,23 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	return session, err
 }
 
+func teardownWithinStopGrace(ctx context.Context, state *sessionState) {
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	graceCtx, cancel := context.WithTimeout(ctx, grace)
+	defer cancel()
+	runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
+}
+
 // finishSession opens the session the handshake began and hands the pump what
 // the handshake and the open result established.
 func finishSession(ctx context.Context, state *sessionState, params domain.StartSessionParams, target agentcore.LaunchTarget, initResp *initializeResponse, declarations *registry.Registry[usagesource.Declaration, struct{}]) (domain.Session, error) {
-	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
-	teardownOnFailure := func() {
-		graceCtx, cancel := context.WithTimeout(ctx, grace)
-		defer cancel()
-		runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
-	}
-
 	allowHTTP := initResp.AgentCapabilities != nil &&
 		initResp.AgentCapabilities.MCPCapabilities != nil &&
 		initResp.AgentCapabilities.MCPCapabilities.HTTP != nil &&
 		*initResp.AgentCapabilities.MCPCapabilities.HTTP
 	wired, agentErr := settleToolDelivery(ctx, state, allowHTTP)
 	if agentErr != nil {
-		teardownOnFailure()
+		teardownWithinStopGrace(ctx, state)
 		return domain.Session{}, agentErr
 	}
 	if params.CredentialVerification {
@@ -461,14 +449,22 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		caps = *initResp.AgentCapabilities
 	}
 
-	sessionID, created, session, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wired)
-	if agentErr != nil {
-		teardownOnFailure()
+	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID, continuationProbe(state, caps, target.WorkspacePath, wired), state.logger)
+	sessionID, session := start.ResumeID(), start.Answer()
+	var newErr *domain.AgentError
+	if startErr == nil && !start.CarriedHistory() {
+		sessionID, session, newErr = createNewSession(ctx, state, target.WorkspacePath, wired)
+	}
+	if startErr != nil || newErr != nil {
+		teardownWithinStopGrace(ctx, state)
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
+		if startErr != nil {
+			return domain.Session{}, startErr
+		}
 		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
 			return domain.Session{}, report
 		}
-		return domain.Session{}, agentErr
+		return domain.Session{}, newErr
 	}
 	switch {
 	case params.CredentialVerification && advertisesSessionDelete(caps):
@@ -498,34 +494,32 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
 	}
-	facts.ledger = newSessionLedger(ctx, state, choice.declaration, created, session)
+	facts.ledger = newSessionLedger(ctx, state, choice.declaration, start.CarriedHistory(), session)
 
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
 	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: sessionID}})
 
 	if agentErr := state.tools.AwaitConnection(ctx); agentErr != nil {
-		teardownOnFailure()
+		teardownWithinStopGrace(ctx, state)
 		return domain.Session{}, agentErr
 	}
 
 	return domain.Session{
-		ID:            sessionID,
-		AgentPID:      strconv.Itoa(state.pid),
-		NoToolChannel: state.tools.NoToolChannel(),
-		Internal:      state,
+		ID:             sessionID,
+		AgentPID:       strconv.Itoa(state.pid),
+		NoToolChannel:  state.tools.NoToolChannel(),
+		CarriedHistory: start.CarriedHistory(),
+		Internal:       state,
 	}, nil
 }
 
 // newSessionLedger returns the session's spend ledger, or nil when the
-// declaration declares neither a token shape nor an amount or the ledger
-// refuses it. A session the runtime
-// created has no history, so its records boundary is known without a read. The
-// records already on the host of a continued session are read here, before the
-// first prompt, so none of them is counted as this run's spend. A launch whose
-// addition is not in effect makes every turn of the session a lower bound, as
-// does a session the declaration's rule names from session, the raw result of
-// the call that opened it.
-func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, created bool, session json.RawMessage) *usage.Ledger {
+// declaration declares no spend or the ledger refuses it. The records a
+// continued session already has on the host are read before its first prompt,
+// so none of them counts as this run's spend. Every turn is a lower bound when
+// the launch addition is not in effect or the declaration's rule flags the raw
+// result of the call that opened the session.
+func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource.Declaration, carried bool, session json.RawMessage) *usage.Ledger {
 	if decl.Live.Spend.Shape == usage.SpendUndeclared && len(decl.Live.Spend.Amounts) == 0 {
 		return nil
 	}
@@ -540,12 +534,11 @@ func newSessionLedger(ctx context.Context, state *sessionState, decl usagesource
 		state.logger.Warn("spend declaration unsupported", slog.Any("error", err))
 		return nil
 	}
-	switch {
-	case created:
-		ledger.SessionCreated()
-	case decl.ReadRecords != nil:
-		ledger.Boundary(readSessionRecords(ctx, state, decl))
+	var history func() usage.RecordsRead
+	if decl.ReadRecords != nil {
+		history = func() usage.RecordsRead { return readSessionRecords(ctx, state, decl) }
 	}
+	ledger.BeginSession(carried, history)
 	return ledger
 }
 
@@ -822,8 +815,6 @@ func runTurn(ctx context.Context, session domain.Session, params domain.RunTurnP
 	}
 }
 
-// closeCallBound returns half of the window the close_session step is given,
-// truncated toward zero.
 func closeCallBound(grace time.Duration) time.Duration {
 	return grace / 2
 }
@@ -931,10 +922,7 @@ func stopSession(ctx context.Context, session domain.Session) error {
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
-	graceCtx, cancel := context.WithTimeout(ctx, grace)
-	defer cancel()
-	runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
+	teardownWithinStopGrace(ctx, state)
 	closeVerification(state)
 	if state.tools != nil {
 		return state.tools.Close()
@@ -1064,7 +1052,6 @@ func awaitExit(callerCtx, graceCtx context.Context, grace time.Duration) func(st
 	}
 }
 
-// closeStdin closes the agent's standard-input handle without waiting on it.
 func closeStdin(state *sessionState) {
 	procutil.CloseWithoutWaiting(state.stdinCloser)
 }
