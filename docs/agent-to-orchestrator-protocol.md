@@ -386,7 +386,7 @@ The re-dispatch and re-block cycle is an expected operational pattern:
 4. The next poll tick observes the state change or the confirmed label's removal and lifts the park.
 5. If the issue is now active and eligible, the orchestrator reads its comments and dispatches a new worker run for it. When the read fails, the issue waits for a later poll tick and no run starts.
 6. Pre-dispatch cleanup (Section 3.4) removes the stale `.sortie/status` file.
-7. The run continues the agent session that stopped, where the parked run recorded one and the agent kind can resume it, and its first prompt renders the `park` template variable: the statement the agent gave when it wrote `blocked` as `park.statement`, and the comments written after the parked run sent its last prompt, less the ones Sortie posted, as `park.comments`. If still blocked, the agent writes `blocked` again.
+7. The run continues the agent session that stopped, where the parked run recorded one and the agent kind can resume it, and its first prompt renders the `park` template variable: the statement the agent gave when it wrote `blocked` as `park.statement`, and the comments as `park.comments`: with the comment feed off, the comments written after the parked run sent its last prompt, less the ones Sortie posted; with the feed on, the run's pending comments, those earlier sessions on the issue were given first, then the new ones. If still blocked, the agent writes `blocked` again.
 
 An update to the issue that is neither a state change nor a removal of the confirmed parking label, for example adding a comment while leaving both the state and the label untouched, does not lift the park.
 

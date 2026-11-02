@@ -72,18 +72,38 @@ type ParkContext struct {
 // parkContextToMap converts a [ParkContext] to the map representation used
 // as the "park" template variable, with snake_case keys.
 func parkContextToMap(pc ParkContext) map[string]any {
-	comments := pc.Comments
-	if comments == nil {
-		comments = []map[string]any{}
-	}
 	return map[string]any{
 		"reason":      pc.Reason,
 		"statement":   pc.Statement,
 		"parked_at":   pc.ParkedAt,
 		"released_at": pc.ReleasedAt,
 		"gesture":     pc.Gesture,
-		"comments":    comments,
+		"comments":    nonNilList(pc.Comments),
 	}
+}
+
+// CommentFeedContext carries the pending issue comments passed to the prompt
+// template as the "comment_feed" variable. New and Earlier hold the template
+// form of the comments in each view; nil renders as an empty list.
+type CommentFeedContext struct {
+	New     []map[string]any
+	Earlier []map[string]any
+}
+
+// commentFeedContextToMap converts a [CommentFeedContext] to the map
+// representation used as the "comment_feed" template variable.
+func commentFeedContextToMap(cf CommentFeedContext) map[string]any {
+	return map[string]any{
+		"new":     nonNilList(cf.New),
+		"earlier": nonNilList(cf.Earlier),
+	}
+}
+
+func nonNilList(list []map[string]any) []map[string]any {
+	if list == nil {
+		return []map[string]any{}
+	}
+	return list
 }
 
 // promptFuncMap is the minimal, prompt-essential FuncMap shipped with
@@ -200,7 +220,8 @@ func newSet(name string) *template.Template {
 // RenderOption applies optional overrides to the template data map
 // before execution. Use [WithContinuationContext] to inject reaction
 // continuation data, [WithStage] to supply the stage chain position, and
-// [WithPark] to supply the hand-over of a released park.
+// [WithPark] to supply the hand-over of a released park, and
+// [WithCommentFeed] to supply the pending issue comments.
 type RenderOption func(m map[string]any)
 
 // isContinuationKey reports whether key is a registered continuation
@@ -241,25 +262,35 @@ func WithPark(pc ParkContext) RenderOption {
 	}
 }
 
+// WithCommentFeed returns a [RenderOption] that sets the "comment_feed"
+// template variable from cf.
+func WithCommentFeed(cf CommentFeedContext) RenderOption {
+	return func(m map[string]any) {
+		m["comment_feed"] = commentFeedContextToMap(cf)
+	}
+}
+
 // Render executes the template with the given inputs and returns the
 // rendered prompt string. The data map contains the top-level keys
-// "issue", "attempt", "run", "stage", and "park", plus every key in [continuationKeys]
+// "issue", "attempt", "run", "stage", "park", and "comment_feed", plus every key in [continuationKeys]
 // (currently "ci_failure", "review_comments", "bot_review_comments",
 // "merge_conflict", "label_review", "label_fix").
 // Continuation keys and "park" default to nil when no [RenderOption]
 // overrides them ([WithPark] sets "park"), ensuring missingkey=error does
-// not reject templates that reference these fields.
+// not reject templates that reference these fields. "comment_feed" defaults
+// to two empty lists ([WithCommentFeed] fills them).
 // Returns a [*TemplateError] with Kind [ErrTemplateRender] on failure,
 // located in the file that holds the fault: a partial's path with its own
 // line numbers, or the prompt template's source with line numbers adjusted
 // to WORKFLOW.md-relative positions.
 func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opts ...RenderOption) (string, error) {
 	templateVars := map[string]any{
-		"issue":   issue,
-		"attempt": attempt,
-		"run":     runContextToMap(run),
-		"stage":   stageContextToMap(StageContext{}),
-		"park":    nil,
+		"issue":        issue,
+		"attempt":      attempt,
+		"run":          runContextToMap(run),
+		"stage":        stageContextToMap(StageContext{}),
+		"park":         nil,
+		"comment_feed": commentFeedContextToMap(CommentFeedContext{}),
 	}
 	for _, k := range continuationKeys {
 		templateVars[k.name] = nil

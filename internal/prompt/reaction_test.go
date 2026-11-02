@@ -21,7 +21,7 @@ func TestBuildReactionTurnPrompt_Selection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := BuildReactionTurnPrompt(mustParseAnalyze(t, tt.body), nil, nil, tt.turn, 3, fix)
+			got, _, err := BuildReactionTurnPrompt(mustParseAnalyze(t, tt.body), nil, nil, tt.turn, 3, fix)
 			if err != nil || !strings.HasPrefix(got, tt.want) {
 				t.Errorf("BuildReactionTurnPrompt(%q, turn %d) = %q, %v, want prefix %q", tt.body, tt.turn, got, err, tt.want)
 			}
@@ -46,7 +46,7 @@ func TestBuiltinPromptsRenderForEveryContinuationKey(t *testing.T) {
 				data = []any{map[string]any{"id": "v-id", "file": "v-file", "start_line": "v-start", "end_line": "v-end", "reviewer": "v-reviewer", "body": "v-body"}}
 			}
 			for turn := 1; turn <= 2; turn++ {
-				got, err := BuildReactionTurnPrompt(mustParseAnalyze(t, "plain"), map[string]any{"identifier": "ID-1", "title": "T"}, nil, turn, 3, map[string]any{k.name: data})
+				got, _, err := BuildReactionTurnPrompt(mustParseAnalyze(t, "plain"), map[string]any{"identifier": "ID-1", "title": "T"}, nil, turn, 3, map[string]any{k.name: data})
 				if err != nil || strings.TrimSpace(got) == "" || got == "plain" || (turn == 1 && !strings.Contains(got, "v-")) {
 					t.Errorf("BuildReactionTurnPrompt(%q, turn %d) = %q, %v, want the built-in prompt holding a sample value", k.name, turn, got, err)
 				}

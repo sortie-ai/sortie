@@ -8,13 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. ([#1585](https://github.com/sortie-ai/sortie/issues/1585))
-- `sortie validate` checks the `comment_feed` setting. ([#1585](https://github.com/sortie-ai/sortie/issues/1585))
+- Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. A prompt template can place these comments itself through the new `comment_feed` variable; otherwise Sortie adds them after the template's text. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- `sortie validate` checks the `comment_feed` setting and warns about a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
 
 ### Changed
 
 - A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
 - When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
+- With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
 
 ### Fixed
 

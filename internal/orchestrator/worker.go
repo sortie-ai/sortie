@@ -1324,10 +1324,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
 	stageOption := prompt.WithStage(stageRenderFrom(ctx))
-	firstTurnOptions := []prompt.RenderOption{stageOption}
-	if parkContext, ok := parkRenderFrom(ctx); ok {
-		firstTurnOptions = append(firstTurnOptions, prompt.WithPark(parkContext))
-	}
+	parkContext, hasPark := parkRenderFrom(ctx)
 
 	publishWorkerState := func(turn int) error {
 		if mcpConfigPath == "" {
@@ -1439,20 +1436,30 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		issueMap := issue.ToTemplateMap()
 		// Place may call this more than once; it must stay free of effects
 		// beyond its result and presentedComments, assigned on every call.
-		renderTurn := func(commentfeed.Selection) (string, error) {
+		renderTurn := func(sel commentfeed.Selection) (string, bool, error) {
+			feedOption := prompt.WithCommentFeed(commentFeedContextOf(sel))
 			switch {
 			case deps.ReactionKind != "":
-				out, err := prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption)
+				out, builtin, err := prompt.BuildReactionTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, continuation, stageOption, feedOption)
 				if turnNumber == 1 {
 					presentedComments = carriedCommentIDs(continuation)
 				}
-				return out, err
+				return out, builtin, err
 			case turnNumber == 1:
-				out, presented, err := renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, firstTurnOptions...)
+				options := []prompt.RenderOption{stageOption}
+				if hasPark {
+					park := parkContext
+					if feed != nil {
+						park.Comments = pendingTemplateComments(sel)
+					}
+					options = append(options, prompt.WithPark(park))
+				}
+				options = append(options, feedOption)
+				out, presented, err := renderFirstTurnPrompt(tmpl, issueMap, attemptInt, maxTurns, continuation, options...)
 				presentedComments = presented
-				return out, err
+				return out, false, err
 			default:
-				return prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption)
+				return prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, stageOption, feedOption)
 			}
 		}
 		var sel commentfeed.Selection
@@ -1700,8 +1707,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if feed != nil {
 			preparePrompt = func(reviewPrompt string) string {
 				reviewSel = selectComments(turnsStarted + 1)
-				prepared, placed, _ := commentfeed.Place(func(commentfeed.Selection) (string, error) {
-					return reviewPrompt, nil
+				prepared, placed, _ := commentfeed.Place(func(commentfeed.Selection) (string, bool, error) {
+					return reviewPrompt, true, nil
 				}, reviewSel)
 				reviewPlaced = placed
 				return prepared
@@ -1951,7 +1958,8 @@ func renderFirstTurnPrompt(tmpl *prompt.Template, issueMap map[string]any, attem
 		if seed != nil {
 			opts = append(opts, prompt.WithContinuationContext(seed))
 		}
-		return prompt.BuildTurnPrompt(tmpl, issueMap, attempt, 1, maxTurns, opts...)
+		out, _, err := prompt.BuildTurnPrompt(tmpl, issueMap, attempt, 1, maxTurns, opts...)
+		return out, err
 	}
 
 	unseeded, err := render(nil)

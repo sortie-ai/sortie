@@ -3,9 +3,12 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"slices"
 
+	"github.com/sortie-ai/sortie/internal/commentfeed"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/storage"
 )
 
@@ -65,6 +68,39 @@ func (o *Orchestrator) applyCommentsGiven(ctx context.Context, msg commentsGiven
 func nonNilComments(comments []domain.Comment) []domain.Comment {
 	if comments == nil {
 		return []domain.Comment{}
+	}
+	return comments
+}
+
+// commentFeedContextOf maps the views of sel to the comment_feed template
+// variable. Only a comment that replaces a version the conversation holds
+// carries replacing.
+func commentFeedContextOf(sel commentfeed.Selection) prompt.CommentFeedContext {
+	return prompt.CommentFeedContext{
+		New:     pendingTemplateMaps(sel.New),
+		Earlier: pendingTemplateMaps(sel.Earlier),
+	}
+}
+
+func pendingTemplateMaps(pending []commentfeed.Pending) []map[string]any {
+	maps := domain.CommentTemplateMaps(pendingComments(pending))
+	for i, p := range pending {
+		maps[i]["replacing"] = p.Replacing
+	}
+	return maps
+}
+
+// pendingTemplateComments returns the comments of sel as .park.comments
+// lists them: the earlier ones first, then the new ones. The result is never
+// nil.
+func pendingTemplateComments(sel commentfeed.Selection) []map[string]any {
+	return domain.CommentTemplateMaps(pendingComments(slices.Concat(sel.Earlier, sel.New)))
+}
+
+func pendingComments(pending []commentfeed.Pending) []domain.Comment {
+	comments := make([]domain.Comment, len(pending))
+	for i, p := range pending {
+		comments[i] = p.Comment
 	}
 	return comments
 }

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -5859,6 +5860,15 @@ func (s *countingFeedStore) ListEarlierGivenComments(context.Context, string, st
 	return nil, nil
 }
 
+type postedFeedStore struct {
+	*stubStore
+	posted []string
+}
+
+func (s postedFeedStore) ListPostedComments(context.Context, string) ([]string, error) {
+	return s.posted, nil
+}
+
 func commentFeedWorkerDeps(t *testing.T, tracker domain.TrackerAdapter, store commentfeed.Store) WorkerDeps {
 	t.Helper()
 	tmpl := mustParseTemplate(t, "turn={{ .run.turn_number }}")
@@ -5892,6 +5902,85 @@ func TestRunWorkerAttempt_CommentAddedBetweenTurnsReachesTheNextPromptOnce(t *te
 	}
 }
 
+func TestRunWorkerAttempt_CommentFeedPlacement(t *testing.T) {
+	t.Parallel()
+
+	const placeNew = "{{ range .comment_feed.new }} {{ .body | toJSON }}{{ end }}"
+	comment := func(id string) domain.Comment { return domain.Comment{ID: id, Body: "body of " + id} }
+	releaseCtx := withDispatchCommentRead(withParkRender(context.Background(), prompt.ParkContext{Comments: []map[string]any{{"id": "c-window"}}}),
+		[]domain.Comment{comment("c-new"), comment("c-earlier"), comment("c-own")})
+
+	tests := []struct {
+		name       string
+		template   string
+		ctx        context.Context
+		initial    []domain.Comment
+		added      domain.Comment
+		wantCounts [2]map[string]int
+		wantGiven  []string
+	}{
+		{
+			name: "template places comment_feed.new", template: "turn={{ .run.turn_number }}" + placeNew, added: comment("c-1"),
+			wantCounts: [2]map[string]int{nil, {"body of c-1": 1, "## New issue": 0}}, wantGiven: []string{"c-1"},
+		},
+		{
+			name:     "template places the feed only on the first turn",
+			template: "turn={{ .run.turn_number }}{{ if not .run.is_continuation }}" + placeNew + "{{ end }}",
+			initial:  []domain.Comment{comment("c-0")}, added: comment("c-1"), wantGiven: []string{"c-0", "c-1"},
+			wantCounts: [2]map[string]int{{"body of c-0": 1, "## New issue": 0}, {"body of c-1": 1, "body of c-0": 0, "## New issue": 1}},
+		},
+		{
+			name:     "continuation that falls back to the default prompt gets the block",
+			template: "{{ if .run.is_continuation }}{{ if not .comment_feed.new }}Continue{{ end }}{{ else }}start{{ end }}",
+			added:    comment("c-1"), wantGiven: []string{"c-1"},
+			wantCounts: [2]map[string]int{nil, {prompt.DefaultContinuationPrompt: 1, "body of c-1": 1}},
+		},
+		{
+			name:     "release run serves .park.comments from the feed",
+			template: "ids={{ if .park }}{{ range .park.comments }}[{{ .id }}]{{ end }}{{ end }}",
+			ctx:      releaseCtx, wantGiven: []string{"c-earlier", "c-new"},
+			wantCounts: [2]map[string]int{{"ids=[c-earlier][c-new]": 1, "c-window": 0, "c-own": 0, "## New issue": 0, "## Issue comments from": 0}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.CommentFeed = config.CommentFeedConfig{Enabled: true, Authors: config.CommentFeedAuthorsAll}
+			tracker := &feedTracker{comments: tt.initial}
+			earlier := map[string][]storage.GivenComment{workerTestIssue().ID: {{ConversationID: "earlier-session", Source: commentfeed.SourceTracker, CommentID: "c-earlier"}}}
+			store := postedFeedStore{&stubStore{givenRows: earlier}, []string{"c-own"}}
+			deps := commentFeedWorkerDeps(t, tracker, store)
+			deps.PromptTemplateByIDFunc = func(string) *prompt.Template { return mustParseTemplate(t, tt.template) }
+			var gotGiven []string
+			deps.OnCommentsGiven = func(_ string, rows []storage.GivenComment) {
+				for _, row := range rows {
+					gotGiven = append(gotGiven, row.CommentID)
+				}
+			}
+
+			prompts := runForPrompts(t, cmp.Or(tt.ctx, context.Background()), cfg, deps, func(turn int) {
+				if turn == 1 && tt.added.ID != "" {
+					tracker.add(tt.added)
+				}
+			})
+
+			for turn, counts := range tt.wantCounts {
+				for substr, want := range counts {
+					if got := strings.Count(prompts[turn], substr); got != want {
+						t.Errorf("occurrences of %q in turn %d prompt = %d, want %d\n%s", substr, turn+1, got, want, prompts[turn])
+					}
+				}
+			}
+			if !slices.Equal(gotGiven, tt.wantGiven) {
+				t.Errorf("comment IDs reported given = %q, want %q", gotGiven, tt.wantGiven)
+			}
+		})
+	}
+}
+
 func TestRunWorkerAttempt_CommentFeedOffSendsTodaysPromptsAndNoExtraCalls(t *testing.T) {
 	t.Parallel()
 
@@ -5899,11 +5988,14 @@ func TestRunWorkerAttempt_CommentFeedOffSendsTodaysPromptsAndNoExtraCalls(t *tes
 	cfg.CommentFeed = config.CommentFeedConfig{Authors: config.CommentFeedAuthorsAll}
 	tracker := &feedTracker{comments: []domain.Comment{{ID: "c-1", Author: "Alice", AuthorID: "alice", Body: "also cover the empty-input case"}}}
 	store := &countingFeedStore{}
-	ctx := withDispatchCommentRead(context.Background(), tracker.comments)
+	ctx := withParkRender(withDispatchCommentRead(context.Background(), tracker.comments), prompt.ParkContext{Comments: []map[string]any{{"id": "w-1"}, {"id": "w-2"}}})
+	deps := commentFeedWorkerDeps(t, tracker, store)
+	tmpl := mustParseTemplate(t, "turn={{ .run.turn_number }}{{ if .park }} ids={{ range .park.comments }}[{{ .id }}]{{ end }}{{ end }}")
+	deps.PromptTemplateByIDFunc = func(string) *prompt.Template { return tmpl }
 
-	prompts := runForPrompts(t, ctx, cfg, commentFeedWorkerDeps(t, tracker, store), nil)
+	prompts := runForPrompts(t, ctx, cfg, deps, nil)
 
-	want := []string{"turn=1\n\n" + prompt.RuntimeStatusSuffix, "turn=2", "turn=3"}
+	want := []string{"turn=1 ids=[w-1][w-2]\n\n" + prompt.RuntimeStatusSuffix, "turn=2", "turn=3"}
 	if !slices.Equal(prompts, want) {
 		t.Errorf("prompts with the feed off = %q, want %q", prompts, want)
 	}
