@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The dashboard sets names such as rules, agent kinds, models and skills in a monospace face, and writes every cost with two decimals, including $100 and more.
 - Every dashboard page opens with the same header, a title with a standfirst that says in a sentence what the page shows, and sets its sections off as panels with titles of their own. The issue page and the session page take the same form.
 - The dashboard's rail, status card and top bar are redrawn, and the project name under the Sortie name links to the project when the state API serves its address. On a narrow screen the bar holds only the Sortie name, the status and the menu, on one line.
+- The Pipeline draws each station as a circle that holds the number of lanes standing at it, and an issue's place on its stage chain reads as text instead of a meter.
 
 ### Removed
 

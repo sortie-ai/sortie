@@ -6,8 +6,8 @@ import {
   timeBaseOf,
   timeText,
 } from "@/lib/active-rows";
-import { fmtStamp, parseInstant, upperFirst } from "@/lib/format";
-import { reactionLabel, reactionShortLabel } from "@/lib/labels";
+import { fmtCount, fmtStamp, parseInstant, plural } from "@/lib/format";
+import { reactionLabel, reactionShortLabel, reactionWatchLabel } from "@/lib/labels";
 import { endingWord, hasSeveralTerminalStates } from "@/lib/ended";
 import { runStatus, stateWord } from "@/lib/run-status";
 
@@ -31,34 +31,55 @@ export type StationKind = "tracker" | "agent" | "handoff" | "reaction" | "end";
 export interface Station {
   key: string;
   kind: StationKind;
+  /** The station's role, the same in every workflow. */
   label: string;
+  /**
+   * What the station stands for in this workflow: the tracker state it configures, as configured,
+   * or what a reaction watches; absent when none applies.
+   */
+  detail?: string;
   /** The form a header too narrow for the label uses; absent when the label is already short. */
   short?: string;
   /** Set on the end station of a workflow that lists two or more terminal states. */
-  labelFromEnding?: true;
+  detailFromEnding?: true;
 }
 
 const AGENT_KEY = "agent";
 
+/** Words a station with its detail, as a title or a screen reader reads it. */
+export function stationName(station: Pick<Station, "label" | "detail">): string {
+  return station.detail === undefined ? station.label : `${station.label} (${station.detail})`;
+}
+
+/** Places a reaction as its station stands on the pipeline; a key outside the order comes after the others. */
+export function reactionRank(configKey: string): number {
+  const rank = (REACTION_ORDER as readonly string[]).indexOf(configKey);
+  return rank === -1 ? REACTION_ORDER.length : rank;
+}
+
 const REACTION_ORDER = [
   "ci_failure",
-  "review_comments",
   "bot_review",
+  "review_comments",
   "merge_conflicts",
   "auto_merge",
   "merge_completion",
   "label_commands",
 ] as const satisfies readonly (keyof ShapeReactions)[];
 
-/** One agent station holds all agent work; stage names never become stations. */
+/** One agent station holds all agent work; stage names never become stations. Each station is named by its role and carries the state or watch it stands for as its detail. */
 export function stationsOf(config: ConfigResponse): Station[] {
+  const { in_progress_state: inProgress } = config.tracker;
+  const queued = (config.tracker.active_states ?? []).find(
+    (state) => state !== "" && state !== inProgress,
+  );
   const stations: Station[] = [
-    { key: "tracker", kind: "tracker", label: "Tracker" },
-    { key: AGENT_KEY, kind: "agent", label: "Agent" },
+    { key: "tracker", kind: "tracker", label: "Tracker", ...detailOf(queued) },
+    { key: AGENT_KEY, kind: "agent", label: "Agent", ...detailOf(inProgress) },
   ];
   const handoff = config.tracker.handoff_state;
   if (handoff !== undefined && handoff !== "") {
-    stations.push({ key: "handoff", kind: "handoff", label: upperFirst(handoff) });
+    stations.push({ key: "handoff", kind: "handoff", label: "Handoff", detail: handoff });
   }
   const reactions = REACTION_ORDER.filter((key) => config.reactions[key] !== undefined);
   for (const key of reactions) {
@@ -68,29 +89,38 @@ export function stationsOf(config: ConfigResponse): Station[] {
       kind: "reaction",
       label: reactionLabel(key),
       ...(short === undefined ? {} : { short }),
+      ...detailOf(
+        key === "merge_completion"
+          ? config.reactions.merge_completion?.target_state
+          : reactionWatchLabel(key),
+      ),
     });
   }
   if (reactions.length > 0) {
+    const detail = endDetailOf(config);
     stations.push({
       key: "end",
       kind: "end",
-      label: endLabelOf(config),
+      label: "Terminal",
+      ...(detail === undefined ? {} : { detail }),
       ...(hasSeveralTerminalStates(config.tracker.terminal_states)
-        ? { labelFromEnding: true as const }
+        ? { detailFromEnding: true as const }
         : {}),
     });
   }
   return stations;
 }
 
-// Sortie records a terminal ending without a merge when an issue closes under an open pull
-// request, so a terminal state's name is true of the end station only when every merge Sortie
-// records moves the issue into it, which `merge_completion` does and `auto_merge` alone does not.
-function endLabelOf(config: ConfigResponse): string {
-  const terminal = config.tracker.terminal_states ?? [];
-  const isEveryMergeTerminal =
-    config.reactions.auto_merge === undefined || config.reactions.merge_completion !== undefined;
-  return terminal.length === 1 && isEveryMergeTerminal ? upperFirst(terminal[0] ?? "End") : "End";
+function detailOf(detail: string | undefined): Pick<Station, "detail"> {
+  return detail === undefined || detail === "" ? {} : { detail };
+}
+
+// The end station's detail is the state a merged issue ends in: the target of merge_completion, else
+// the first terminal state. An issue that ends otherwise shows its own ending in its lane.
+function endDetailOf(config: ConfigResponse): string | undefined {
+  const target = config.reactions.merge_completion?.target_state;
+  const first = (config.tracker.terminal_states ?? []).find((state) => state !== "");
+  return target !== undefined && target !== "" ? target : first;
 }
 
 function pendingEntryOf(
@@ -149,8 +179,8 @@ export interface Standing {
   station: string;
   mark: LaneMarker | null;
   time: string | null;
-  /** The name the station takes in this issue's lane only; null keeps the station's own. */
-  label: string | null;
+  /** The detail the station takes in this issue's lane only; null keeps the station's own. */
+  detail: string | null;
 }
 
 function reactionKeyOf(deciding: Deciding): string | undefined {
@@ -199,16 +229,16 @@ function outcomeStation(kind: string, stations: readonly Station[]): Station | u
     : (stations.find((s) => s.kind === wanted) ?? stations.at(-1));
 }
 
-function endingStationLabel(outcome: IssueOutcomeResponse): string | null {
+function endingStationDetail(outcome: IssueOutcomeResponse): string | null {
   if (outcome.kind === "merged") {
-    return "Merged";
+    return "merged";
   }
   return outcome.kind === "terminal" && outcome.state !== undefined && outcome.state !== ""
-    ? upperFirst(outcome.state)
+    ? outcome.state
     : null;
 }
 
-/** Returns `null` when neither exists, so a finished issue without a recorded ending has no marker. The `label` of the standing renames the station for this issue only, and only when the station takes its name from the ending. */
+/** Returns `null` when neither a state row nor an ending exists, so a finished issue without a recorded ending has no marker. The standing's `detail` applies to this issue only. */
 export function standingOf(input: StandingInput, stations: readonly Station[]): Standing | null {
   const { deciding, outcome, issueId, attention, now } = input;
   if (deciding !== null) {
@@ -216,7 +246,7 @@ export function standingOf(input: StandingInput, stations: readonly Station[]): 
       station: decidingStation(deciding, stations),
       mark: rowMark(deciding.kind, issueId, attention, awaitsApproval(deciding)),
       time: timeText(deciding.kind, timeBaseOf(deciding), now),
-      label: null,
+      detail: null,
     };
   }
   if (outcome === null) {
@@ -229,7 +259,7 @@ export function standingOf(input: StandingInput, stations: readonly Station[]): 
         station: station.key,
         mark: endingMarker(outcome.kind),
         time: fmtStamp(outcome.observed_at),
-        label: station.labelFromEnding === true ? endingStationLabel(outcome) : null,
+        detail: station.detailFromEnding === true ? endingStationDetail(outcome) : null,
       };
 }
 
@@ -290,6 +320,45 @@ type PrLoop = Record<string, PrLoopStationResponse> | null;
 
 type Reading = Pick<LaneStation, "state" | "continuations">;
 
+/**
+ * Words what the newest check of a reaction found, in the noun the header gives the station:
+ * failures, comments, or conflicts, counted or "no", or checks still pending. Returns `undefined`
+ * when no row holds a check the station can word.
+ */
+function checkDetailOf(key: string, pending: readonly PendingReading[]): string | undefined {
+  const check = pending.find(
+    (row) => row.config_key === key && row.last_check !== null,
+  )?.last_check;
+  if (check === undefined || check === null) {
+    return undefined;
+  }
+  switch (key) {
+    case "ci_failure":
+      if (check.failing !== undefined && check.failing > 0) {
+        return plural(check.failing, "failure", "failures");
+      }
+      if (check.pending !== undefined && check.pending > 0) {
+        return `${fmtCount(check.pending)} pending`;
+      }
+      return check.failing === undefined ? undefined : "no failures";
+    case "bot_review":
+    case "review_comments":
+      if (check.actionable_comments === undefined) {
+        return undefined;
+      }
+      return check.actionable_comments > 0
+        ? plural(check.actionable_comments, "comment", "comments")
+        : "no comments";
+    case "merge_conflicts":
+      if (check.mergeable === undefined || check.mergeable === null) {
+        return undefined;
+      }
+      return check.mergeable ? "no conflicts" : "conflicts";
+    default:
+      return undefined;
+  }
+}
+
 function holdingStateOf(rows: readonly PendingReading[]): StationState {
   if (rows.some((r) => r.escalated_at !== null)) {
     return "needs";
@@ -336,7 +405,7 @@ function readingOf(
   return { state: index < current ? "passed" : "ahead", continuations: 0 };
 }
 
-/** The current station takes the standing's label over its own; a reaction station reads from the pending pull request row while one exists, else from the served `prLoop`. */
+/** The current station takes the standing's detail, and a reaction station what its newest check found, read from the pending pull request row while one exists, else from `prLoop`. */
 export function laneOf(
   stations: readonly Station[],
   standing: Standing | null,
@@ -344,11 +413,11 @@ export function laneOf(
   prLoop: PrLoop,
 ): LaneStation[] {
   const current = standing === null ? -1 : stations.findIndex((s) => s.key === standing.station);
-  return stations.map((station, index) =>
-    standing !== null && index === current
+  return stations.map((station, index) => ({
+    ...(standing !== null && index === current
       ? {
           ...station,
-          label: standing.label ?? station.label,
+          ...(standing.detail === null ? {} : { detail: standing.detail }),
           state: "current",
           mark: standing.mark,
           time: standing.time,
@@ -359,8 +428,9 @@ export function laneOf(
           ...readingOf(station, index, current, pending, prLoop),
           mark: null,
           time: null,
-        },
-  );
+        }),
+    ...(station.kind === "reaction" ? detailOf(checkDetailOf(station.key, pending)) : {}),
+  }));
 }
 
 export interface StagePosition {

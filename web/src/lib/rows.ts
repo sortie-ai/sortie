@@ -10,13 +10,17 @@ export const ROW_LIST =
 export const ROW_GRID =
   "grid grid-cols-[auto_minmax(0,1fr)] gap-x-sm gap-y-xxs max-md:gap-y-xs px-md py-sm md:col-span-full md:grid-cols-subgrid md:gap-x-md wrap-anywhere";
 
-export function rowStyles(isSelected: boolean, isOpenable: boolean): string {
+/** Classes of the edge that marks a row whose issue needs a person. */
+export const ATTENTION_EDGE = "shadow-[inset_1px_0_0_var(--color-warning-fill)]";
+
+export function rowStyles(isSelected: boolean, isOpenable: boolean, needsPerson = false): string {
   return cn(
     "scroll-mt-20 scroll-mb-md transition-colors duration-(--duration-feedback)",
     // A row names its fill as the ground too, so a lane's marks fill with it.
     isSelected
-      ? "bg-item-selected shadow-[inset_2px_0_0_var(--color-line-active)] [--ground:var(--color-item-selected)]"
+      ? "bg-item-selected [--ground:var(--color-item-selected)]"
       : "hover:bg-item-hover hover:[--ground:var(--color-item-hover)] active:bg-item-selected active:[--ground:var(--color-item-selected)]",
+    needsPerson ? ATTENTION_EDGE : isSelected && "shadow-[inset_2px_0_0_var(--color-line-active)]",
     isOpenable && "cursor-pointer",
   );
 }
