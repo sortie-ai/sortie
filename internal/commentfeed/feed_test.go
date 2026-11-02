@@ -275,6 +275,7 @@ func TestPlace(t *testing.T) {
 		sel                   Selection
 		emptied, filled       string
 		emptiedErr, filledErr error
+		filledBuiltin         bool
 		wantPrompt            string
 		wantPlaced            []string
 		wantRender            []int
@@ -289,6 +290,7 @@ func TestPlace(t *testing.T) {
 		{name: "differing renders return the filled render alone", sel: both, emptied: "base", filled: "with feed", wantPrompt: "with feed", wantPlaced: []string{"e1", "n2"}, wantRender: []int{0, 2}},
 		{name: "failing emptied render counts as placed", sel: newOnly, emptiedErr: errRender, filled: "with feed", wantPrompt: "with feed", wantPlaced: []string{"n2"}, wantRender: []int{0, 1}},
 		{name: "blank filled render gets the block", sel: newOnly, emptied: "base", filled: " ", wantPrompt: " \n\n" + Block(newOnly), wantPlaced: []string{"n2"}, wantRender: []int{0, 1}},
+		{name: "built-in filled render gets the block although it differs", sel: newOnly, emptied: "base", filled: "builtin", filledBuiltin: true, wantPrompt: "builtin\n\n" + Block(newOnly), wantPlaced: []string{"n2"}, wantRender: []int{0, 1}},
 	}
 
 	for _, tt := range tests {
@@ -296,12 +298,12 @@ func TestPlace(t *testing.T) {
 			t.Parallel()
 
 			var rendered []int
-			render := func(sel Selection) (string, error) {
+			render := func(sel Selection) (string, bool, error) {
 				rendered = append(rendered, len(sel.Earlier)+len(sel.New))
 				if rendered[len(rendered)-1] == 0 {
-					return tt.emptied, tt.emptiedErr
+					return tt.emptied, false, tt.emptiedErr
 				}
-				return tt.filled, tt.filledErr
+				return tt.filled, tt.filledBuiltin, tt.filledErr
 			}
 
 			prompt, placed, err := Place(render, tt.sel)

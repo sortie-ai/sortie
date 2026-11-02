@@ -70,7 +70,7 @@ emptied = render with comment_feed.new, comment_feed.earlier, and park.comments 
 filled  = render with the views filled      # rendered last, so the comments the run records match the prompt sent
 if filled fails:
   fail the run like any render failure
-if filled is not blank and (emptied fails or filled differs from emptied):
+if filled is the template's own output, not blank, and (emptied fails or filled differs from emptied):
   send filled                       # the template placed the comments
 else:
   send filled, a blank line, and the block
@@ -79,7 +79,7 @@ else:
 A boundary with no pending comments renders once and sends the prompt unchanged, and so does every boundary while the feed is off. The renders differ only in the feed views: `comment_feed.new`, `comment_feed.earlier`, and, on turn 1 of a release run, `park.comments`. `issue.comments` and every other input are identical in both, so a template that renders only `.issue.comments` receives the block and shows those comments in its own text as well.
 
 - Both outcomes count every pending comment as given. A template that shows part of the feed, such as one view, a count, or a line pointing the agent at its tracker tool, marks every pending comment given. That pointer line is the deliberate way to leave the comments out of the prompt; turning the feed off is the other.
-- A blank filled render receives the block, so a template that renders nothing cannot drop a comment. An emptied render that fails while the filled one succeeds counts as placed, because the template reads a comment without a guard.
+- A blank filled render receives the block, so a template that renders nothing cannot drop a comment. So does a filled render replaced by a built-in prompt, the default continuation prompt or a reaction's built-in, because the built-in never shows the feed. An emptied render that fails while the filled one succeeds counts as placed, because the template reads a comment without a guard.
 - A template that places the feed on some turns only receives the block on the others.
 - The block follows the operator's render or the built-in reaction prompt chosen above, and precedes the text Sortie appends on the first turn of a run, the tool advertisement and the runtime status suffix. The self-review review and fix prompts have no operator template to compare, so they always receive the block.
 

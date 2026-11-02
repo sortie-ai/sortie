@@ -90,7 +90,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -133,11 +133,11 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		first, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
+		first, _, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
 		if err != nil {
 			t.Fatalf("first turn: %v", err)
 		}
-		cont, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
+		cont, _, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
 		if err != nil {
 			t.Fatalf("continuation turn: %v", err)
 		}
@@ -159,7 +159,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -177,7 +177,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 2, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -214,7 +214,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		_, err = BuildTurnPrompt(tmpl, map[string]any{}, nil, 1, 20)
+		_, _, err = BuildTurnPrompt(tmpl, map[string]any{}, nil, 1, 20)
 		if err == nil {
 			t.Fatal("expected render error, got nil")
 		}
@@ -237,7 +237,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		_, err = BuildTurnPrompt(tmpl, map[string]any{}, nil, 2, 20)
+		_, _, err = BuildTurnPrompt(tmpl, map[string]any{}, nil, 2, 20)
 		if err == nil {
 			t.Fatal("expected render error on continuation turn, got nil")
 		}
@@ -254,7 +254,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		_, err = BuildTurnPrompt(tmpl, issue, nil, 0, 20)
+		_, _, err = BuildTurnPrompt(tmpl, issue, nil, 0, 20)
 		if err == nil {
 			t.Fatal("expected error for turnNumber=0, got nil")
 		}
@@ -272,7 +272,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -289,7 +289,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("parse: %v", err)
 		}
 
-		got, err := BuildTurnPrompt(tmpl, issue, 2, 1, 20)
+		got, _, err := BuildTurnPrompt(tmpl, issue, 2, 1, 20)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -307,7 +307,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 		}
 
 		for _, turn := range []int{3, 4, 5} {
-			got, err := BuildTurnPrompt(tmpl, issue, nil, turn, 20)
+			got, _, err := BuildTurnPrompt(tmpl, issue, nil, turn, 20)
 			if err != nil {
 				t.Fatalf("turn %d: unexpected error: %v", turn, err)
 			}

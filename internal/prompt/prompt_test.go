@@ -648,7 +648,7 @@ func TestRender_WithContinuationContext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		got, err := BuildTurnPrompt(
+		got, _, err := BuildTurnPrompt(
 			tmpl,
 			map[string]any{"title": "t"}, nil, 1, 5,
 			WithContinuationContext(map[string]any{"ci_failure": map[string]any{"count": 3}}),

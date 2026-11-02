@@ -5930,6 +5930,12 @@ func TestRunWorkerAttempt_CommentFeedPlacement(t *testing.T) {
 			wantCounts: [2]map[string]int{{"body of c-0": 1, "## New issue": 0}, {"body of c-1": 1, "body of c-0": 0, "## New issue": 1}},
 		},
 		{
+			name:     "continuation that falls back to the default prompt gets the block",
+			template: "{{ if .run.is_continuation }}{{ if not .comment_feed.new }}Continue{{ end }}{{ else }}start{{ end }}",
+			added:    comment("c-1"), wantGiven: []string{"c-1"},
+			wantCounts: [2]map[string]int{nil, {prompt.DefaultContinuationPrompt: 1, "body of c-1": 1}},
+		},
+		{
 			name:     "release run serves .park.comments from the feed",
 			template: "ids={{ if .park }}{{ range .park.comments }}[{{ .id }}]{{ end }}{{ end }}",
 			ctx:      releaseCtx, wantGiven: []string{"c-earlier", "c-new"},

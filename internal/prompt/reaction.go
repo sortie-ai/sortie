@@ -133,13 +133,13 @@ Push to no other branch and do not start other work.`
 // BuildReactionTurnPrompt returns the prompt for one turn of a reaction run.
 // The operator's template wins when its render with the run's continuation
 // context is not blank and differs from its render without it; otherwise the
-// built-in prompt of the continuation key is rendered with the same data. A
-// render that fails without the context counts as differing, because the
-// template then reads the key unguarded.
+// built-in prompt of the continuation key is rendered with the same data and
+// builtin is true. A render that fails without the context counts as
+// differing, because the template then reads the key unguarded.
 //
 // A continuation holding no registered key, or a turnNumber below 1, behaves
 // as [BuildTurnPrompt]. opts apply to every render. Safe for concurrent use.
-func BuildReactionTurnPrompt(tmpl *Template, issue map[string]any, attempt any, turnNumber, maxTurns int, continuation map[string]any, opts ...RenderOption) (string, error) {
+func BuildReactionTurnPrompt(tmpl *Template, issue map[string]any, attempt any, turnNumber, maxTurns int, continuation map[string]any, opts ...RenderOption) (prompt string, builtin bool, err error) {
 	key, ok := activeContinuationKey(continuation)
 	if !ok || turnNumber < 1 {
 		return BuildTurnPrompt(tmpl, issue, attempt, turnNumber, maxTurns, opts...)
@@ -150,13 +150,14 @@ func BuildReactionTurnPrompt(tmpl *Template, issue map[string]any, attempt any, 
 
 	seeded, err := tmpl.Render(issue, attempt, run, seededOpts...)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	unseeded, unseededErr := tmpl.Render(issue, attempt, run, opts...)
 	if strings.TrimSpace(seeded) != "" && (unseededErr != nil || seeded != unseeded) {
-		return seeded, nil
+		return seeded, false, nil
 	}
-	return builtinTemplates[key].Render(issue, attempt, run, seededOpts...)
+	prompt, err = builtinTemplates[key].Render(issue, attempt, run, seededOpts...)
+	return prompt, true, err
 }
 
 // activeContinuationKey returns the first registered key that continuation

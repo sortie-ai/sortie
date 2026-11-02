@@ -1019,18 +1019,18 @@ function run_agent_attempt(issue, attempt, settings, orchestrator_channel, dispa
   exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason, soft_stop_statement=pending_statement, handed_off_comments=presented)
 ```
 
-`place_comment_block` decides whether the template placed the pending comments by comparing a render with the feed views empty and one with them filled (Section 12.1). The self-review review and fix turns call it with a render that ignores its argument, so the two renders match and the block is appended:
+`place_comment_block` decides whether the template placed the pending comments by comparing a render with the feed views empty and one with them filled (Section 12.1). A render reports `builtin` when it substituted a built-in prompt for the template's output. The self-review review and fix turns call it with a render that ignores its argument, so the two renders match and the block is appended:
 
 ```text
 function place_comment_block(render, selection):
   if selection.new is empty and selection.earlier is empty:
     return render(selection), []                      // one render, nothing placed
-  emptied, emptied_err = render(empty_selection)
-  filled, err = render(selection)                     // rendered last, so presented matches the prompt sent
+  emptied, _, emptied_err = render(empty_selection)
+  filled, filled_builtin, err = render(selection)     // rendered last, so presented matches the prompt sent
   if err != null:
     return failed, []
   placed = selection.earlier followed by selection.new
-  if filled is not blank and (emptied_err != null or filled != emptied):
+  if not filled_builtin and filled is not blank and (emptied_err != null or filled != emptied):
     return filled, placed                             // the template placed the comments
   return filled + "\n\n" + comment_block(selection), placed
 ```
