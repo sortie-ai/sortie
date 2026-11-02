@@ -641,9 +641,13 @@ func TestFetchIssueCommentChanges(t *testing.T) {
 		t.Fatalf("FetchIssueCommentChanges: %v", err)
 	}
 
-	if len(listed) != 5 || !slices.Equal(changes.Comments, listed) || !slices.Equal(issue.Comments, listed) {
-		t.Errorf("comments by read = FetchIssueByID %v, FetchIssueCommentChanges %v, want both equal to FetchIssueComments %v (5 comments)",
-			issue.Comments, changes.Comments, listed)
+	if len(listed) != 5 || !slices.Equal(issue.Comments, listed) {
+		t.Fatalf("FetchIssueByID comments %v, want FetchIssueComments %v (5 comments)", issue.Comments, listed)
+	}
+	// The two identical 10:05 comments swap: equal creation times order by ID.
+	wantOrder := []domain.Comment{listed[0], listed[2], listed[1], listed[3], listed[4]}
+	if !slices.Equal(changes.Comments, wantOrder) {
+		t.Errorf("FetchIssueCommentChanges comments = %v, want oldest first with ties by ID %v", changes.Comments, wantOrder)
 	}
 	if changes.Next != "" {
 		t.Errorf("FetchIssueCommentChanges Next = %q, want zero point", changes.Next)

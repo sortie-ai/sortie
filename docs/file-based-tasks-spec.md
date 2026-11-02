@@ -273,7 +273,7 @@ Returns comments for the specified issue. If the issue exists but has `null` com
 
 **Returns:** `([]Comment, nil)` on success; `(nil, *TrackerError)` if not found.
 
-`FetchIssueCommentChanges(issueID, point)` returns the `FetchIssueComments` list and an empty next point on every call, whatever the given point. Every read is a full read, and errors are those of `FetchIssueComments`.
+`FetchIssueCommentChanges(issueID, point)` returns the comments of the `FetchIssueComments` list, oldest first by `created_at` with ties by ascending `id`, and an empty next point on every call, whatever the given point. Every read is a full read. Errors are those of `FetchIssueComments`, plus a payload error when a comment's `created_at` is not an RFC 3339 timestamp.
 
 **Returns:** `(CommentChanges, nil)` on success; `(zero CommentChanges, *TrackerError)` if not found.
 
