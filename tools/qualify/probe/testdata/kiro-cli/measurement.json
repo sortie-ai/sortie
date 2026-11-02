@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
   "profile_digest": "00af275549f4f65c57f61fe27d1c31f570ba6749c277e4f2b77ee0da2ba94119",
-  "measured_at": "2026-09-28",
+  "measured_at": "2026-11-02",
   "expectation": {
     "Verdict": "qualified",
     "Conformance": "not_qualified",
