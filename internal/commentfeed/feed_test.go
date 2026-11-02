@@ -142,6 +142,7 @@ func TestRun_Select(t *testing.T) {
 		comments       []domain.Comment
 		access         map[string]answer
 		deliverFirst   bool
+		refuse         string
 		want           outcome
 	}{
 		{
@@ -201,6 +202,11 @@ func TestRun_Select(t *testing.T) {
 			comments: []domain.Comment{comment("c1", "dave", person), comment("c2", "erin", person)},
 			access:   map[string]answer{"dave": {err: errors.New("lookup failed")}}, deliverFirst: true, want: outcome{canWrite: 3},
 		},
+		{
+			name: "comment the channel refused stays pending and keeps the read point", cfg: feedCfg(all, nil, nil), conv: fresh,
+			comments: append(slices.Clone(alice), comment("c2", "alice", person)), deliverFirst: true, refuse: "c2",
+			want: outcome{new: []string{"c2"}},
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,7 +219,8 @@ func TestRun_Select(t *testing.T) {
 			run := newRun(tt.cfg, store, tracker, func([]storage.GivenComment) {})
 			if tt.deliverFirst {
 				first := mustSelect(t, run, tt.conv)
-				run.Delivered("s1", time.Time{}, ChannelNextPrompt, slices.Concat(first.Earlier, first.New))
+				delivered := slices.DeleteFunc(slices.Concat(first.Earlier, first.New), func(p Pending) bool { return p.Comment.ID == tt.refuse })
+				run.Delivered("s1", time.Time{}, ChannelNextPrompt, delivered)
 			}
 
 			sel := mustSelect(t, run, tt.conv)

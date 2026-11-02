@@ -136,6 +136,7 @@ type Run struct {
 	candidate   domain.CommentReadPoint
 	withheld    bool
 	outstanding bool
+	selected    []Pending
 	unreported  []storage.GivenComment
 }
 
@@ -161,6 +162,7 @@ func NewRun(p RunParams) *Run {
 func (r *Run) Select(ctx context.Context, conv Conversation) (Selection, error) {
 	r.outstanding = false
 	r.withheld = false
+	r.selected = nil
 
 	if !r.loaded {
 		if err := r.load(ctx, conv); err != nil {
@@ -212,6 +214,7 @@ func (r *Run) Select(ctx context.Context, conv Conversation) (Selection, error) 
 		sel.New = append(sel.New, p)
 	}
 
+	r.selected = slices.Concat(sel.Earlier, sel.New)
 	if withheldCount > 0 {
 		r.withheld = true
 		r.logger.Warn("issue comments withheld after author lookup failed",
@@ -246,13 +249,15 @@ func (r *Run) load(ctx context.Context, conv Conversation) error {
 }
 
 // Delivered records the comments a channel gave the agent and commits the
-// read point of the last Select unless that Select withheld a comment.
+// read point of the last Select unless that Select withheld a comment or the
+// channel left a selected one out.
 // Rows wait for a non-empty sessionID before they are reported.
 func (r *Run) Delivered(sessionID string, at time.Time, channel string, comments []Pending) {
-	if r.outstanding && !r.withheld {
+	if r.outstanding && !r.withheld && deliversAll(r.selected, comments) {
 		r.point = r.candidate
 	}
 	r.outstanding = false
+	r.selected = nil
 
 	for _, p := range comments {
 		row := storage.GivenComment{
@@ -266,6 +271,19 @@ func (r *Run) Delivered(sessionID string, at time.Time, channel string, comments
 		r.unreported = append(r.unreported, row)
 	}
 	r.flush(sessionID)
+}
+
+func deliversAll(selected, delivered []Pending) bool {
+	given := make(map[commentKey]struct{}, len(delivered))
+	for _, p := range delivered {
+		given[commentKey{source: p.Source, commentID: p.Comment.ID}] = struct{}{}
+	}
+	for _, p := range selected {
+		if _, ok := given[commentKey{source: p.Source, commentID: p.Comment.ID}]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // Finish reports the rows still waiting for a session identifier and drops
