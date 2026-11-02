@@ -42,6 +42,13 @@ const queryIssuesByStates = `query IssuesByStates($filter: IssueFilter!, $first:
   }
 }`
 
+// commentNodeSelection is the comment node selection shared by every document
+// that reads comments, so the full reads and the change read decode one shape.
+const commentNodeSelection = `id body createdAt updatedAt
+        user { id displayName name email app }
+        botActor { id name }
+        externalUser { id }`
+
 // queryIssueByID fetches a single issue by UUID or human identifier, including
 // the first page of comments.
 const queryIssueByID = `query IssueByID($id: String!) {
@@ -54,9 +61,7 @@ const queryIssueByID = `query IssueByID($id: String!) {
     inverseRelations(first: 25) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage } }
     comments(first: 50, orderBy: createdAt) {
       nodes {
-        id body createdAt
-        user { displayName name email }
-        botActor { name }
+        ` + commentNodeSelection + `
       }
       pageInfo { hasNextPage endCursor }
     }
@@ -69,9 +74,21 @@ const queryIssueComments = `query IssueComments($id: String!, $first: Int!, $aft
   issue(id: $id) {
     comments(first: $first, after: $after, orderBy: createdAt) {
       nodes {
-        id body createdAt
-        user { displayName name email }
-        botActor { name }
+        ` + commentNodeSelection + `
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+// queryIssueCommentChanges fetches a page of an issue's comments filtered by
+// update time. It re-selects the parent issue so a not-found mid-pagination
+// surfaces through the classifier.
+const queryIssueCommentChanges = `query IssueCommentChanges($id: String!, $first: Int!, $after: String, $filter: CommentFilter!) {
+  issue(id: $id) {
+    comments(first: $first, after: $after, orderBy: createdAt, filter: $filter) {
+      nodes {
+        ` + commentNodeSelection + `
       }
       pageInfo { hasNextPage endCursor }
     }

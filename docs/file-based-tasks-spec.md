@@ -76,10 +76,12 @@ Optional fields MAY be omitted entirely from the JSON object. When omitted, the 
 
 A Parent Reference is a JSON object identifying the parent issue for a sub-task.
 
-| Field        | JSON Type | Required | Description                        |
-| ------------ | --------- | -------- | ---------------------------------- |
-| `id`         | string    | Yes      | Tracker-internal ID of the parent. |
-| `identifier` | string    | Yes      | Human-readable key of the parent.  |
+| Field        | JSON Type | Required | Description                                                                           |
+| ------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
+| `id`         | string    | No       | Tracker-internal comment identifier. Derived when omitted or empty (Section 7.3).     |
+| `author`     | string    | Yes      | Display name or username of the author. Also the author's identity, compared exactly. |
+| `body`       | string    | Yes      | Comment text content.                                                                 |
+| `created_at` | string    | Yes      | ISO-8601 timestamp.                                                                   |
 
 Example:
 
@@ -93,12 +95,12 @@ When the issue has no parent, the `parent` field MUST be either `null` or absent
 
 A Comment is a JSON object representing a single comment on an issue.
 
-| Field        | JSON Type | Required | Description                             |
-| ------------ | --------- | -------- | --------------------------------------- |
-| `id`         | string    | Yes      | Tracker-internal comment identifier.    |
-| `author`     | string    | Yes      | Display name or username of the author. |
-| `body`       | string    | Yes      | Comment text content.                   |
-| `created_at` | string    | Yes      | ISO-8601 timestamp.                     |
+| Field        | JSON Type | Required | Description                                                                                                       |
+| ------------ | --------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `id`         | string    | No       | Tracker-internal comment identifier. When omitted or empty, the adapter derives one (see Comment identity in Section 7.3). |
+| `author`     | string    | Yes      | Display name or username of the author. It is also the author's identity, compared exactly.                       |
+| `body`       | string    | Yes      | Comment text content.                                                                                             |
+| `created_at` | string    | Yes      | ISO-8601 timestamp.                                                                                               |
 
 Example:
 
@@ -181,6 +183,12 @@ The `comments` field carries tri-state semantics:
 This distinction is critical for prompt rendering. When comments are `nil`, the orchestrator knows it must call `FetchIssueComments` separately if comments are needed.
 
 **Context-dependent override in `FetchIssueByID`:** When an issue has `null` comments in the file and is retrieved via `FetchIssueByID`, the adapter coerces `nil` to an empty non-nil slice `[]Comment{}`. This is because `FetchIssueByID` is defined as returning a "fully-populated" issue. Listing operations (`FetchCandidateIssues`, `FetchIssuesByStates`) always set comments to `nil` regardless of the file value, to match the adapter contract.
+
+#### Comment identity
+
+A comment whose `id` is missing or empty gets an identity from the adapter: the lowercase hexadecimal SHA-256 digest of the compact JSON array `[author, created_at, body, n]`, as Go's standard JSON encoder writes it. `n` is the number of earlier comments in the same `comments` array that have no `id` and equal `author`, `created_at`, and `body`, so two identical id-less comments get distinct identities.
+
+One comment has one identity in every read, `FetchIssueByID`, `FetchIssueComments`, and `FetchIssueCommentChanges` alike, across re-reads of the file and restarts, as long as its author, `created_at`, body, and position among identical id-less comments stay the same. An edit to an id-less comment's text gives it a new identity, so a consumer sees a new comment and not an edit. A non-empty `id` passes through unchanged. A comment with a non-empty `author` is attributed to a person; a comment with an empty `author` has an unknown author kind.
 
 ### 7.4 State Comparison
 
@@ -267,6 +275,10 @@ Returns comments for the specified issue. If the issue exists but has `null` com
 
 **Returns:** `([]Comment, nil)` on success; `(nil, *TrackerError)` if not found.
 
+`FetchIssueCommentChanges(issueID, point)` returns the `FetchIssueComments` list and an empty next point on every call, whatever the given point. Every read is a full read, and errors are those of `FetchIssueComments`.
+
+**Returns:** `(CommentChanges, nil)` on success; `(zero CommentChanges, *TrackerError)` if not found.
+
 ### 9.6 AddLabel and RemoveLabel
 
 `AddLabel(issueID, label)` and `RemoveLabel(issueID, label)` change the labels an issue shows on later reads without modifying the file. The adapter keeps an in-memory overlay per issue: an ordered list of entries, each holding a label and whether the issue carries it, with at most one entry per label. Two labels are the same label when they compare equal ignoring letter case.
@@ -321,7 +333,7 @@ Producers of issue files MUST verify the following invariants after every create
 11. Timestamps use ISO-8601 format (e.g. `"2026-03-01T10:00:00Z"`).
 12. Blocker References contain at minimum `id` and `identifier`; `state` is optional.
 13. Parent References contain both `id` and `identifier`.
-14. Comment objects contain `id`, `author`, `body`, and `created_at`.
+14. Comment objects contain `author`, `body`, and `created_at`; `id` is optional.
 
 ## 12. Examples
 
@@ -560,7 +572,7 @@ The following JSON Schema is provided for reference. It describes the file forma
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["id", "author", "body", "created_at"],
+              "required": ["author", "body", "created_at"],
               "properties": {
                 "id": { "type": "string" },
                 "author": { "type": "string" },

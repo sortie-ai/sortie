@@ -10,6 +10,7 @@ package jira
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,8 +18,10 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -39,6 +42,7 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*JiraAdapter)(nil)
+var _ domain.CommentChangeReader = (*JiraAdapter)(nil)
 
 // searchFields is the comma-separated list of Jira fields requested
 // in search and issue-detail operations.
@@ -827,30 +831,9 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 			return nil, ctx.Err()
 		}
 
-		params := url.Values{
-			"orderBy":    {"created"},
-			"maxResults": {fmt.Sprintf("%d", maxCommentResults)},
-			"startAt":    {fmt.Sprintf("%d", startAt)},
-		}
-
-		body, _, err := a.client.Get(ctx, a.basePath+"/issue/"+url.PathEscape(issueID)+"/comment", params)
+		cr, err := a.fetchCommentPage(ctx, issueID, "created", startAt)
 		if err != nil {
-			if domain.IsNotFound(err) {
-				return nil, &domain.TrackerError{
-					Kind:    domain.ErrTrackerNotFound,
-					Message: fmt.Sprintf("issue not found: %s", issueID),
-				}
-			}
 			return nil, err
-		}
-
-		var cr commentResponse
-		if err := json.Unmarshal(body, &cr); err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to parse comment response",
-				Err:     err,
-			}
 		}
 
 		allComments = append(allComments, cr.Comments...)
@@ -865,4 +848,179 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 		return []domain.Comment{}, nil
 	}
 	return normalizeComments(a.apiVersion, allComments), nil
+}
+
+// fetchCommentPage requests one page of an issue's comments, ordered by
+// orderBy, starting at startAt.
+func (a *JiraAdapter) fetchCommentPage(ctx context.Context, issueID, orderBy string, startAt int) (commentResponse, error) {
+	params := url.Values{
+		"orderBy":    {orderBy},
+		"maxResults": {fmt.Sprintf("%d", maxCommentResults)},
+		"startAt":    {fmt.Sprintf("%d", startAt)},
+	}
+
+	body, _, err := a.client.Get(ctx, a.basePath+"/issue/"+url.PathEscape(issueID)+"/comment", params)
+	if err != nil {
+		if domain.IsNotFound(err) {
+			return commentResponse{}, &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+		return commentResponse{}, err
+	}
+
+	var cr commentResponse
+	if err := json.Unmarshal(body, &cr); err != nil {
+		return commentResponse{}, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse comment response",
+			Err:     err,
+		}
+	}
+	return cr, nil
+}
+
+// FetchIssueCommentChanges reads the issue's comments newest first, down to
+// the first page holding a comment the previous read returned.
+//
+// The point lists the IDs of the newest comments the read returned. Jira
+// has no update-time filter, so an edit to a comment older than every
+// comment the read returns is not seen.
+func (a *JiraAdapter) FetchIssueCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var changes domain.CommentChanges
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		read, readErr := a.readCommentChanges(ctx, issueID, since)
+		if readErr != nil {
+			return readErr
+		}
+		changes = read
+		return nil
+	})
+	return changes, err
+}
+
+func (a *JiraAdapter) readCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var comments []domain.Comment
+	var err error
+	if known := decodeCommentPoint(since); len(known) == 0 {
+		comments, err = a.fetchComments(ctx, issueID)
+	} else {
+		comments, err = a.fetchCommentsUntilKnown(ctx, issueID, known)
+	}
+	if err != nil {
+		return domain.CommentChanges{}, err
+	}
+	return domain.CommentChanges{Comments: comments, Next: encodeCommentPoint(comments)}, nil
+}
+
+// fetchCommentsUntilKnown walks the comment pages newest first and returns
+// the comments it read, oldest created first, each ID once.
+func (a *JiraAdapter) fetchCommentsUntilKnown(ctx context.Context, issueID string, known map[string]struct{}) ([]domain.Comment, error) {
+	var held []jiraComment
+	startAt := 0
+
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		page, err := a.fetchCommentPage(ctx, issueID, "-created", startAt)
+		if err != nil {
+			return nil, err
+		}
+
+		held = append(held, page.Comments...)
+
+		if len(page.Comments) == 0 || startAt+len(page.Comments) >= page.Total || pageHoldsKnown(page.Comments, known) {
+			break
+		}
+		startAt += len(page.Comments)
+	}
+
+	return orderComments(normalizeComments(a.apiVersion, held))
+}
+
+// pageHoldsKnown reports whether any comment on the page is known. The
+// page's oldest comment is not the test: once a known comment is deleted,
+// that test walks to the last page on every read.
+func pageHoldsKnown(page []jiraComment, known map[string]struct{}) bool {
+	for _, c := range page {
+		if _, ok := known[c.ID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// orderComments keeps the first occurrence of each ID and sorts oldest
+// created first, ties by ID. A comment created between two page requests
+// shifts the offsets, so one comment can arrive on both pages.
+func orderComments(comments []domain.Comment) ([]domain.Comment, error) {
+	type datedComment struct {
+		domain.Comment
+		created time.Time
+	}
+
+	seen := make(map[string]struct{}, len(comments))
+	dated := make([]datedComment, 0, len(comments))
+	for _, c := range comments {
+		if _, dup := seen[c.ID]; dup {
+			continue
+		}
+		seen[c.ID] = struct{}{}
+
+		created, err := c.CreatedTime()
+		if err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse comment created time",
+				Err:     err,
+			}
+		}
+		dated = append(dated, datedComment{Comment: c, created: created})
+	}
+
+	slices.SortFunc(dated, func(x, y datedComment) int {
+		return cmp.Or(x.created.Compare(y.created), compareCommentIDs(x.ID, y.ID))
+	})
+	ordered := make([]domain.Comment, len(dated))
+	for i, d := range dated {
+		ordered[i] = d.Comment
+	}
+	return ordered, nil
+}
+
+// compareCommentIDs orders numeric IDs by value without parsing them:
+// shorter first, then byte-wise.
+func compareCommentIDs(x, y string) int {
+	return cmp.Or(cmp.Compare(len(x), len(y)), strings.Compare(x, y))
+}
+
+// encodeCommentPoint returns the point listing the IDs of the last
+// maxCommentResults comments, one page of known IDs being all the stop
+// test needs.
+func encodeCommentPoint(comments []domain.Comment) domain.CommentReadPoint {
+	newest := comments[max(0, len(comments)-maxCommentResults):]
+	ids := make([]string, len(newest))
+	for i, c := range newest {
+		ids[i] = c.ID
+	}
+	slices.SortFunc(ids, compareCommentIDs)
+	encoded, _ := json.Marshal(ids)
+	return domain.CommentReadPoint(encoded)
+}
+
+// decodeCommentPoint returns the IDs a point lists, or nil for an empty
+// point or one this adapter did not return.
+func decodeCommentPoint(since domain.CommentReadPoint) map[string]struct{} {
+	var ids []string
+	if err := json.Unmarshal([]byte(since), &ids); err != nil {
+		return nil
+	}
+	known := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		known[id] = struct{}{}
+	}
+	return known
 }

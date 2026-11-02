@@ -2,6 +2,7 @@ package jira
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -58,6 +59,9 @@ type jiraPriority struct {
 
 type jiraUser struct {
 	DisplayName string `json:"displayName"`
+	AccountID   string `json:"accountId"`
+	AccountType string `json:"accountType"`
+	Name        string `json:"name"`
 }
 
 type jiraIssueType struct {
@@ -103,6 +107,7 @@ type jiraComment struct {
 	Author  *jiraUser       `json:"author"`
 	Body    json.RawMessage `json:"body"`
 	Created string          `json:"created"`
+	Updated string          `json:"updated"`
 }
 
 // normalizeSearchIssue maps a Jira API issue to a domain.Issue. The
@@ -175,7 +180,9 @@ func extractBlockers(links []jiraIssueLink) []domain.BlockerRef {
 // normalizeComments maps Jira comment objects to domain.Comment
 // values. Comment bodies are extracted per apiVersion: ADF is
 // flattened on "3", the raw wiki-markup string is preserved on "2".
-// Nil author fields produce an empty author string.
+// The author identity is the account ID, else the username, and the
+// kind comes from the account type; the display author keeps the
+// display name, and a nil author produces empty author fields.
 func normalizeComments(apiVersion string, comments []jiraComment) []domain.Comment {
 	source := make([]issuekit.SourceComment, len(comments))
 	for i, c := range comments {
@@ -183,12 +190,40 @@ func normalizeComments(apiVersion string, comments []jiraComment) []domain.Comme
 			ID:        c.ID,
 			Body:      extractBody(apiVersion, c.Body),
 			CreatedAt: c.Created,
+			UpdatedAt: c.Updated,
 		}
 		if c.Author != nil {
 			source[i].Author = c.Author.DisplayName
 		}
+		source[i].AuthorID, source[i].AuthorKind = jiraCommentAuthor(c.Author)
 	}
 	return issuekit.NormalizeComments(source)
+}
+
+// jiraCommentAuthor returns the identity and kind of a comment author.
+func jiraCommentAuthor(user *jiraUser) (string, domain.CommentAuthorKind) {
+	if user == nil {
+		return "", domain.CommentAuthorUnknown
+	}
+	id := user.AccountID
+	if id == "" {
+		id = user.Name
+	}
+	switch {
+	case strings.EqualFold(user.AccountType, "atlassian"):
+		return id, domain.CommentAuthorPerson
+	case strings.EqualFold(user.AccountType, "app"):
+		return id, domain.CommentAuthorBot
+	case strings.EqualFold(user.AccountType, "customer"):
+		return id, domain.CommentAuthorExternal
+	case user.AccountType != "":
+		return id, domain.CommentAuthorUnknown
+	case id != "":
+		// Data Center sends no account type, so a named author cannot
+		// be told from a customer or an automation user.
+		return id, domain.CommentAuthorPerson
+	}
+	return id, domain.CommentAuthorUnknown
 }
 
 // extractBody returns the body text for a description or comment field

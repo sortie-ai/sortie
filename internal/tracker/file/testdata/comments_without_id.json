@@ -1,0 +1,37 @@
+[
+  {
+    "id": "20001",
+    "identifier": "PROJ-10",
+    "title": "Staging deploy fails",
+    "description": "The staging deploy exits with a timeout.",
+    "priority": 1,
+    "state": "To Do",
+    "url": "https://tracker.example.com/PROJ-10",
+    "labels": ["bug"],
+    "comments": [
+      {
+        "author": "alice",
+        "body": "Deploy failed on staging.",
+        "created_at": "2026-03-01T10:00:00Z"
+      },
+      {
+        "author": "bob",
+        "body": "Same here.",
+        "created_at": "2026-03-01T10:05:00Z"
+      },
+      {
+        "author": "bob",
+        "body": "Same here.",
+        "created_at": "2026-03-01T10:05:00Z"
+      },
+      {
+        "id": "c9",
+        "author": "carol",
+        "body": "Rolled back to the previous release.",
+        "created_at": "2026-03-01T10:10:00Z"
+      }
+    ],
+    "created_at": "2026-03-01T09:00:00Z",
+    "updated_at": "2026-03-01T10:10:00Z"
+  }
+]

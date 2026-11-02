@@ -11,6 +11,8 @@ package file
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,8 +34,11 @@ func init() {
 	})
 }
 
-// Compile-time interface satisfaction check.
-var _ domain.TrackerAdapter = (*FileAdapter)(nil)
+// Compile-time interface satisfaction checks.
+var (
+	_ domain.TrackerAdapter      = (*FileAdapter)(nil)
+	_ domain.CommentChangeReader = (*FileAdapter)(nil)
+)
 
 // FileAdapter reads issues from a JSON file and implements
 // [domain.TrackerAdapter]. The file is re-read on each
@@ -302,36 +307,60 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 // [*domain.TrackerError] with Kind [domain.ErrTrackerNotFound] if
 // the issue does not exist.
 func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]domain.Comment, error) {
-	comments := make([]domain.Comment, 0)
+	var comments []domain.Comment
 	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
-		raws, err := loadIssues(a.path)
-		if err != nil {
-			return err
-		}
-
-		for _, raw := range raws {
-			if raw.ID != issueID {
-				continue
-			}
-
-			issue := normalize(raw)
-			comments = issue.Comments
-			if comments == nil {
-				comments = []domain.Comment{}
-			}
-
-			a.mu.RLock()
-			comments = append(comments, a.commentOverrides[issueID]...)
-			a.mu.RUnlock()
-			return nil
-		}
-
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerNotFound,
-			Message: fmt.Sprintf("issue not found: %s", issueID),
-		}
+		var err error
+		comments, err = a.readComments(issueID)
+		return err
 	})
-	return comments, err
+	if err != nil {
+		return []domain.Comment{}, err
+	}
+	return comments, nil
+}
+
+// FetchIssueCommentChanges returns the [FileAdapter.FetchIssueComments]
+// list and an empty point on every call, so each read is full. Errors are
+// those of [FileAdapter.FetchIssueComments].
+func (a *FileAdapter) FetchIssueCommentChanges(_ context.Context, issueID string, _ domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var comments []domain.Comment
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		var err error
+		comments, err = a.readComments(issueID)
+		return err
+	})
+	if err != nil {
+		return domain.CommentChanges{}, err
+	}
+	return domain.CommentChanges{Comments: comments}, nil
+}
+
+func (a *FileAdapter) readComments(issueID string) ([]domain.Comment, error) {
+	raws, err := loadIssues(a.path)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, raw := range raws {
+		if raw.ID != issueID {
+			continue
+		}
+
+		comments := normalize(raw).Comments
+		if comments == nil {
+			comments = []domain.Comment{}
+		}
+
+		a.mu.RLock()
+		comments = append(comments, a.commentOverrides[issueID]...)
+		a.mu.RUnlock()
+		return comments, nil
+	}
+
+	return nil, &domain.TrackerError{
+		Kind:    domain.ErrTrackerNotFound,
+		Message: fmt.Sprintf("issue not found: %s", issueID),
+	}
 }
 
 // TransitionIssue records a state override for the given issue in the
@@ -618,6 +647,10 @@ func loadIssues(path string) ([]rawIssue, error) {
 	return raws, nil
 }
 
+// normalize maps a fixture issue to a [domain.Issue]. A comment's author is
+// also its identity, because the fixture has no account system, and a named
+// author reads as a person. A comment without an id gets the identity
+// [commentIdentity] derives.
 func normalize(raw rawIssue) domain.Issue {
 	iss := domain.Issue{
 		ID:          raw.ID,
@@ -646,12 +679,26 @@ func normalize(raw rawIssue) domain.Issue {
 
 	if raw.Comments != nil {
 		source := make([]issuekit.SourceComment, len(raw.Comments))
+		idless := make(map[rawComment]int)
 		for i, c := range raw.Comments {
+			id := c.ID
+			if id == "" {
+				// Identical id-less comments must stay distinct, so the
+				// identity counts the earlier ones.
+				id = commentIdentity(c, idless[c])
+				idless[c]++
+			}
+			kind := domain.CommentAuthorUnknown
+			if c.Author != "" {
+				kind = domain.CommentAuthorPerson
+			}
 			source[i] = issuekit.SourceComment{
-				ID:        c.ID,
-				Author:    c.Author,
-				Body:      c.Body,
-				CreatedAt: c.CreatedAt,
+				ID:         id,
+				Author:     c.Author,
+				AuthorID:   c.Author,
+				AuthorKind: kind,
+				Body:       c.Body,
+				CreatedAt:  c.CreatedAt,
 			}
 		}
 		iss.Comments = issuekit.NormalizeComments(source)
@@ -672,6 +719,16 @@ func normalize(raw rawIssue) domain.Issue {
 	}
 
 	return iss
+}
+
+// commentIdentity derives a comment's identity from its content, so one
+// comment keeps one identity across reads and restarts. n is the number of
+// earlier id-less comments with the same author, time, and body.
+func commentIdentity(c rawComment, n int) string {
+	// Marshaling a slice of strings and an int cannot fail.
+	b, _ := json.Marshal([]any{c.Author, c.CreatedAt, c.Body, n})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func toStringSet(ss []string) map[string]bool {

@@ -20,6 +20,7 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/issuekit"
@@ -39,12 +40,19 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*LinearAdapter)(nil)
+var _ domain.CommentChangeReader = (*LinearAdapter)(nil)
 
 // defaultEndpoint is the Linear GraphQL endpoint used when the config omits it.
 const defaultEndpoint = "https://api.linear.app/graphql"
 
 // topLevelPageSize is the page size for top-level issue connections.
 const topLevelPageSize = 50
+
+// commentUpdateLookback is how far before a read point the change read starts
+// its update-time filter. Linear stamps updatedAt before the comment is
+// committed, so a comment stamped before the point can still commit after the
+// read that produced it.
+const commentUpdateLookback = 30 * time.Second
 
 // stateBatchChunkSize is the maximum number of ids or numbers per state-batch
 // request.
@@ -425,20 +433,110 @@ func (a *LinearAdapter) collectComments(ctx context.Context, issueID string, inl
 func (a *LinearAdapter) FetchIssueComments(ctx context.Context, issueID string) ([]domain.Comment, error) {
 	comments := make([]domain.Comment, 0)
 	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
-		variables := map[string]any{
-			"id":    issueID,
-			"first": topLevelPageSize,
-		}
-		nodes, fetchErr := paginate(ctx, a.client, queryIssueComments, variables, decodeCommentsPage, a.log)
+		fetched, fetchErr := a.fetchComments(ctx, issueID)
 		if fetchErr != nil {
 			return fetchErr
 		}
-		normalized := normalizeComments(nodes)
-		sortCommentsByCreatedAt(normalized)
-		comments = normalized
+		comments = fetched
 		return nil
 	})
 	return comments, err
+}
+
+// fetchComments walks every comment page and returns the comments sorted
+// ascending by creation time.
+func (a *LinearAdapter) fetchComments(ctx context.Context, issueID string) ([]domain.Comment, error) {
+	variables := map[string]any{
+		"id":    issueID,
+		"first": topLevelPageSize,
+	}
+	nodes, err := paginate(ctx, a.client, queryIssueComments, variables, decodeCommentsPage, a.log)
+	if err != nil {
+		return nil, err
+	}
+	comments := normalizeComments(nodes)
+	sortCommentsByCreatedAt(comments)
+	return comments, nil
+}
+
+// FetchIssueCommentChanges returns the comments updated at or after the
+// instant since names, minus a short lookback, with a point naming the newest
+// update time seen. Comments updated at the point's instant are read again;
+// an empty or undecodable since reads every comment.
+func (a *LinearAdapter) FetchIssueCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	var changes domain.CommentChanges
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		read, readErr := a.readCommentChanges(ctx, issueID, since)
+		if readErr != nil {
+			return readErr
+		}
+		changes = read
+		return nil
+	})
+	return changes, err
+}
+
+func (a *LinearAdapter) readCommentChanges(ctx context.Context, issueID string, since domain.CommentReadPoint) (domain.CommentChanges, error) {
+	point := decodeCommentPoint(since)
+
+	var comments []domain.Comment
+	var err error
+	if point.IsZero() {
+		comments, err = a.fetchComments(ctx, issueID)
+	} else {
+		comments, err = a.fetchCommentsUpdatedSince(ctx, issueID, point.Add(-commentUpdateLookback))
+	}
+	if err != nil {
+		return domain.CommentChanges{}, err
+	}
+
+	newest := point
+	for _, comment := range comments {
+		updated, parseErr := comment.UpdatedTime()
+		if parseErr != nil {
+			return domain.CommentChanges{}, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("linear graphql: comment %s has an unparseable updatedAt", comment.ID),
+				Err:     parseErr,
+			}
+		}
+		if updated.After(newest) {
+			newest = updated
+		}
+	}
+
+	next := domain.CommentReadPoint("")
+	if !newest.IsZero() {
+		next = domain.CommentReadPoint(newest.UTC().Format(time.RFC3339Nano))
+	}
+	return domain.CommentChanges{Comments: comments, Next: next}, nil
+}
+
+// fetchCommentsUpdatedSince walks the comments updated at or after from and
+// returns them sorted ascending by creation time.
+func (a *LinearAdapter) fetchCommentsUpdatedSince(ctx context.Context, issueID string, from time.Time) ([]domain.Comment, error) {
+	variables := map[string]any{
+		"id":     issueID,
+		"first":  topLevelPageSize,
+		"filter": map[string]any{"updatedAt": map[string]any{"gte": from.UTC().Format(time.RFC3339Nano)}},
+	}
+	nodes, err := paginate(ctx, a.client, queryIssueCommentChanges, variables, decodeCommentsPage, a.log)
+	if err != nil {
+		return nil, err
+	}
+	comments := normalizeComments(nodes)
+	sortCommentsByCreatedAt(comments)
+	return comments, nil
+}
+
+// decodeCommentPoint returns the instant a point names, or the zero time when
+// the point is empty or not in the form a read produces.
+func decodeCommentPoint(since domain.CommentReadPoint) time.Time {
+	point, err := time.Parse(time.RFC3339Nano, string(since))
+	if err != nil {
+		return time.Time{}
+	}
+	return point
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested UUID,

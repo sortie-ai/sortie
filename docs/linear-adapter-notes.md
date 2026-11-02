@@ -92,6 +92,8 @@ A caller may seed the cursor to resume a connection past a page it already holds
 
 The nested labels connection of an issue node is the exception to nested-first-page reads. It selects the first 25 labels with an end cursor, and an issue whose connection reports another page gets the rest from the issue labels query, seeded with that cursor, before normalization. A label list that omitted a label would hide a stage label from dispatch, so a failed completing request fails the read, and a next page without an end cursor raises the missing-cursor error without sending a request. The other nested connection, the inverse relations that carry blockers, stays capped at its first page; its truncation is logged with the issue and the connection named, which keeps a dropped blocker observable instead of imaginary.
 
+The comment change read filters on `updatedAt` and starts the filter 30 seconds before the point, because Linear stamps `updatedAt` before the comment is committed (seen 14 ms to 170 ms earlier than `createdAt`). Without the lookback, a comment stamped before the point and committed after the previous read would never be read. A comment the lookback returns again is already known to the caller, so it costs no extra request. The result also holds any comment whose `updatedAt` moved without an edit, such as one in a resolved thread.
+
 Never depend on server-side ordering. Connection order and the priority sort argument are both treated as hints: dispatch order comes from a client-side sort by normalized priority then creation time, and comments are re-sorted into chronological order after collection because agents read them as a narrative.
 
 ## Field mapping
@@ -100,7 +102,7 @@ Priority is a small integer where zero means no priority, so zero and null both 
 
 `branchName` is always present and always opaque. Its format is a workspace-level template, and the default prefix derives from the acting user's handle, so nothing may parse it or assume a shape.
 
-The assignee is strictly a human user. Agents and applications surface through separate fields the adapter does not read, so an agent-driven issue with no human assignee normalizes to an empty assignee rather than to the agent's name. Comment authors have the same split, which is why author resolution falls back through the bot actor before giving up; comments originating in a chat integration expose their author in a field the adapter does not select and resolve to the bot name or to empty.
+The assignee is strictly a human user. Agents and applications surface through separate fields the adapter does not read, so an agent-driven issue with no human assignee normalizes to an empty assignee rather than to the agent's name. Comment authors have the same split, which is why author resolution falls back through the bot actor before giving up. The adapter also selects the external user, for the author's identity and kind only, so the display author still resolves through the user and the bot actor. A user with a bot actor reads as an app acting for a person, and a comment with an external user and a bot actor keeps the bot's name as its display author.
 
 Blockers come from the issue's inverse relations. The relation record lives on the blocked issue, and the blocker is the relation's source issue, so reading a blocked issue gives you the blockers directly. The relation type is compared case-insensitively after trimming, and the blocker slice is always non-nil.
 
@@ -111,6 +113,8 @@ What the adapter writes is stored verbatim, and that includes text it might be t
 ## Rate limits
 
 No quota may be hardcoded. Linear derives the request limit from the size of the workspace, scaling it with the number of paid seats, so the published headline figure describes no particular workspace and the limit your test workspace reports will not be the limit an operator's workspace reports. The response headers are the only source of truth for the workspace you are actually calling.
+
+The request quota belongs to the user, and every key of that user shares it. The comment feed's reads compete with the poll loop and with anything else running on that person's keys.
 
 There is also a complexity budget, and the response reports the cost of the query just executed. That header, not any published scoring formula, is the authoritative cost. The formula is a worst-case upper bound because it multiplies each connection's cost by the page size you asked for, while the charge tracks the rows actually returned, so a query that requests a large page and matches few issues costs a fraction of its estimate. Sizing a query against the formula therefore leads you to shrink pages that were never expensive.
 

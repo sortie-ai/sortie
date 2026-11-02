@@ -1,0 +1,24 @@
+{
+  "data": {
+    "issue": {
+      "comments": {
+        "nodes": [
+          {
+            "id": "comment-lookback",
+            "body": "Release notes drafted.",
+            "createdAt": "2026-11-02T09:00:00.000Z",
+            "updatedAt": "2026-11-02T11:59:45.000Z",
+            "url": "https://linear.app/sortie/issue/SOR-5#comment-lookback",
+            "user": { "id": "user-release-bot", "displayName": "Release Bot", "name": "release-bot", "email": "release-bot@example.com", "app": true },
+            "botActor": null,
+            "externalUser": null
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "comment-lookback"
+        }
+      }
+    }
+  }
+}

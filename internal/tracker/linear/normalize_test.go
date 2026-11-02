@@ -239,24 +239,49 @@ func TestExtractBlockers(t *testing.T) {
 func TestNormalizeComments(t *testing.T) {
 	t.Parallel()
 
-	t.Run("author fallback chain", func(t *testing.T) {
+	t.Run("author, identity and kind per payload shape", func(t *testing.T) {
 		t.Parallel()
 
-		nodes := []linearComment{
-			{ID: "c1", Body: "b1", CreatedAt: "t1", User: &linearUser{DisplayName: "Ada", Name: "ada"}},
-			{ID: "c2", Body: "b2", CreatedAt: "t2", User: &linearUser{Name: "grace"}},
-			{ID: "c3", Body: "b3", CreatedAt: "t3", User: nil, BotActor: &linearBotActor{Name: "Sortie Bot"}},
-			{ID: "c4", Body: "b4", CreatedAt: "t4", User: nil, BotActor: nil},
-			{ID: "c5", Body: "b5", CreatedAt: "t5", User: &linearUser{}, BotActor: &linearBotActor{Name: "Fallback Bot"}},
+		const updatedAt = "2026-06-12T12:00:00.000Z"
+		tests := []struct {
+			name       string
+			node       linearComment
+			wantAuthor string
+			wantID     string
+			wantKind   domain.CommentAuthorKind
+		}{
+			{"user with app flag is a bot", linearComment{User: &linearUser{ID: "u1", DisplayName: "Release Bot", App: true}}, "Release Bot", "u1", domain.CommentAuthorBot},
+			{"user with bot actor is an app", linearComment{User: &linearUser{ID: "u2", DisplayName: "Ada", Name: "ada"}, BotActor: &linearBotActor{ID: "b2", Name: "Sortie Bot"}}, "Ada", "u2", domain.CommentAuthorApp},
+			{"user is a person", linearComment{User: &linearUser{ID: "u3", DisplayName: "Ada", Name: "ada"}}, "Ada", "u3", domain.CommentAuthorPerson},
+			{"user without display name falls back to name", linearComment{User: &linearUser{ID: "u4", Name: "grace"}}, "grace", "u4", domain.CommentAuthorPerson},
+			{"external user keeps the bot actor name", linearComment{ExternalUser: &linearExternalUser{ID: "e5"}, BotActor: &linearBotActor{ID: "b5", Name: "Zendesk"}}, "Zendesk", "e5", domain.CommentAuthorExternal},
+			{"bot actor", linearComment{BotActor: &linearBotActor{ID: "b6", Name: "Sortie Bot"}}, "Sortie Bot", "b6", domain.CommentAuthorBot},
+			{"bot actor without id", linearComment{BotActor: &linearBotActor{Name: "Sortie Bot"}}, "Sortie Bot", "", domain.CommentAuthorBot},
+			{"empty user falls back to bot actor name", linearComment{User: &linearUser{}, BotActor: &linearBotActor{Name: "Fallback Bot"}}, "Fallback Bot", "", domain.CommentAuthorApp},
+			{"no author", linearComment{}, "", "", domain.CommentAuthorUnknown},
 		}
 
-		got := normalizeComments(nodes)
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-		wantAuthors := []string{"Ada", "grace", "Sortie Bot", "", "Fallback Bot"}
-		for i, c := range got {
-			if c.Author != wantAuthors[i] {
-				t.Errorf("comment[%d].Author = %q, want %q", i, c.Author, wantAuthors[i])
-			}
+				tt.node.UpdatedAt = updatedAt
+
+				got := normalizeComments([]linearComment{tt.node})[0]
+
+				if got.Author != tt.wantAuthor {
+					t.Errorf("Author = %q, want %q", got.Author, tt.wantAuthor)
+				}
+				if got.AuthorID != tt.wantID {
+					t.Errorf("AuthorID = %q, want %q", got.AuthorID, tt.wantID)
+				}
+				if got.AuthorKind != tt.wantKind {
+					t.Errorf("AuthorKind = %q, want %q", got.AuthorKind, tt.wantKind)
+				}
+				if got.UpdatedAt != updatedAt {
+					t.Errorf("UpdatedAt = %q, want %q", got.UpdatedAt, updatedAt)
+				}
+			})
 		}
 	})
 
@@ -290,11 +315,13 @@ func TestSortCommentsByCreatedAt(t *testing.T) {
 		{ID: "newest", CreatedAt: "2026-06-12T12:00:00.000Z"},
 		{ID: "oldest", CreatedAt: "2026-06-10T12:00:00.000Z"},
 		{ID: "middle", CreatedAt: "2026-06-11T12:00:00.000Z"},
+		{ID: "tied-b", CreatedAt: "2026-06-13T12:00:00.000Z"},
+		{ID: "tied-a", CreatedAt: "2026-06-13T12:00:00.000Z"},
 	}
 
 	sortCommentsByCreatedAt(comments)
 
-	want := []string{"oldest", "middle", "newest"}
+	want := []string{"oldest", "middle", "newest", "tied-a", "tied-b"}
 	if got := commentIDs(comments); !reflect.DeepEqual(got, want) {
 		t.Errorf("sortCommentsByCreatedAt order = %v, want %v", got, want)
 	}

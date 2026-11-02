@@ -47,14 +47,23 @@ type linearStateName struct {
 
 // linearUser is the nullable assignee or comment author selection.
 type linearUser struct {
+	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
 	Name        string `json:"name"`
 	Email       string `json:"email"`
+	App         bool   `json:"app"`
 }
 
 // linearBotActor is the comment actor selection for bot or integration authors.
 type linearBotActor struct {
+	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// linearExternalUser is the comment author selection for a person without a
+// Linear account whose comment an integration relayed.
+type linearExternalUser struct {
+	ID string `json:"id"`
 }
 
 // linearParent is the nullable parent-issue selection.
@@ -118,11 +127,13 @@ type linearRelationConn struct {
 
 // linearComment is one comment node.
 type linearComment struct {
-	ID        string          `json:"id"`
-	Body      string          `json:"body"`
-	CreatedAt string          `json:"createdAt"`
-	User      *linearUser     `json:"user"`
-	BotActor  *linearBotActor `json:"botActor"`
+	ID           string              `json:"id"`
+	Body         string              `json:"body"`
+	CreatedAt    string              `json:"createdAt"`
+	UpdatedAt    string              `json:"updatedAt"`
+	User         *linearUser         `json:"user"`
+	BotActor     *linearBotActor     `json:"botActor"`
+	ExternalUser *linearExternalUser `json:"externalUser"`
 }
 
 // linearCommentConn is the comments connection, present only on the by-id
@@ -428,19 +439,46 @@ func warnNestedOverflow(log *slog.Logger, identifier, connection string, hasNext
 }
 
 // normalizeComments maps comment nodes to [domain.Comment] values, resolving
-// the author via the user.displayName, user.name, then botActor.name chain.
-// It returns a non-nil empty slice when there are no comments.
+// the display author via the user.displayName, user.name, then botActor.name
+// chain. The author identity and kind come from [commentAuthor] and the update
+// time from updatedAt. It returns a non-nil empty slice when there are no
+// comments.
 func normalizeComments(nodes []linearComment) []domain.Comment {
 	staged := make([]issuekit.SourceComment, 0, len(nodes))
 	for _, node := range nodes {
+		authorID, authorKind := commentAuthor(node)
 		staged = append(staged, issuekit.SourceComment{
-			ID:        node.ID,
-			Author:    resolveCommentAuthor(node),
-			Body:      node.Body,
-			CreatedAt: node.CreatedAt,
+			ID:         node.ID,
+			Author:     resolveCommentAuthor(node),
+			AuthorID:   authorID,
+			AuthorKind: authorKind,
+			Body:       node.Body,
+			CreatedAt:  node.CreatedAt,
+			UpdatedAt:  node.UpdatedAt,
 		})
 	}
 	return issuekit.NormalizeComments(staged)
+}
+
+// commentAuthor reports the author's identity and kind from the first matching
+// payload shape. A user with a bot actor is a person's account an app acted
+// for; an external user precedes the bot actor because the external person
+// wrote the comment and the integration only relayed it.
+func commentAuthor(node linearComment) (id string, kind domain.CommentAuthorKind) {
+	switch {
+	case node.User != nil && node.User.App:
+		return node.User.ID, domain.CommentAuthorBot
+	case node.User != nil && node.BotActor != nil:
+		return node.User.ID, domain.CommentAuthorApp
+	case node.User != nil:
+		return node.User.ID, domain.CommentAuthorPerson
+	case node.ExternalUser != nil:
+		return node.ExternalUser.ID, domain.CommentAuthorExternal
+	case node.BotActor != nil:
+		return node.BotActor.ID, domain.CommentAuthorBot
+	default:
+		return "", domain.CommentAuthorUnknown
+	}
 }
 
 // resolveCommentAuthor resolves the comment author using the user.displayName,
@@ -460,11 +498,12 @@ func resolveCommentAuthor(comment linearComment) string {
 	return ""
 }
 
-// sortCommentsByCreatedAt sorts comments in ascending createdAt order in place.
-// Linear returns comments newest-first; this restores chronological order.
+// sortCommentsByCreatedAt sorts comments in ascending createdAt order in place,
+// ties by ascending ID. Linear returns comments newest-first; this restores
+// chronological order.
 func sortCommentsByCreatedAt(comments []domain.Comment) {
 	slices.SortFunc(comments, func(a, b domain.Comment) int {
-		return strings.Compare(a.CreatedAt, b.CreatedAt)
+		return cmp.Or(strings.Compare(a.CreatedAt, b.CreatedAt), strings.Compare(a.ID, b.ID))
 	})
 }
 

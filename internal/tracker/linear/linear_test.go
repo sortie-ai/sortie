@@ -676,6 +676,7 @@ func TestFetchIssueByID(t *testing.T) {
 		if continuation[0].variables["after"] != "comment-0002" {
 			t.Errorf("continuation after = %v, want %q (inline endCursor, not page 1)", continuation[0].variables["after"], "comment-0002")
 		}
+		assertBaseCommentVariables(t, continuation, "SOR-5")
 	})
 
 	t.Run("inline page hasNextPage without end cursor is missing cursor", func(t *testing.T) {
@@ -782,6 +783,32 @@ func TestFetchIssueComments(t *testing.T) {
 		}
 	})
 
+	t.Run("two pages send the base variables and no filter", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query IssueComments", loadFixture(t, "comment_changes_page1.json"))
+		f.queueBody("query IssueComments", loadFixture(t, "comment_changes_page2.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		comments, err := adapter.FetchIssueComments(context.Background(), "SOR-5")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+
+		wantIDs := []string{"comment-lookback", "comment-edited", "comment-new"}
+		if got := commentIDs(comments); !reflect.DeepEqual(got, wantIDs) {
+			t.Errorf("comment order = %v, want %v", got, wantIDs)
+		}
+		calls := f.callsFor("query IssueComments")
+		if len(calls) != 2 {
+			t.Fatalf("FetchIssueComments sent %d requests, want 2", len(calls))
+		}
+		assertBaseCommentVariables(t, calls, "SOR-5")
+	})
+
 	t.Run("empty connection returns non-nil empty slice", func(t *testing.T) {
 		t.Parallel()
 
@@ -811,6 +838,77 @@ func TestFetchIssueComments(t *testing.T) {
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
+}
+
+func TestFetchIssueCommentChanges(t *testing.T) {
+	t.Parallel()
+
+	commentNew := domain.Comment{ID: "comment-new", Author: "Zendesk", AuthorID: "ext-7", AuthorKind: domain.CommentAuthorExternal, Body: "Customer replied through Zendesk: the export still fails.", CreatedAt: "2026-11-02T12:00:10.000Z", UpdatedAt: "2026-11-02T12:00:10.000Z"}
+	commentEdited := domain.Comment{ID: "comment-edited", Author: "Grace Hopper", AuthorID: "user-grace", AuthorKind: domain.CommentAuthorPerson, Body: "Edited: the retry limit is 3, not 5.", CreatedAt: "2026-11-02T10:00:00.000Z", UpdatedAt: "2026-11-02T12:00:30.000Z"}
+	commentLookback := domain.Comment{ID: "comment-lookback", Author: "Release Bot", AuthorID: "user-release-bot", AuthorKind: domain.CommentAuthorBot, Body: "Release notes drafted.", CreatedAt: "2026-11-02T09:00:00.000Z", UpdatedAt: "2026-11-02T11:59:45.000Z"}
+	commentAtPoint := domain.Comment{ID: "comment-at-point", Author: "Ada Lovelace", AuthorID: "user-ada", AuthorKind: domain.CommentAuthorPerson, Body: "Reproduced on staging.", CreatedAt: "2026-11-02T09:30:00.000Z", UpdatedAt: "2026-11-02T12:00:00.500Z"}
+
+	const point domain.CommentReadPoint = "2026-11-02T12:00:00.5Z"
+
+	tests := []struct {
+		name       string
+		since      domain.CommentReadPoint
+		key        string
+		fixtures   []string
+		want       []domain.Comment
+		wantNext   domain.CommentReadPoint
+		wantFilter string
+		wantErr    domain.TrackerErrorKind
+	}{
+		{"new and edited comments are read from the lookback start", point, "query IssueCommentChanges", []string{"comment_changes_page1.json", "comment_changes_page2.json"}, []domain.Comment{commentLookback, commentEdited, commentNew}, "2026-11-02T12:00:30Z", "2026-11-02T11:59:30.5Z", ""},
+		{"only the comment updated at the point leaves the point unchanged", point, "query IssueCommentChanges", []string{"comment_changes_unchanged.json"}, []domain.Comment{commentAtPoint}, point, "2026-11-02T11:59:30.5Z", ""},
+		{"undecodable point reads every comment without a filter", "x", "query IssueComments", []string{"comment_changes_page1.json", "comment_changes_page2.json"}, []domain.Comment{commentLookback, commentEdited, commentNew}, "2026-11-02T12:00:30Z", "", ""},
+		{"unparseable updatedAt is a payload error", point, "query IssueCommentChanges", []string{"comment_changes_bad_updated_at.json"}, nil, "", "2026-11-02T11:59:30.5Z", domain.ErrTrackerPayload},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFakeClient()
+			seedPreflight(f, t)
+			for _, fixture := range tt.fixtures {
+				f.queueBody(tt.key, loadFixture(t, fixture))
+			}
+			adapter := newTestAdapter(t, f)
+
+			got, err := adapter.FetchIssueCommentChanges(context.Background(), "SOR-5", tt.since)
+
+			calls := f.callsFor(tt.key)
+			if len(calls) != len(tt.fixtures) {
+				t.Fatalf("FetchIssueCommentChanges(%q) sent %d requests, want %d", tt.since, len(calls), len(tt.fixtures))
+			}
+			for _, call := range calls {
+				filter, hasFilter := call.variables["filter"]
+				wantFilter := map[string]any{"updatedAt": map[string]any{"gte": tt.wantFilter}}
+				if tt.wantFilter == "" && hasFilter {
+					t.Errorf("FetchIssueCommentChanges(%q) sent filter %v, want none", tt.since, filter)
+				}
+				if tt.wantFilter != "" && !reflect.DeepEqual(filter, wantFilter) {
+					t.Errorf("FetchIssueCommentChanges(%q) filter = %v, want %v", tt.since, filter, wantFilter)
+				}
+			}
+			if tt.wantErr != "" {
+				assertTrackerErrorKind(t, err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				t.Fatalf("FetchIssueCommentChanges(%q): %v", tt.since, err)
+			}
+			if !reflect.DeepEqual(got.Comments, tt.want) {
+				t.Errorf("FetchIssueCommentChanges(%q).Comments = %+v, want %+v", tt.since, got.Comments, tt.want)
+			}
+			if got.Next != tt.wantNext {
+				t.Errorf("FetchIssueCommentChanges(%q).Next = %q, want %q", tt.since, got.Next, tt.wantNext)
+			}
+			adaptertest.AssertCommentsAscending(t, got.Comments)
+		})
+	}
 }
 
 func TestFetchIssueStatesByIDs(t *testing.T) {
@@ -2131,6 +2229,18 @@ func identifiers(issues []domain.Issue) []string {
 		out[i] = iss.Identifier
 	}
 	return out
+}
+
+func assertBaseCommentVariables(t *testing.T, calls []recordedCall, issueID string) {
+	t.Helper()
+	for i, call := range calls {
+		if got, want := slices.Sorted(maps.Keys(call.variables)), []string{"after", "first", "id"}; !slices.Equal(got, want) {
+			t.Errorf("call[%d] variables = %v, want keys %v (no filter)", i, got, want)
+		}
+		if call.variables["id"] != issueID || call.variables["first"] != topLevelPageSize {
+			t.Errorf("call[%d] id, first = %v, %v, want %q, %d", i, call.variables["id"], call.variables["first"], issueID, topLevelPageSize)
+		}
+	}
 }
 
 func commentIDs(comments []domain.Comment) []string {

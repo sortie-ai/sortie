@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -587,6 +588,66 @@ func TestFetchIssueComments(t *testing.T) {
 		_, err := a.FetchIssueComments(ctx, "99999")
 		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
+}
+
+func TestFetchIssueComments_DerivedIdentity(t *testing.T) {
+	t.Parallel()
+
+	a := newAdapter(t, fixture("comments_without_id.json"), nil)
+
+	comments, err := a.FetchIssueComments(context.Background(), "20001")
+	if err != nil {
+		t.Fatalf("FetchIssueComments: %v", err)
+	}
+
+	wantIDs := []string{
+		"f7a151bb6f7abd57a1b3277e26bfca0b6dc0d21b0193d62a51c5ef02779aa627",
+		"7d1a19ffbf94f2e9f69b266cecfbab410573b7465f4a8fc4bb44072c5ce71fbb",
+		"07542c7211c17a66799180b75041dd752d5e97cf77aaa1e3cc8a1a6cf0ee0ab5",
+		"c9",
+	}
+	gotIDs := make([]string, len(comments))
+	for i, c := range comments {
+		gotIDs[i] = c.ID
+		if c.AuthorID != c.Author || c.AuthorKind != domain.CommentAuthorPerson {
+			t.Errorf("comment[%d] (AuthorID, AuthorKind) = (%q, %q), want (%q, %q)",
+				i, c.AuthorID, c.AuthorKind, c.Author, domain.CommentAuthorPerson)
+		}
+	}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("FetchIssueComments IDs = %q, want %q", gotIDs, wantIDs)
+	}
+}
+
+func TestFetchIssueCommentChanges(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	a := newAdapter(t, fixture("comments_without_id.json"), nil)
+	if _, err := a.CommentIssue(ctx, "20001", "session dispatched"); err != nil {
+		t.Fatalf("CommentIssue: %v", err)
+	}
+
+	issue, err := a.FetchIssueByID(ctx, "20001")
+	if err != nil {
+		t.Fatalf("FetchIssueByID: %v", err)
+	}
+	listed, err := a.FetchIssueComments(ctx, "20001")
+	if err != nil {
+		t.Fatalf("FetchIssueComments: %v", err)
+	}
+	changes, err := a.FetchIssueCommentChanges(ctx, "20001", "2026-03-01T10:05:00Z")
+	if err != nil {
+		t.Fatalf("FetchIssueCommentChanges: %v", err)
+	}
+
+	if len(listed) != 5 || !slices.Equal(changes.Comments, listed) || !slices.Equal(issue.Comments, listed) {
+		t.Errorf("comments by read = FetchIssueByID %v, FetchIssueCommentChanges %v, want both equal to FetchIssueComments %v (5 comments)",
+			issue.Comments, changes.Comments, listed)
+	}
+	if changes.Next != "" {
+		t.Errorf("FetchIssueCommentChanges Next = %q, want zero point", changes.Next)
+	}
 }
 
 func TestNormalization(t *testing.T) {

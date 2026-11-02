@@ -40,7 +40,9 @@ The fragment is wrapped in parentheses when it is appended, and that is load-bea
 
 Priority reads the priority object's id, never its name. Names are workflow text an admin can edit; the id is the numeric scheme the domain's integer priority expects. A non-integer id yields no priority rather than a guess.
 
-Timestamps are stored verbatim as strings and the adapter parses nothing. Anything downstream that does parse them must accept Jira's millisecond-and-offset form as well as RFC 3339. Do not assume RFC 3339 alone.
+Timestamps are stored verbatim as strings. Only the comment change read parses one, the comment's `created`, to order its result. Anything that parses them must accept Jira's millisecond-and-offset form as well as RFC 3339. Do not assume RFC 3339 alone.
+
+A comment's author identity is the account ID on Cloud and the username on Data Center, never the display name, which stays the display author. The kind comes from the Cloud account type: `atlassian` reads as a person, `app` is an app's own account and reads as a bot, and `customer` reads as external. Data Center sends no account type, so every named author reads as a person, service-desk customers and automation users included.
 
 `BranchName` is always empty. The core REST issue payload does not carry it, and the only source is the development-information surface at `/rest/dev-status/`, which answers only when a source control tool is connected to the site. Note the path: it sits outside the versioned `/rest/api/` tree, which is why searching the REST API reference for a branch field turns up nothing and why people conclude the data does not exist. Nothing in the adapter calls it, and anything that starts to should treat it as a surface with its own rules rather than another issue route.
 
@@ -72,9 +74,11 @@ Atlassian documents eventual consistency for its search endpoints only. Nothing 
 
 ## Pagination
 
-Cloud search is cursor based, Server search is offset based, and comments are offset based on both. A read-path change usually touches three loops.
+Cloud search is cursor based, Server search is offset based, and comments are offset based on both. A read-path change usually touches more than one loop.
 
 One known weakness: the cursor walk treats an absent cursor as the end of the walk, and the decoder never reports a missing one, so a result set truncated by a dropped cursor is indistinguishable from a complete one. The Linear adapter raises a missing-cursor error in the same situation; this one does not.
+
+The comment change read walks newest first and stops after the first page holding a comment the previous read returned on its newest page. A new comment or an edit on the pages it reads is seen; an edit to a comment older than those pages is not. The issue's `updated` field is no change probe, because Sortie's own writes move it.
 
 ## Rate limits, retries, and errors
 

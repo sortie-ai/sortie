@@ -257,6 +257,10 @@ type CommentChangeReader interface {
 	// Next can move without a changed comment. Errors are those of
 	// [TrackerAdapter.FetchIssueComments].
 	//
+	// An adapter whose tracker cannot filter comments by update time may
+	// leave out an edit to a comment older than every comment its read
+	// returns, and that adapter's method godoc names the limit.
+	//
 	// A read from Next can omit every unchanged comment this read
 	// returned, so the caller passes Next only once each of them is
 	// recorded as given or left out by selection, and passes since again
