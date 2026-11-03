@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard and API: attention and next-step messages now say "bot review comments" everywhere. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 - Dashboard: costs show two decimals at every amount, including $100 and more. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 - Dashboard: every page, the issue and session pages included, opens with the same header (a title and a one-line summary) and groups its content into titled panels. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
-- Dashboard: the side rail, status card, and top bar are redesigned, and the project name links to the project's page. On a phone, the top bar shows only the logo, the status, and the menu. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: the side rail, status card, and top bar are redesigned, and the project name links to the project's page when the tracker has one. On a phone, the top bar shows only the logo, the status, and the menu. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 - Dashboard: the Pipeline runs its stations in the order CI, bot review, human review, shows how many issues stand at each station, and shows an issue's progress through its stage chain as text instead of a bar. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 
 ### Removed
