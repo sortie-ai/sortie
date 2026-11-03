@@ -115,12 +115,18 @@ function detailOf(detail: string | undefined): Pick<Station, "detail"> {
   return detail === undefined || detail === "" ? {} : { detail };
 }
 
-// The end station's detail is the state a merged issue ends in: the target of merge_completion, else
-// the first terminal state. An issue that ends otherwise shows its own ending in its lane.
+// Sortie records a terminal ending without a merge when an issue closes under an open pull
+// request, so a terminal state's name is true of the end station only when every merge Sortie
+// records moves the issue into it, which `merge_completion` does and `auto_merge` alone does not.
 function endDetailOf(config: ConfigResponse): string | undefined {
   const target = config.reactions.merge_completion?.target_state;
-  const first = (config.tracker.terminal_states ?? []).find((state) => state !== "");
-  return target !== undefined && target !== "" ? target : first;
+  if (target !== undefined && target !== "") {
+    return target;
+  }
+  const terminal = (config.tracker.terminal_states ?? []).filter((state) => state !== "");
+  return terminal.length === 1 && config.reactions.auto_merge === undefined
+    ? terminal[0]
+    : undefined;
 }
 
 function pendingEntryOf(

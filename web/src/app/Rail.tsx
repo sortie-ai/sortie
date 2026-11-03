@@ -134,18 +134,11 @@ export function Rail({ screens }: RailProps) {
       <div className="mt-auto px-sm pt-md text-body-sm text-ink-muted">
         {/* The first link starts at the rail's left edge and the last ends at its right. */}
         <p className="flex items-center justify-between">
-          {EXTERNAL_LINKS.flatMap(({ label, href }, index) => [
-            ...(index === 0
-              ? []
-              : [
-                  <span key={`dot-${href}`} aria-hidden="true">
-                    ·
-                  </span>,
-                ]),
+          {EXTERNAL_LINKS.map(({ label, href }) => (
             <ExternalLink key={href} href={href}>
               {label}
-            </ExternalLink>,
-          ])}
+            </ExternalLink>
+          ))}
         </p>
       </div>
     </aside>
