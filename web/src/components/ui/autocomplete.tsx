@@ -1,6 +1,6 @@
 import { Autocomplete as BaseAutocomplete } from "@base-ui/react/autocomplete";
 
-import { SearchIcon } from "@/components/icons";
+import { SearchIcon, XIcon } from "@/components/icons";
 import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
@@ -48,6 +48,12 @@ export function AutocompleteInput(props: AutocompleteInputProps) {
         onKeyDown={keepTextSelection}
         {...props}
       />
+      <BaseAutocomplete.Clear
+        aria-label="Clear search"
+        className="-mr-xxs inline-grid size-6 shrink-0 cursor-pointer place-items-center rounded text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-focus-ring"
+      >
+        <XIcon />
+      </BaseAutocomplete.Clear>
     </BaseAutocomplete.InputGroup>
   );
 }

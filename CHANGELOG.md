@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The state API serves `config.tracker.project_url`, the web address of the tracked project, for the GitHub and Jira trackers.
 - Long code blocks and JSON in the dashboard's served texts fold to one line that opens on a click.
 - A row title on Overview, Pipeline and History links to its issue page, so the page opens in a new tab or from the keyboard.
+- The command palette's search field has a button that clears it.
 
 ### Changed
 
