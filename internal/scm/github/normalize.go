@@ -98,7 +98,7 @@ func githubLabelNames(labels []githubLabel) []string {
 //
 // DisplayID is left empty; callers that know the repository
 // owner and name should set it to "owner/repo#N" after normalization.
-func normalizeIssue(gi githubIssue, model *issuekit.LabelStateModel, states issuekit.LabelStates) domain.Issue {
+func normalizeIssue(gi githubIssue, model *issuekit.LabelStateModel, states issuekit.LabelStates, priorities map[string]int) domain.Issue {
 	num := strconv.Itoa(gi.Number)
 	labelNames := githubLabelNames(gi.Labels)
 
@@ -124,14 +124,16 @@ func normalizeIssue(gi githubIssue, model *issuekit.LabelStateModel, states issu
 	// outside the configured terminal states, so it cannot stand in here.
 	blockersUnresolved := gi.DependenciesSummary == nil || gi.DependenciesSummary.TotalBlockedBy != 0
 
+	labels := issuekit.NormalizeLabels(labelNames)
 	return domain.Issue{
 		ID:                 num,
 		Identifier:         num,
 		Title:              gi.Title,
 		Description:        desc,
+		Priority:           issuekit.PriorityFromLabels(labels, priorities),
 		State:              model.Derive(states, num, labelNames, isClosed(gi)),
 		URL:                gi.HTMLURL,
-		Labels:             issuekit.NormalizeLabels(labelNames),
+		Labels:             labels,
 		Assignee:           assignee,
 		IssueType:          issueType,
 		BlockedBy:          []domain.BlockerRef{},

@@ -2,9 +2,9 @@
 // v4. It talks to GitLab.com or a self-managed instance over the shared
 // HTTP transport with no third-party GitLab client library, normalizing
 // issue responses to domain types: IDs derived from the project-scoped iid
-// rather than the instance-global id, labels lowercased, priority always
-// nil (GitLab issues carry no priority field), parent always nil (GitLab
-// exposes no sub-issue relationship on this route), state derived from
+// rather than the instance-global id, labels lowercased, priority taken
+// only from the operator-declared priority_labels map, parent always nil
+// (GitLab exposes no sub-issue relationship on this route), state derived from
 // labels against the configured active, terminal, and handoff lists, and
 // blocked_by always a non-nil empty slice (GitLab Community Edition has no
 // blocks relation type).
@@ -17,8 +17,8 @@
 // tracker.query_filter, a failed project check, or a failed preflight
 // catalog read fails construction, so a misconfiguration surfaces at
 // startup rather than on the first poll. A configured query_filter naming
-// a label triggers a second, diagnostic catalog read whose failure is
-// logged and does not fail construction. Registered under kind "gitlab"
+// a label or a non-empty priority_labels map triggers a second, diagnostic
+// catalog read whose failure is logged and does not fail construction. Registered under kind "gitlab"
 // via an init function.
 //
 // The package also implements the read half of [domain.SCMAdapter] for
@@ -97,6 +97,7 @@ const stateBatchSize = 50
 // concurrent use, so the adapter is safe for concurrent use.
 type GitLabAdapter struct {
 	*issuekit.StateSource
+	priorityLabels map[string]int
 
 	client      *httpkit.Client
 	project     string
@@ -312,11 +313,12 @@ func parseQueryFilter(raw string) (url.Values, error) {
 // numeric project ID or a namespace path such as "group/project").
 // Optional: "endpoint" (instance base URL, defaulting to
 // "https://gitlab.com"), "active_states", "terminal_states",
-// "handoff_state" (label names, lowercased), "user_agent", and
+// "handoff_state" (label names, lowercased), "user_agent",
 // "query_filter" (a URL query fragment merged into opened-issue
-// listings). A non-empty "query_filter" is parsed and validated against
-// the adapter's reserved and allowed key sets before any network call; a
-// value that fails validation blocks construction. A missing or malformed
+// listings), and "priority_labels" (label-to-integer map). A non-empty
+// "query_filter" is parsed and validated against the adapter's reserved and
+// allowed key sets before any network call; a value that fails validation
+// blocks construction. A missing or malformed
 // key, or a preflight failure (invalid token or an unreachable project),
 // returns a [*domain.TrackerError] and blocks construction.
 func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
@@ -368,6 +370,11 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		baseURL += "/api/v4"
 	}
 
+	priorityLabels, err := issuekit.ParsePriorityLabels(config["priority_labels"])
+	if err != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: err.Error()}
+	}
+
 	initialStates, err := issuekit.TrackerStatesFromConfig(config)
 	if err != nil {
 		return nil, err
@@ -396,6 +403,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 
 	adapter := &GitLabAdapter{
 		StateSource:      source,
+		priorityLabels:   priorityLabels,
 		client:           client,
 		project:          project,
 		projectPath:      projectPath,
@@ -458,9 +466,10 @@ func (a *GitLabAdapter) readProjectLabelNames(ctx context.Context) ([]string, er
 // text under labels and under not[labels] each warn once, distinguished
 // in the log record by a "negated" attribute.
 //
-// It returns without reading the label catalog when the filter names no
-// label, and never fails construction: a catalog read failure is logged
-// at WARN and the method returns.
+// The same read checks priority_labels names case-insensitively. It returns
+// without reading the catalog when neither setting names a label, and never
+// fails construction: a catalog read failure is logged at WARN and the
+// method returns.
 func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
 	type labelsKey struct {
 		raw     string
@@ -473,16 +482,25 @@ func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
 			keys = append(keys, labelsKey{raw: key, negated: negated})
 		}
 	}
-	if len(keys) == 0 {
+	if len(keys) == 0 && len(a.priorityLabels) == 0 {
 		return
 	}
 
 	catalog, err := fetchProjectLabels(ctx, a.client, a.projectPath, a.log)
 	if err != nil {
-		a.log.Warn("gitlab query_filter labels catalog unavailable; label names were not validated",
-			slog.Any("error", err))
+		if len(keys) > 0 {
+			a.log.Warn("gitlab query_filter labels catalog unavailable; label names were not validated", slog.Any("error", err))
+		} else {
+			a.log.Warn("gitlab priority_labels catalog unavailable; label names were not validated", slog.Any("error", err))
+		}
 		return
 	}
+	names := make([]string, len(catalog))
+	for i, label := range catalog {
+		names[i] = label.Name
+	}
+	issuekit.WarnUnresolvedPriorityLabels(a.log, a.priorityLabels, names)
+
 	known := make(map[string]struct{}, len(catalog))
 	for _, l := range catalog {
 		known[l.Name] = struct{}{}
@@ -649,7 +667,7 @@ func (a *GitLabAdapter) listIssues(ctx context.Context, s issuekit.LabelStates, 
 		if gi.IssueType != "" && gi.IssueType != "issue" {
 			continue
 		}
-		out = append(out, normalizeIssue(gi, a.project, a.model, s))
+		out = append(out, normalizeIssue(gi, a.project, a.model, s, a.priorityLabels))
 	}
 	return out, nil
 }
@@ -1007,7 +1025,7 @@ func (a *GitLabAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 			}
 		}
 
-		fetched := normalizeIssue(gi, a.project, a.model, a.model.Snapshot())
+		fetched := normalizeIssue(gi, a.project, a.model, a.model.Snapshot(), a.priorityLabels)
 
 		comments, commentsErr := a.fetchComments(ctx, decimal)
 		if commentsErr != nil {

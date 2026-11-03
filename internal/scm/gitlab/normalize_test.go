@@ -12,7 +12,7 @@ import (
 
 func normalizeUnder(gi gitlabIssue, project string, active, terminal []string) domain.Issue {
 	model := issuekit.NewLabelStateModel(issuekit.NewStateSource(domain.TrackerStates{Active: active, Terminal: terminal}), nil)
-	return normalizeIssue(gi, project, model, model.Snapshot())
+	return normalizeIssue(gi, project, model, model.Snapshot(), nil)
 }
 
 func TestNormalizeIssue_AllFields(t *testing.T) {
@@ -222,5 +222,28 @@ func TestNormalizeComments_EmptyReturnsNonNilSlice(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
+func TestNormalizeIssuePriorityLabels(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		mapping map[string]int
+		want    *int
+	}{
+		{name: "configured", mapping: map[string]int{"priority/low": 4, "priority/high": 2}, want: new(2)},
+		{name: "unconfigured"},
+		{name: "unmapped", mapping: map[string]int{"p1": 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model := issuekit.NewLabelStateModel(issuekit.NewStateSource(domain.TrackerStates{}), nil)
+			raw := gitlabIssue{IID: 7, Labels: []string{"Priority/LOW", "PRIORITY/High"}}
+			got := normalizeIssue(raw, "acme/widgets", model, model.Snapshot(), tt.mapping)
+			if (got.Priority == nil) != (tt.want == nil) || (got.Priority != nil && *got.Priority != *tt.want) {
+				t.Errorf("normalizeIssue(%v).Priority = %v, want %v", raw, got.Priority, tt.want)
+			}
+		})
 	}
 }

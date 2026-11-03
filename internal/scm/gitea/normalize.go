@@ -77,7 +77,7 @@ func giteaLabelNames(labels []giteaLabel) []string {
 // DisplayID is left empty; callers apply [setDisplayID] after normalization.
 // State is derived by model under states, with a closed native status read as
 // closed.
-func normalizeIssue(gi giteaIssue, model *issuekit.LabelStateModel, states issuekit.LabelStates) domain.Issue {
+func normalizeIssue(gi giteaIssue, model *issuekit.LabelStateModel, states issuekit.LabelStates, priorities map[string]int) domain.Issue {
 	num := strconv.Itoa(gi.Number)
 	labelNames := giteaLabelNames(gi.Labels)
 
@@ -86,15 +86,17 @@ func normalizeIssue(gi giteaIssue, model *issuekit.LabelStateModel, states issue
 		assignee = gi.Assignees[0].Login
 	}
 
+	labels := issuekit.NormalizeLabels(labelNames)
 	return domain.Issue{
 		ID:                 num,
 		Identifier:         num,
 		Title:              gi.Title,
 		Description:        gi.Body,
+		Priority:           issuekit.PriorityFromLabels(labels, priorities),
 		State:              model.Derive(states, num, labelNames, gi.State == "closed"),
 		BranchName:         gi.Ref,
 		URL:                gi.HTMLURL,
-		Labels:             issuekit.NormalizeLabels(labelNames),
+		Labels:             labels,
 		Assignee:           assignee,
 		BlockedBy:          []domain.BlockerRef{},
 		BlockersUnresolved: true,
