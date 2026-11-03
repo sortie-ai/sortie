@@ -243,6 +243,7 @@ func TestClaimVerificationRefusesAnAmbiguousOrOperatorSetLaunch(t *testing.T) {
 		{"an environment document to merge into", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"OPENCODE_CONFIG_CONTENT={}"}, true},
 		{"an environment value that is not an object", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"OPENCODE_CONFIG_CONTENT=[1]"}, false},
 		{"a document assigned by an env program in the command", agentcore.LaunchTarget{Command: "env", Args: []string{"OPENCODE_CONFIG_CONTENT=x", "opencode", "acp"}}, nil, false},
+		{"a quoted document assigned by an env program over SSH", agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: `env 'OPENCODE_CONFIG_CONTENT={"permission":"allow"}' opencode acp`}, nil, false},
 		{"a plain switch set in another case", agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, []string{"gemini_system_md=/etc/system.md"}, runtime.GOOS != "windows"},
 		{"a file-backed switch already set", agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, []string{"GEMINI_SYSTEM_MD=/etc/system.md"}, false},
 		{"two runtimes named", agentcore.LaunchTarget{Command: "gemini", Args: []string{"copilot"}}, nil, false},

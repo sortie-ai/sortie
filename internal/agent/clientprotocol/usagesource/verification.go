@@ -47,10 +47,11 @@ func ClaimVerification(target agentcore.LaunchTarget, environ []string) (Verific
 // CommandAssigns reports whether the configured agent command assigns name in
 // a word of the form NAME=value, as an env program in front of the runtime
 // does. Such an assignment replaces any value the launch environment carries,
-// so a merge into that value would not reach the runtime.
+// so a merge into that value would not reach the runtime. A word may open with
+// a shell quote, which a string-form remote command keeps in its words.
 func CommandAssigns(target agentcore.LaunchTarget, name string) bool {
 	return slices.ContainsFunc(target.CommandWords(), func(word string) bool {
-		return agentcore.IsEnvEntryNamed(word, name)
+		return agentcore.IsEnvEntryNamed(strings.TrimLeft(word, `'"`), name)
 	})
 }
 
