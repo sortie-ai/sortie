@@ -49,6 +49,10 @@ function uncachedTotal(history: IssueHistoryResponse | null): number | null {
   return history === null ? 0 : history.totals.uncached_tokens;
 }
 
+function isHistoryTokensComplete(history: IssueHistoryResponse | null): boolean {
+  return history === null ? true : history.totals.tokens_complete;
+}
+
 function figuresOf(detail: IssueDetailResponse, config: ConfigResponse | undefined): BudgetFigures {
   const { running, budget_exhausted: exhausted, history } = detail;
   if (detail.status === "running" && running !== null) {
@@ -79,7 +83,10 @@ function figuresOf(detail: IssueDetailResponse, config: ConfigResponse | undefin
         used: exhausted.budget_tokens === null ? uncachedTotal(history) : exhausted.used_tokens,
         limit: exhausted.budget_tokens,
         limitKnown: true,
-        complete: exhausted.unmeasured_sessions === 0,
+        complete:
+          exhausted.budget_tokens === null
+            ? isHistoryTokensComplete(history)
+            : exhausted.unmeasured_sessions === 0,
       },
       money: moneyLine(totals, exhausted.budget_usd, true),
       uncachedTokens: uncachedTotal(history),
@@ -97,7 +104,7 @@ function figuresOf(detail: IssueDetailResponse, config: ConfigResponse | undefin
       used: uncachedTotal(history),
       limit: config?.agent.max_tokens ?? null,
       limitKnown: isKnown,
-      complete: history === null ? true : history.totals.tokens_complete,
+      complete: isHistoryTokensComplete(history),
     },
     money: moneyLine(totals, config?.agent.max_cost_usd ?? null, isKnown),
     uncachedTokens: uncachedTotal(history),

@@ -126,6 +126,7 @@ const (
 	ruleIMPORT    contractRule = "IMPORT"
 	ruleTEARDOWN  contractRule = "TEARDOWN"
 	ruleBLOCKER   contractRule = "BLOCKER"
+	ruleLINKER    contractRule = "LINKER"
 	ruleIDENTITY  contractRule = "IDENTITY"
 	ruleSTOPGRACE contractRule = "STOPGRACE"
 	ruleCAPTURE   contractRule = "CAPTURE"
@@ -226,7 +227,8 @@ var contractPackageBannedImports = map[string]map[string]string{
 // one rule and states why; it stays subject to every other rule.
 var contractAllowlist = map[string]map[contractRule]string{
 	"file": {
-		ruleHOOK: "no HTTP, no credential, no remote project, and no config to validate",
+		ruleHOOK:   "no HTTP, no credential, no remote project, and no config to validate",
+		ruleLINKER: "a file tracker has no web page to link to",
 	},
 	"procutil": {
 		ruleTEARDOWN:  "owns SetGroupCancel and SetGroupKill, the helpers every other launcher calls",
@@ -1398,11 +1400,11 @@ func bodyCallsTrackermetricsTrack(file *ast.File, body *ast.BlockStmt) bool {
 }
 
 // contractTrackerAdapterType returns the type a non-test file names in
-// "var _ domain.TrackerAdapter = (*T)(nil)", with the domain qualifier
+// "var _ domain.<iface> = (*T)(nil)", with the domain qualifier
 // resolved from the file's own imports, or "" when no file asserts one.
 // A package that also holds a source-control adapter declares its tracker
 // adapter this way, which is how rule METRICS tells the two apart.
-func contractTrackerAdapterType(files []*ast.File) string {
+func contractTrackerAdapterType(files []*ast.File, iface string) string {
 	for _, file := range files {
 		domainIdent := resolveContractImportName(file, contractDomainImportPath)
 		if domainIdent == "" {
@@ -1414,7 +1416,7 @@ func contractTrackerAdapterType(files []*ast.File) string {
 				continue
 			}
 			for _, spec := range gen.Specs {
-				if name := contractTrackerAssertionType(spec, domainIdent); name != "" {
+				if name := contractTrackerAssertionType(spec, domainIdent, iface); name != "" {
 					return name
 				}
 			}
@@ -1423,13 +1425,13 @@ func contractTrackerAdapterType(files []*ast.File) string {
 	return ""
 }
 
-func contractTrackerAssertionType(spec ast.Spec, domainIdent string) string {
+func contractTrackerAssertionType(spec ast.Spec, domainIdent, iface string) string {
 	value, ok := spec.(*ast.ValueSpec)
 	if !ok || len(value.Names) != 1 || value.Names[0].Name != "_" || len(value.Values) != 1 {
 		return ""
 	}
 	typ, ok := value.Type.(*ast.SelectorExpr)
-	if !ok || typ.Sel.Name != "TrackerAdapter" {
+	if !ok || typ.Sel.Name != iface {
 		return ""
 	}
 	if qualifier, ok := typ.X.(*ast.Ident); !ok || qualifier.Name != domainIdent {
@@ -1519,6 +1521,20 @@ func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker 
 	})
 
 	return violations
+}
+
+// A new tracker kind must not ship without a project page; the file kind
+// is exempt through the allowlist.
+func checkContractProjectLinker(fset *token.FileSet, pkg contractPackage) []contractViolation {
+	registers, _, _, _, _, pos := contractRegistrationFacts(fset, pkg.files)
+	if !registers || contractExempt(pkg.dirName, ruleLINKER) {
+		return nil
+	}
+	trackerType := contractTrackerAdapterType(pkg.files, "TrackerAdapter")
+	if trackerType != "" && contractTrackerAdapterType(pkg.files, "ProjectLinker") == trackerType {
+		return nil
+	}
+	return []contractViolation{{pos: pos, text: "tracker adapter does not assert domain.ProjectLinker"}}
 }
 
 // contractPathIsUnder reports whether importPath is prefix or a path
@@ -2675,7 +2691,7 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, factsPos := contractRegistrationFacts(fset, pkg.files)
 
 	if !contractExempt(pkg.dirName, ruleMETRICS) {
-		trackerType := contractTrackerAdapterType(pkg.files)
+		trackerType := contractTrackerAdapterType(pkg.files, "TrackerAdapter")
 		for _, file := range pkg.files {
 			violations = append(violations, checkContractMetrics(fset, file, registers, trackerType)...)
 		}
@@ -2833,6 +2849,9 @@ func TestCheckAdapterContract(t *testing.T) {
 	sort.Slice(walked, func(i, j int) bool { return walked[i].dir < walked[j].dir })
 	for _, w := range walked {
 		for _, v := range checkAdapterContractPackage(fset, w.pkg) {
+			t.Errorf("%s: %s", v.pos, v.text)
+		}
+		for _, v := range checkContractProjectLinker(fset, w.pkg) {
 			t.Errorf("%s: %s", v.pos, v.text)
 		}
 	}

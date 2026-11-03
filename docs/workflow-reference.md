@@ -3216,7 +3216,7 @@ A session whose `usage_arrival` is `none` contributes nothing to the token total
 | ----- | ---- | ----------- |
 | `tracker.kind` | string | The tracker adapter kind the process started with. A reload that edits `tracker.kind` does not change it. |
 | `tracker.project` | string or absent | The `tracker.project` the tracker adapter was built with, after environment resolution and unmasked: a Jira project key, a GitHub or Gitea `owner/repo`, a GitLab namespace path or numeric project ID, or a Linear team key. Omitted when unset. A reload that edits `tracker.project` does not change it. |
-| `tracker.project_url` | string or absent | The web address of the project, when the tracker adapter names one: the GitHub repository, on github.com or on the Enterprise host the endpoint names, or the Jira project's browse page. Omitted otherwise. |
+| `tracker.project_url` | string or absent | The address of the project's page in the tracker, served for the `github`, `gitea`, `gitlab`, `linear` and `jira` trackers. Omitted when the tracker has no web page, as the `file` tracker has none, or when the address is not an absolute http(s) URL. Credentials, query and fragment are never part of it. |
 | `tracker.active_states` | array of strings | `tracker.active_states` as written. |
 | `tracker.in_progress_state` | string or absent | The state Sortie writes at dispatch. Omitted when unset. |
 | `tracker.handoff_state` | string or absent | The state Sortie writes after a successful run. Omitted when unset. |

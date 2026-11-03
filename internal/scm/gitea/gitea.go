@@ -49,6 +49,7 @@ func init() {
 var _ domain.TrackerAdapter = (*GiteaAdapter)(nil)
 var _ domain.CommentChangeReader = (*GiteaAdapter)(nil)
 var _ domain.CommentAuthorAccessReader = (*GiteaAdapter)(nil)
+var _ domain.ProjectLinker = (*GiteaAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 50 items per page this
 // allows up to 10,000 results before the adapter stops and returns what it has.
@@ -63,6 +64,7 @@ type GiteaAdapter struct {
 	client      *httpkit.Client
 	owner       string
 	repo        string
+	projectURL  string
 	model       *issuekit.LabelStateModel
 	queryFilter url.Values // parsed tracker.query_filter; nil or empty when unset
 	log         *slog.Logger
@@ -170,6 +172,7 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		client:      client,
 		owner:       owner,
 		repo:        repo,
+		projectURL:  strings.TrimSuffix(parsedEndpoint.Base, "/api/v1") + "/" + owner + "/" + repo,
 		model:       issuekit.NewLabelStateModel(source, slog.Default()),
 		queryFilter: filter,
 		log:         slog.Default(),
@@ -188,6 +191,11 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	return adapter, nil
+}
+
+// ProjectURL returns the web address of the configured repository.
+func (a *GiteaAdapter) ProjectURL() string {
+	return a.projectURL
 }
 
 // parseGiteaQueryFilter parses the operator tracker.query_filter into url.Values.

@@ -362,7 +362,7 @@ export function NextOutcomes({ outcomes }: NextOutcomesProps) {
 }
 
 // Without a token budget the tokens read on a line of their own, as sessions without one do.
-function tokensText(tokens: BudgetLine & { complete: boolean }): string | undefined {
+function tokensText(tokens: BudgetLine & { complete: boolean }): ReactNode {
   if (!tokens.limitKnown) {
     return undefined;
   }
@@ -370,7 +370,11 @@ function tokensText(tokens: BudgetLine & { complete: boolean }): string | undefi
   if (tokens.used === null) {
     return hasBudget ? "not reported" : "not reported, no budget";
   }
-  return hasBudget ? undefined : `${fmtTokens(tokens.used)}, no budget`;
+  return hasBudget ? undefined : (
+    <>
+      <NotedFigure figure={liveTokensFigure(tokens.used, tokens.complete)} />, no budget
+    </>
+  );
 }
 
 interface CostShare {

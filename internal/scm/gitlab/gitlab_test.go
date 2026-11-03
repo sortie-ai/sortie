@@ -2765,3 +2765,22 @@ func TestWriteIdentifierGuard(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectWebURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, endpoint, project, want string }{
+		{"subgroup path", "https://gitlab.com", "acme/team/widgets", "https://gitlab.com/acme/team/widgets"},
+		{"api suffix is dropped", "https://example.com/gitlab/api/v4", "acme/widgets", "https://example.com/gitlab/acme/widgets"},
+		{"numeric id uses the projects route", "https://gitlab.com/api/v4", "4242", "https://gitlab.com/projects/4242"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := projectWebURL(tt.endpoint, tt.project); got != tt.want {
+				t.Errorf("projectWebURL(%q, %q) = %q, want %q", tt.endpoint, tt.project, got, tt.want)
+			}
+		})
+	}
+}

@@ -8,39 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. A prompt template can place these comments itself through the new `comment_feed` variable; otherwise Sortie adds them after the template's text. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
-- `sortie validate` checks the `comment_feed` setting and warns about a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
-- `agent-client-protocol` workflows set environment variables for the agent with `agent-client-protocol.env`, locally and on SSH workers, with values taken as written. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
-- `agent-client-protocol.permissions: approve-all` approves a tool permission request that offers a single way to allow just that call, instead of refusing it. Every other request is still refused, tools the agent's own configuration denies stay denied, a request for a person's input still ends the run, and the default `deny-all` keeps refusing. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
-- The state API serves `config.tracker.project_url`, the web address of the tracked project, for the GitHub and Jira trackers.
-- Long code blocks and JSON in the dashboard's served texts fold to one line that opens on a click.
-- A row title on Overview, Pipeline and History links to its issue page, so the page opens in a new tab or from the keyboard.
-- The command palette's search field has a button that clears it.
+- Agents now get the issue comments they have not seen yet before every turn, including comments written during a run, from people with write access to the project only. It is on by default and changes agent prompts after upgrade; set `comment_feed.enabled: false` to turn it off, or place the comments yourself with the new `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- `sortie validate` now checks the `comment_feed` setting and flags a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- `agent-client-protocol` workflows can pass environment variables to the agent with `agent-client-protocol.env`, locally and on SSH workers. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- `agent-client-protocol.permissions: approve-all` now approves a request to allow a single tool call; every other permission request is still refused. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- The state API reports the web address of the tracked project as `config.tracker.project_url` for GitHub, GitLab, Gitea, Linear, and Jira. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: long code blocks and JSON in messages fold to one line and expand on a click. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: issue titles in Overview, Pipeline, and History are links, so an issue page opens in a new tab or from the keyboard. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: the command palette's search field has a clear button. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 
 ### Changed
 
-- A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
-- When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
-- With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
-- When an `agent-client-protocol` workflow gives OpenCode its own configuration document, the agent credential check adds its tool denial to that document instead of sending the agent's full context, on SSH workers too. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
-- The attention and next-step sentences of the dashboard and the JSON API say "bot review comments" throughout, where some said "review bot comments".
-- The dashboard sets names such as rules, agent kinds, models and skills in a monospace face, and writes every cost with two decimals, including $100 and more.
-- Every dashboard page opens with the same header, a title with a standfirst that says in a sentence what the page shows, and sets its sections off as panels with titles of their own. The issue page and the session page take the same form.
-- The dashboard's rail, status card and top bar are redrawn, and the project name under the Sortie name links to the project when the state API serves its address. On a narrow screen the bar holds only the Sortie name, the status and the menu, on one line.
-- The Pipeline draws each station as a circle that holds the number of lanes standing at it, and an issue's place on its stage chain reads as text instead of a meter.
+- File tracker: a comment in an issue file no longer needs an `id`; Sortie gives it a stable one. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
+- When an agent can't continue its earlier session, every agent kind now starts a new session and logs a warning. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
+- With the comment feed on, the `.park.comments` template variable lists only the comments the agent has not seen yet. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- OpenCode on `agent-client-protocol`: the credential check keeps its reduced, tool-free context when the workflow supplies its own OpenCode configuration, on SSH workers too. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- Dashboard and API: attention and next-step messages now say "bot review comments" everywhere. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: costs show two decimals at every amount, including $100 and more. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: every page, the issue and session pages included, opens with the same header (a title and a one-line summary) and groups its content into titled panels. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: the side rail, status card, and top bar are redesigned, and the project name links to the project's page when the tracker has one. On a phone, the top bar shows only the logo, the status, and the menu. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: the Pipeline runs its stations in the order CI, bot review, human review, shows how many issues stand at each station, and shows an issue's progress through its stage chain as text instead of a bar. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 
 ### Removed
 
-- The dashboard's rail no longer has a field that filters the screens; the command palette finds them.
-- Overview's Active section no longer has a List and Pipeline switch, and the Pipeline no longer links to Overview; `L` and the rail move between them.
+- Dashboard: the side rail's screen filter; the command palette finds screens. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Dashboard: Overview's List and Pipeline switch and the Pipeline's link to Overview; press `L` or use the side rail to switch between them. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 
 ### Fixed
 
-- The first prompt after a person releases a parked issue no longer repeats the agent's stop statement through Sortie's own stop comment, and it includes comments written while the parked run's last turn was still running. ([#1582](https://github.com/sortie-ai/sortie/issues/1582))
-- Claude Code and Copilot CLI runs no longer fail on every retry when the agent's earlier session has been deleted or has expired; the agent starts a new session instead. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
-- With `opencode.dangerously_skip_permissions: false`, the `opencode` agent now refuses every tool call that `opencode.allowed_tools` does not allow, as documented, instead of performing the calls the tool lists leave undecided. ([#1593](https://github.com/sortie-ai/sortie/issues/1593))
-- OpenCode on `agent-client-protocol` no longer spends an uncounted model request on a session title when its configuration document defines the title agent under `agents`. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
-- On SSH workers, an `agent-client-protocol` workflow whose `agent.command` is a list gets the same runtime-specific launch handling as a string command, OpenCode's session-title suppression included. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- After a person releases a parked issue, the agent's first prompt no longer repeats its own stop statement, and it includes comments written during the parked run's last turn. ([#1582](https://github.com/sortie-ai/sortie/issues/1582))
+- Claude Code and Copilot CLI runs no longer fail on every retry when the agent's earlier session was deleted or expired; the agent starts a new session instead. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
+- With `opencode.dangerously_skip_permissions: false`, the `opencode` agent now refuses every tool call that `opencode.allowed_tools` does not allow, as documented. ([#1593](https://github.com/sortie-ai/sortie/issues/1593))
+- OpenCode on `agent-client-protocol` no longer spends an extra, uncounted model request on a session title when its configuration defines a title agent. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- On SSH workers, an `agent-client-protocol` workflow whose `agent.command` is a list now launches the same way as one given as a string. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 
 ## [1.31.0] - 2026-10-31
 
