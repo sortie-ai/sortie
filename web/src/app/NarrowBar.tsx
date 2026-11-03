@@ -1,18 +1,19 @@
+import { Link } from "react-router";
+
 import { useStateQuery } from "@/api/queries";
-import { BrandMark } from "@/app/BrandMark";
+import { BrandLink } from "@/app/BrandLink";
 import { keyTip } from "@/app/key-tips";
 import { modifierLabel } from "@/app/keys";
 import { SearchIcon } from "@/components/icons";
 import { StatusMark } from "@/components/StatusMark";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/cn";
 import { ACKNOWLEDGED_WORD, acknowledgedCount, condition } from "@/lib/condition";
+import { cn } from "@/lib/cn";
 import { fmtCount, pluralVerb } from "@/lib/format";
 
 import type { StateResponse } from "@/api/types.gen";
-import type { ReactElement } from "react";
 
-function statusLabel(state: StateResponse): string | ReactElement {
+function statusLabel(state: StateResponse): string {
   const { subject, verb } = pluralVerb(
     state.counts.attention,
     ["item", "items"],
@@ -21,13 +22,7 @@ function statusLabel(state: StateResponse): string | ReactElement {
   const needs = `${subject} ${verb} attention`;
   switch (condition(state)) {
     case "degraded":
-      return state.counts.attention > 0 ? (
-        <span className="flex flex-wrap gap-x-xs">
-          <span>Degraded</span> <span>{needs}</span>
-        </span>
-      ) : (
-        "Degraded"
-      );
+      return state.counts.attention > 0 ? `Degraded, ${needs}` : "Degraded";
     case "needs":
       return needs;
     case "held":
@@ -37,36 +32,38 @@ function statusLabel(state: StateResponse): string | ReactElement {
   }
 }
 
+const LINK =
+  "rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+
 export interface NarrowBarProps {
   onOpenPalette: () => void;
 }
 
 export function NarrowBar({ onOpenPalette }: NarrowBarProps) {
   const { data } = useStateQuery();
-  const project = data?.config?.tracker.project;
-  const hasProject = project !== undefined && project !== "";
 
   return (
-    <header className="sticky top-0 z-(--z-sticky) flex items-center gap-sm border-b border-line bg-canvas px-md py-sm md:hidden">
-      <BrandMark />
-      <div className={cn("flex flex-col", hasProject && "min-w-0")}>
-        <span className="font-heading font-semibold">Sortie</span>
-        {hasProject ? (
-          <span title={project} className="truncate text-body-sm text-ink-muted">
-            {project}
-          </span>
-        ) : undefined}
+    <header className="sticky top-0 z-(--z-sticky) flex items-center gap-x-md border-b border-line bg-canvas px-md py-sm md:hidden">
+      <BrandLink />
+      <div className="flex min-w-0 flex-1 justify-center">
+        {data === undefined ? undefined : (
+          <Link
+            to="/"
+            title={statusLabel(data)}
+            className={cn(
+              "flex max-w-full min-w-0 text-body-sm hover:underline hover:underline-offset-2",
+              LINK,
+            )}
+          >
+            <StatusMark
+              mark={condition(data)}
+              label={<span className="block truncate">{statusLabel(data)}</span>}
+              className="min-w-0 *:min-w-0"
+            />
+          </Link>
+        )}
       </div>
-      {data === undefined ? undefined : (
-        <span className="min-w-0 text-body-sm wrap-anywhere">
-          <StatusMark mark={condition(data)} label={statusLabel(data)} />
-        </span>
-      )}
-      <Button
-        className="ml-auto"
-        onClick={onOpenPalette}
-        title={keyTip("Open commands", modifierLabel(), "K")}
-      >
+      <Button onClick={onOpenPalette} title={keyTip("Open commands", modifierLabel(), "K")}>
         <SearchIcon />
         Menu
       </Button>

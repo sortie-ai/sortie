@@ -1,6 +1,6 @@
 import { Autocomplete as BaseAutocomplete } from "@base-ui/react/autocomplete";
 
-import { SearchIcon } from "@/components/icons";
+import { SearchIcon, XIcon } from "@/components/icons";
 import { cn } from "@/lib/cn";
 
 import type { ReactNode } from "react";
@@ -28,14 +28,32 @@ export function Autocomplete<ItemValue>(props: AutocompleteProps<ItemValue>) {
 
 export type AutocompleteInputProps = Omit<BaseAutocomplete.Input.Props, "className">;
 
+type InputKeyDownEvent = Parameters<NonNullable<AutocompleteInputProps["onKeyDown"]>>[0];
+
+const TEXT_SELECTION_KEYS = new Set(["Home", "End"]);
+
+/** Leaves Shift+Home and Shift+End to the field, which the inline list takes as jumps otherwise. */
+function keepTextSelection(event: InputKeyDownEvent) {
+  if (event.shiftKey && TEXT_SELECTION_KEYS.has(event.key)) {
+    event.preventBaseUIHandler();
+  }
+}
+
 export function AutocompleteInput(props: AutocompleteInputProps) {
   return (
     <BaseAutocomplete.InputGroup className="flex items-center gap-xs border-b border-line bg-field px-md text-ink-muted">
       <SearchIcon />
       <BaseAutocomplete.Input
         className="h-10 w-full min-w-0 bg-transparent text-body-md text-ink outline-none placeholder:text-ink-muted"
+        onKeyDown={keepTextSelection}
         {...props}
       />
+      <BaseAutocomplete.Clear
+        aria-label="Clear search"
+        className="-mr-xxs inline-grid size-6 shrink-0 cursor-pointer place-items-center rounded text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-focus-ring"
+      >
+        <XIcon />
+      </BaseAutocomplete.Clear>
     </BaseAutocomplete.InputGroup>
   );
 }
@@ -45,7 +63,7 @@ export type AutocompleteListProps = Omit<BaseAutocomplete.List.Props, "className
 export function AutocompleteList(props: AutocompleteListProps) {
   return (
     <BaseAutocomplete.List
-      className="min-h-0 overflow-y-auto overscroll-contain py-xxs scroll-py-xxs"
+      className="min-h-0 overflow-y-auto overscroll-contain pt-xxs pb-xs scroll-py-xxs empty:hidden"
       {...props}
     />
   );
@@ -66,7 +84,7 @@ export interface AutocompleteGroupLabelProps {
 
 export function AutocompleteGroupLabel({ children }: AutocompleteGroupLabelProps) {
   return (
-    <BaseAutocomplete.GroupLabel className="px-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted">
+    <BaseAutocomplete.GroupLabel className="mx-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted [[role=group]:not(:first-child)>&]:mt-xs [[role=group]:not(:first-child)>&]:border-t [[role=group]:not(:first-child)>&]:border-line">
       {children}
     </BaseAutocomplete.GroupLabel>
   );
@@ -99,13 +117,17 @@ export function AutocompleteItem({ className, ...rest }: AutocompleteItemProps) 
 }
 
 export interface AutocompleteEmptyProps {
+  title: string;
   children: ReactNode;
 }
 
-export function AutocompleteEmpty({ children }: AutocompleteEmptyProps) {
+export function AutocompleteEmpty({ title, children }: AutocompleteEmptyProps) {
   return (
-    <BaseAutocomplete.Empty className="px-md py-lg text-body-md text-ink-muted empty:hidden">
-      {children}
+    <BaseAutocomplete.Empty className="pt-xxs pb-xs empty:hidden">
+      <div className="mx-md pt-xs pb-xxs text-label-caps font-medium text-ink-muted">{title}</div>
+      <p className="flex min-h-8 items-center px-md py-xxs text-body-md text-ink-muted">
+        {children}
+      </p>
     </BaseAutocomplete.Empty>
   );
 }

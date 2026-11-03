@@ -5,13 +5,14 @@ import { Kbd } from "@/app/Kbd";
 import { keyTip } from "@/app/key-tips";
 import { modifierLabel } from "@/app/keys";
 import { LiveIndicator } from "@/app/LiveIndicator";
-import { SearchIcon } from "@/components/icons";
+import { RETURN } from "@/app/screen-top";
+import { CircleHelpIcon, SearchIcon } from "@/components/icons";
 import { ThemeMenu } from "@/components/ThemeMenu";
 import { useIssueSummary } from "@/components/use-issue-summary";
 import { useSessionRun } from "@/components/use-session-run";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { backOf } from "@/lib/issue-link";
-import { RangePicker } from "@/screens/analytics/RangePicker";
 
 import type { ScreenEntry } from "@/app/Rail";
 
@@ -30,6 +31,7 @@ function BackCrumb({ screens }: BackCrumbProps) {
     <>
       <Link
         to={back}
+        state={RETURN}
         className="text-ink-muted transition-colors duration-(--duration-feedback) hover:text-ink hover:underline hover:underline-offset-2"
       >
         {label}
@@ -72,6 +74,7 @@ function SessionBreadcrumb({ identifier, dispatchId, screens }: SessionBreadcrum
       <Link
         to={`/issues/${encodeURIComponent(identifier)}`}
         state={{ back }}
+        title={isResolved ? (session.title ?? undefined) : undefined}
         className="text-ink-muted wrap-anywhere transition-colors duration-(--duration-feedback) hover:text-ink hover:underline hover:underline-offset-2"
       >
         {isResolved ? session.key : identifier}
@@ -97,7 +100,7 @@ function AgentsStatus() {
           ? `${running} ${running === 1 ? "agent" : "agents"} running`
           : `${running} of ${cap} ${cap === 1 ? "agent" : "agents"} running`
       }
-      className="flex items-center gap-xs whitespace-nowrap text-body-sm max-lg:hidden"
+      className="flex items-center gap-xs whitespace-nowrap text-body-md max-lg:hidden"
     >
       <span className="text-ink-muted">Agents</span>
       <span className="font-medium text-ink tabular-nums">
@@ -111,13 +114,16 @@ export interface PageBreadcrumbProps {
   screens: ScreenEntry[];
 }
 
+const CRUMBS =
+  "-mt-(--size-crumbs) flex h-(--size-crumbs) items-center text-body-sm text-ink-muted max-md:hidden *:*:trim-caps";
+
 export function PageBreadcrumb({ screens }: PageBreadcrumbProps) {
   const identifier = useMatch("/issues/:identifier")?.params.identifier;
   const sessionParams = useMatch("/issues/:identifier/sessions/:dispatchId")?.params;
 
   if (sessionParams?.identifier !== undefined && sessionParams.dispatchId !== undefined) {
     return (
-      <div className="mb-md text-body-sm text-ink-muted max-md:hidden">
+      <div className={CRUMBS}>
         <SessionBreadcrumb
           identifier={sessionParams.identifier}
           dispatchId={sessionParams.dispatchId}
@@ -130,7 +136,7 @@ export function PageBreadcrumb({ screens }: PageBreadcrumbProps) {
     return undefined;
   }
   return (
-    <div className="mb-md text-body-sm text-ink-muted max-md:hidden">
+    <div className={CRUMBS}>
       <Breadcrumb identifier={identifier} screens={screens} />
     </div>
   );
@@ -142,13 +148,19 @@ export interface TopBarProps {
   isHolding: boolean;
   onTogglePause: () => void;
   onOpenPalette: () => void;
+  onOpenShortcuts: () => void;
 }
 
-export function TopBar({ className, isHolding, onTogglePause, onOpenPalette }: TopBarProps) {
-  const isAnalytics = useMatch("/analytics") !== null;
-
+export function TopBar({
+  className,
+  isHolding,
+  onTogglePause,
+  onOpenPalette,
+  onOpenShortcuts,
+}: TopBarProps) {
   return (
-    <header className="sticky top-0 z-(--z-sticky) h-(--size-header) border-b border-line bg-canvas max-md:hidden">
+    // The rule lies outside the header's height, so its content centers on whole pixels.
+    <header className="sticky top-0 z-(--z-header) h-(--size-header) bg-canvas shadow-[0_1px_0_var(--color-line)] max-md:hidden">
       <div className={cn("flex h-full items-center gap-lg text-body-sm", className)}>
         <button
           type="button"
@@ -164,12 +176,18 @@ export function TopBar({ className, isHolding, onTogglePause, onOpenPalette }: T
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center gap-lg">
-          <div className="flex items-center">
-            <AgentsStatus />
-            <LiveIndicator isHolding={isHolding} onTogglePause={onTogglePause} />
-          </div>
+          <AgentsStatus />
+          <LiveIndicator isHolding={isHolding} onTogglePause={onTogglePause} />
           <div className="flex items-center gap-xs">
-            {isAnalytics ? <RangePicker /> : undefined}
+            <Button
+              variant="ghost"
+              onClick={onOpenShortcuts}
+              aria-label="Shortcuts"
+              title={keyTip("Shortcuts", "?")}
+              className="w-(--size-control) px-0"
+            >
+              <CircleHelpIcon />
+            </Button>
             <ThemeMenu />
           </div>
         </div>

@@ -146,7 +146,7 @@ func TestNextOutcomes(t *testing.T) {
 			situation: Situation{PendingReactions: pendingRow("bot-review", watchedFor(1500*time.Second, 3, 3))},
 			shape:     fixtureShape(botReview),
 			want: []NextOutcome{{
-				"If a check in the next 25m finds a new review bot comment on the code of the pull request",
+				"If a check in the next 25m finds a new bot review comment on the code of the pull request",
 				"Bot review fixes are used up (3 of 3), so Sortie applies `needs-human` to the issue and keeps watching the pull request.",
 			}},
 		},

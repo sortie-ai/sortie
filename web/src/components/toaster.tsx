@@ -269,10 +269,10 @@ function ToastView({ item, onLeave, onRemove }: ToastViewProps) {
         isLeaving && "opacity-0 duration-(--duration-exit) ease-exit",
       )}
     >
-      <div className="flex items-start gap-sm">
+      <div className="flex items-center gap-sm">
         <span
           className={cn(
-            "mt-xxs flex size-lg shrink-0 items-center justify-center rounded-full",
+            "flex size-lg shrink-0 items-center justify-center rounded-full",
             BADGE[item.variant],
           )}
         >

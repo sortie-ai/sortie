@@ -65,9 +65,12 @@ export function DegradedBanner() {
   return (
     <div
       role="status"
-      className="mb-lg flex items-start gap-sm rounded-xl bg-error-container p-md text-body-md text-ink"
+      className="mb-xxl flex items-start gap-sm rounded-xl border border-error-border bg-error-container p-md text-body-md text-ink"
     >
-      <TriangleAlertIcon className="mt-xxs text-error" />
+      {/* A box one line tall centers the icon on the banner's first line. */}
+      <span className="flex h-lh shrink-0 items-center">
+        <TriangleAlertIcon className="text-error" />
+      </span>
       <div className="min-w-0 wrap-anywhere">
         {lines.map((line) => (
           <div key={line.label}>

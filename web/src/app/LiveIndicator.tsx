@@ -102,7 +102,7 @@ export function LiveIndicator({ isHolding, onTogglePause }: LiveIndicatorProps) 
               type="button"
               onClick={onTogglePause}
               aria-describedby={tipId}
-              className="inline-flex h-(--size-control) cursor-pointer items-center gap-xs rounded-lg px-sm text-body-sm whitespace-nowrap transition-colors duration-(--duration-feedback) hover:bg-state-hover focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring active:bg-state-pressed"
+              className="inline-flex h-(--size-control) cursor-pointer items-center gap-xs rounded-lg px-sm text-body-md whitespace-nowrap transition-colors duration-(--duration-feedback) hover:bg-state-hover focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring active:bg-state-pressed"
             />
           }
         >

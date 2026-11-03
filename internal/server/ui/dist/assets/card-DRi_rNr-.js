@@ -1,0 +1,1 @@
+import{r as e}from"./react-AyOTluXZ.js";var t=e();function n({children:e}){return(0,t.jsx)(`div`,{className:`max-w-full overflow-clip rounded-xl border border-line bg-canvas`,children:e})}export{n as t};

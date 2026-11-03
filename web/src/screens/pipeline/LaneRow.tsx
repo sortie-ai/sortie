@@ -1,10 +1,13 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 
 import { ChevronDownIcon } from "@/components/icons";
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { Lane } from "@/components/Lane";
+import { Parts } from "@/components/Parts";
+import { MONO } from "@/components/ui/mono";
 import { cn } from "@/lib/cn";
 import { plural, pluralVerb } from "@/lib/format";
-import { rowStyles, secondLineColor } from "@/lib/rows";
+import { ATTENTION_EDGE, rowStyles, secondLineColor } from "@/lib/rows";
 
 import { laneNavKey } from "./lanes";
 
@@ -14,7 +17,7 @@ import type { PipelineLane } from "./lanes";
 const GROUP_KEY_LIMIT = 12;
 
 function laneGridStyles(): string {
-  return "grid grid-cols-[minmax(0,1fr)_auto] [grid-template-areas:'ident_snt'_'trk_trk'] items-baseline gap-x-lg px-md py-xs max-md:grid-cols-[minmax(0,1fr)] max-md:[grid-template-areas:'ident'_'trk'_'snt']";
+  return "grid grid-cols-[minmax(0,1fr)_auto] [grid-template-areas:'ident_snt'_'trk_trk'] items-baseline gap-x-lg px-md max-md:grid-cols-[minmax(0,1fr)] max-md:[grid-template-areas:'ident'_'trk'_'snt']";
 }
 
 export interface LaneRowProps {
@@ -39,37 +42,47 @@ export function LaneRow({ lane, variant, isSelected, showSelection, onOpen }: La
       onClick={() => onOpen(lane)}
       className={cn(
         laneGridStyles(),
-        "scroll-mt-28! border-b border-line wrap-anywhere",
-        rowStyles(isLook && !isNeeds, true),
-        isNeeds && "shadow-[inset_2px_0_0_var(--color-warning-fill)]",
-        isNeeds && isLook && "bg-item-selected",
+        // A rule and padding set lanes apart.
+        "scroll-mt-28! border-b border-line py-md wrap-anywhere",
+        rowStyles(isLook, true, isNeeds),
       )}
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-sm [grid-area:ident]">
-        <span className="text-body-md font-medium text-ink">{lane.title ?? lane.displayKey}</span>
-        {hasTitle ? (
-          <span className={cn("text-body-sm tabular-nums", secondLineColor(isLook))}>
-            {lane.displayKey}
-          </span>
-        ) : undefined}
-        {lane.route === null ? undefined : (
-          <span className={cn("font-mono text-body-sm", secondLineColor(isLook))}>
-            {lane.route}
-          </span>
-        )}
-        {lane.agentKind === null ? undefined : (
-          <span className={cn("text-body-sm", secondLineColor(isLook))}>{lane.agentKind}</span>
-        )}
+        <span className="text-body-md font-medium text-ink">
+          <IssueTitleLink identifier={lane.identifier}>
+            {lane.title ?? lane.displayKey}
+          </IssueTitleLink>
+        </span>
+        <Parts
+          className={cn("text-body-sm", secondLineColor(isLook))}
+          parts={[
+            hasTitle ? (
+              <span key="key" className="tabular-nums">
+                {lane.displayKey}
+              </span>
+            ) : null,
+            lane.route === null ? null : (
+              <span key="route" className={MONO}>
+                {lane.route}
+              </span>
+            ),
+            lane.agentKind === null ? null : (
+              <span key="agent" className={MONO}>
+                {lane.agentKind}
+              </span>
+            ),
+          ].filter((part) => part !== null)}
+        />
       </div>
       <span
         className={cn(
-          "w-32 truncate text-body-md font-medium [grid-area:snt]",
+          "w-32 truncate text-body-md font-medium [grid-area:snt] max-md:mt-xs md:text-right",
           isNeeds ? "text-warning" : "text-ink",
         )}
       >
         {lane.word}
       </span>
-      <div className="min-w-0 [grid-area:trk]">
+      <div className="mt-xs min-w-0 [grid-area:trk]">
         <Lane
           stations={lane.stations}
           position={lane.position}
@@ -111,8 +124,8 @@ export function StationGroup({
         <Collapsible.Trigger
           className={cn(
             laneGridStyles(),
-            "w-full cursor-pointer border-b border-line text-left transition-colors duration-(--duration-feedback) hover:bg-item-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring active:bg-item-selected",
-            needing > 0 && "shadow-[inset_2px_0_0_var(--color-warning-fill)]",
+            "w-full cursor-pointer border-b border-line py-sm text-left transition-colors duration-(--duration-feedback) hover:bg-item-hover hover:[--ground:var(--color-item-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring active:bg-item-selected active:[--ground:var(--color-item-selected)]",
+            needing > 0 && ATTENTION_EDGE,
           )}
         >
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-sm [grid-area:ident]">
@@ -128,14 +141,20 @@ export function StationGroup({
               {needing > 0 ? `, ${needsWord.count} ${needsWord.verb} attention` : undefined}
             </span>
           </span>
-          <span className="flex flex-wrap gap-x-xs gap-y-xxs py-xxs text-body-sm text-ink-body tabular-nums [grid-area:trk]">
-            {lanes.slice(0, GROUP_KEY_LIMIT).map((lane) => (
-              <span key={lane.issueId}>{lane.displayKey}</span>
-            ))}
-            {lanes.length > GROUP_KEY_LIMIT ? (
-              <span className="text-ink-muted">{`+${lanes.length - GROUP_KEY_LIMIT}`}</span>
-            ) : undefined}
-          </span>
+          <Parts
+            className="py-xxs text-body-sm text-ink-body tabular-nums [grid-area:trk]"
+            parts={[
+              ...lanes.slice(0, GROUP_KEY_LIMIT).map((lane) => lane.displayKey),
+              ...(lanes.length > GROUP_KEY_LIMIT
+                ? [
+                    <span
+                      key="more"
+                      className="text-ink-muted"
+                    >{`+${lanes.length - GROUP_KEY_LIMIT}`}</span>,
+                  ]
+                : []),
+            ]}
+          />
           <span className="text-right text-body-sm text-ink-muted [grid-area:snt] max-md:text-left">
             {isOpen ? "Hide lanes" : "Show lanes"}
           </span>

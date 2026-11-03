@@ -41,8 +41,11 @@ func init() {
 }
 
 // Compile-time interface satisfaction check.
-var _ domain.TrackerAdapter = (*JiraAdapter)(nil)
-var _ domain.CommentChangeReader = (*JiraAdapter)(nil)
+var (
+	_ domain.TrackerAdapter      = (*JiraAdapter)(nil)
+	_ domain.CommentChangeReader = (*JiraAdapter)(nil)
+	_ domain.ProjectLinker       = (*JiraAdapter)(nil)
+)
 
 // searchFields is the comma-separated list of Jira fields requested
 // in search and issue-detail operations.
@@ -165,6 +168,12 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		apiVersion:  apiVersion,
 		basePath:    basePath(apiVersion),
 	}, nil
+}
+
+// ProjectURL returns the web address of the configured project, the
+// browse page Jira opens for a project key.
+func (a *JiraAdapter) ProjectURL() string {
+	return httpkit.RedactURLUserinfo(a.endpoint) + "/browse/" + url.PathEscape(a.project)
 }
 
 // normalizeAPIVersion coerces a raw config value to a validated Jira

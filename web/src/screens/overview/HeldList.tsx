@@ -1,4 +1,5 @@
 import { plural } from "@/lib/format";
+import { Panel } from "@/components/Panel";
 
 import { HeldItem } from "./HeldItem";
 
@@ -17,16 +18,12 @@ export function HeldList({ rows, count, now }: HeldListProps) {
     return undefined;
   }
   return (
-    <section className="flex flex-col gap-sm">
-      <div className="flex flex-wrap items-baseline gap-x-sm">
-        <h2 className="font-heading text-h7 font-semibold text-ink">Not dispatched</h2>
-        <span className="text-body-md text-ink-muted">{plural(count, "issue", "issues")}</span>
-      </div>
-      <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-canvas">
+    <Panel title="Not dispatched" meta={plural(count, "issue", "issues")}>
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-canvas">
         {rows.map((row) => (
           <HeldItem key={row.issue_id} row={row} now={now} />
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }

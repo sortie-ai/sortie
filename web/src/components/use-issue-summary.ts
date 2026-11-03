@@ -21,6 +21,15 @@ export function useIssueSummary(identifier: string): IssueDetailRow | undefined 
     if (row !== undefined) {
       return row;
     }
+    // A held issue has no run yet, so the issue endpoint does not know it; the state does.
+    const held = (state.held ?? []).find((candidate) => candidate.issue_identifier === identifier);
+    if (held !== undefined) {
+      return {
+        displayKey: held.display_identifier || held.issue_identifier,
+        title: held.issue_title ?? null,
+        statusTextFull: held.status_text_full,
+      };
+    }
     const ended = pages === undefined ? undefined : buildEnded(pages, state);
     const issue = ended?.find((candidate) => candidate.identifier === identifier);
     return issue === undefined

@@ -2,8 +2,17 @@ import { Link } from "react-router";
 
 import { useStateQuery } from "@/api/queries";
 import { Pair, Pairs, Panel } from "@/components/Panel";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
-import { StatusMark } from "@/components/StatusMark";
+import { StatusMark, markWord } from "@/components/StatusMark";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { scmProviderName } from "@/lib/condition";
 import {
   fmtCount,
@@ -12,13 +21,13 @@ import {
   fmtStampSec,
   fmtVersion,
   parseInstant,
+  pluralVerb,
 } from "@/lib/format";
 
 import type { HealthCheckResponse, StateHealthResponse, StateResponse } from "@/api/types.gen";
 import type { Mark } from "@/lib/run-status";
 import type { ReactNode } from "react";
 
-const HEADING = "font-heading text-h5 font-semibold text-ink";
 const LINK =
   "text-link underline underline-offset-2 hover:text-link-hover focus-visible:outline-2 focus-visible:outline-focus-ring active:text-link-active";
 
@@ -55,19 +64,31 @@ interface CheckRowProps {
 function CheckRow({ name, check, line, unrunLine = "Not run yet." }: CheckRowProps) {
   const hasRun = check.checked_at !== null;
   const hasError = hasRun && check.error !== undefined && check.error !== "";
+  const mark = markOf(check);
   return (
-    <li className="grid grid-cols-[var(--size-icon)_minmax(0,1fr)] items-baseline gap-x-md gap-y-xxs border-t border-line py-sm text-body-md first:border-t-0 sm:grid-cols-[var(--size-icon)_168px_minmax(0,1fr)]">
-      <StatusMark mark={markOf(check)} className="self-start pt-0.75" />
-      <span className="font-medium text-ink">{name}</span>
-      <div className="col-start-2 flex min-w-0 flex-col gap-xs text-ink-body sm:col-start-3">
-        <span>{hasRun ? line : unrunLine}</span>
-        {hasError ? (
-          <pre className="rounded-lg bg-error-container p-sm font-mono text-body-sm whitespace-pre-wrap text-ink wrap-anywhere">
-            {check.error}
-          </pre>
-        ) : undefined}
-      </div>
-    </li>
+    <TableRow>
+      <TableCell>
+        <StatusMark
+          mark={mark}
+          label={
+            <>
+              {name}
+              <span className="sr-only"> ({markWord(mark)})</span>
+            </>
+          }
+        />
+      </TableCell>
+      <TableCell isWrapping>
+        <div className="flex min-w-0 flex-col gap-xs">
+          <span>{hasRun ? line : unrunLine}</span>
+          {hasError ? (
+            <pre className="rounded-lg bg-error-container p-sm font-mono text-body-sm whitespace-pre-wrap text-ink wrap-anywhere">
+              {check.error}
+            </pre>
+          ) : undefined}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -94,48 +115,54 @@ function Checks({ health }: ChecksProps) {
 
   return (
     <Panel title="Checks">
-      <ul>
-        <CheckRow
-          name="Database"
-          check={database}
-          line={
-            database.status === "fail"
-              ? failureText(database, "check", "checks")
-              : "SQLite is reachable."
-          }
-        />
-        <CheckRow
-          name="Dispatch preflight"
-          check={preflight}
-          line={
-            preflight.status === "fail"
-              ? `${failureText(preflight, "tick", "ticks")} No new issue starts until preflight passes.`
-              : "The last tick passed preflight."
-          }
-        />
-        <CheckRow name={workflow.file ?? "Workflow file"} check={workflow} line={workflowLine} />
-        <CheckRow name="Tracker poll" check={poll} line={sentence} unrunLine={sentence} />
-        {scm === null ? undefined : (
+      <Table>
+        <TableHeader>
+          <TableHead>Check</TableHead>
+          <TableHead>Status</TableHead>
+        </TableHeader>
+        <TableBody>
           <CheckRow
-            name={scmProviderName(scm.provider)}
-            check={scm}
-            unrunLine="No pull request checked since Sortie started."
+            name="Database"
+            check={database}
             line={
-              scm.status === "fail" ? (
-                failureText(scm, "read", "reads")
-              ) : (
-                <>
-                  Reachable, used by the reactions on{" "}
-                  <Link to="/workflow" className={LINK}>
-                    Workflow
-                  </Link>
-                  .
-                </>
-              )
+              database.status === "fail"
+                ? failureText(database, "check", "checks")
+                : "SQLite is reachable."
             }
           />
-        )}
-      </ul>
+          <CheckRow
+            name="Dispatch preflight"
+            check={preflight}
+            line={
+              preflight.status === "fail"
+                ? `${failureText(preflight, "tick", "ticks")} No new issue starts until preflight passes.`
+                : "The last tick passed preflight."
+            }
+          />
+          <CheckRow name={workflow.file ?? "Workflow file"} check={workflow} line={workflowLine} />
+          <CheckRow name="Tracker poll" check={poll} line={sentence} unrunLine={sentence} />
+          {scm === null ? undefined : (
+            <CheckRow
+              name={scmProviderName(scm.provider)}
+              check={scm}
+              unrunLine="No pull request checked since Sortie started."
+              line={
+                scm.status === "fail" ? (
+                  failureText(scm, "read", "reads")
+                ) : (
+                  <>
+                    Reachable, used by the reactions on{" "}
+                    <Link to="/workflow" className={LINK}>
+                      Workflow
+                    </Link>
+                    .
+                  </>
+                )
+              }
+            />
+          )}
+        </TableBody>
+      </Table>
     </Panel>
   );
 }
@@ -164,7 +191,7 @@ function PollLoopPanel({ state, health }: AsideProps) {
   const { poll } = health;
   const interval = state.config?.polling.interval_ms;
   return (
-    <Panel title="Poll loop">
+    <Panel isRuled title="Poll loop">
       <Pairs>
         {interval === undefined ? undefined : (
           <Pair label="Interval">every {fmtDuration(interval / 1000)}</Pair>
@@ -180,7 +207,7 @@ function PollLoopPanel({ state, health }: AsideProps) {
 
 function ProcessPanel({ state, health }: AsideProps) {
   return (
-    <Panel title="Process">
+    <Panel isRuled title="Process">
       <Pairs>
         <Pair label="Version">{fmtVersion(state.version)}</Pair>
         <Pair label="Started">{stampOrDash(state.started_at, fmtStamp)}</Pair>
@@ -193,25 +220,41 @@ function ProcessPanel({ state, health }: AsideProps) {
   );
 }
 
+function standfirstOf(health: StateHealthResponse): string {
+  const checks = [
+    health.database,
+    health.preflight,
+    health.workflow,
+    health.poll,
+    health.scm,
+  ].filter((check) => check !== null);
+  const failing = checks.filter((check) => check.checked_at !== null && check.status === "fail");
+  const unrun = checks.filter((check) => check.checked_at === null);
+  if (failing.length > 0) {
+    const agreement = pluralVerb(failing.length, ["check", "checks"], ["fails", "fail"]);
+    return `${agreement.count} of ${fmtCount(checks.length)} ${agreement.noun} ${agreement.verb}.`;
+  }
+  if (unrun.length > 0) {
+    const agreement = pluralVerb(unrun.length, ["check", "checks"], ["has", "have"]);
+    return `${agreement.count} of ${fmtCount(checks.length)} ${agreement.noun} ${agreement.verb} not run yet; the others pass.`;
+  }
+  return `All ${fmtCount(checks.length)} checks pass.`;
+}
+
 export function HealthScreen(): ReactNode {
   const { data } = useStateQuery();
   if (data === undefined) {
-    return <h1 className={HEADING}>Health</h1>;
+    return <ScreenHeader title="Health" />;
   }
   const { health } = data;
   if (health === undefined) {
-    return (
-      <div className="flex flex-col gap-xs">
-        <h1 className={HEADING}>Health</h1>
-        <p className="text-body-lg text-ink-body">Sortie serves no health checks.</p>
-      </div>
-    );
+    return <ScreenHeader title="Health" standfirst="Sortie serves no health checks." />;
   }
 
   return (
-    <div className="flex flex-col gap-lg">
-      <h1 className={HEADING}>Health</h1>
-      <div className="grid grid-cols-1 items-start gap-x-xxxl gap-y-xl min-[1024px]:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="flex flex-col">
+      <ScreenHeader title="Health" standfirst={standfirstOf(health)} />
+      <div className="grid grid-cols-1 items-start gap-x-xxxl gap-y-xl xl:grid-cols-[minmax(0,1fr)_var(--size-margin)]">
         <Checks health={health} />
         <div className="flex min-w-0 flex-col gap-xl">
           <PollLoopPanel state={data} health={health} />

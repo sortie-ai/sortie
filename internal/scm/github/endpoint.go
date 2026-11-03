@@ -1,12 +1,29 @@
 package github
 
 import (
+	"net/url"
+
 	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
 // defaultEndpoint is the public GitHub REST API base URL, applied when
 // the adapter config omits "endpoint".
 const defaultEndpoint = "https://api.github.com"
+
+// webBase returns the web origin a person opens for a GitHub REST API
+// base URL: github.com for the public API, and the API's own origin for
+// GitHub Enterprise Server, which serves its API under /api/v3 on the
+// same host. It returns "" for a value that does not parse.
+func webBase(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Host == "api.github.com" {
+		return "https://github.com"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
 
 // resolveEndpoint turns a configured endpoint into the base URL a GitHub
 // HTTP client is built from, and reports whether the configured value is

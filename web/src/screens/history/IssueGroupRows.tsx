@@ -2,11 +2,15 @@ import { Fragment, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 import { useHistoryRunsQuery } from "@/api/queries";
+import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { NotedFigure } from "@/components/NotedFigure";
+import { NameText } from "@/components/NameText";
+import { Parts } from "@/components/Parts";
 import { ServedText } from "@/components/ServedText";
-import { StandingMark } from "@/components/Lane";
+import { MarkSlot } from "@/components/Lane";
 import { StatusMark } from "@/components/StatusMark";
 import { Button } from "@/components/ui/button";
+import { MONO } from "@/components/ui/mono";
 import {
   TableBody,
   TableCell,
@@ -70,11 +74,13 @@ export function HistoryTableHead({ state }: HistoryTableHeadProps) {
       {hasRule ? <TableHead>Rule</TableHead> : undefined}
       <TableHead>Agent</TableHead>
       <TableHead className={SKILLS_WIDTH}>Skills</TableHead>
-      <TableHead>Duration</TableHead>
-      <TableHead>Turns</TableHead>
-      <TableHead title="Cache reads not included">Tokens</TableHead>
-      {hasCost ? <TableHead>Est. cost</TableHead> : undefined}
-      <TableHead>Finished</TableHead>
+      <TableHead align="right">Duration</TableHead>
+      <TableHead align="right">Turns</TableHead>
+      <TableHead align="right" title="Cache reads not included">
+        Tokens
+      </TableHead>
+      {hasCost ? <TableHead align="right">Est. cost</TableHead> : undefined}
+      <TableHead align="right">Finished</TableHead>
     </TableHeader>
   );
 }
@@ -133,13 +139,13 @@ function SkillsCell({ skills }: SkillsCellProps) {
                   mark="failed"
                   label={
                     <>
-                      {call.skill}
+                      <span className={MONO}>{call.skill}</span>
                       <span className="sr-only"> (failed)</span>
                     </>
                   }
                 />
               ) : (
-                call.skill
+                <span className={MONO}>{call.skill}</span>
               )}
             </Fragment>
           ))}
@@ -186,29 +192,29 @@ function RunRow({ run, columns }: RunRowProps) {
       </TableCell>
       {columns.hasRule ? (
         <TableCell note={hop === undefined ? undefined : <ServedText text={hop} />}>
-          <span className={cn(rule === ruleName && "font-mono text-body-sm")}>
+          <span className={cn(rule === ruleName && MONO)}>
             <ServedText text={rule} />
           </span>
         </TableCell>
       ) : undefined}
       <TableCell
         title={isModelDiverged ? `Configured ${run.configured_model}` : undefined}
-        note={agent[1] === undefined ? undefined : <ServedText text={agent[1]} />}
+        note={agent[1] === undefined ? undefined : <NameText name={agent[1]} />}
       >
-        {agent[0] === undefined ? undefined : <ServedText text={agent[0]} />}
+        {agent[0] === undefined ? undefined : <NameText name={agent[0]} />}
       </TableCell>
       <SkillsCell skills={run.skills} />
-      <TableCell>{fmtDuration(runSeconds(run))}</TableCell>
-      <TableCell>{fmtCount(run.turns_completed)}</TableCell>
-      <TableCell>
+      <TableCell look="number">{fmtDuration(runSeconds(run))}</TableCell>
+      <TableCell look="number">{fmtCount(run.turns_completed)}</TableCell>
+      <TableCell look="number">
         <NotedFigure figure={runTokensFigure(run)} />
       </TableCell>
       {columns.hasCost ? (
-        <TableCell>
+        <TableCell look="number">
           <NotedFigure figure={runCostFigure(run)} />
         </TableCell>
       ) : undefined}
-      <TableCell>{fmtStamp(run.completed_at)}</TableCell>
+      <TableCell look="number">{fmtStamp(run.completed_at)}</TableCell>
     </TableRow>
   );
 }
@@ -275,29 +281,23 @@ export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
     <TableBody>
       <TableRow look="group" onClick={() => void navigate(link.to, { state: link.state })}>
         <TableSpanCell colSpan={columns.span}>
-          <div className="flex items-start gap-sm">
-            <span className="flex w-(--size-icon) shrink-0 items-center justify-center self-center">
-              {standing.marker === null ? undefined : <StandingMark marker={standing.marker} />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-body-md font-medium text-ink wrap-anywhere">
-                <Link
-                  to={link.to}
-                  state={link.state}
-                  onClick={(event) => event.stopPropagation()}
-                  className="rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <ServedText text={title} />
-                </Link>
-              </p>
-              <p className="flex flex-wrap gap-x-md text-body-sm text-ink-muted wrap-anywhere">
-                {secondLine.map(([id, part]) => (
+          {/* The date shares the title's line only, so the second line may run on under it. */}
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-sm">
+            <MarkSlot marker={standing.marker} />
+            <p className="text-body-md font-medium text-ink wrap-anywhere max-md:self-baseline">
+              <IssueTitleLink identifier={group.issue_identifier}>
+                <ServedText text={title} />
+              </IssueTitleLink>
+            </p>
+            <p className="col-span-2 col-start-2 text-body-sm text-ink-muted wrap-anywhere">
+              <Parts
+                parts={secondLine.map(([id, part]) => (
                   <span key={id}>{part}</span>
                 ))}
-              </p>
-            </div>
+              />
+            </p>
             {ending === null ? undefined : (
-              <span className="shrink-0 text-body-sm whitespace-nowrap text-ink-muted tabular-nums">
+              <span className="col-start-3 row-start-1 whitespace-nowrap tabular-nums max-md:self-baseline max-md:text-body-sm max-md:text-ink-muted">
                 {fmtStamp(ending.observed_at)}
               </span>
             )}

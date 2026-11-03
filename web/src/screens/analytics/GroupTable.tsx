@@ -13,6 +13,7 @@ import {
 import { useTableSort } from "@/components/use-table-sort";
 import { statsCostFigure, statsCostPerSucceededFigure, statsTokensFigure } from "@/lib/figures";
 import { fmtCount, fmtDuration, fmtMean, fmtPercent } from "@/lib/format";
+import { Panel } from "@/components/Panel";
 
 import type { Duration, Group } from "@/api/types.gen";
 import type { SortColumn } from "@/components/use-table-sort";
@@ -84,7 +85,8 @@ export const COLUMN_WIDTH = {
   runs: "w-[96px]",
   measure: "w-[112px]",
   turns: "w-[120px]",
-  figure: "w-[112px]",
+  // Room for a worded figure such as "not measured".
+  figure: "w-[128px]",
 } as const;
 
 function durationText(duration: Duration): string {
@@ -166,10 +168,9 @@ export function GroupTable<Row extends Group>({
   const { visible, hasMore, attachBody, handleShowMore } = usePaging(ordered);
 
   return (
-    <section className="flex flex-col gap-sm">
+    <Panel title={title}>
       <Table
-        title={title}
-        className={hasRates ? "table-fixed min-w-264" : "table-fixed min-w-208"}
+        className={hasRates ? "table-fixed min-w-276" : "table-fixed min-w-212"}
         frozenColumns={1}
       >
         <TableHeader>
@@ -183,15 +184,21 @@ export function GroupTable<Row extends Group>({
               {column.header}
             </SortableHead>
           ))}
-          <SortableHead columnId="runs" sort={sort} className={COLUMN_WIDTH.runs}>
+          <SortableHead columnId="runs" sort={sort} align="right" className={COLUMN_WIDTH.runs}>
             Runs
           </SortableHead>
-          <SortableHead columnId={measure} sort={sort} className={COLUMN_WIDTH.measure}>
+          <SortableHead
+            columnId={measure}
+            sort={sort}
+            align="right"
+            className={COLUMN_WIDTH.measure}
+          >
             {measure === "share" ? "Share" : "Success"}
           </SortableHead>
           <SortableHead
             columnId="duration"
             sort={sort}
+            align="right"
             title="From the typical succeeded run to a slow one."
           >
             Duration
@@ -218,7 +225,7 @@ export function GroupTable<Row extends Group>({
               columnId="cost-per-succeeded"
               sort={sort}
               align="right"
-              help="Estimated cost per succeeded run"
+              title="Estimated cost per succeeded run."
               className={COLUMN_WIDTH.figure}
             >
               Per run
@@ -238,11 +245,11 @@ export function GroupTable<Row extends Group>({
                   </span>
                 </TableCell>
               ))}
-              <TableCell>{fmtCount(row.runs)}</TableCell>
-              <TableCell>
+              <TableCell look="number">{fmtCount(row.runs)}</TableCell>
+              <TableCell look="number">
                 {fmtPercent(measure === "share" ? row.share : row.success_rate)}
               </TableCell>
-              <TableCell>{durationText(row.duration_seconds)}</TableCell>
+              <TableCell look="number">{durationText(row.duration_seconds)}</TableCell>
               <TableCell look="number">
                 {row.mean_turns === null ? "not recorded" : fmtMean(row.mean_turns)}
               </TableCell>
@@ -264,6 +271,6 @@ export function GroupTable<Row extends Group>({
         </TableBody>
       </Table>
       <ShowMore hasMore={hasMore} onShowMore={handleShowMore} />
-    </section>
+    </Panel>
   );
 }

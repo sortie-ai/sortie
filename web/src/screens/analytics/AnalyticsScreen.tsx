@@ -1,11 +1,13 @@
 import { ApiError } from "@/api/client";
 import { useStateQuery, useStatsQuery } from "@/api/queries";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
+import { NameText } from "@/components/NameText";
 import { hasRateSource } from "@/lib/budget";
-import { cn } from "@/lib/cn";
 import { agentLabel, isNamedRuleGroup, modelLabel, ruleLabel, startLabel } from "@/lib/labels";
 import { runStatus } from "@/lib/run-status";
+import { Panel } from "@/components/Panel";
 
 import { ChainFunnel } from "./ChainFunnel";
 import { GroupTable } from "./GroupTable";
@@ -14,8 +16,9 @@ import { RangePicker } from "./RangePicker";
 import { SkillTable } from "./SkillTable";
 import { SpendChart } from "./SpendChart";
 import { SummaryTiles } from "./SummaryTiles";
-import { useAnalyticsRange } from "./analytics-range";
+import { RANGE_OPTIONS, useAnalyticsRange } from "./analytics-range";
 
+import type { AnalyticsRange } from "@/api/queries";
 import type { Group, Report } from "@/api/types.gen";
 import type { NameColumn } from "./GroupTable";
 
@@ -23,20 +26,6 @@ const MESSAGE = "text-body-md text-ink-body";
 
 function isUnavailable(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503 && error.code === "history_unavailable";
-}
-
-interface NameTextProps {
-  name: string;
-  label: string;
-}
-
-// A name the client has no wording for reads as served, in the monospace face.
-function NameText({ name, label }: NameTextProps) {
-  return (
-    <span className={cn(label === name && "font-mono text-body-sm")}>
-      <ServedText text={label} />
-    </span>
-  );
 }
 
 const RULE_COLUMN: NameColumn<Group> = {
@@ -160,6 +149,11 @@ function Breakdowns({ report, hasRules, hasRates }: BreakdownsProps) {
   );
 }
 
+function standfirstOf(range: AnalyticsRange): string {
+  const label = RANGE_OPTIONS.find((option) => option.value === range)?.label ?? "";
+  return range === "all" ? "Every run on record." : `Runs finished in the ${label.toLowerCase()}.`;
+}
+
 export function AnalyticsScreen() {
   const { data: state } = useStateQuery();
   const config = state?.config;
@@ -168,11 +162,8 @@ export function AnalyticsScreen() {
   const report = stats.data;
 
   return (
-    <div className="flex flex-col gap-lg">
-      <div className="flex items-center justify-between gap-md">
-        <h1 className="font-heading text-h4 font-semibold text-ink">Analytics</h1>
-        <RangePicker className="md:hidden" />
-      </div>
+    <div className="flex flex-col">
+      <ScreenHeader title="Analytics" standfirst={standfirstOf(range)} actions={<RangePicker />} />
       {report === undefined ? (
         stats.isError ? (
           <p className={MESSAGE}>
@@ -188,7 +179,7 @@ export function AnalyticsScreen() {
           {(report.warnings ?? []).map((warning, index) => (
             <p
               key={index}
-              className="rounded-lg bg-warning-container px-md py-sm text-body-md text-ink"
+              className="rounded-xl bg-warning-container px-md py-sm text-body-md text-ink"
             >
               <ServedText text={warning} />
             </p>
@@ -199,7 +190,9 @@ export function AnalyticsScreen() {
             </p>
           ) : (
             <div key={range} className="flex flex-col gap-xl">
-              <SummaryTiles report={report} hasCost={hasRateSource(state)} />
+              <Panel title="Summary">
+                <SummaryTiles report={report} hasCost={hasRateSource(state)} />
+              </Panel>
               <OutcomeBar summary={report.summary} />
               {hasRateSource(state) &&
               range !== "24h" &&

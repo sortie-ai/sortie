@@ -1,25 +1,17 @@
-import { useState } from "react";
-import { NavLink, useNavigate } from "react-router";
+import { NavLink, useLocation, useMatch } from "react-router";
 
 import { useStateQuery } from "@/api/queries";
-import { BrandMark } from "@/app/BrandMark";
-import { keyTip } from "@/app/key-tips";
+import { BrandLink } from "@/app/BrandLink";
+import { ProjectName } from "@/app/ProjectName";
 import { StatusCard } from "@/app/StatusCard";
-import {
-  BookOpenIcon,
-  CircleHelpIcon,
-  ExternalLinkIcon,
-  GithubIcon,
-  SearchIcon,
-  XIcon,
-} from "@/components/icons";
-import { Button, buttonStyles } from "@/components/ui/button";
+import { ExternalLink } from "@/components/ExternalLink";
 import { cn } from "@/lib/cn";
 import { fmtVersion, pluralVerb } from "@/lib/format";
+import { backOf } from "@/lib/issue-link";
 
 import type { StateResponse } from "@/api/types.gen";
 import type { IconProps } from "@/components/icons";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 /** `key` is the letter pressed after `G`, `path` is relative to the application's base path, and screens with the same `group` sit together; the screen at `/` is Overview, which carries the attention badge. */
 export interface ScreenEntry {
@@ -32,9 +24,10 @@ export interface ScreenEntry {
 
 const OVERVIEW_PATH = "/";
 
-const EXTERNAL_LINKS: { label: string; href: string; Icon: (props: IconProps) => ReactNode }[] = [
-  { label: "Documentation", href: "https://docs.sortie-ai.com", Icon: BookOpenIcon },
-  { label: "GitHub", href: "https://github.com/sortie-ai/sortie", Icon: GithubIcon },
+const EXTERNAL_LINKS: { label: string; href: string }[] = [
+  { label: "Home", href: "https://sortie-ai.com" },
+  { label: "Docs", href: "https://docs.sortie-ai.com" },
+  { label: "GitHub", href: "https://github.com/sortie-ai/sortie" },
 ];
 
 function hasCriticalItem(state: StateResponse): boolean {
@@ -74,106 +67,42 @@ function AttentionBadge({ state }: AttentionBadgeProps) {
   );
 }
 
-function matching(screens: ScreenEntry[], query: string): ScreenEntry[] {
-  const needle = query.trim().toLowerCase();
-  return needle === ""
-    ? screens
-    : screens.filter((screen) => screen.label.toLowerCase().includes(needle));
-}
-
-interface NavFilterProps {
-  query: string;
-  firstMatch: ScreenEntry | undefined;
-  onQueryChange: (query: string) => void;
-}
-
-function NavFilter({ query, firstMatch, onQueryChange }: NavFilterProps) {
-  const navigate = useNavigate();
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    // Enter and Escape during IME composition confirm or cancel a candidate.
-    if (event.nativeEvent.isComposing) {
-      return;
-    }
-    if (event.key === "Enter" && firstMatch !== undefined) {
-      onQueryChange("");
-      void navigate(firstMatch.path);
-    } else if (event.key === "Escape") {
-      onQueryChange("");
-      event.currentTarget.blur();
-    }
-  }
-
-  return (
-    <label className="relative mb-md flex items-center">
-      <span className="sr-only">Filter screens</span>
-      <SearchIcon className="pointer-events-none absolute left-sm text-ink-muted" />
-      <input
-        type="text"
-        placeholder="Filter"
-        autoComplete="off"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        className="h-(--size-control) w-full rounded-lg border border-line bg-field pr-xl pl-[calc(var(--spacing-sm)+var(--size-icon)+var(--spacing-xs))] text-body-md text-ink outline-none transition-colors duration-(--duration-feedback) placeholder:text-ink-muted hover:border-line-medium focus-visible:border-line-medium focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-focus-ring"
-      />
-      {query === "" ? undefined : (
-        <button
-          type="button"
-          aria-label="Clear filter"
-          onClick={() => onQueryChange("")}
-          className="absolute right-xxs inline-grid size-6 cursor-pointer place-items-center rounded text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-focus-ring"
-        >
-          <XIcon />
-        </button>
-      )}
-    </label>
-  );
-}
-
 export interface RailProps {
   screens: ScreenEntry[];
-  onOpenShortcuts: () => void;
 }
 
-export function Rail({ screens, onOpenShortcuts }: RailProps) {
+export function Rail({ screens }: RailProps) {
   const { data } = useStateQuery();
-  const [query, setQuery] = useState("");
-  const shown = matching(screens, query);
-  const groups = groupsOf(shown);
-  const project = data?.config?.tracker.project;
+  // On an issue or a session, the screen it was opened from keeps an outline.
+  const isDetail = useMatch("/issues/*") !== null;
+  const back = backOf(useLocation().state);
+  const origin = isDetail ? back.split(/[?#]/, 1)[0] : null;
+  const groups = groupsOf(screens);
 
   return (
     <aside
-      data-theme="dark"
       aria-label="Sortie navigation"
-      className="sticky top-0 hidden h-screen flex-col bg-surface px-sm py-lg text-ink [--ghost-hover:var(--color-item-hover-panel)] [--ghost-pressed:var(--color-item-selected-panel)] md:flex"
+      className="sticky top-0 hidden h-screen flex-col border-r border-line bg-surface px-sm pb-lg text-ink [--ghost-hover:var(--color-item-hover-panel)] [--ghost-pressed:var(--color-item-selected-panel)] md:flex"
     >
-      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-sm px-sm pb-md">
-        <BrandMark />
-        <span className="font-heading text-h7 font-semibold">Sortie</span>
-        {data === undefined ? undefined : (
-          <span
-            title={data.version}
-            className="justify-self-end whitespace-nowrap text-body-sm text-ink-muted"
-          >
-            {fmtVersion(data.version)}
-          </span>
-        )}
-        {project === undefined || project === "" ? undefined : (
-          <span
-            title={project}
-            className="col-span-2 col-start-2 truncate text-body-sm text-ink-muted"
-          >
-            {project}
-          </span>
-        )}
+      {/* The brand row is as tall as the header and the project row as tall as the band over a screen's title; the name and version share the search field's baseline. */}
+      <div className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)] grid-rows-[var(--size-header)_var(--size-crumbs)] items-center gap-x-sm px-sm">
+        <div className="col-span-2 flex min-w-0 items-baseline gap-sm">
+          <BrandLink />
+          {data === undefined ? undefined : (
+            <span title={data.version} className="ml-auto truncate text-body-sm text-ink-muted">
+              {fmtVersion(data.version)}
+            </span>
+          )}
+        </div>
+        <div className="col-span-2 flex min-w-0">
+          <ProjectName />
+        </div>
       </div>
-      <NavFilter query={query} firstMatch={shown[0]} onQueryChange={setQuery} />
+      {/* The padding below the card puts the first screen link on the line of the first panel's title. */}
+      <div className="pb-[calc(var(--spacing-head)-var(--spacing-md)-(var(--size-nav-item)-var(--text-h7--line-height))/2)]">
+        <StatusCard />
+      </div>
       <nav aria-label="Main" className="min-h-0 overflow-y-auto">
-        {shown.length === 0 ? (
-          <p className="px-sm text-body-md text-ink-muted">No screens match</p>
-        ) : undefined}
         {groups.map((group, index) => (
           <div key={group[0].group}>
             {index > 0 ? <div role="separator" className="mx-sm mb-md h-px bg-line" /> : undefined}
@@ -183,10 +112,16 @@ export function Rail({ screens, onOpenShortcuts }: RailProps) {
                   key={screen.path}
                   to={screen.path}
                   end
-                  className="flex h-(--size-nav-item) items-center gap-sm rounded-lg px-sm text-ink-body transition-colors duration-(--duration-feedback) hover:bg-item-hover-panel hover:text-ink focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring active:bg-item-selected-panel aria-[current=page]:bg-item-selected-panel aria-[current=page]:font-medium aria-[current=page]:text-ink"
+                  className={cn(
+                    "flex h-(--size-nav-item) items-center gap-sm rounded-lg px-sm text-ink-body transition-colors duration-(--duration-feedback) hover:bg-item-hover-panel hover:text-ink focus-visible:-outline-offset-1 focus-visible:outline-2 focus-visible:outline-focus-ring active:bg-item-selected-panel aria-[current=page]:bg-item-selected-panel aria-[current=page]:font-medium aria-[current=page]:text-ink",
+                    screen.path === origin && "ring-1 ring-line-medium ring-inset",
+                  )}
                 >
                   <screen.icon />
-                  {screen.label}
+                  {/* A line in a panel title's face carries the label, so it stands on the title's baseline. */}
+                  <span className="font-heading text-h7">
+                    <span className="font-sans text-body-md tracking-normal">{screen.label}</span>
+                  </span>
                   {screen.path === OVERVIEW_PATH && data !== undefined ? (
                     <AttentionBadge state={data} />
                   ) : undefined}
@@ -196,33 +131,22 @@ export function Rail({ screens, onOpenShortcuts }: RailProps) {
           </div>
         ))}
       </nav>
-      <div className="mt-auto grid gap-xxs pt-md">
-        <div className="mb-sm">
-          <StatusCard />
-        </div>
-        {EXTERNAL_LINKS.map(({ label, href, Icon }) => (
-          <a
-            key={href}
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={`${label}, opens in a new tab`}
-            className={buttonStyles("ghost", "w-full justify-start font-regular")}
-          >
-            <Icon />
-            {label}
-            <ExternalLinkIcon className="ml-auto text-ink-muted" />
-          </a>
-        ))}
-        <Button
-          variant="ghost"
-          className="w-full justify-start font-regular"
-          onClick={onOpenShortcuts}
-          title={keyTip("Shortcuts", "?")}
-        >
-          <CircleHelpIcon />
-          Shortcuts
-        </Button>
+      <div className="mt-auto px-sm pt-md text-body-sm text-ink-muted">
+        {/* The first link starts at the rail's left edge and the last ends at its right. */}
+        <p className="flex items-center justify-between">
+          {EXTERNAL_LINKS.flatMap(({ label, href }, index) => [
+            ...(index === 0
+              ? []
+              : [
+                  <span key={`dot-${href}`} aria-hidden="true">
+                    ·
+                  </span>,
+                ]),
+            <ExternalLink key={href} href={href}>
+              {label}
+            </ExternalLink>,
+          ])}
+        </p>
       </div>
     </aside>
   );

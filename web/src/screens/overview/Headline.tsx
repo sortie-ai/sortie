@@ -1,3 +1,4 @@
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { cn } from "@/lib/cn";
 
 import type { Headline as HeadlineText, Segment } from "./headline";
@@ -20,16 +21,23 @@ function renderSegments(segments: readonly Segment[]) {
 }
 
 export interface HeadlineProps {
-  headline: HeadlineText;
+  /** Missing while the screen does not yet know what to say; only the title shows. */
+  headline: HeadlineText | undefined;
 }
 
+/** Heads Overview with the headline as its standfirst, its first sentence set apart in weight. */
 export function Headline({ headline }: HeadlineProps) {
   return (
-    <header>
-      <h1 className="mb-xs font-heading text-h4 font-semibold text-ink">
-        {renderSegments(headline.heading)}
-      </h1>
-      <p className="text-body-lg text-ink-body">{renderSegments(headline.lede)}</p>
-    </header>
+    <ScreenHeader
+      title="Overview"
+      standfirst={
+        headline === undefined ? undefined : (
+          <>
+            <span className="font-medium text-ink">{renderSegments(headline.heading)}</span>{" "}
+            {renderSegments(headline.lede)}
+          </>
+        )
+      }
+    />
   );
 }

@@ -104,7 +104,7 @@ export interface PricesInForcePanelProps {
 
 export function PricesInForcePanel({ table }: PricesInForcePanelProps) {
   return (
-    <Panel title="Prices in force">
+    <Panel isRuled title="Prices in force">
       <Pairs>
         <Pair label="Source">{table === null ? "None" : layerLabel(table.layer)}</Pair>
         <Pair label="Prices as of">{table === null ? undefined : fmtStamp(table.as_of)}</Pair>
@@ -130,7 +130,7 @@ export interface TokenRatesPanelProps {
 
 export function TokenRatesPanel({ source }: TokenRatesPanelProps) {
   return (
-    <Panel title="Token rates">
+    <Panel isRuled title="Token rates">
       <Pairs>
         <Pair label="Entries">{entriesText(source)}</Pair>
         <Pair label="Version">
@@ -144,7 +144,7 @@ export function TokenRatesPanel({ source }: TokenRatesPanelProps) {
 export function OperatorTablePanel({ source }: SourceProps) {
   const isFile = source.file !== null;
   return (
-    <Panel title="Custom prices">
+    <Panel isRuled title="Custom prices">
       <Pairs>
         <Pair label="Status">
           <StatusValue source={source} />
@@ -168,7 +168,7 @@ export function OperatorTablePanel({ source }: SourceProps) {
 
 export function DownloadedTablePanel({ source }: SourceProps) {
   return (
-    <Panel title="Downloaded prices">
+    <Panel isRuled title="Downloaded prices">
       <Pairs>
         <Pair label="Status">
           <StatusValue source={source} />
@@ -190,7 +190,7 @@ export function DownloadedTablePanel({ source }: SourceProps) {
 
 export function EmbeddedTablePanel({ source }: SourceProps) {
   return (
-    <Panel title="Built-in prices">
+    <Panel isRuled title="Built-in prices">
       <Pairs>
         <Pair label="Status">
           <StatusValue source={source} loaded="On" />

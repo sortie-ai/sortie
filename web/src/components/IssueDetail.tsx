@@ -8,16 +8,20 @@ import { ExternalLinkIcon } from "@/components/icons";
 import { IssueMargin, NextOutcomes } from "@/components/IssueMargin";
 import { IssueStory, storyRunsOf } from "@/components/IssueStory";
 import { Lane } from "@/components/Lane";
+import { Panel } from "@/components/Panel";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { NotedFigure } from "@/components/NotedFigure";
+import { NameText } from "@/components/NameText";
 import { Parts } from "@/components/Parts";
 import { ServedText } from "@/components/ServedText";
 import { StallNotice } from "@/components/StallNotice";
 import { StateBadge } from "@/components/StateBadge";
+import { Beat, TIME_EDGE, Timeline } from "@/components/Timeline";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { DrawerClose, DrawerTitle } from "@/components/ui/drawer";
+import { MONO } from "@/components/ui/mono";
 import { useAttentionActions } from "@/components/use-attention-actions";
 import { budgetOf, moneyBudgetFigure } from "@/lib/budget";
-import { cn } from "@/lib/cn";
 import {
   NOT_MEASURED,
   issueCostFigure,
@@ -25,6 +29,7 @@ import {
   liveTokensFigure,
   runningTokensText,
 } from "@/lib/figures";
+import { cn } from "@/lib/cn";
 import { closingClock } from "@/lib/ended";
 import { fmtClock, fmtMoney, lowerFirst, plural, upperFirst } from "@/lib/format";
 import { issueLinkOf, latestSessionOf, sessionLinkOf } from "@/lib/issue-link";
@@ -193,34 +198,20 @@ function Actions({ detail, attention = [] }: ActionsProps) {
         </Link>
       )}
       {trackerUrl === null ? undefined : (
-        <ExternalButton href={trackerUrl}>Open issue</ExternalButton>
+        <ExternalButton href={trackerUrl} title="Open the issue in the tracker">
+          Issue
+        </ExternalButton>
       )}
       {pullRequest === undefined || pullRequestUrl === null ? undefined : (
-        <ExternalButton href={pullRequestUrl}>{`PR #${pullRequest.number}`}</ExternalButton>
+        <ExternalButton href={pullRequestUrl} title={`Open PR #${pullRequest.number}`}>
+          PR
+        </ExternalButton>
       )}
     </div>
   );
 }
 
-interface KickerProps {
-  detail: IssueDetailResponse | undefined;
-}
-
-function Kicker({ detail }: KickerProps) {
-  const state = detail?.issue.state;
-  const type = detail?.issue.issue_type;
-  if (!state && !type) {
-    return undefined;
-  }
-  return (
-    <p className="flex flex-wrap items-center gap-x-sm gap-y-xxs text-body-sm text-ink-muted">
-      {state ? <StateBadge state={state} /> : undefined}
-      {type ? <span>{type}</span> : undefined}
-    </p>
-  );
-}
-
-function agentParts(detail: IssueDetailResponse): string[] {
+function agentParts(detail: IssueDetailResponse): ReactNode[] {
   const { running } = detail;
   const last = detail.history?.runs?.[0];
   const kind = running?.agent_kind ?? last?.agent_kind;
@@ -229,7 +220,8 @@ function agentParts(detail: IssueDetailResponse): string[] {
   if (!kind) {
     return [];
   }
-  return model ? [agentLabel(kind), modelLabel(model)] : [agentLabel(kind)];
+  const agent = <NameText key="agent" name={kind} label={agentLabel(kind)} />;
+  return model ? [agent, <NameText key="model" name={model} label={modelLabel(model)} />] : [agent];
 }
 
 interface PeekFactsProps {
@@ -253,7 +245,10 @@ function PeekFacts({ detail, state, position }: PeekFactsProps) {
       "Route",
       <Parts
         key="route"
-        parts={[ruleLabel(position.current), `${k} of ${position.chain.length}`]}
+        parts={[
+          <NameText key="rule" name={position.current} label={ruleLabel(position.current)} />,
+          `${k} of ${position.chain.length}`,
+        ]}
       />,
     ]);
   }
@@ -326,7 +321,7 @@ function PeekFacts({ detail, state, position }: PeekFactsProps) {
           key="pull-request"
           parts={[
             `#${pullRequest.number}`,
-            <span key="branch" className="font-mono">
+            <span key="branch" className={MONO}>
               {pullRequest.branch}
             </span>,
           ]}
@@ -358,62 +353,53 @@ function PeekRuns({ detail, now }: PeekRunsProps) {
   const total = detail.history?.totals.run_count ?? served.length;
   const shown = numberedRunsOf(served, total).slice(-PEEK_RUNS);
   const earlier = total - shown.length;
-  const node = "relative z-(--z-raised) mt-xs ml-xxs size-2.25 rounded-full border-[1.5px]";
   return (
-    <ul className="relative before:absolute before:top-xs before:bottom-xs before:left-15 before:w-px before:bg-line">
-      {earlier > 0 ? (
-        <li className="grid grid-cols-[48px_20px_minmax(0,1fr)] gap-x-sm py-xs text-body-md">
-          <span />
-          <span aria-hidden="true" className={cn(node, "border-ink-muted bg-canvas")} />
-          <span className="text-ink-muted">{plural(earlier, "earlier run", "earlier runs")}</span>
-        </li>
-      ) : undefined}
-      {shown.map(({ run, number }) => (
-        <li
-          key={run.run_id}
-          className="grid grid-cols-[48px_20px_minmax(0,1fr)] gap-x-sm py-xs text-body-md"
-        >
-          <span className="pt-xxs text-right text-body-sm text-ink-muted tabular-nums">
-            {fmtClock(run.started_at)}
-          </span>
-          <span aria-hidden="true" className={cn(node, "border-ink-body bg-ink-body")} />
-          <span className="text-ink-body">
-            <Parts
-              parts={[
-                `Run ${number}`,
-                ...(run.rule_name ? [ruleLabel(run.rule_name)] : []),
-                `${lowerFirst(runOutcome(run).word)} at ${fmtClock(run.completed_at)}`,
-              ]}
-            />
-            {run.stage_target && run.stage_result ? (
+    <div className={cn(TIME_EDGE, "-ml-(--edge)")}>
+      <Timeline>
+        {earlier > 0 ? (
+          <Beat time="" node="open">
+            <span className="text-ink-muted">{plural(earlier, "earlier run", "earlier runs")}</span>
+          </Beat>
+        ) : undefined}
+        {shown.map(({ run, number }) => (
+          <Beat key={run.run_id} time={fmtClock(run.started_at)} node="solid">
+            {/* Every run reads alike: which run on its first line, how it ended under it. */}
+            <span className="text-ink-body">
+              <Parts
+                parts={[
+                  `Run ${number}`,
+                  ...(run.rule_name
+                    ? [
+                        <NameText
+                          key="rule"
+                          name={run.rule_name}
+                          label={ruleLabel(run.rule_name)}
+                        />,
+                      ]
+                    : []),
+                ]}
+              />
               <span className="block text-body-sm text-ink-muted">
-                {upperFirst(hopLabel(run.stage_target, run.stage_result))}
+                <Parts
+                  parts={[
+                    `${upperFirst(runOutcome(run).word)} at ${fmtClock(run.completed_at)}`,
+                    ...(run.stage_target && run.stage_result
+                      ? [lowerFirst(hopLabel(run.stage_target, run.stage_result))]
+                      : []),
+                  ]}
+                />
               </span>
-            ) : undefined}
+            </span>
+          </Beat>
+        ))}
+        <Beat time={closingClock(detail, now)} node="now">
+          <span className="text-ink">
+            <ServedText text={detail.status_text_full} />
           </span>
-        </li>
-      ))}
-      <li className="grid grid-cols-[48px_20px_minmax(0,1fr)] gap-x-sm py-xs text-body-md">
-        <span className="pt-xxs text-right text-body-sm text-ink-muted tabular-nums">
-          {closingClock(detail, now)}
-        </span>
-        <span
-          aria-hidden="true"
-          className={cn(
-            node,
-            "border-primary bg-primary shadow-[0_0_0_3px_var(--color-surface-sunken)]",
-          )}
-        />
-        <span className="text-ink">
-          <ServedText text={detail.status_text_full} />
-        </span>
-      </li>
-    </ul>
+        </Beat>
+      </Timeline>
+    </div>
   );
-}
-
-function SubHeading({ children }: { children: ReactNode }) {
-  return <h3 className="mt-lg mb-sm text-body-sm font-medium text-ink-muted">{children}</h3>;
 }
 
 export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps) {
@@ -425,7 +411,8 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
   const { data: older } = useHistoryRunsQuery(data?.issue_id ?? "", {}, false);
   const key = row?.displayKey ?? identifier;
   const failure = error instanceof ApiError ? error : undefined;
-  const isGone = failure?.status === 404;
+  // The issue endpoint knows an issue only once it has run; a row from the lists keeps a waiting one.
+  const isGone = failure?.status === 404 && row === undefined;
   const isHistoryDown = failure?.status === 503 && failure.code === "history_unavailable";
   const title = data?.issue.title || row?.title;
   const sentence = data?.status_text_full || row?.statusTextFull;
@@ -439,7 +426,8 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
   if (peek) {
     return (
       <div className="flex flex-col p-lg max-md:p-md">
-        <div className="mb-md flex items-center gap-sm text-body-sm text-ink-muted">
+        {/* The key, its state, and the buttons' words stand on one baseline. */}
+        <div className="mb-md flex items-baseline gap-sm text-body-sm text-ink-muted">
           <DrawerTitle className="text-body-sm font-normal text-ink-body tabular-nums">
             {key}
           </DrawerTitle>
@@ -463,12 +451,13 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
               <p className="mb-xs font-heading text-h6 font-semibold text-ink">{title}</p>
             ) : undefined}
             {sentence ? (
-              <p className="mb-md text-body-md text-ink-body">
+              <p className="mb-lg text-body-md text-ink-body">
                 <ServedText text={sentence} />
               </p>
             ) : undefined}
+            {/* The line runs midway between the sentence's last baseline and the actions. */}
             {view?.lane === undefined ? undefined : (
-              <div className="mb-md">
+              <div className="mb-xl">
                 <Lane
                   stations={view.lane}
                   position={view.position}
@@ -480,7 +469,7 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
             )}
             {data === undefined ? undefined : (
               <>
-                <div className="mb-lg">
+                <div className="mb-xl">
                   <Actions
                     detail={data}
                     attention={(state?.attention ?? []).filter(
@@ -488,15 +477,20 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
                     )}
                   />
                 </div>
-                <PeekFacts detail={data} state={state} position={view?.position ?? null} />
-                {(data.next_outcomes ?? []).length === 0 ? undefined : (
-                  <>
-                    <SubHeading>What happens next</SubHeading>
-                    <NextOutcomes outcomes={data.next_outcomes ?? []} />
-                  </>
-                )}
-                <SubHeading>So far</SubHeading>
-                <PeekRuns detail={data} now={now} />
+                {/* Spaced and ruled as the issue page's margin is. */}
+                <div className="flex flex-col gap-xl">
+                  <Panel isRuled title="Details">
+                    <PeekFacts detail={data} state={state} position={view?.position ?? null} />
+                  </Panel>
+                  {(data.next_outcomes ?? []).length === 0 ? undefined : (
+                    <Panel isRuled title="What happens next">
+                      <NextOutcomes outcomes={data.next_outcomes ?? []} />
+                    </Panel>
+                  )}
+                  <Panel isRuled title="What happened so far">
+                    <PeekRuns detail={data} now={now} />
+                  </Panel>
+                </div>
               </>
             )}
           </>
@@ -507,28 +501,19 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
 
   return (
     <div className="flex flex-col">
-      <Kicker detail={data} />
       {isGone ? (
-        <p className="mt-xs text-body-md text-ink-body">Sortie no longer knows {key}.</p>
+        <ScreenHeader title={key} standfirst={`Sortie no longer knows ${key}.`} />
       ) : (
         <>
-          <h1 className="mt-xs mb-xs font-heading text-h5 font-semibold text-ink">
-            {title ?? key}
-          </h1>
-          {sentence ? (
-            <p className="mb-lg text-body-lg text-ink-body">
-              <ServedText text={sentence} />
-            </p>
-          ) : undefined}
+          <ScreenHeader
+            title={title ?? key}
+            standfirst={sentence ? <ServedText text={sentence} /> : undefined}
+            actions={data === undefined ? undefined : <Actions detail={data} />}
+          />
           {stallText === null ? undefined : <StallNotice text={stallText} isStalled />}
           {isHistoryDown ? (
             <p className="mb-lg text-body-md text-ink-body">Run history could not be read.</p>
           ) : undefined}
-          {data === undefined ? undefined : (
-            <div className="mb-lg">
-              <Actions detail={data} />
-            </div>
-          )}
           {view?.lane === undefined ? undefined : (
             <div className="mb-xl">
               <Lane
@@ -540,7 +525,7 @@ export function IssueDetail({ identifier, row, peek = false }: IssueDetailProps)
             </div>
           )}
           {data === undefined || view === undefined ? undefined : (
-            <div className="flex flex-col gap-xl xl:grid xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start xl:gap-xxxl">
+            <div className="flex flex-col gap-xl xl:grid xl:grid-cols-[minmax(0,1fr)_var(--size-margin)] xl:items-start xl:gap-xxxl">
               <div className="min-w-0">
                 <IssueStory
                   detail={data}

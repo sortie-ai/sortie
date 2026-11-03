@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useRef } from "react";
 
+import { ChartFrame } from "@/components/ChartFrame";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
+import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
 import { fmtClockSec, fmtCount, fmtDuration, fmtTokens } from "@/lib/format";
 
-import type { RefObject } from "react";
 import type { TurnBar } from "./timeline";
 
 const LABEL_DIGIT_PX = 7;
@@ -23,25 +24,6 @@ function headingOf(bar: TurnBar): string {
     return `Turn ${bar.turn}`;
   }
   return bar.at === null ? "Turn in progress" : fmtClockSec(bar.at);
-}
-
-function useWidth(ref: RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    setWidth(element.clientWidth);
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry !== undefined) {
-        setWidth(entry.contentRect.width);
-      }
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
 }
 
 // Every Nth bar carries a label once the slots are narrower than the widest
@@ -106,10 +88,10 @@ export interface TokensLegendProps {
 
 export function TokensLegend({ hasInProgress }: TokensLegendProps) {
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-md gap-y-xxs">
+    <span className="inline-flex flex-wrap items-baseline gap-x-md gap-y-xxs">
       <span className="inline-flex items-center gap-xs">
         <span aria-hidden="true" className="size-sm rounded bg-primary" />
-        Completed turn
+        <span className="self-baseline">Completed turn</span>
       </span>
       {hasInProgress ? (
         <span className="inline-flex items-center gap-xs">
@@ -117,7 +99,7 @@ export function TokensLegend({ hasInProgress }: TokensLegendProps) {
             aria-hidden="true"
             className="size-sm rounded border border-primary bg-surface-raised"
           />
-          In progress
+          <span className="self-baseline">In progress</span>
         </span>
       ) : undefined}
     </span>
@@ -136,44 +118,21 @@ export function TokensChart({ bars }: TokensChartProps) {
   const top = topOf(Math.max(...bars.map((bar) => bar.tokens)));
 
   return (
-    <div
-      role="img"
-      aria-label={`Tokens per turn, ${bars.length} ${bars.length === 1 ? "turn" : "turns"}`}
-      className="relative h-44"
+    <ChartFrame
+      label={`Tokens per turn, ${bars.length} ${bars.length === 1 ? "turn" : "turns"}`}
+      valueName="Tokens"
+      categoryName="Turn"
+      ticks={[1, 0.5, 0].map((fraction) => fmtTokens(top * fraction))}
+      plotRef={plotRef}
     >
-      <span className="absolute top-0 left-0 text-body-sm text-ink-muted">Tokens</span>
-      <div ref={plotRef} className="absolute top-6 right-0 bottom-10 left-7.5">
-        {[0, 0.5].map((fraction) => (
-          <div
-            key={fraction}
-            className="absolute inset-x-0 border-t border-line"
-            style={{ top: `${fraction * 100}%` }}
-          />
-        ))}
-        <div className="absolute inset-x-0 bottom-0 border-t border-line-strong" />
-        {[0, 0.5, 1].map((fraction) => (
-          <span
-            key={fraction}
-            className="absolute right-full mr-1.5 -translate-y-1/2 text-body-sm text-ink-muted"
-            style={{ top: `${(1 - fraction) * 100}%` }}
-          >
-            {fmtTokens(top * fraction)}
-          </span>
-        ))}
-        <div className="absolute inset-0 grid auto-cols-fr grid-flow-col">
-          {bars.map((bar, index) => (
-            <BarSlot
-              key={index}
-              bar={bar}
-              top={top}
-              hasLabel={bar.turn !== null && index % stride === 0}
-            />
-          ))}
-        </div>
-      </div>
-      <span className="absolute right-0 bottom-0 left-7.5 text-center text-body-sm text-ink-muted">
-        Turn
-      </span>
-    </div>
+      {bars.map((bar, index) => (
+        <BarSlot
+          key={index}
+          bar={bar}
+          top={top}
+          hasLabel={bar.turn !== null && index % stride === 0}
+        />
+      ))}
+    </ChartFrame>
   );
 }

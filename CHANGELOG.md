@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `sortie validate` checks the `comment_feed` setting and warns about a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
 - `agent-client-protocol` workflows set environment variables for the agent with `agent-client-protocol.env`, locally and on SSH workers, with values taken as written. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 - `agent-client-protocol.permissions: approve-all` approves a tool permission request that offers a single way to allow just that call, instead of refusing it. Every other request is still refused, tools the agent's own configuration denies stay denied, a request for a person's input still ends the run, and the default `deny-all` keeps refusing. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- The state API serves `config.tracker.project_url`, the web address of the tracked project, for the GitHub and Jira trackers.
+- Long code blocks and JSON in the dashboard's served texts fold to one line that opens on a click.
+- A row title on Overview, Pipeline and History links to its issue page, so the page opens in a new tab or from the keyboard.
+- The command palette's search field has a button that clears it.
 
 ### Changed
 
@@ -19,6 +23,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 - With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
 - When an `agent-client-protocol` workflow gives OpenCode its own configuration document, the agent credential check adds its tool denial to that document instead of sending the agent's full context, on SSH workers too. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- The attention and next-step sentences of the dashboard and the JSON API say "bot review comments" throughout, where some said "review bot comments".
+- The dashboard sets names such as rules, agent kinds, models and skills in a monospace face, and writes every cost with two decimals, including $100 and more.
+- Every dashboard page opens with the same header, a title with a standfirst that says in a sentence what the page shows, and sets its sections off as panels with titles of their own. The issue page and the session page take the same form.
+- The dashboard's rail, status card and top bar are redrawn, and the project name under the Sortie name links to the project when the state API serves its address. On a narrow screen the bar holds only the Sortie name, the status and the menu, on one line.
+- The Pipeline draws each station as a circle that holds the number of lanes standing at it, and an issue's place on its stage chain reads as text instead of a meter.
+
+### Removed
+
+- The dashboard's rail no longer has a field that filters the screens; the command palette finds them.
+- Overview's Active section no longer has a List and Pipeline switch, and the Pipeline no longer links to Overview; `L` and the rail move between them.
 
 ### Fixed
 

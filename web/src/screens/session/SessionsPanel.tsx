@@ -7,7 +7,6 @@ import { storyRunsOf } from "@/components/IssueStory";
 import { Panel } from "@/components/Panel";
 import { StatusMark } from "@/components/StatusMark";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { fmtDuration, lowerFirst, parseInstant } from "@/lib/format";
 import { sessionLinkOf } from "@/lib/issue-link";
 import { numberedRunsOf } from "@/lib/run-number";
@@ -85,8 +84,8 @@ function SessionRowView({ row, identifier, isCurrent }: SessionRowViewProps) {
       : sessionLinkOf(identifier, row.dispatchId, location);
 
   return (
-    <TableRow>
-      <TableCell>
+    <li className="contents">
+      <span>
         {link === undefined ? (
           <strong className={isCurrent ? "font-bold text-ink" : "font-medium"}>{name}</strong>
         ) : (
@@ -94,18 +93,18 @@ function SessionRowView({ row, identifier, isCurrent }: SessionRowViewProps) {
             {name}
           </Link>
         )}
-      </TableCell>
-      <TableCell isWrapping>
+      </span>
+      <span className="min-w-0">
         {row.mark === null ? row.word : <StatusMark mark={row.mark} label={row.word} />}
-      </TableCell>
-      <TableCell look="number">
+      </span>
+      <span className="text-right text-ink-muted tabular-nums">
         {row.endedAt === null ? (
           <LiveDuration startedAt={row.startedAt} />
         ) : (
           fmtDuration(secondsBetween(row.startedAt, parseInstant(row.endedAt)))
         )}
-      </TableCell>
-    </TableRow>
+      </span>
+    </li>
   );
 }
 
@@ -155,19 +154,17 @@ export function SessionsPanel({ identifier, dispatchId }: SessionsPanelProps) {
   };
 
   return (
-    <Panel title="Sessions">
-      <Table aria-label="Sessions" isCompact>
-        <TableBody>
-          {rows.map((row) => (
-            <SessionRowView
-              key={row.key}
-              row={row}
-              identifier={identifier}
-              isCurrent={row.dispatchId === dispatchId}
-            />
-          ))}
-        </TableBody>
-      </Table>
+    <Panel isRuled title="Sessions">
+      <ol className="grid grid-cols-[120px_minmax(0,1fr)_auto] items-baseline gap-x-md gap-y-xs text-body-md text-ink-body">
+        {rows.map((row) => (
+          <SessionRowView
+            key={row.key}
+            row={row}
+            identifier={identifier}
+            isCurrent={row.dispatchId === dispatchId}
+          />
+        ))}
+      </ol>
       {canShowOlder ? (
         <div className="flex flex-wrap items-center gap-x-sm gap-y-xs">
           <Button disabled={isFetching} onClick={handleShowOlder}>
