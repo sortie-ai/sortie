@@ -1,6 +1,7 @@
 package linear
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestRunPreflight(t *testing.T) {
 		f := newFakeClient()
 		seedPreflight(f, t)
 
-		cache, err := runPreflight(context.Background(), f, "SOR",
+		cache, _, err := runPreflight(context.Background(), f, "SOR",
 			[]string{"backlog", "TODO"}, []string{"done"}, "in review", nil)
 		if err != nil {
 			t.Fatalf("runPreflight: %v", err)
@@ -54,7 +55,7 @@ func TestRunPreflight(t *testing.T) {
 		f.queueBody("query Me", loadFixture(t, "viewer.json"))
 		f.queueBody("query TeamStates", loadFixture(t, "team_states_empty.json"))
 
-		_, err := runPreflight(context.Background(), f, "NOPE",
+		_, _, err := runPreflight(context.Background(), f, "NOPE",
 			testActiveStates, testTerminalStates, "", nil)
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
@@ -66,7 +67,7 @@ func TestRunPreflight(t *testing.T) {
 		f := newFakeClient()
 		seedPreflight(f, t)
 
-		_, err := runPreflight(context.Background(), f, "SOR",
+		_, _, err := runPreflight(context.Background(), f, "SOR",
 			[]string{"Backlog", "Nonexistent"}, testTerminalStates, "", nil)
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
@@ -81,7 +82,7 @@ func TestRunPreflight(t *testing.T) {
 		var buf strings.Builder
 		log := newTextLogger(&buf)
 
-		cache, err := runPreflight(context.Background(), f, "SOR",
+		cache, _, err := runPreflight(context.Background(), f, "SOR",
 			[]string{"Done"}, []string{"Todo"}, "", log)
 		if err != nil {
 			t.Fatalf("runPreflight should not fail on wrong category: %v", err)
@@ -105,7 +106,7 @@ func TestRunPreflight(t *testing.T) {
 		f := newFakeClient()
 		f.queueBody("query Me", loadFixture(t, "auth_error.json"))
 
-		_, err := runPreflight(context.Background(), f, "SOR",
+		_, _, err := runPreflight(context.Background(), f, "SOR",
 			testActiveStates, testTerminalStates, "", nil)
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
@@ -141,7 +142,7 @@ func TestRunPreflightRetry(t *testing.T) {
 			f.queueResponse("query Me", transient)
 		}
 
-		_, err := runPreflight(context.Background(), f, "SOR",
+		_, _, err := runPreflight(context.Background(), f, "SOR",
 			testActiveStates, testTerminalStates, "", nil)
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
@@ -157,7 +158,7 @@ func TestRunPreflightRetry(t *testing.T) {
 		f.queueBody("query Me", loadFixture(t, "viewer.json"))
 		f.queueBody("query TeamStates", loadFixture(t, "team_states.json"))
 
-		_, err := runPreflight(context.Background(), f, "SOR",
+		_, _, err := runPreflight(context.Background(), f, "SOR",
 			testActiveStates, testTerminalStates, "", nil)
 		if err != nil {
 			t.Fatalf("runPreflight should recover after a transient failure: %v", err)
@@ -167,4 +168,36 @@ func TestRunPreflightRetry(t *testing.T) {
 			t.Errorf("viewer call count = %d, want 2 (one retry then success)", len(calls))
 		}
 	})
+}
+
+func TestNewAdapterProjectURL(t *testing.T) {
+	t.Parallel()
+
+	const organization = `"organization": { "urlKey": "acme" },`
+	tests := []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"workspace url key names the team page", loadFixture(t, "team_states.json"), "https://linear.app/acme/team/SOR"},
+		{"response without a workspace gives no page", bytes.ReplaceAll(loadFixture(t, "team_states.json"), []byte(organization), nil), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFakeClient()
+			f.queueBody("query Me", loadFixture(t, "viewer.json"))
+			f.queueBody("query TeamStates", tt.body)
+
+			adapter, err := newAdapter(f, "SOR", domain.TrackerStates{}, nil, nil)
+			if err != nil {
+				t.Fatalf("newAdapter: %v", err)
+			}
+
+			if got := adapter.(domain.ProjectLinker).ProjectURL(); got != tt.want {
+				t.Errorf("ProjectURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

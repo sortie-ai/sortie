@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"maps"
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -434,10 +436,30 @@ func positiveOrNil[T int | float64](n T) *T {
 }
 
 // trackerProjectURL returns the web address of the tracker's project, or ""
-// when the adapter names none.
+// when the adapter names none or names one that is not an absolute http(s)
+// URL. Credentials, query and fragment never reach the state API, so no
+// adapter has to scrub its own address.
 func (o *Orchestrator) trackerProjectURL() string {
-	if linker, ok := o.trackerAdapter.(domain.ProjectLinker); ok {
-		return linker.ProjectURL()
+	linker, ok := o.trackerAdapter.(domain.ProjectLinker)
+	if !ok {
+		return ""
 	}
-	return ""
+	return publicProjectURL(linker.ProjectURL())
+}
+
+// publicProjectURL reduces raw to scheme, host and path, or "" when raw is
+// not an absolute http(s) URL with a host.
+func publicProjectURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
+	return parsed.String()
 }

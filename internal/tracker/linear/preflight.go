@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -29,29 +30,30 @@ var terminalStateTypes = map[string]struct{}{
 
 // runPreflight validates credentials and the configured state names against
 // the team's workflow states, returning a cache mapping each lowercase state
-// name to its canonical casing.
+// name to its canonical casing and the team's web address.
 //
 // It runs the viewer credential check and the team-states query through client.
 // A config error (auth, payload) fails immediately; a transient error
 // (transport, API) is retried with a bounded backoff before failing. An unknown
 // team key or a configured state name absent from the team is a payload error.
 // A configured name whose category contradicts its list emits a WARN without
-// failing.
-func runPreflight(ctx context.Context, client graphQLClient, project string, active, terminal []string, handoff string, log *slog.Logger) (map[string]string, error) {
+// failing. The web address is "" when the response names no workspace.
+func runPreflight(ctx context.Context, client graphQLClient, project string, active, terminal []string, handoff string, log *slog.Logger) (map[string]string, string, error) {
 	if err := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		return checkViewer(ctx, client)
 	}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	var states []teamState
+	var team teamInfo
 	if err := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		var fetchErr error
-		states, fetchErr = fetchTeamStates(ctx, client, project)
+		team, fetchErr = fetchTeam(ctx, client, project)
 		return fetchErr
 	}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	states := team.States
 
 	casingCache := make(map[string]string, len(states))
 	typeByLower := make(map[string]string, len(states))
@@ -70,7 +72,7 @@ func runPreflight(ctx context.Context, client graphQLClient, project string, act
 
 	for _, name := range configured {
 		if _, ok := casingCache[strings.ToLower(name)]; !ok {
-			return nil, &domain.TrackerError{
+			return nil, "", &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: fmt.Sprintf("state %q not found in team %q", name, project),
 			}
@@ -79,7 +81,22 @@ func runPreflight(ctx context.Context, client graphQLClient, project string, act
 
 	warnWrongCategory(active, terminal, typeByLower, log)
 
-	return casingCache, nil
+	return casingCache, teamURL(team.WorkspaceKey, project), nil
+}
+
+// teamInfo is what the team-states query returns about the configured team.
+type teamInfo struct {
+	States       []teamState
+	WorkspaceKey string
+}
+
+// teamURL returns the team's page on linear.app, or "" when the workspace
+// URL key is empty.
+func teamURL(workspaceKey, teamKey string) string {
+	if workspaceKey == "" {
+		return ""
+	}
+	return "https://linear.app/" + url.PathEscape(workspaceKey) + "/team/" + url.PathEscape(teamKey)
 }
 
 // warnWrongCategory emits a WARN when a configured active state has a terminal
@@ -120,25 +137,27 @@ func checkViewer(ctx context.Context, client graphQLClient) error {
 	return classifyGraphQLErrors(resp.Errors)
 }
 
-// fetchTeamStates runs the team-states query and returns the team's workflow
-// states. A team with no matching node is an unknown-team payload error.
-func fetchTeamStates(ctx context.Context, client graphQLClient, project string) ([]teamState, error) {
+// fetchTeam runs the team-states query and returns the team's workflow states
+// and workspace URL key. A team with no matching node is an unknown-team
+// payload error.
+func fetchTeam(ctx context.Context, client graphQLClient, project string) (teamInfo, error) {
 	body, _, err := client.Execute(ctx, queryTeamStates, map[string]any{"teamKey": project})
 	if err != nil {
-		return nil, err
+		return teamInfo{}, err
 	}
 	var resp graphQLResponse[teamStatesData]
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, payloadError(err)
+		return teamInfo{}, payloadError(err)
 	}
 	if classified := classifyGraphQLErrors(resp.Errors); classified != nil {
-		return nil, classified
+		return teamInfo{}, classified
 	}
 	if len(resp.Data.Teams.Nodes) == 0 {
-		return nil, &domain.TrackerError{
+		return teamInfo{}, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("unknown team key %q", project),
 		}
 	}
-	return resp.Data.Teams.Nodes[0].States.Nodes, nil
+	node := resp.Data.Teams.Nodes[0]
+	return teamInfo{States: node.States.Nodes, WorkspaceKey: node.Organization.URLKey}, nil
 }

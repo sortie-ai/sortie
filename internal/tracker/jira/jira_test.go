@@ -2375,7 +2375,6 @@ func TestJiraAdapter_ProjectURL(t *testing.T) {
 		endpoint string
 	}{
 		{name: "plain endpoint", endpoint: "https://test.atlassian.net/"},
-		{name: "endpoint with userinfo", endpoint: "https://user:secret@test.atlassian.net/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

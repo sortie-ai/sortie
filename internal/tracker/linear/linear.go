@@ -41,6 +41,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*LinearAdapter)(nil)
 var _ domain.CommentChangeReader = (*LinearAdapter)(nil)
+var _ domain.ProjectLinker = (*LinearAdapter)(nil)
 
 // defaultEndpoint is the Linear GraphQL endpoint used when the config omits it.
 const defaultEndpoint = "https://api.linear.app/graphql"
@@ -65,6 +66,7 @@ type LinearAdapter struct {
 	*issuekit.StateSource
 	client      graphQLClient
 	project     string
+	projectURL  string // team page from the preflight; "" when absent
 	queryFilter map[string]any
 	casingCache map[string]string
 	log         *slog.Logger
@@ -146,7 +148,7 @@ func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 // the team-state casing cache. It is the seam shared by the production
 // constructor and offline tests.
 func newAdapter(client graphQLClient, project string, states domain.TrackerStates, queryFilter map[string]any, log *slog.Logger) (domain.TrackerAdapter, error) {
-	casingCache, err := runPreflight(context.Background(), client, project, states.Active, states.Terminal, states.Handoff, log)
+	casingCache, projectURL, err := runPreflight(context.Background(), client, project, states.Active, states.Terminal, states.Handoff, log)
 	if err != nil {
 		return nil, err
 	}
@@ -155,10 +157,17 @@ func newAdapter(client graphQLClient, project string, states domain.TrackerState
 		StateSource: issuekit.NewStateSource(states),
 		client:      client,
 		project:     project,
+		projectURL:  projectURL,
 		queryFilter: queryFilter,
 		casingCache: casingCache,
 		log:         log,
 	}, nil
+}
+
+// ProjectURL returns the web address of the configured team, or "" when the
+// team response names no workspace.
+func (a *LinearAdapter) ProjectURL() string {
+	return a.projectURL
 }
 
 // parseQueryFilter decodes the operator-supplied query_filter into an

@@ -79,6 +79,7 @@ var _ domain.TrackerAdapter = (*GitLabAdapter)(nil)
 var _ domain.CommentChangeReader = (*GitLabAdapter)(nil)
 var _ domain.CommentAuthorKindReader = (*GitLabAdapter)(nil)
 var _ domain.CommentAuthorAccessReader = (*GitLabAdapter)(nil)
+var _ domain.ProjectLinker = (*GitLabAdapter)(nil)
 
 // maxPages is the upper bound on paginated fetches. At 100 items per page
 // this allows up to 20,000 results before the adapter stops and returns
@@ -101,6 +102,7 @@ type GitLabAdapter struct {
 	client      *httpkit.Client
 	project     string
 	projectPath string
+	projectURL  string
 	model       *issuekit.LabelStateModel
 	log         *slog.Logger
 	metrics     domain.Metrics
@@ -399,6 +401,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		client:           client,
 		project:          project,
 		projectPath:      projectPath,
+		projectURL:       projectWebURL(parsedEndpoint.Base, project),
 		model:            model,
 		log:              log,
 		bots:             newBotFlags(client),
@@ -409,6 +412,22 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 	adapter.warnUnresolvedFilterLabels(context.Background())
 	return adapter, nil
+}
+
+// ProjectURL returns the web address of the configured project.
+func (a *GitLabAdapter) ProjectURL() string {
+	return a.projectURL
+}
+
+// projectWebURL returns the project's page under the instance's web base. A
+// numeric project id has no path to name, so it uses the instance's
+// /projects/<id> route, which GitLab resolves to the project's page.
+func projectWebURL(endpointBase, project string) string {
+	webBase := strings.TrimSuffix(endpointBase, "/api/v4")
+	if isAllASCIIDigits(project) {
+		return webBase + "/projects/" + project
+	}
+	return webBase + "/" + project
 }
 
 // configuredStateNames returns the union of activeStates, terminalStates,

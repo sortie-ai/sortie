@@ -23,6 +23,10 @@ func TestTrackerProjectURL(t *testing.T) {
 		want    string
 	}{
 		{name: "adapter names its project", adapter: linkingTracker{url: "https://github.com/owner/repo"}, want: "https://github.com/owner/repo"},
+		{name: "credentials are stripped", adapter: linkingTracker{url: "https://user:secret@gitea.example.com/owner/repo"}, want: "https://gitea.example.com/owner/repo"},
+		{name: "trailing slash, query and fragment are dropped", adapter: linkingTracker{url: "https://gitlab.example.com/group/sub/?tab=issues#top"}, want: "https://gitlab.example.com/group/sub"},
+		{name: "non-http scheme is dropped", adapter: linkingTracker{url: "ftp://example.com/owner/repo"}, want: ""},
+		{name: "address without host is dropped", adapter: linkingTracker{url: "https:///owner/repo"}, want: ""},
 		{name: "adapter names none", adapter: struct{ domain.TrackerAdapter }{}, want: ""},
 	}
 	for _, tt := range tests {
