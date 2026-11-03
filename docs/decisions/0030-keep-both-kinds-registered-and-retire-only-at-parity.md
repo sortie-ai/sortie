@@ -71,7 +71,7 @@ On a generic protocol-driven kind the runtime invocation stays one opaque comman
 
 The list form of the command is not such a field. It names no switch and is checked offline only for its shape: a list, non-empty, with a non-empty string in every element. It exists because a local launch splits a string on whitespace, so only a list carries a switch value that holds a space, such as an agent name. The string form keeps working unchanged.
 
-**Workflow-declared properties**, such as tool calls being pre-authorized, with a configuration contradicting one refused offline, were rejected. The failure they would guard against, a runtime waiting on an approval nobody can give, does not occur on this route, because this project answers every permission request inside the protocol. A missing trust switch costs a refused tool call, reported at run time.
+**Workflow-declared properties** of the runtime, with a configuration contradicting one refused offline, were rejected. The failure they would guard against, a runtime waiting on an approval nobody can give, does not occur on this route, because this project answers every permission request inside the protocol. How this project answers is the one permission property the workflow declares, because it is this project's own reply rather than a property of the runtime: refusal by default, or the once-only approval of a request that offers exactly one way to grant it, one value for every runtime the kind drives. It names no runtime's switch, so the invocation stays the one opaque command above, and offline it is checked only for holding one of its values. Without the approval, a missing trust switch costs a refused tool call, reported at run time.
 
 ### The staged path out
 

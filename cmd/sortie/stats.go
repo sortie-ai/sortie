@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/storage"
@@ -588,7 +589,7 @@ func runStats(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		emitDiags(stdout, stderr, "text", mapManagerError(err), nil)
 		return 1
 	}
-	cfg, err := config.NewServiceConfig(wf.Config)
+	cfg, err := config.NewServiceConfig(wf.Config, config.WithLiteralSettings(registry.LiteralSettingsOf))
 	if err != nil {
 		emitDiags(stdout, stderr, "text", mapManagerError(err), nil)
 		return 1

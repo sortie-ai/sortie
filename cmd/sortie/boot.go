@@ -197,6 +197,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		workflow.WithValidateFunc(workflowValidate),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
 		workflow.WithRetiredAgents(registry.RetiredAgentOf),
+		workflow.WithLiteralSettings(registry.LiteralSettingsOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))
 	if err != nil {
 		fmt.Fprintf(p.stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable

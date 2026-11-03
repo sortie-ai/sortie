@@ -1,8 +1,12 @@
 package usagesource
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -221,6 +225,12 @@ func TestOpenCodeDisableTitle(t *testing.T) {
 		{"disable false", `{"agent":{"title":{"disable":false}}}`, ""},
 		{"not JSON", `not json`, ""},
 		{"agent not an object", `{"agent":"x"}`, ""},
+		{"agents not an object", `{"agents":[]}`, ""},
+		{"agents.title not an object", `{"agents":{"title":"x"}}`, ""},
+		{"agents.title disabled true", `{"agents":{"title":{"disabled":true}}}`, `{"agents":{"title":{"disabled":true}}}`},
+		{"agents.title disabled false", `{"agents":{"title":{"disabled":false}}}`, ""},
+		{"agents.title without disabled", `{"agents":{"title":{"model":"a/b"}}}`, `{"agents":{"title":{"disabled":true,"model":"a/b"}}}`},
+		{"agents without title falls to the legacy path", `{"agents":{"build":{}}}`, `{"agent":{"title":{"disable":true}},"agents":{"build":{}}}`},
 	}
 
 	for _, tt := range tests {
@@ -231,6 +241,63 @@ func TestOpenCodeDisableTitle(t *testing.T) {
 
 			if inEffect != (tt.want != "") || (inEffect && got != tt.want) || (!inEffect && got != tt.current) {
 				t.Errorf("opencodeDisableTitle(%q) = %q, %v, want %q, %v", tt.current, got, inEffect, tt.want, tt.want != "")
+			}
+		})
+	}
+}
+
+func memberTokens(t *testing.T, document string) map[string]string {
+	t.Helper()
+
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(document), &members); err != nil {
+		t.Fatalf("Unmarshal(%q) = %v, want an object", document, err)
+	}
+	tokens := map[string]string{}
+	for key, raw := range members {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		var written strings.Builder
+		for {
+			token, err := decoder.Token()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Token(%s) = %v", raw, err)
+			}
+			fmt.Fprintf(&written, "%v ", token)
+		}
+		tokens[key] = written.String()
+	}
+	return tokens
+}
+
+func TestOpenCodeDenyAll(t *testing.T) {
+	t.Parallel()
+
+	const schema = `"$schema":"https://opencode.ai/config.json"`
+	tests := []struct{ name, current, want string }{
+		{"unset", "", opencodeDenyAllConfig},
+		{"written order kept with the deny last", `{"permission":{"read":"allow","bash":"ask","edit":"deny"}}`, `{"permission":{"read":"allow","bash":"ask","edit":"deny","*":"deny"}}`},
+		{"operator star dropped, other members kept", `{` + schema + `,"model":"a/b","permission":{"read":"allow","*":"ask","bash":"ask"}}`, `{` + schema + `,"model":"a/b","permission":{"read":"allow","bash":"ask","*":"deny"}}`},
+		{"string permission replaced", `{"permission":"allow"}`, opencodeDenyAllConfig},
+		{"absent permission added", `{"model":"a/b"}`, `{"model":"a/b","permission":{"*":"deny"}}`},
+		{"permissions list gets the rule last", `{"permission":{"read":"allow"},"permissions":[{"action":"read","resource":"*","effect":"allow"}]}`, `{"permission":{"read":"allow"},"permissions":[{"action":"read","resource":"*","effect":"allow"},` + opencodeDenyAllRule + `]}`},
+		{"permissions not a list", `{"permissions":{}}`, ""},
+		{"permission not an object", `{"permission":["x"]}`, ""},
+		{"not JSON", `not json`, ""},
+		{"agent-scoped grant would override the deny", `{"agent":{"build":{"permission":{"*":"allow"}}}}`, ""},
+		{"agent without permissions keeps the deny", `{"agents":{"build":{"model":"a/b"}}}`, `{"agents":{"build":{"model":"a/b"}},"permission":{"*":"deny"}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, inEffect := opencodeDenyAll(tt.current, tt.current != "")
+
+			if inEffect != (tt.want != "") || (!inEffect && got != tt.current) || (inEffect && !reflect.DeepEqual(memberTokens(t, got), memberTokens(t, tt.want))) {
+				t.Errorf("opencodeDenyAll(%q) = %q, %v, want %q, %v", tt.current, got, inEffect, tt.want, tt.want != "")
 			}
 		})
 	}

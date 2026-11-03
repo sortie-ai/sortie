@@ -23,6 +23,7 @@ func init() {
 		RequiresCommand:       true,
 		ValidateAgentConfig:   validateConfig,
 		MCPDialect:            registry.MCPDialectACPSession,
+		LiteralSettings:       []string{envKey},
 		UsageSources:          usage.Sources{Live: usagesource.Default.Live},
 		CredentialEnv:         registry.DeclareCredentialEnv(),
 		EffortForwarding:      registry.EffortNotForwarded,
@@ -61,8 +62,12 @@ type ClientProtocolAdapter struct {
 
 // NewClientProtocolAdapter constructs a [ClientProtocolAdapter]. The kind's
 // settings arrive per session; it reads mcp_config only to check its type (the
-// shared tool delivery owns the path a session uses) and model as the model a
-// usage-limit refusal holds and whose pulled window supplies its reset.
+// shared tool delivery owns the path a session uses), model as the model a
+// usage-limit refusal holds and whose pulled window supplies its reset, env as
+// the variables the runtime launches with, and permissions as the declared
+// answer to a permission request. The env values load as written, because a
+// runtime's own configuration document carries "$" characters that variable
+// resolution would corrupt.
 func NewClientProtocolAdapter() (domain.AgentAdapter, error) {
 	return &ClientProtocolAdapter{}, nil
 }

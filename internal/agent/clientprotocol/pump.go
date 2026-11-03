@@ -1455,8 +1455,10 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 	p.finalizeTurnWithUsage(ev, p.settleSpend(turn, end, nil, usage.RecordsRead{}))
 }
 
-// handlePermissionRequest answers a session/request_permission request and, when
-// the shared posture ends the attempt, latches or begins that end.
+// handlePermissionRequest answers a session/request_permission request with the
+// once-only allowing option when the operator declared approval and the offer
+// holds exactly one, and otherwise by the shared refusal posture, which may end
+// the attempt by latching or beginning that end.
 func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 	if !msg.ID.Present() {
 		return
@@ -1474,8 +1476,14 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 		params = requestPermissionRequest{}
 	}
 
+	approveID, approvable := selectApprovingOption(params.Options)
 	optionID, found := selectRefusingOption(params.Options)
-	posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, found, agentcore.AnswerPending)
+	posture := agentcore.DecidePermissionRequest(p.state.permissions, approvable, found)
+
+	if posture.Approve {
+		p.respondSelected(msg.ID, approveID)
+		return
+	}
 
 	if posture.Notice != "" {
 		agentcore.EmitNotification(p.emitOrQueue, posture.NoticeWithDetail(""))

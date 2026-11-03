@@ -72,6 +72,13 @@ func WithRetiredAgents(lookup config.RetiredAgentLookup) ManagerOption {
 	return func(m *Manager) { m.retiredAgents = lookup }
 }
 
+// WithLiteralSettings sets the lookup the manager passes to every configuration
+// load. Callers wire it to the agent registry; this package never imports the
+// registry. A nil lookup, the default, resolves every key.
+func WithLiteralSettings(lookup config.LiteralSettingsLookup) ManagerOption {
+	return func(m *Manager) { m.literalSettings = lookup }
+}
+
 // LoadStatus is the outcome of the workflow file's recent loads.
 type LoadStatus struct {
 	// LastLoadAt is when the latest load ended, whether it succeeded or failed.
@@ -91,12 +98,13 @@ type LoadStatus struct {
 // available via [Manager.Config] and [Manager.PromptTemplate]. Safe for
 // concurrent use.
 type Manager struct {
-	path           string
-	logger         *slog.Logger
-	validateFunc   ValidateFunc
-	agentKindProbe func(kind string) bool
-	retiredAgents  config.RetiredAgentLookup
-	advisoryFunc   AdvisoryFunc
+	path            string
+	logger          *slog.Logger
+	validateFunc    ValidateFunc
+	agentKindProbe  func(kind string) bool
+	retiredAgents   config.RetiredAgentLookup
+	literalSettings config.LiteralSettingsLookup
+	advisoryFunc    AdvisoryFunc
 
 	// promoteMu serializes every writer of currentRates, from the read of
 	// the rates in force through the swap, so a landed table never replaces
@@ -502,7 +510,9 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		return config.ServiceConfig{}, nil, nil, nil, err
 	}
 
-	cfg, err := config.NewServiceConfig(wf.Config, config.WithRetiredAgents(m.retiredAgents))
+	cfg, err := config.NewServiceConfig(wf.Config,
+		config.WithRetiredAgents(m.retiredAgents),
+		config.WithLiteralSettings(m.literalSettings))
 	if err != nil {
 		return config.ServiceConfig{}, nil, nil, nil, err
 	}

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -207,6 +209,82 @@ func TestPermissionRequestSelectsRefusingOption(t *testing.T) {
 	if !reflect.DeepEqual(gotNotice, wantNotice) {
 		t.Errorf("permission refusal notification = %+v, want shared emitter shape %+v", gotNotice, wantNotice)
 	}
+}
+
+func TestPermissionRequestPostureSelectsOption(t *testing.T) {
+	t.Parallel()
+
+	const (
+		allowOnce   = `{"kind":"allow_once","name":"a","optionId":"allow-once"}`
+		allowAlways = `{"kind":"allow_always","name":"b","optionId":"allow-always"}`
+		secondOnce  = `{"kind":"allow_once","name":"c","optionId":"allow-once-2"}`
+		rejectOnce  = `{"kind":"reject_once","name":"d","optionId":"reject-once"}`
+	)
+
+	tests := []struct {
+		name        string
+		permissions agentcore.PermissionDeclaration
+		options     []string
+		wantID      string
+	}{
+		{"approve-all with allow_always offered before allow_once selects the allow_once", agentcore.DeclaredApproval, []string{allowAlways, allowOnce}, "allow-once"},
+		{"permissions unset with allow_once and reject_once selects the reject_once", agentcore.DeclaredRefusal, []string{allowOnce, rejectOnce}, "reject-once"},
+		{"approve-all with allow_always and reject_once selects the reject_once", agentcore.DeclaredApproval, []string{allowAlways, rejectOnce}, "reject-once"},
+		{"approve-all with two allow_once and a reject_once selects the reject_once", agentcore.DeclaredApproval, []string{allowOnce, secondOnce, rejectOnce}, "reject-once"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+			state.permissions = tt.permissions
+			out := newOutboundReader(outPr)
+			markSessionKnown(state)
+			var events []domain.AgentEvent
+			outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "do something", OnEvent: collectEvents(&events)})
+			promptID := out.awaitMethod(t, methodSessionPrompt)
+
+			sendLine(t, inPw, permissionRequestLine(`"perm-1"`, "["+strings.Join(tt.options, ",")+"]"))
+
+			resp := decodeResponse(t, out.next(t))
+			if resp.Result.Outcome.Outcome != outcomeSelected || resp.Result.Outcome.OptionID != tt.wantID {
+				t.Errorf("permission reply = %+v, want outcome %q with optionId %q", resp.Result.Outcome, outcomeSelected, tt.wantID)
+			}
+
+			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+			outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+			if outcome.err != nil || outcome.result.ExitReason != domain.EventTurnCompleted {
+				t.Errorf("RunTurn() = %q, %v, want %q, nil: the turn continues", outcome.result.ExitReason, outcome.err, domain.EventTurnCompleted)
+			}
+			refusalNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).Notice
+			if tt.wantID == "allow-once" && slices.ContainsFunc(events, func(e domain.AgentEvent) bool { return e.Message == refusalNotice }) {
+				t.Errorf("RunTurn() events = %+v, want no refusal notice on an approval", events)
+			}
+		})
+	}
+}
+
+func TestElicitationCreateRefusedUnderApproveAll(t *testing.T) {
+	t.Parallel()
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	state.permissions = agentcore.DeclaredApproval
+	out := newOutboundReader(outPr)
+	markSessionKnown(state)
+	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "do something", OnEvent: func(domain.AgentEvent) {}})
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+
+	sendLine(t, inPw, `{"jsonrpc":"2.0","id":7,"method":"elicitation/create","params":{"sessionId":"sess-test"}}`)
+
+	resp := decodeResponse(t, out.next(t))
+	if resp.Error == nil || resp.Error.Code != jsonrpc.MethodNotFoundCode {
+		t.Errorf("elicitation/create reply error = %+v, want code %d", resp.Error, jsonrpc.MethodNotFoundCode)
+	}
+
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+	outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+	dispositiontest.AssertDispositionContract(t, agentcore.HumanInputEvidence(elicitationDetail), outcome.result, outcome.err)
 }
 
 func TestPermissionRequestMalformedToolCallNameSelectsRefusingOption(t *testing.T) {

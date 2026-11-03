@@ -1489,3 +1489,45 @@ func TestManager_LabelCommandsRecordsNoBranchAdvisory(t *testing.T) {
 		})
 	}
 }
+
+func TestManager_WithLiteralSettings_KeepsListedKeyLiteral(t *testing.T) {
+	t.Parallel()
+
+	const doc = `{"$schema":"https://opencode.ai/config.json","model":"$m"}`
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	mustWriteFile(t, path, fmt.Appendf(nil, `---
+agent:
+  kind: testkind
+testkind:
+  env: {DOC: '%[1]s'}
+  other: $PATH
+dispatch:
+  rules:
+    - name: r
+      match: {labels: [cheap]}
+      testkind:
+        env: {DOC: '%[1]s'}
+---
+Prompt.
+`, doc))
+
+	mgr, err := NewManager(path, testLogger(), WithLiteralSettings(func(string) []string { return []string{"env"} }))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	mgr.Stop()
+	cfg := mgr.Config()
+
+	for _, rule := range []string{"", "r"} {
+		got := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: "testkind", RuleName: rule}, "").Passthrough
+		if env, _ := got["env"].(map[string]any); env["DOC"] != doc {
+			t.Errorf("rule %q env DOC = %q, want %q", rule, env["DOC"], doc)
+		}
+		if got["other"] != os.Getenv("PATH") {
+			t.Errorf("rule %q other = %q, want $PATH resolved", rule, got["other"])
+		}
+	}
+	if refs := cfg.ExtensionEnvRefPaths("testkind"); !refs["other"] || refs["env.DOC"] {
+		t.Errorf("ExtensionEnvRefPaths(testkind) = %v, want other recorded and env.DOC not", refs)
+	}
+}
