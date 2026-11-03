@@ -152,7 +152,7 @@ A runtime that advertises `mcpCapabilities.http` receives Sortie's tool server a
 
 Delivery is not the problem: `session/new` carries the declaration, and the runtime reaches the server and lists its tools. But a runtime that asks the client for consent before a tool call gets a refusal, and the tool is not called. The protocol's server declaration has no trust or approval field, so Sortie cannot mark a server as pre-approved on the wire. The only lever is the runtime's own configuration, reached through `agent.command`: an approval mode that does not ask, or a rule that pre-approves the tools of Sortie's server.
 
-Both `gemini` and `kiro-cli` behave this way: under a posture that asks, the declared server is delivered and its tool is never called. The other runtimes are unmeasured on this point.
+Both `gemini` and `kiro-cli` behave this way: under a posture that asks, the declared server is delivered and its tool is never called. `opencode` behaves this way once its configuration carries a permission rule that asks about every tool: it resolves the declared server's tool and raises a permission request for it, Sortie refuses the request, the tool does not run, and the model carries on and finishes the turn, so the turn succeeds. Without such a rule `opencode` asks about no tool, and the declared server's tool runs and the turn consumes its answer. The remaining runtimes are unmeasured on this point.
 
 `kiro-cli` adds a second condition: with an API-key credential it drops every declared server before any posture question. See `docs/kiro-adapter-notes.md`.
 

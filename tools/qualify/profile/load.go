@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -145,9 +146,17 @@ func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, er
 
 // ModelEnv carries the model to a runtime whose launch takes no model switch,
 // through one environment variable of every launch that carries a model.
+//
+// AskingValue replaces Value on the launches that must make the runtime ask
+// before a tool; FailingValue replaces it on the launches that must make a
+// turn fail against a scripted upstream, with the upstream's URL in place of
+// the model. Each is omitted from the encoded form when empty, so a profile
+// that sets neither keeps its digest.
 type ModelEnv struct {
-	Name  string `json:"name"`
-	Value string `json:"value"` // carries "{model}" exactly once
+	Name         string `json:"name"`
+	Value        string `json:"value"`                   // carries "{model}" exactly once
+	AskingValue  string `json:"asking_value,omitempty"`  // carries "{model}" exactly once
+	FailingValue string `json:"failing_value,omitempty"` // carries "{upstream}" exactly once
 }
 
 // EntryPoint is one surface's argument vector for a graded launch, appended to
@@ -181,6 +190,12 @@ type TerminalLocator struct {
 	Mode               string `json:"mode"`
 	DiscriminatorKey   string `json:"discriminator_key"`
 	DiscriminatorValue string `json:"discriminator_value"`
+
+	// DiscriminatorPath names the discriminator as a nested key sequence, for a
+	// runtime that carries it below the top level of a stream value. It replaces
+	// DiscriminatorKey in discriminated mode and is omitted from the encoded
+	// form when empty, so it never moves a profile's digest.
+	DiscriminatorPath []string `json:"discriminator_path,omitempty"`
 
 	// EnvelopePath descends from the located value to the terminal object, for a
 	// runtime that wraps its payload below the located value. Empty is omitted
@@ -218,6 +233,19 @@ type Recognizer struct {
 	// one. The zero value, which the encoded form omits so it never moves a
 	// profile's digest, resolves them against the terminal object.
 	TokenLocator TerminalLocator `json:"token_locator,omitzero"`
+
+	// ErrorLocator selects the stream value that reports a failed turn, for a
+	// runtime that reports one on a line other than the terminal one. The zero
+	// value, which the encoded form omits so it never moves a profile's digest,
+	// leaves the terminal object alone to decide.
+	ErrorLocator TerminalLocator `json:"error_locator,omitzero"`
+
+	// LimitLocator selects the stream value that reports a turn cut off at a
+	// limit, for a runtime that reports one as an error line. It is consulted
+	// before ErrorLocator. The zero value, which the encoded form omits so it
+	// never moves a profile's digest, leaves the terminal object alone to
+	// decide.
+	LimitLocator TerminalLocator `json:"limit_locator,omitzero"`
 }
 
 // TokenPath is one nested key sequence the token-inventory reading resolves out
@@ -371,7 +399,7 @@ var entryPointFields = map[string]bool{
 
 var terminalLocatorFields = map[string]bool{
 	"mode": true, "discriminator_key": true, "discriminator_value": true,
-	"envelope_path": true,
+	"envelope_path": true, "discriminator_path": true,
 }
 
 var recognizerFieldOrder = []string{
@@ -382,7 +410,7 @@ var recognizerFieldOrder = []string{
 
 // recognizerOptionalFields carries the recognizer members a discovery pass may
 // omit.
-var recognizerOptionalFields = []string{"session_id_path", "token_paths", "token_locator"}
+var recognizerOptionalFields = []string{"session_id_path", "token_paths", "token_locator", "error_locator", "limit_locator"}
 
 var recognizerFields = func() map[string]bool {
 	fields := make(map[string]bool, len(recognizerFieldOrder)+len(recognizerOptionalFields))
@@ -622,13 +650,17 @@ func checkContinuationCoordinates(entryPoints map[evidence.Surface]EntryPoint, r
 }
 
 // checkMeasuredEntryPointShape requires asking_args on every measured surface,
-// and "{prompt}" exactly once in args and asking_args on a native surface but
-// never on the protocol surface.
+// an asking launch that differs from the ordinary one, and "{prompt}" exactly
+// once in args and asking_args on a native surface but never on the protocol
+// surface.
 func checkMeasuredEntryPointShape(profile RuntimeProfile) error {
 	for _, surface := range profile.MeasuredSurfaces() {
 		entry := profile.EntryPoints[surface]
 		if len(entry.AskingArgs) == 0 {
 			return fmt.Errorf("entry_points[%s]: asking_args is required", surface)
+		}
+		if slices.Equal(entry.AskingArgs, entry.Args) && !profile.asksThroughModelEnv() {
+			return fmt.Errorf("entry_points[%s]: asking_args must differ from args or model_env.asking_value must differ from value", surface)
 		}
 		wantPrompt := surface != evidence.SurfaceProtocol
 		if err := checkPromptPlaceholder(entry.Args, wantPrompt); err != nil {
@@ -773,18 +805,24 @@ func decodeModelEnv(raw json.RawMessage) (*ModelEnv, error) {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
 	}
+	var env ModelEnv
+	members := []modelEnvMember{
+		{name: "name", dst: &env.Name},
+		{name: "value", dst: &env.Value, placeholder: "{model}"},
+		{name: "asking_value", dst: &env.AskingValue, placeholder: "{model}", optional: true},
+		{name: "failing_value", dst: &env.FailingValue, placeholder: "{upstream}", optional: true},
+	}
 	for name := range fields {
-		if name != "name" && name != "value" {
+		if !slices.ContainsFunc(members, func(m modelEnvMember) bool { return m.name == name }) {
 			return nil, fmt.Errorf("unknown field %q", name)
 		}
 	}
-	var env ModelEnv
-	for _, member := range []struct {
-		name string
-		dst  *string
-	}{{"name", &env.Name}, {"value", &env.Value}} {
+	for _, member := range members {
 		rawMember, ok := fields[member.name]
 		if !ok {
+			if member.optional {
+				continue
+			}
 			return nil, fmt.Errorf("missing field %q", member.name)
 		}
 		value, err := evidence.DecodeString(rawMember)
@@ -792,14 +830,24 @@ func decodeModelEnv(raw json.RawMessage) (*ModelEnv, error) {
 			return nil, fmt.Errorf("%s: %w", member.name, err)
 		}
 		*member.dst = value
+		if member.placeholder == "" {
+			continue
+		}
+		if tokens := placeholderTokenPattern.FindAllString(value, -1); len(tokens) != 1 || tokens[0] != member.placeholder {
+			return nil, fmt.Errorf("%s %q must carry %s exactly once and no other placeholder", member.name, value, member.placeholder)
+		}
 	}
 	if !modelEnvNamePattern.MatchString(env.Name) {
 		return nil, fmt.Errorf("name %q is not a bare environment variable name", env.Name)
 	}
-	if tokens := placeholderTokenPattern.FindAllString(env.Value, -1); len(tokens) != 1 || tokens[0] != "{model}" {
-		return nil, fmt.Errorf("value %q must carry {model} exactly once and no other placeholder", env.Value)
-	}
 	return &env, nil
+}
+
+type modelEnvMember struct {
+	name        string
+	dst         *string
+	placeholder string
+	optional    bool
 }
 
 func rejectModelPlaceholderInEntryPoints(entries map[evidence.Surface]EntryPoint) error {
@@ -1021,6 +1069,20 @@ func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error
 		}
 		recognizer.TokenLocator = tokenLocator
 	}
+	if raw, has := fields["error_locator"]; has {
+		errorLocator, errorLocatorErr := decodeTerminalLocator("error_locator", raw)
+		if errorLocatorErr != nil {
+			return Recognizer{}, errorLocatorErr
+		}
+		recognizer.ErrorLocator = errorLocator
+	}
+	if raw, has := fields["limit_locator"]; has {
+		limitLocator, limitLocatorErr := decodeTerminalLocator("limit_locator", raw)
+		if limitLocatorErr != nil {
+			return Recognizer{}, limitLocatorErr
+		}
+		recognizer.LimitLocator = limitLocator
+	}
 
 	if err := json.Unmarshal(fields["error_members"], &recognizer.ErrorMembers); err != nil {
 		return Recognizer{}, fmt.Errorf("error_members: %w", err)
@@ -1119,8 +1181,13 @@ func decodeTerminalLocator(name string, raw json.RawMessage) (TerminalLocator, e
 	if locator.Mode != "first_value" && locator.Mode != "discriminated" {
 		return TerminalLocator{}, fmt.Errorf("%s.mode = %q, want first_value or discriminated", name, locator.Mode)
 	}
-	if locator.Mode == "discriminated" && (locator.DiscriminatorKey == "" || locator.DiscriminatorValue == "") {
-		return TerminalLocator{}, fmt.Errorf("%s.discriminator_key and %s.discriminator_value are required in discriminated mode", name, name)
+	if locator.Mode == "discriminated" {
+		if (locator.DiscriminatorKey == "") == (len(locator.DiscriminatorPath) == 0) || locator.DiscriminatorValue == "" {
+			return TerminalLocator{}, fmt.Errorf("%s.discriminator_value and exactly one of %s.discriminator_key and %s.discriminator_path are required in discriminated mode", name, name, name)
+		}
+		if err := validateKeyPath(locator.DiscriminatorPath); err != nil {
+			return TerminalLocator{}, fmt.Errorf("%s.discriminator_path: %w", name, err)
+		}
 	}
 	return locator, nil
 }
@@ -1449,6 +1516,32 @@ func (p RuntimeProfile) ModelEnviron(model string) (string, bool) {
 	return p.ModelEnv.Name + "=" + strings.ReplaceAll(p.ModelEnv.Value, "{model}", model), true
 }
 
+// AskingModelEnviron returns the NAME=value entry a launch built from
+// asking_args carries: AskingValue when set, else Value, with {model}
+// substituted. ok is false when the profile carries its model through
+// ModelArgs.
+func (p RuntimeProfile) AskingModelEnviron(model string) (entry string, ok bool) {
+	if p.ModelEnv == nil {
+		return "", false
+	}
+	value := cmp.Or(p.ModelEnv.AskingValue, p.ModelEnv.Value)
+	return p.ModelEnv.Name + "=" + strings.ReplaceAll(value, "{model}", model), true
+}
+
+// FailingModelEnviron returns the NAME=value entry the runtime-failure
+// launches carry, with {upstream} substituted. ok is false when the profile
+// states no FailingValue.
+func (p RuntimeProfile) FailingModelEnviron(upstream string) (entry string, ok bool) {
+	if p.ModelEnv == nil || p.ModelEnv.FailingValue == "" {
+		return "", false
+	}
+	return p.ModelEnv.Name + "=" + strings.ReplaceAll(p.ModelEnv.FailingValue, "{upstream}", upstream), true
+}
+
+func (p RuntimeProfile) asksThroughModelEnv() bool {
+	return p.ModelEnv != nil && p.ModelEnv.AskingValue != "" && p.ModelEnv.AskingValue != p.ModelEnv.Value
+}
+
 // PublishedPostureArgs builds the published-posture probe's argv: the sample
 // command with element zero replaced by commandPath, and p.ModelArgs appended
 // with {model} substituted.
@@ -1534,6 +1627,10 @@ func (l TerminalLocator) Matches(index int, record map[string]any) bool {
 	case "first_value":
 		return index == 0
 	case "discriminated":
+		if len(l.DiscriminatorPath) > 0 {
+			value, ok := descendValue(record, l.DiscriminatorPath)
+			return ok && fmt.Sprint(value) == l.DiscriminatorValue
+		}
 		return fmt.Sprint(record[l.DiscriminatorKey]) == l.DiscriminatorValue
 	}
 	return false
@@ -1681,10 +1778,19 @@ func (r Recognizer) TokenValue(path TokenPath, output string) (float64, bool) {
 }
 
 // Terminal recognizes one native surface's terminal outcome from its raw
-// output. It reports false when no terminal object is located or none of its
-// members resolve to a known outcome.
+// output. A stream value LimitLocator selects is a limit_reached terminal and
+// one ErrorLocator selects is an error terminal, whatever the terminal object
+// says; the limit wins. Otherwise it reports false when no terminal object is
+// located or none of its members resolve to a known outcome.
 func (r Recognizer) Terminal(output string) (Terminal, bool) {
-	terminal, found := r.locateTerminal(decodeTopLevelJSONValues(output))
+	values := decodeTopLevelJSONValues(output)
+	if r.LimitLocator.Mode != "" && len(r.LimitLocator.matching(values)) > 0 {
+		return Terminal{Case: evidence.CaseLimitReached}, true
+	}
+	if r.ErrorLocator.Mode != "" && len(r.ErrorLocator.matching(values)) > 0 {
+		return Terminal{Error: true}, true
+	}
+	terminal, found := r.locateTerminal(values)
 	if !found {
 		return Terminal{}, false
 	}
