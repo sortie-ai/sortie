@@ -1460,6 +1460,21 @@ func TestGenerateContentUnsupportedShapes(t *testing.T) {
 	}
 }
 
+func TestAssistantWireRefusesTruncatedReply(t *testing.T) {
+	t.Parallel()
+
+	srv, ledger := startLedgered(t, []fakemodel.Response{{Text: "answer", Truncated: true}})
+
+	reply := assistantWire.post(t, srv, assistantWire.turnBody)
+
+	assertFailureRow(t, srv, ledger, reply, failureWant{
+		seq:    1,
+		status: http.StatusBadRequest, kind: fakemodel.ExchangeUnmatched, wire: assistantWire.wire,
+		message:  requestLabel(1, http.MethodPost, assistantWire.path) + " meets a truncated script entry this wire cannot carry",
+		envelope: assistantWire.envelope,
+	})
+}
+
 type generateContentChunk struct {
 	Candidates []struct {
 		Content struct {

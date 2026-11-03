@@ -543,6 +543,10 @@ func (s *Server) respond(ex *Exchange, r *http.Request) (contentType, failure st
 	if entry.Status != 0 {
 		return refuse(ex, c, entry)
 	}
+	if entry.Truncated && c.wire() == WireGenerateAssistantResponse {
+		return failWire(ex, c, ExchangeUnmatched,
+			label+" meets a truncated script entry this wire cannot carry", "")
+	}
 	turn := reply{seq: ex.Seq, model: dec.model, streaming: dec.streaming, operation: dec.operation, text: entry.Text, truncated: entry.Truncated, usage: entry.Usage}
 	if entry.Call != nil {
 		call, err := entry.Call(dec.tools)
