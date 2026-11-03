@@ -608,6 +608,9 @@ var knownTopLevelKeys = map[string]bool{
 // retired agent kind onto the replacement kind, rewriting raw in place
 // as it does for environment overrides. A conversion the retired kind
 // cannot carry returns a [*ConfigError].
+//
+// Under [WithLiteralSettings] the values of the keys a kind lists load
+// as written, with no $VAR resolution.
 func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceConfig, error) {
 	if raw == nil {
 		raw = map[string]any{}
@@ -631,8 +634,14 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 		}
 	}
 
+	var literals heldSettings
+	literals.hold(extensions, options.literalSettings)
+	for _, rule := range dispatchRuleMaps(raw) {
+		literals.hold(ruleSettingsKeys(rule), options.literalSettings)
+	}
 	preResolution := resolveExtensionEnvRefs(extensions)
 	preResolution = resolveRuleBlockEnvRefs(raw, preResolution)
+	literals.restore()
 
 	var conversions []AgentKindConversion
 	if options.retiredAgents != nil {
@@ -1732,6 +1741,41 @@ func resolveExtensionEnvRefs(extensions map[string]any) map[string]string {
 		extensions[k] = resolveExtensionEnvValue(k, v, &snapshot)
 	}
 	return snapshot
+}
+
+type heldSetting struct {
+	block map[string]any
+	key   string
+	value any
+}
+
+// heldSettings keeps literal settings values out of the $VAR resolution walkers.
+type heldSettings []heldSetting
+
+// hold takes out of each kind block in blocks the keys lookup lists for
+// that kind. A nil lookup holds nothing.
+func (h *heldSettings) hold(blocks map[string]any, lookup LiteralSettingsLookup) {
+	if lookup == nil {
+		return
+	}
+	for kind, value := range blocks {
+		block, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range lookup(kind) {
+			if held, present := block[key]; present {
+				*h = append(*h, heldSetting{block: block, key: key, value: held})
+				delete(block, key)
+			}
+		}
+	}
+}
+
+func (h heldSettings) restore() {
+	for _, held := range h {
+		held.block[held.key] = held.value
+	}
 }
 
 // dispatchRuleMaps returns the dispatch.rules elements of raw, a nil map

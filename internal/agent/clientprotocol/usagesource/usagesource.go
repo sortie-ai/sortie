@@ -318,9 +318,12 @@ func isJSONObject(raw []byte) bool {
 // Close at teardown.
 type VerificationAddition interface {
 	// Claim reports whether the addition applies to target and, when it does,
-	// creates the file its switches name and returns them. It refuses a remote
-	// launch, whose host and command line are not Sortie's to extend, and a
-	// command line that does not name its runtime; a refusal creates nothing.
+	// creates the file its switches name and returns them. It refuses a command
+	// line that does not name its runtime; a refusal creates nothing.
+	//
+	// An addition whose switches are only Merges MAY claim a remote launch. One
+	// with a file, an argument or a plain Env entry refuses it, because a file
+	// Sortie writes exists only on the launching host.
 	Claim(target agentcore.LaunchTarget) (VerificationSwitches, bool)
 
 	// Context reports which agent context components the verification request
@@ -337,6 +340,10 @@ type VerificationSwitches struct {
 	// Env holds "NAME=value" entries appended to the launch environment.
 	Env []string
 
+	// Merges are additions merged into the value the launch gives Name, which
+	// keeps the operator's own members. ClaimVerification resolves them into Env.
+	Merges []LaunchAddition
+
 	// Args are appended after the operator's command line.
 	Args []string
 }
@@ -352,16 +359,17 @@ var executableSuffixes = []string{".cmd", ".ps1", ".exe", ".js"}
 
 // namesRuntime reports whether the tokens of a local launch's command line name
 // the executable or one of the npm packages. A remote launch names nothing here:
-// verification additions claim local launches only.
+// the additions that write a file, append an argument or add a plain Env entry
+// claim local launches only.
 func namesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
 	return target.RemoteCommand == "" && commandNamesRuntime(target, executable, packages...)
 }
 
 // commandNamesRuntime reports whether the configured agent command names the
-// executable or one of the npm packages. A remote launch scans the
-// whitespace-separated words of RemoteCommand, a string the remote shell parses,
-// and never Command, which is the SSH executable. A wrong match on a remote
-// launch costs one refused request pair before a puller stops.
+// executable or one of the npm packages. A remote launch scans the words of the
+// command as [agentcore.LaunchTarget.CommandWords] reads them, never Command,
+// which is the SSH executable. A wrong match on a remote launch costs one
+// refused request pair before a puller stops.
 func commandNamesRuntime(target agentcore.LaunchTarget, executable string, packages ...string) bool {
 	return runtimeWordIndex(target.CommandWords(), executable, packages...) >= 0
 }

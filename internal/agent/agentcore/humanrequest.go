@@ -48,9 +48,26 @@ const (
 	noticeHumanInputRuntimeRefused = "the agent runtime refused a request only a person could answer, and this unattended run has no one to answer it"
 )
 
+// PermissionDeclaration is the operator's declared answer to permission
+// requests. The zero value refuses.
+type PermissionDeclaration uint8
+
+const (
+	// DeclaredRefusal refuses each permission request.
+	DeclaredRefusal PermissionDeclaration = iota
+
+	// DeclaredApproval approves a permission request once, where the runtime
+	// offers a way to grant that one call.
+	DeclaredApproval
+)
+
 // RefusalPosture is the shared layer's decision for one recognized request.
 // An adapter reads it and acts; it never constructs one.
 type RefusalPosture struct {
+	// Approve reports whether the adapter answers with the runtime's
+	// once-only allowing option. Every other field is then zero.
+	Approve bool
+
 	// Transmit reports whether the adapter writes a refusal on the
 	// runtime's reply channel. False when the runtime offers none and
 	// when the request already carries a refusal.
@@ -66,7 +83,8 @@ type RefusalPosture struct {
 	EndAttempt bool
 
 	// Notice is the operator-facing stem explaining the refusal, on every
-	// posture row. The caller emits it as a domain.EventNotification,
+	// posture row except Approve. The caller emits it as a
+	// domain.EventNotification,
 	// alone when it has no detail for this request and joined to that
 	// detail by ": " when it has one, using the same detail it passes to
 	// [HumanInputEvidence]. It is a stem rather than a whole sentence
@@ -124,6 +142,21 @@ func DecideHumanRequest(class HumanRequestClass, replyChannel bool, answer Human
 	default:
 		return RefusalPosture{EndAttempt: true, Notice: noticeHumanInputRequired}
 	}
+}
+
+// DecidePermissionRequest returns the posture for one recognized permission
+// request under the operator's declaration. approvalOffered reports whether
+// the request offers exactly one way to grant the call once; refusalOffered
+// is the reply-channel input [DecideHumanRequest] takes.
+//
+// Only [DeclaredApproval] with an approval offered approves. Every other
+// input, a declaration outside the constants included, takes the refusal
+// posture, so a declaration never ends a request worse than refusal.
+func DecidePermissionRequest(declared PermissionDeclaration, approvalOffered, refusalOffered bool) RefusalPosture {
+	if declared == DeclaredApproval && approvalOffered {
+		return RefusalPosture{Approve: true}
+	}
+	return DecideHumanRequest(ClassPermission, refusalOffered, AnswerPending)
 }
 
 // HumanInputEvidence returns the [TurnEvidence] an adapter passes to

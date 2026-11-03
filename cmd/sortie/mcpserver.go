@@ -93,7 +93,7 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		return 1
 	}
 
-	cfg, err := config.NewServiceConfig(wf.Config)
+	cfg, err := config.NewServiceConfig(wf.Config, config.WithLiteralSettings(registry.LiteralSettingsOf))
 	if err != nil {
 		logger.Error("failed to parse config", slog.Any("error", err))
 		return 1

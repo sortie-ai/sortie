@@ -18,8 +18,13 @@ import (
 // kind, and false for a kind that is not retired.
 type RetiredAgentLookup func(kind string) (registry.RetiredAgent, bool)
 
+// LiteralSettingsLookup reports the keys of a kind's settings block
+// whose values load as written, and nil for a kind that lists none.
+type LiteralSettingsLookup func(kind string) []string
+
 type serviceConfigOptions struct {
-	retiredAgents RetiredAgentLookup
+	retiredAgents   RetiredAgentLookup
+	literalSettings LiteralSettingsLookup
 }
 
 // ServiceConfigOption tunes how [NewServiceConfig] builds a
@@ -32,6 +37,16 @@ type ServiceConfigOption func(*serviceConfigOptions)
 func WithRetiredAgents(lookup RetiredAgentLookup) ServiceConfigOption {
 	return func(o *serviceConfigOptions) {
 		o.retiredAgents = lookup
+	}
+}
+
+// WithLiteralSettings makes [NewServiceConfig] leave the value under every key
+// lookup lists for a kind untouched: no $VAR resolves in it and no
+// pre-resolution literal is recorded. It covers the kind's top-level block and
+// its block inside a dispatch rule. A nil lookup resolves every key.
+func WithLiteralSettings(lookup LiteralSettingsLookup) ServiceConfigOption {
+	return func(o *serviceConfigOptions) {
+		o.literalSettings = lookup
 	}
 }
 

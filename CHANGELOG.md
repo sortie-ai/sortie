@@ -10,18 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Agents now receive the issue comments they have not seen yet before every turn, including comments written while a run is in progress. It is on by default and changes agent prompts after upgrade; only comments from people with write access to the project are delivered, and `comment_feed.enabled: false` turns it off. A prompt template can place these comments itself through the new `comment_feed` variable; otherwise Sortie adds them after the template's text. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
 - `sortie validate` checks the `comment_feed` setting and warns about a misspelled field of the `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- `agent-client-protocol` workflows set environment variables for the agent with `agent-client-protocol.env`, locally and on SSH workers, with values taken as written. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- `agent-client-protocol.permissions: approve-all` approves a tool permission request that offers a single way to allow just that call, instead of refusing it. Every other request is still refused, tools the agent's own configuration denies stay denied, a request for a person's input still ends the run, and the default `deny-all` keeps refusing. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 
 ### Changed
 
 - A comment in a file-tracker issue file may omit its `id`; Sortie gives it a stable identity built from its author, time, and text, shown wherever comment ids appear. ([#1579](https://github.com/sortie-ai/sortie/issues/1579))
 - When an agent can no longer continue its earlier session, every agent kind now starts a new session and logs one warning saying so. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 - With the comment feed on, `.park.comments` lists the comments the agent has not seen yet, from the authors the feed delivers. ([#1586](https://github.com/sortie-ai/sortie/issues/1586))
+- When an `agent-client-protocol` workflow gives OpenCode its own configuration document, the agent credential check adds its tool denial to that document instead of sending the agent's full context, on SSH workers too. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 
 ### Fixed
 
 - The first prompt after a person releases a parked issue no longer repeats the agent's stop statement through Sortie's own stop comment, and it includes comments written while the parked run's last turn was still running. ([#1582](https://github.com/sortie-ai/sortie/issues/1582))
 - Claude Code and Copilot CLI runs no longer fail on every retry when the agent's earlier session has been deleted or has expired; the agent starts a new session instead. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
 - With `opencode.dangerously_skip_permissions: false`, the `opencode` agent now refuses every tool call that `opencode.allowed_tools` does not allow, as documented, instead of performing the calls the tool lists leave undecided. ([#1593](https://github.com/sortie-ai/sortie/issues/1593))
+- OpenCode on `agent-client-protocol` no longer spends an uncounted model request on a session title when its configuration document defines the title agent under `agents`. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- On SSH workers, an `agent-client-protocol` workflow whose `agent.command` is a list gets the same runtime-specific launch handling as a string command, OpenCode's session-title suppression included. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 
 ## [1.31.0] - 2026-10-31
 

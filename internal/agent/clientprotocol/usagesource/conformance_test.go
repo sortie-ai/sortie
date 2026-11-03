@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -204,6 +205,9 @@ func TestVerificationAdditionsConformToTheRegistryContract(t *testing.T) {
 			"remote launch": {Command: "ssh", RemoteCommand: executable + " --acp", SSHHost: "worker"},
 			"unnamed":       {Command: "/opt/sortie-neutral/sortie-neutral-launch", Args: []string{"--acp"}},
 		}
+		if kind == opencodeAgentName {
+			delete(refusals, "remote launch")
+		}
 		for name, target := range refusals {
 			refused := constructor()
 			if switches, claimed := refused.Claim(target); claimed {
@@ -216,7 +220,7 @@ func TestVerificationAdditionsConformToTheRegistryContract(t *testing.T) {
 
 		claimant := constructor()
 		switches, claimed := claimant.Claim(agentcore.LaunchTarget{Command: executable, Args: verificationClaimArgs(kind)})
-		if !claimed || len(switches.Env)+len(switches.Args) == 0 {
+		if !claimed || len(switches.Env)+len(switches.Args)+len(switches.Merges) == 0 {
 			t.Fatalf("%s Claim(%s --acp) = %v, %v, want a claim with at least one switch", kind, executable, switches, claimed)
 		}
 		claimant.Close()
@@ -236,8 +240,10 @@ func TestClaimVerificationRefusesAnAmbiguousOrOperatorSetLaunch(t *testing.T) {
 		{"a named launch with nothing set", agentcore.LaunchTarget{Command: "copilot", Args: []string{"--acp"}}, []string{"PATH=/bin", "OPENCODE_CONFIG=/x"}, true},
 		{"a bare flag in Args", agentcore.LaunchTarget{Command: "copilot", Args: []string{"--acp", "--available-tools", "bash"}}, nil, false},
 		{"a flag with a value in Args", agentcore.LaunchTarget{Command: "copilot", Args: []string{"--acp", "--no-custom-instructions=true"}}, nil, false},
-		{"an environment name set", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"OPENCODE_CONFIG_CONTENT={}"}, false},
-		{"an environment name set in another case", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"opencode_config_content={}"}, false},
+		{"an environment document to merge into", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"OPENCODE_CONFIG_CONTENT={}"}, true},
+		{"an environment value that is not an object", agentcore.LaunchTarget{Command: "opencode", Args: []string{"acp"}}, []string{"OPENCODE_CONFIG_CONTENT=[1]"}, false},
+		{"a document assigned by an env program in the command", agentcore.LaunchTarget{Command: "env", Args: []string{"OPENCODE_CONFIG_CONTENT=x", "opencode", "acp"}}, nil, false},
+		{"a plain switch set in another case", agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, []string{"gemini_system_md=/etc/system.md"}, runtime.GOOS != "windows"},
 		{"a file-backed switch already set", agentcore.LaunchTarget{Command: "gemini", Args: []string{"--acp"}}, []string{"GEMINI_SYSTEM_MD=/etc/system.md"}, false},
 		{"two runtimes named", agentcore.LaunchTarget{Command: "gemini", Args: []string{"copilot"}}, nil, false},
 		{"kiro with a model", agentcore.LaunchTarget{Command: "kiro-cli", Args: []string{"acp", "--model", "x"}}, nil, true},
@@ -271,6 +277,8 @@ func TestVerificationSwitchesPerRuntime(t *testing.T) {
 		name           string
 		kind           string
 		args           []string
+		target         agentcore.LaunchTarget
+		environ        []string
 		wantArgs       []string
 		wantEnv        []string
 		wantPromptIn   string
@@ -282,6 +290,13 @@ func TestVerificationSwitchesPerRuntime(t *testing.T) {
 			wantKeeps: []registry.VerificationResidual{registry.VerificationKeepsProjectInstructions, registry.VerificationKeepsUserInstructions}},
 		{name: "opencode denies every tool through inline configuration", kind: opencodeAgentName,
 			wantEnv: []string{"OPENCODE_CONFIG_CONTENT={\"permission\":{\"*\":\"deny\"}}"}},
+		{name: "opencode merges the denial into the document the environment holds", kind: opencodeAgentName,
+			environ: []string{`OPENCODE_CONFIG_CONTENT={"permission":{"read":"allow"}}`},
+			wantEnv: []string{`OPENCODE_CONFIG_CONTENT={"permission":{"read":"allow","*":"deny"}}`}},
+		{name: "opencode claims a remote list-form launch and merges into the configured document", kind: opencodeAgentName,
+			target: agentcore.LaunchTarget{Command: "ssh", SSHHost: "worker", RemoteCommand: "'opencode' 'acp'", RemoteArgv: []string{"opencode", "acp"},
+				ConfiguredEnv: []sshutil.EnvVar{{Name: "OPENCODE_CONFIG_CONTENT", Value: `{"model":"m"}`}}},
+			wantEnv: []string{`OPENCODE_CONFIG_CONTENT={"model":"m","permission":{"*":"deny"}}`}},
 		{name: "gemini points at a private system prompt file", kind: geminiAgentName,
 			wantPromptIn: "GEMINI_SYSTEM_MD="},
 		{name: "kiro selects a tool-less agent for a spaced --model", kind: kiroAgentName, args: []string{"acp", "--model", "x"},
@@ -294,24 +309,23 @@ func TestVerificationSwitchesPerRuntime(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			setTempRoot(t, root)
-			constructor, err := VerificationAdditions.Get(tt.kind)
-			if err != nil {
-				t.Fatalf("VerificationAdditions.Get(%q) error = %v", tt.kind, err)
-			}
-
-			addition := constructor()
-			for _, residual := range tt.wantKeeps {
-				if !addition.Context().Keeps(residual) {
-					t.Errorf("%s Context().Keeps(%q) = false, want true", tt.kind, residual)
-				}
-			}
 			args := tt.args
 			if args == nil {
 				args = []string{"--acp"}
 			}
-			switches, claimed := addition.Claim(agentcore.LaunchTarget{Command: verificationExecutables[tt.kind], Args: args})
+			target := tt.target
+			if target.Command == "" {
+				target = agentcore.LaunchTarget{Command: verificationExecutables[tt.kind], Args: args}
+			}
+
+			addition, switches, claimed := ClaimVerification(target, append([]string{}, tt.environ...))
 			if !claimed {
-				t.Fatalf("%s Claim() claimed = false, want true", tt.kind)
+				t.Fatalf("ClaimVerification(%v, %v) claimed = false, want true", target, tt.environ)
+			}
+			for _, residual := range tt.wantKeeps {
+				if !addition.Context().Keeps(residual) {
+					t.Errorf("%s Context().Keeps(%q) = false, want true", tt.kind, residual)
+				}
 			}
 			if !slices.Equal(switches.Args, tt.wantArgs) {
 				t.Errorf("%s Claim() Args = %q, want %q", tt.kind, switches.Args, tt.wantArgs)

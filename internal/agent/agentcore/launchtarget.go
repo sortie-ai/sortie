@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -71,6 +72,16 @@ type LaunchTarget struct {
 	// launch also grants its runtime once the SSH connection is gone. Zero in
 	// local mode.
 	StopGrace time.Duration
+
+	// ConfiguredEnv is what the workflow sets for the runtime, in ascending
+	// name order. [LaunchTarget.Environ] applies it to a local launch and a
+	// remote launch carries it on the standard-input preamble. Callers MUST NOT
+	// modify it.
+	ConfiguredEnv []sshutil.EnvVar
+
+	// RemoteArgv holds a list-form command's elements, unquoted, when the
+	// command runs over SSH. Nil for a string command and for a local launch.
+	RemoteArgv []string
 }
 
 // ResolveLaunchTarget resolves the workspace path and agent binary for a
@@ -82,8 +93,8 @@ type LaunchTarget struct {
 // no command (e.g., "claude", "copilot", "codex app-server"). A non-empty
 // params.AgentConfig.CommandArgv is the command instead: locally element zero
 // resolves whole, whitespace included, and the rest become Args; over SSH
-// every element is single-quoted into RemoteCommand. This is the only reader
-// of CommandArgv.
+// every element is single-quoted into RemoteCommand and kept unquoted in
+// RemoteArgv. This is the only reader of CommandArgv.
 //
 // Adapter-specific post-resolution steps (canary version checks, auth
 // preflights) are the caller's responsibility and must run after
@@ -156,7 +167,12 @@ func resolveSSHLaunch(params domain.StartSessionParams, absPath, sshHost, remote
 
 func resolveArgvLaunch(params domain.StartSessionParams, absPath, sshHost string, argv []string) (LaunchTarget, *domain.AgentError) {
 	if sshHost != "" {
-		return resolveSSHLaunch(params, absPath, sshHost, sshutil.QuoteArgv(argv))
+		target, agentErr := resolveSSHLaunch(params, absPath, sshHost, sshutil.QuoteArgv(argv))
+		if agentErr != nil {
+			return LaunchTarget{}, agentErr
+		}
+		target.RemoteArgv = slices.Clone(argv)
+		return target, nil
 	}
 	resolved, agentErr := lookPath(argv[0])
 	if agentErr != nil {
@@ -170,11 +186,14 @@ func resolveArgvLaunch(params domain.StartSessionParams, absPath, sshHost string
 }
 
 // CommandWords returns the words of the configured agent command: Command
-// then Args for a local launch, the whitespace-separated words of
-// RemoteCommand for a remote one. The SSH executable is never among them.
-// The slice is the caller's to modify.
+// then Args for a local launch; for a remote one, RemoteArgv when the command
+// is a list, else the whitespace-separated words of RemoteCommand. The SSH
+// executable is never among them. The slice is the caller's to modify.
 func (t LaunchTarget) CommandWords() []string {
 	if t.RemoteCommand != "" {
+		if t.RemoteArgv != nil {
+			return slices.Clone(t.RemoteArgv)
+		}
 		return strings.Fields(t.RemoteCommand)
 	}
 	return append([]string{t.Command}, t.Args...)
@@ -183,30 +202,39 @@ func (t LaunchTarget) CommandWords() []string {
 // SSHOptions resolves t's SSH transport options for one remote
 // launch. It reads each of t.SSHEnvNames with [os.LookupEnv], in
 // order, carrying a name only when its value holds a non-whitespace
-// character, then appends every settings entry whose Value is
-// non-empty. A name already carried, whether from t.SSHEnvNames or
-// from an earlier settings entry, is not carried again.
+// character, then appends t.ConfiguredEnv, then every settings entry
+// whose Value is non-empty. Per name, a settings entry beats
+// t.ConfiguredEnv, which beats t.SSHEnvNames. A name already carried is
+// not carried again.
 //
-// A variable that is unset, empty, or only whitespace is left behind,
-// so a blank value on the orchestrator cannot override the credential
-// or login the remote host already holds.
+// A variable that is unset, empty, or only whitespace in t.SSHEnvNames is
+// left behind, so a blank value on the orchestrator cannot override the
+// credential or login the remote host already holds. A t.ConfiguredEnv
+// entry is carried with an empty value too, because the workflow set it.
 //
 // settings carries adapter-owned variables with computed values, such
 // as a tool-server setting. It MUST NOT carry a credential: a
-// credential reaches a remote launch only as a name in
-// t.SSHEnvNames. SSHOptions calls os.LookupEnv on every call, so
-// calling it once per launch reflects the orchestrator's environment
-// at that moment.
+// credential reaches a remote launch only as a name in t.SSHEnvNames or
+// as an entry of t.ConfiguredEnv, which carries what the workflow sets
+// for the runtime, a credential included, only on the standard-input
+// preamble. SSHOptions calls os.LookupEnv on every call, so calling it
+// once per launch reflects the orchestrator's environment at that moment.
 //
-// A name in t.WithheldEnv is never carried, whether t.SSHEnvNames or a
-// settings entry names it, and is returned as the options' Unset list.
+// A name in t.WithheldEnv is never carried, whether t.SSHEnvNames,
+// t.ConfiguredEnv or a settings entry names it, and is returned as the
+// options' Unset list.
 func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions {
 	var carried []sshutil.EnvVar
-	skip := make(map[string]bool, len(t.WithheldEnv)+len(t.SSHEnvNames)+len(settings))
+	settingNames := make(map[string]bool, len(settings))
+	for _, entry := range settings {
+		settingNames[entry.Name] = true
+	}
+	skip := make(map[string]bool, len(t.WithheldEnv)+len(t.ConfiguredEnv)+len(t.SSHEnvNames)+len(settings))
+	maps.Copy(skip, settingNames)
 	for _, name := range t.WithheldEnv {
 		skip[name] = true
 	}
-	for _, entry := range settings {
+	for _, entry := range t.ConfiguredEnv {
 		skip[entry.Name] = true
 	}
 
@@ -220,6 +248,13 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 			continue
 		}
 		carried = append(carried, sshutil.EnvVar{Name: name, Value: value})
+	}
+
+	for _, entry := range t.ConfiguredEnv {
+		if settingNames[entry.Name] || slices.Contains(t.WithheldEnv, entry.Name) {
+			continue
+		}
+		carried = append(carried, entry)
 	}
 
 	added := make(map[string]bool, len(settings))
@@ -240,9 +275,10 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 }
 
 // RuntimeEnv returns name's value as the runtime receives it from
-// Sortie: from env, or [os.Environ] when env is nil, for a local
-// launch; for a remote launch, only a variable the launch forwards
-// over SSH, which is a name in t.SSHEnvNames whose value in env holds a
+// Sortie: from env, or [LaunchTarget.Environ] when env is nil, for a local
+// launch; for a remote launch, a name in t.ConfiguredEnv with its configured
+// value, empty included, else only a variable the launch forwards over SSH,
+// which is a name in t.SSHEnvNames whose value in env holds a
 // non-whitespace character, the rule [LaunchTarget.SSHOptions] carries
 // by. A value the remote host sets for itself is invisible. A name in
 // t.WithheldEnv is never visible. When env holds a name more than once
@@ -252,16 +288,21 @@ func (t LaunchTarget) RuntimeEnv(env []string, name string) (string, bool) {
 		return "", false
 	}
 	remote := t.RemoteCommand != ""
-	if remote && !slices.Contains(t.SSHEnvNames, name) {
-		return "", false
+	if remote {
+		if i := slices.IndexFunc(t.ConfiguredEnv, func(entry sshutil.EnvVar) bool { return entry.Name == name }); i >= 0 {
+			return t.ConfiguredEnv[i].Value, true
+		}
+		if !slices.Contains(t.SSHEnvNames, name) {
+			return "", false
+		}
 	}
 	if env == nil {
-		env = os.Environ()
+		env = t.Environ()
 	}
 	var value string
 	var found bool
 	for _, entry := range env {
-		if !isEnvEntryNamed(entry, name) {
+		if !IsEnvEntryNamed(entry, name) {
 			continue
 		}
 		_, value, _ = strings.Cut(entry, "=")
@@ -273,8 +314,24 @@ func (t LaunchTarget) RuntimeEnv(env []string, name string) (string, bool) {
 	return value, found
 }
 
+// Environ returns the environment a local launch starts from: [os.Environ]
+// less every entry that names a t.ConfiguredEnv variable, then t.ConfiguredEnv
+// in order. A configured name replaces the inherited entry, whatever its
+// letter case on Windows.
+func (t LaunchTarget) Environ() []string {
+	env := slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		return slices.ContainsFunc(t.ConfiguredEnv, func(configured sshutil.EnvVar) bool {
+			return IsEnvEntryNamed(entry, configured.Name)
+		})
+	})
+	for _, configured := range t.ConfiguredEnv {
+		env = append(env, configured.Name+"="+configured.Value)
+	}
+	return env
+}
+
 // BindWorkspace re-verifies t.WorkspacePath and, on success, sets
-// cmd.Dir to it, sets cmd.Env to os.Environ() when it is nil, and
+// cmd.Dir to it, sets cmd.Env to [LaunchTarget.Environ] when it is nil, and
 // replaces every PWD entry already in cmd.Env with one naming the same
 // verified path, so a subprocess that trusts PWD over its own working
 // directory still lands in the workspace. It also removes every entry
@@ -291,7 +348,7 @@ func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
 	}
 	cmd.Dir = absPath
 	if cmd.Env == nil {
-		cmd.Env = os.Environ()
+		cmd.Env = t.Environ()
 	}
 	cmd.Env = dropEnvNames(cmd.Env, t.WithheldEnv)
 	cmd.Env = setPWD(cmd.Env, absPath)
@@ -299,14 +356,14 @@ func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
 }
 
 // dropEnvNames returns env without the entries named in names, compared
-// as [isEnvEntryNamed] compares.
+// as [IsEnvEntryNamed] compares.
 func dropEnvNames(env, names []string) []string {
 	if len(names) == 0 {
 		return env
 	}
 	return slices.DeleteFunc(slices.Clone(env), func(entry string) bool {
 		return slices.ContainsFunc(names, func(name string) bool {
-			return isEnvEntryNamed(entry, name)
+			return IsEnvEntryNamed(entry, name)
 		})
 	})
 }
@@ -328,13 +385,14 @@ func setPWD(env []string, value string) []string {
 
 // isPWDEntry reports whether entry is an env-slice assignment of PWD.
 func isPWDEntry(entry string) bool {
-	return isEnvEntryNamed(entry, "PWD")
+	return IsEnvEntryNamed(entry, "PWD")
 }
 
-// isEnvEntryNamed reports whether entry is an env-slice assignment of
+// IsEnvEntryNamed reports whether entry is an env-slice assignment of
 // name, comparing case-insensitively on Windows to match that platform's
-// own environment-variable name resolution.
-func isEnvEntryNamed(entry, name string) bool {
+// own environment-variable name resolution. It is the one name rule every
+// reader of a launch environment uses.
+func IsEnvEntryNamed(entry, name string) bool {
 	key, _, found := strings.Cut(entry, "=")
 	if !found {
 		return false
@@ -347,8 +405,8 @@ func isEnvEntryNamed(entry, name string) bool {
 
 // AuxiliaryCommand builds a one-shot runtime subcommand run in the
 // workspace, locally or over ssh like the session itself. A nil env
-// means [BindWorkspace] supplies os.Environ() with PWD replaced; stdin
-// may be nil. Returns a non-nil [*domain.AgentError] and a nil
+// means [BindWorkspace] supplies [LaunchTarget.Environ] with PWD replaced;
+// stdin may be nil. Returns a non-nil [*domain.AgentError] and a nil
 // *[exec.Cmd] when the workspace path fails re-verification immediately
 // before launch.
 func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin io.Reader, env []string, carried ...sshutil.EnvVar) (*exec.Cmd, *domain.AgentError) {

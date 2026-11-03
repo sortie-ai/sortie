@@ -109,8 +109,8 @@ func (p RuntimePath) label() string {
 
 // ReadRuntimeFile reads the file path names on the session's host and returns
 // its bytes. A local session resolves the home from path.HomeVar in env, or in
-// [os.Environ] when env is nil, and from the user's home directory joined with
-// path.HomeDefault when that value is empty. A remote session reads through its
+// [LaunchTarget.Environ] when env is nil, and from the user's home directory
+// joined with path.HomeDefault when that value is empty. A remote session reads through its
 // own SSH launch, where the remote shell resolves the home; env is not
 // consulted. An invalid path wraps [ErrInvalidRuntimePath] before any file
 // opens or process starts.
@@ -359,8 +359,9 @@ func (c HostCommand) label() string {
 // expands the configured command's own text, as it did for the launch. The
 // command never sees standard input and its standard error is discarded.
 //
-// env is the environment of an InSession local command, [os.Environ] when
-// nil; a remote session does not consult it. A command that does not start or
+// env is the environment of an InSession local command,
+// [LaunchTarget.Environ] when nil; a remote session does not consult it. A
+// command that does not start or
 // does not exit zero wraps [ErrHostCommandFailed], whatever its status; a
 // remote SSH connection failure wraps [sshutil.ErrConnectionFailed] instead.
 // Output above cmd.Limit is an error, and at most Limit+1 bytes are held.
@@ -422,9 +423,19 @@ func (t LaunchTarget) captureHost(ctx context.Context, env []string, cmd HostCom
 // arguments that follow it, each quoted by the launch.
 func (t LaunchTarget) remoteHostCommand(hc HostCommand) (string, []string) {
 	if hc.LaunchWords > 0 {
-		return remotePrefix(t.RemoteCommand, hc.LaunchWords), hc.Args
+		return t.remoteLaunchPrefix(hc.LaunchWords), hc.Args
 	}
 	return sshutil.QuoteArgv(append([]string{hc.Name}, hc.Args...)), nil
+}
+
+// remoteLaunchPrefix returns the remote text of the configured command through
+// its n-th word. A list-form command quotes its first n elements, since one
+// holding a space spans several words of RemoteCommand.
+func (t LaunchTarget) remoteLaunchPrefix(n int) string {
+	if t.RemoteArgv != nil {
+		return sshutil.QuoteArgv(t.RemoteArgv[:n])
+	}
+	return remotePrefix(t.RemoteCommand, n)
 }
 
 // checkLaunchWords refuses a command that names its program twice or not at

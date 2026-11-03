@@ -40,6 +40,8 @@ const opencodeTitleDisabledConfig = `{"agent":{"title":{"disable":true}}}`
 // configuration removes that one.
 const opencodeDenyAllConfig = `{"permission":{"*":"deny"}}`
 
+const opencodeDenyAllRule = `{"action":"*","resource":"*","effect":"deny"}`
+
 func init() {
 	VerificationAdditions.Register(opencodeAgentName, func() VerificationAddition { return opencodeVerification{} })
 	Declarations.Register(opencodeHandshakeName, Declaration{
@@ -196,10 +198,12 @@ func jsonObject(raw []byte) (map[string]json.RawMessage, bool) {
 	return members, true
 }
 
-// opencodeDisableTitle merges agent.title.disable true into the operator's
-// inline configuration, keeping every other member. It leaves the value as set
-// and reports false when the operator's own document keeps title generation on
-// or has a shape the member cannot be added to.
+// opencodeDisableTitle merges the title switch into the operator's inline
+// configuration, keeping every other member. The runtime reads the document's
+// agents.title entry in place of the legacy agent.title entry, whole, so the
+// legacy switch is only written when the document defines no agents.title. It
+// leaves the value as set and reports false when the operator's own document
+// keeps title generation on or has a shape the member cannot be added to.
 func opencodeDisableTitle(current string, set bool) (string, bool) {
 	if !set || strings.TrimSpace(current) == "" {
 		return opencodeTitleDisabledConfig, true
@@ -208,43 +212,172 @@ func opencodeDisableTitle(current string, set bool) (string, bool) {
 	if !ok {
 		return current, false
 	}
+	if raw, present := document["agents"]; present {
+		agents, ok := jsonObject(raw)
+		if !ok {
+			return current, false
+		}
+		if _, titled := agents["title"]; titled {
+			return mergeTitleSwitch(current, document, "agents", agents, "disabled")
+		}
+	}
 	agent := map[string]json.RawMessage{}
 	if raw, present := document["agent"]; present {
 		if agent, ok = jsonObject(raw); !ok {
 			return current, false
 		}
 	}
+	return mergeTitleSwitch(current, document, "agent", agent, "disable")
+}
+
+func mergeTitleSwitch(current string, document map[string]json.RawMessage, group string, members map[string]json.RawMessage, field string) (string, bool) {
 	title := map[string]json.RawMessage{}
-	if raw, present := agent["title"]; present {
+	if raw, present := members["title"]; present {
+		var ok bool
 		if title, ok = jsonObject(raw); !ok {
 			return current, false
 		}
 	}
-	if raw, present := title["disable"]; present {
+	if raw, present := title[field]; present {
 		return current, string(bytes.TrimSpace(raw)) == "true"
 	}
-	title["disable"] = json.RawMessage("true")
+	title[field] = json.RawMessage("true")
 	var err error
-	if agent["title"], err = json.Marshal(title); err != nil {
+	if members["title"], err = encodeJSON(title); err != nil {
 		return current, false
 	}
-	if document["agent"], err = json.Marshal(agent); err != nil {
+	if document[group], err = encodeJSON(members); err != nil {
 		return current, false
 	}
-	merged, err := json.Marshal(document)
+	merged, err := encodeJSON(document)
 	if err != nil {
 		return current, false
 	}
 	return string(merged), true
 }
 
+// opencodeDenyAll merges a deny-all rule into the operator's inline
+// configuration as the last of its top-level rules, keeping every other member.
+// The runtime lets the last matching rule decide and concatenates permissions
+// after permission, so the rule goes at the end of permissions when the document
+// has it. It leaves the value as set and reports false when a rule member has a
+// shape the rule cannot be added to.
+func opencodeDenyAll(current string, set bool) (string, bool) {
+	if !set || strings.TrimSpace(current) == "" {
+		return opencodeDenyAllConfig, true
+	}
+	document, ok := jsonObject([]byte(current))
+	if !ok {
+		return current, false
+	}
+	member, rules := "permission", json.RawMessage(nil)
+	if raw, present := document["permissions"]; present {
+		member = "permissions"
+		rules, ok = appendDenyAllRule(raw)
+	} else {
+		rules, ok = denyAllPermission(document["permission"])
+	}
+	if !ok {
+		return current, false
+	}
+	document[member] = rules
+	merged, err := encodeJSON(document)
+	if err != nil {
+		return current, false
+	}
+	return string(merged), true
+}
+
+func appendDenyAllRule(permissions json.RawMessage) (json.RawMessage, bool) {
+	var rules []json.RawMessage
+	if !bytes.HasPrefix(bytes.TrimSpace(permissions), []byte("[")) || json.Unmarshal(permissions, &rules) != nil {
+		return nil, false
+	}
+	encoded, err := encodeJSON(append(rules, json.RawMessage(opencodeDenyAllRule)))
+	return encoded, err == nil
+}
+
+// denyAllPermission returns the permission member with its "*" rule replaced by
+// a deny and moved last. It writes the members in the order the operator wrote
+// them: a Go map would sort the keys, and the last matching rule wins. An absent
+// member and a string, which the runtime reads as one "*" rule, yield the
+// deny-all alone.
+func denyAllPermission(permission json.RawMessage) (json.RawMessage, bool) {
+	var members []objectMember
+	if len(permission) > 0 && !bytes.HasPrefix(permission, []byte(`"`)) {
+		var ok bool
+		if members, ok = orderedMembers(permission); !ok {
+			return nil, false
+		}
+	}
+	var out bytes.Buffer
+	out.WriteByte('{')
+	for _, member := range members {
+		if member.key == "*" {
+			continue
+		}
+		key, err := encodeJSON(member.key)
+		if err != nil {
+			return nil, false
+		}
+		out.Write(key)
+		out.WriteByte(':')
+		out.Write(member.value)
+		out.WriteByte(',')
+	}
+	out.WriteString(`"*":"deny"}`)
+	return out.Bytes(), true
+}
+
+type objectMember struct {
+	key   string
+	value json.RawMessage
+}
+
+// orderedMembers returns the members of a JSON object in the order written.
+func orderedMembers(raw json.RawMessage) ([]objectMember, bool) {
+	if _, ok := jsonObject(raw); !ok {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := decoder.Token(); err != nil {
+		return nil, false
+	}
+	var members []objectMember
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, isString := token.(string)
+		if err != nil || !isString {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, false
+		}
+		members = append(members, objectMember{key: key, value: value})
+	}
+	return members, true
+}
+
+// encodeJSON marshals v without escaping HTML characters, so a member the
+// operator wrote keeps the characters it holds.
+func encodeJSON(v any) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
 type opencodeVerification struct{}
 
 func (opencodeVerification) Claim(target agentcore.LaunchTarget) (VerificationSwitches, bool) {
-	if !namesRuntime(target, opencodeExecutableName, opencodePackageNames...) {
+	if !commandNamesRuntime(target, opencodeExecutableName, opencodePackageNames...) {
 		return VerificationSwitches{}, false
 	}
-	return VerificationSwitches{Env: []string{"OPENCODE_CONFIG_CONTENT=" + opencodeDenyAllConfig}}, true
+	return VerificationSwitches{Merges: []LaunchAddition{{Name: opencodeConfigVariable, Merge: opencodeDenyAll}}}, true
 }
 
 func (opencodeVerification) Context() registry.VerificationContext {
