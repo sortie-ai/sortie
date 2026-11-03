@@ -2,11 +2,9 @@
 
 Working notes for anyone changing Sortie's GitHub Copilot CLI adapter in `internal/agent/copilot`.
 
-Eligibility: unmeasured
+Eligibility: qualified
 
-Product conformance: unmeasured
-
-Neither verdict is a failure. Both are unmeasured because the cases that need the runtime to refuse a turn never occurred: a request built to trigger a refusal completed normally on both surfaces. No measured row puts the protocol surface below the native one.
+Product conformance: qualified
 
 This file is checked against the tracked measurement under `tools/qualify/probe/testdata/copilot-cli/`. Changing a grade row below fails the staleness gate until a fresh run replaces that measurement.
 
@@ -172,7 +170,7 @@ A stored login authenticates a run. Every grade on this page was measured under 
 
 ## Load-bearing capability observations
 
-No row blocks transport parity. Turn disposition and retry classification are not observed on either surface, because the refusal cases never occurred, and that is what holds both verdicts at unmeasured. Token accounting is a gap on the protocol surface only, and the native stream carries the figure, so the routes differ on that row.
+No row blocks transport parity. Turn disposition and retry classification are usable on the protocol surface and a gap on the native stream, which reports no outcome for an endpoint failure, a cancellation, or a question for a person. Token accounting is a gap on the protocol surface only, and the native stream carries the figure, so the routes differ on that row.
 
 No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's own records, the session-state journal that the native kind reads too. The effective adapter returned a measured figure from that source, and the ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at ... token(s), the issue entered the token budget hold") and dispatched nothing in the quiet window after it. The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
@@ -182,20 +180,20 @@ Other gaps on the protocol route, each with an owner:
 
 - The documentation site has no page for the protocol route of this runtime. The sample workflow points at the generic reference page.
 
-Two cases are not observed on either surface: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. A request built to trigger one completed normally. They are recorded as unobserved, not declared never produced, which is why both verdicts are unmeasured. `limit_reached` was induced on the protocol surface the same way: the oversize turn completed normally. On the native surface it was not induced, because the prompt channel cannot carry a request big enough.
+The refusal cases, a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`, are declared, not measured, on both surfaces as never produced. On the protocol surface a request the model declines ends `end_turn` with the refusal as the model's prose, and so does a refusal or a content filter answered by a local stand-in upstream, after only the stand-in's own text; the runtime writes no text of its own. On the native stream a request the model declines ends the launch with `exitCode` 0, and the terminal event has no member a refusal could set. `limit_reached` is declared on the protocol surface as folded into a completed turn: an over-budget prompt, and a context-length error from a local stand-in endpoint, each arrive as `Error:` agent text followed by `end_turn`, and the runtime's journal records the over-budget rejection as a `session.error` whose `errorType` is `query`. On the native surface it was not induced, because the prompt channel cannot carry a request big enough.
 
 On the protocol surface, retry classification excludes the human-input case as not applicable. The consent request the asking-posture launch raised offered a refusing option, the client refused it inside the protocol, and the turn went on. That exclusion does not cover a question addressed to a person. The native stream has no terminal vocabulary for the human-input outcome, so the case is not inducible there.
 
 An endpoint failure is a declared outcome on the protocol surface and not inducible on the native one; the next section gives the frames. Cancellation passed on the protocol surface, where the turn ended in cancellation after its own context was cancelled. The native stream writes its terminal only at exit, so cancellation cannot be induced there. The retryable failure case passed on both surfaces: after one SIGKILL to its group, the launch reported transport loss. The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation.
 
-- protocol turn_disposition: Not observed: not_observed
-- protocol retry_classification: Not observed: not_observed
+- protocol turn_disposition: Observed: usable
+- protocol retry_classification: Observed: usable
 - protocol token_ceiling: Observed: gap
 - protocol tool_server_delivery: Observed: usable
 - protocol session_continuation: Observed: usable
 - protocol permission_handling: Observed: usable
-- native_stream_json turn_disposition: Not observed: not_observed
-- native_stream_json retry_classification: Not observed: not_observed
+- native_stream_json turn_disposition: Observed: gap
+- native_stream_json retry_classification: Observed: gap
 - native_stream_json token_ceiling: Observed: usable
 - native_stream_json session_continuation: Observed: usable
 
@@ -224,6 +222,12 @@ An endpoint failure is folded into a completed turn. When the scripted model end
 
 Nothing on the wire marks the failure, so the profile declares it for the protocol surface only, as an outcome folded into another case. The native route differs: `copilot -p` exits with status 1, prints the error on stderr, and writes no result event. That is why the native surface carries the `output_channel_silent_on_failure` entry for the same case.
 
+An over-budget prompt ends the same way, and the runtime rejects the prompt itself, before any upstream request. The last frames of an oversize turn:
+
+- a `usage_update` whose `used` exceeds `size`
+- `agent_message_chunk`, "Error: Execution failed: Request exceeds the model's prompt budget after reserving output (... tokens; limit ...). Reduce context or compact before continuing."
+- `{"stopReason":"end_turn",...}`
+
 Every model request sends a `usage_update` before its model text. The Copilot usage declaration rests on that order, because the runtime's own text chunks carry no message identifier and no metadata, so frame order is the only signal on the wire. It held on the bring-your-own-key route, in the frames above, where a `usage_update` (frame 7) comes ahead of the first tool call and another (frame 10) ahead of the next request. It held on the hosted provider too: a text-only request runs `usage_update` at frame 6 and the first model text at frame 7, and a tool-forcing request runs `usage_update` (6), `tool_call` (7), `tool_call_update` (9), a second `usage_update` (10), then the model's text (11).
 
 Runtime text of Copilot's own can precede the first `usage_update`, so the rule reads model text, not any chunk. Two such lines were seen. The notice "Warning: No token count multiplier is known ..." appears for a model id the multiplier table does not know, such as `scripted-model`. On the hosted provider, the credential verification session starts with `Info: Disabled tools: ...` at frame 6, then `usage_update` at frame 7, and the model's text at frame 8 (`"SORTIE_CRE"`). Neither line counts as the model being reached.
@@ -236,7 +240,7 @@ The notice depends on the model id. `claude-sonnet-4.5` is known to the installe
 
 The CLI offers no single-document JSON output, so the profile declares the plain-JSON surface absent. The run corroborated the declaration.
 
-A refused model or an endpoint failure ends a `-p` launch with exit status 1 and an error on stderr, and no result event. The stream is silent on failure, so that case is not inducible on this surface. The result event is written at exit, so cancellation is not inducible either.
+A refused model or an endpoint failure ends a `-p` launch with exit status 1 and an error on stderr, and no result event. The stream is silent on failure, so that case is not inducible on this surface. A request the model declines ends the launch with a `result` event whose `exitCode` is 0 and with empty standard error, unlike the exit status 1 of a refused model or an endpoint failure. The result event is written at exit, so cancellation is not inducible either.
 
 Token accounting is covered above: the stream's `session.usage_checkpoint` line carries the token figure, and the same checkpoint carries premium requests and AI credits.
 
@@ -252,20 +256,15 @@ A workspace `.mcp.json` is a separate path. In prompt mode it loaded only with `
 
 - retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation
 - retry_classification human_input: not applicable on protocol: the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose
+- retry_classification non_retryable_refusal: declared outcome_never_produced
 - retry_classification unknown_outcome: no deterministic inducer on any runtime, so the case carries no obligation
 - turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation
+- turn_disposition limit_reached: declared outcome_folded_into_another
 - turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface
 - turn_disposition runtime_failure: declared outcome_folded_into_another
 - turn_disposition runtime_failure: induced, and the surface reported no outcome (output_channel_silent_on_failure), so the case keeps its obligation
+- turn_disposition runtime_refusal: declared outcome_never_produced
 
 ## Unobserved surfaces
-
-These cases were induced and the runtime did not produce them:
-
-- native_stream_json retry_classification non_retryable_refusal: fixture_induction_failed
-- native_stream_json turn_disposition runtime_refusal: fixture_induction_failed
-- protocol retry_classification non_retryable_refusal: fixture_induction_failed
-- protocol turn_disposition limit_reached: fixture_induction_failed
-- protocol turn_disposition runtime_refusal: fixture_induction_failed
 
 Windows live qualification is unobserved.

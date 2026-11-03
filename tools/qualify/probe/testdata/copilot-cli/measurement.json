@@ -1,22 +1,22 @@
 {
   "schema_version": 5,
-  "profile_digest": "b7546553aebaf7c02ec462b9cea2e8945ee258f0517a14c8963691bdc55782a5",
-  "measured_at": "2026-11-02",
+  "profile_digest": "d64ec8c94ce487c5a3c144c5aaf194df47d6428ddb152a0fb0ae4d0bdfd7161f",
+  "measured_at": "2026-11-03",
   "expectation": {
-    "Verdict": "unmeasured",
-    "Conformance": "unmeasured",
+    "Verdict": "qualified",
+    "Conformance": "qualified",
     "Grades": [
       {
         "Surface": "protocol",
         "Capability": "turn_disposition",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "usable",
+        "Label": "Observed:"
       },
       {
         "Surface": "protocol",
         "Capability": "retry_classification",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "usable",
+        "Label": "Observed:"
       },
       {
         "Surface": "protocol",
@@ -45,14 +45,14 @@
       {
         "Surface": "native_stream_json",
         "Capability": "turn_disposition",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
         "Capability": "retry_classification",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
@@ -70,22 +70,19 @@
     "Excluded": [
       "retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation",
       "retry_classification human_input: not applicable on protocol: the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose",
+      "retry_classification non_retryable_refusal: declared outcome_never_produced",
       "retry_classification unknown_outcome: no deterministic inducer on any runtime, so the case carries no obligation",
       "turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation",
+      "turn_disposition limit_reached: declared outcome_folded_into_another",
       "turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface",
       "turn_disposition runtime_failure: declared outcome_folded_into_another",
-      "turn_disposition runtime_failure: induced, and the surface reported no outcome (output_channel_silent_on_failure), so the case keeps its obligation"
+      "turn_disposition runtime_failure: induced, and the surface reported no outcome (output_channel_silent_on_failure), so the case keeps its obligation",
+      "turn_disposition runtime_refusal: declared outcome_never_produced"
     ],
-    "Unobserved": [
-      "native_stream_json retry_classification non_retryable_refusal: fixture_induction_failed",
-      "native_stream_json turn_disposition runtime_refusal: fixture_induction_failed",
-      "protocol retry_classification non_retryable_refusal: fixture_induction_failed",
-      "protocol turn_disposition limit_reached: fixture_induction_failed",
-      "protocol turn_disposition runtime_refusal: fixture_induction_failed"
-    ]
+    "Unobserved": null
   },
   "requested_model": "mai-code-1.1-flash",
   "observed_model": null,
-  "provenance_digest": "f01cbe368f96917f48fc06b269bd1707ea3c78e3d4d0df5661dd0ac0517b92cb",
+  "provenance_digest": "9114a879fdec29e192c561024057d5cb4cc8158719a7e03876459bc9dc018a93",
   "evaluator_version": 2
 }
