@@ -286,6 +286,8 @@ func TestOpenCodeDenyAll(t *testing.T) {
 		{"permissions not a list", `{"permissions":{}}`, ""},
 		{"permission not an object", `{"permission":["x"]}`, ""},
 		{"not JSON", `not json`, ""},
+		{"agent-scoped grant would override the deny", `{"agent":{"build":{"permission":{"*":"allow"}}}}`, ""},
+		{"agent without permissions keeps the deny", `{"agents":{"build":{"model":"a/b"}}}`, `{"agents":{"build":{"model":"a/b"}},"permission":{"*":"deny"}}`},
 	}
 
 	for _, tt := range tests {

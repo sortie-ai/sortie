@@ -267,7 +267,7 @@ func opencodeDenyAll(current string, set bool) (string, bool) {
 		return opencodeDenyAllConfig, true
 	}
 	document, ok := jsonObject([]byte(current))
-	if !ok {
+	if !ok || hasAgentScopedPermission(document) {
 		return current, false
 	}
 	member, rules := "permission", json.RawMessage(nil)
@@ -286,6 +286,31 @@ func opencodeDenyAll(current string, set bool) (string, bool) {
 		return current, false
 	}
 	return string(merged), true
+}
+
+// hasAgentScopedPermission reports whether the document may grant a tool for
+// one agent. The runtime applies those rules after the top-level ones, so they
+// override the deny-all; a group whose shape is unknown counts as granting.
+func hasAgentScopedPermission(document map[string]json.RawMessage) bool {
+	for _, group := range []string{"agent", "agents"} {
+		raw, present := document[group]
+		if !present {
+			continue
+		}
+		var agents map[string]map[string]json.RawMessage
+		if json.Unmarshal(raw, &agents) != nil {
+			return true
+		}
+		for _, agent := range agents {
+			if _, ok := agent["permission"]; ok {
+				return true
+			}
+			if _, ok := agent["permissions"]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func appendDenyAllRule(permissions json.RawMessage) (json.RawMessage, bool) {
