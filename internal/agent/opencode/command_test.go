@@ -377,21 +377,21 @@ func TestBuildInlineConfig(t *testing.T) {
 		wantMCP     bool
 	}{
 		{name: "bypass on without lists carries only share", pt: passthroughConfig{DangerousSkipPermissions: true}},
-		{name: "bypass off without lists asks for every tool", wantPerm: `{"*":"ask"}`},
+		{name: "bypass off without lists denies every tool", wantPerm: `{"*":"deny"}`},
 		{
 			name:     "bypass off with allowed_tools asks first, allows the listed tool and denies the other known keys",
 			pt:       passthroughConfig{AllowedTools: []string{"read"}},
-			wantPerm: `{"*":"ask","bash":"deny","codesearch":"deny","doom_loop":"deny","edit":"deny","external_directory":"deny","glob":"deny","grep":"deny","list":"deny","lsp":"deny","opencode_list_mcp_resources":"deny","opencode_models":"deny","opencode_read_mcp_resource":"deny","opencode_session_move":"deny","opencode_session_rename":"deny","question":"deny","read":"allow","skill":"deny","task":"deny","todowrite":"deny","webfetch":"deny","websearch":"deny"}`,
+			wantPerm: `{"*":"deny","bash":"deny","codesearch":"deny","doom_loop":"deny","edit":"deny","external_directory":"deny","glob":"deny","grep":"deny","list":"deny","lsp":"deny","opencode_list_mcp_resources":"deny","opencode_models":"deny","opencode_read_mcp_resource":"deny","opencode_session_move":"deny","opencode_session_rename":"deny","question":"deny","read":"allow","skill":"deny","task":"deny","todowrite":"deny","webfetch":"deny","websearch":"deny"}`,
 		},
 		{
 			name:     "bypass off with denied_tools only keeps the denies and asks for the rest",
 			pt:       passthroughConfig{DeniedTools: []string{"bash"}},
-			wantPerm: `{"*":"ask","bash":"deny"}`,
+			wantPerm: `{"*":"deny","bash":"deny"}`,
 		},
 		{
 			name:     "a denied list entry keeps its own action beside the base ask",
 			pt:       passthroughConfig{DeniedTools: []string{"external_directory"}},
-			wantPerm: `{"*":"ask","external_directory":"deny"}`,
+			wantPerm: `{"*":"deny","external_directory":"deny"}`,
 		},
 		{name: "disable_autocompact adds compaction", pt: passthroughConfig{DangerousSkipPermissions: true, DisableAutocompact: true}, wantCompact: true},
 		{name: "delivery document becomes the mcp member verbatim", pt: passthroughConfig{DangerousSkipPermissions: true}, mcp: mcp, wantMCP: true},
@@ -466,7 +466,7 @@ func TestRemoteLaunch_ConfigDocumentArrivesAsLateEntry(t *testing.T) {
 func TestStartSession_VerificationPermissionPolicy(t *testing.T) {
 	t.Parallel()
 
-	const operatorPolicy = `{"*":"ask","bash":"deny"}`
+	const operatorPolicy = `{"*":"deny","bash":"deny"}`
 	operator := map[string]any{"dangerously_skip_permissions": false, "denied_tools": []any{"bash"}}
 
 	tests := []struct {
