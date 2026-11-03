@@ -16,7 +16,7 @@ func stateModel(active, terminal []string) (*issuekit.LabelStateModel, issuekit.
 
 func normalizeIssueUnder(gi giteaIssue, active, terminal []string) domain.Issue {
 	m, s := stateModel(active, terminal)
-	return normalizeIssue(gi, m, s)
+	return normalizeIssue(gi, m, s, nil)
 }
 
 func normalizeBlockersUnder(blockers []giteaIssue, active, terminal []string) []domain.BlockerRef {
@@ -337,6 +337,29 @@ func TestIsPullRequest(t *testing.T) {
 			got := isPullRequest(tt.gi)
 			if got != tt.want {
 				t.Errorf("isPullRequest(%v) = %v, want %v", tt.gi, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeIssuePriorityLabels(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		mapping map[string]int
+		want    *int
+	}{
+		{name: "configured", mapping: map[string]int{"priority/low": 4, "priority/high": 2}, want: new(2)},
+		{name: "unconfigured"},
+		{name: "unmapped", mapping: map[string]int{"p1": 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model := issuekit.NewLabelStateModel(issuekit.NewStateSource(domain.TrackerStates{}), nil)
+			raw := giteaIssue{Number: 7, Labels: []giteaLabel{{Name: "Priority/LOW"}, {Name: "PRIORITY/High"}}}
+			got := normalizeIssue(raw, model, model.Snapshot(), tt.mapping)
+			if (got.Priority == nil) != (tt.want == nil) || (got.Priority != nil && *got.Priority != *tt.want) {
+				t.Errorf("normalizeIssue(%v).Priority = %v, want %v", raw, got.Priority, tt.want)
 			}
 		})
 	}

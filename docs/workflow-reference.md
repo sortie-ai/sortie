@@ -184,12 +184,34 @@ tracker:
 | `api_version`     | string          | No                        | `"3"`           | Requires restart                   | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. `sortie validate` rejects a value other than `"2"` or `"3"`, and rejects `"2"` against an `.atlassian.net` endpoint. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch, reconciliation, and tracker operations | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list dispatches nothing. No tracker supplies a default list, and an entry cannot be blank.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch, reconciliation, and tracker operations | Issue states that release claims and trigger cleanup. Required and non-empty for `github`, `gitea`, and `gitlab`, where a closed issue reads as the first entry. No tracker supplies a default list, and an entry cannot be blank. |
+| `priority_labels` | map of integers | No                        | _(absent)_      | Requires restart                   | Gitea, GitHub, and GitLab only. Exact label names mapped to numeric priority; case-insensitive, smallest matching value wins, no match leaves priority unset. See below.                        |
 | `query_filter`    | string          | No                        | `""` (empty)    | Requires restart                   | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). For GitLab: a URL query fragment for the project issue-list route, key-checked against an allowlist and merged into candidate polling only (see the GitLab note below). |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed. The transition is suppressed when the issue has already reached a terminal state, and withheld when the run's frozen `handoff_evidence` policy does not permit the write ([architecture §11.5](architecture/11-issue-tracker-integration-contract.md#115-tracker-writes-important-boundary)). When the run's rule carries `next` and the hop is made, the exit adds the next rule's stage label in place of this transition, so the transition happens only when the hop is not made ([Stage chains](#stage-chains)). Required when any dispatch rule carries `next`. |
 | `handoff_evidence` | string         | No                        | `observed`      | Future worker attempts             | Policy governing the evidence condition on an otherwise-eligible handoff. `observed` withholds only when absence of work is positively observed and allows an undeterminable verdict; `strict` also withholds an undeterminable verdict; `off` restores the prior four-condition decision and performs no baseline capture, exit-time workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are rejected as a closed set while configuration is parsed, without contacting the tracker, so startup, reload, and `sortie validate` all reject the same value. See [architecture §6.4](architecture/06-configuration-specification.md#64-config-fields-summary-cheat-sheet) for the verdict's derivation. |
 | `no_change_state` | string          | No                        | `handoff_state` | Future worker exits                | Target tracker state for a worker run whose agent declared, through `.sortie/status`, that the requested outcome already held and nothing needed changing. When absent, a declared run targets `handoff_state` instead, so a deployment that does not set this field sees no change in where its issues land. Is the one target-state field permitted to name a terminal state. A declared run on a rule that carries `next` hops like any other successful run, so this target applies to such a run only when the hop is not made. |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | **Deprecated.** Toggles for the comments Sortie posts at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`; non-boolean values are rejected with a configuration error. A key set to `true` subscribes the `tracker_comment` destination to events: `on_dispatch` to `session.started`, `on_completion` to `session.completed` and `session.stopped`, and `on_failure` to `session.failed`. The keys keep working and draw a deprecation warning that names the replacement: list those events in a `tracker_comment` entry of [`notifications`](#211-notifications-operator-notification-backends), then remove the key. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides, which are deprecated with them. |
+
+**`priority_labels` — priority from labels:**
+
+Gitea, GitHub, and GitLab have no native issue priority field. Operators already use labels such as `priority/high` or `P1` to express priority. This optional map declares the numeric meaning of those labels explicitly; Sortie guesses no label convention or priority scale.
+
+```yaml
+tracker:
+  kind: gitea
+  priority_labels:
+    "priority/critical": 1
+    "priority/high": 2
+    "priority/low": 4
+```
+
+- Keys match the adapter's normalized lowercase label set exactly, ignoring letter case. There are no globs or regular expressions; `priority/*` matches only a label literally named `priority/*`.
+- Lower values dispatch first, with unset priority last. If several mapped labels are present, the smallest value wins. An issue with no mapped label keeps unset priority. Omitting the map preserves the existing behavior.
+- Values must be YAML integers in the domain's Go `int` range (`-9223372036854775808` through `9223372036854775807` on the supported 64-bit platforms). Zero and negative integers are valid; strings, floats, booleans, nulls, and out-of-range integers are errors.
+- The setting is accepted only for `kind: gitea`, `github`, or `gitlab`, even when the map is empty. Null or a value other than a map is an error. Names must not be empty or only white space, and must be unique after lowercasing. A name also used by `active_states`, `terminal_states`, `handoff_state`, `in_progress_state`, or `no_change_state` is an error, ignoring letter case.
+- Gitea and GitLab warn at construction about priority labels absent from their repository or project catalog, using the same advisory catalog check as `query_filter`. Priority label lookup ignores letter case. A failed diagnostic catalog read warns and does not block construction. GitHub performs no construction-time catalog check.
+- The normalized value populates the existing `.issue.priority`, so the ordinary dispatch sort and [`match.priority`](#priority-predicates) work without any new tracker field. Labels remain in `.issue.labels`.
+- Changes require a restart. There is no environment override or `$VAR` indirection for this map. Invalid configuration fails startup and validation; a failed reload retains the previous configuration.
 
 **`active_states` / `terminal_states` validation rules:**
 
@@ -403,7 +425,7 @@ tracker:
 Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
 
-Four prompt-template variables (see [Section 5.2](#52-template-input-variables)) are always empty for this tracker, so a template that reads them renders nothing rather than failing: `{{ .issue.priority }}`, because GitLab issues carry no priority field; `{{ .issue.blocked_by }}`, because Community Edition has no blocking relationship between issues; `{{ .issue.parent }}`, because the issue route exposes no sub-issue relationship; and `{{ .issue.branch_name }}`, because GitLab computes branch names in the UI rather than storing one on the issue. Both `{{ .issue.id }}` and `{{ .issue.identifier }}` are the project-scoped issue number (GitLab's `iid`), the number shown as `#7` in the GitLab UI, never the instance-global issue ID.
+Priority is unset unless an issue carries a label declared in `tracker.priority_labels`. Three prompt-template variables (see [Section 5.2](#52-template-input-variables)) are always empty for this tracker, so a template that reads them renders nothing rather than failing: `{{ .issue.blocked_by }}`, because Community Edition has no blocking relationship between issues; `{{ .issue.parent }}`, because the issue route exposes no sub-issue relationship; and `{{ .issue.branch_name }}`, because GitLab computes branch names in the UI rather than storing one on the issue. Both `{{ .issue.id }}` and `{{ .issue.identifier }}` are the project-scoped issue number (GitLab's `iid`), the number shown as `#7` in the GitLab UI, never the instance-global issue ID.
 
 ---
 
@@ -1283,7 +1305,7 @@ The `priority` key takes a predicate object with exactly one operator key:
 | `gt` | Priority is greater than value |
 | `gte` | Priority is greater than or equal to value |
 
-For `in`, the value is a list of integers (e.g., `{ in: [1, 2] }`). For all other operators, the value is a single integer. An issue with no priority never matches a `priority` predicate.
+For `in`, the value is a list of integers (e.g., `{ in: [1, 2] }`). For all other operators, the value is a single integer. An issue with no priority never matches a `priority` predicate. For Gitea, GitHub, and GitLab, configure `tracker.priority_labels` to give labels an explicit numeric priority.
 
 #### Title phrases
 
@@ -2051,6 +2073,7 @@ For path fields (`workspace.root`, `db_path`), tilde (`~`) expansion still appli
 | `hooks.before_remove`                  | Same as above                                                   |
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
+| `tracker.priority_labels`              | Complex map type; set literal label names and integers in front matter. No `$VAR` indirection. |
 | `tracker.api_version`                  | No override variable exists; set it in the front matter or through `$VAR` indirection |
 | `tracker.handoff_evidence`             | No override variable exists; set it in the front matter. The value is matched against the closed set as written, so `$VAR` indirection does not apply. |
 | `notifications`                        | List of pass-through destination maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.11), not as field-level overrides. |
@@ -2068,7 +2091,7 @@ On WORKFLOW.md reload, `applyEnvOverrides` re-reads both `os.Getenv` and the `.e
 - **`.env` file changes are picked up** on each reload. The `.env` file itself is not watched by fsnotify — only WORKFLOW.md changes trigger reload.
 - **Real environment variable changes require a process restart.** `os.Getenv` reads the current process environment. While Go can observe in-process changes via `os.Setenv`, operator-provided env vars are inherited at process launch and are effectively immutable from outside the running process.
 
-For configuration values that need to change without restarting, use the `.env` file and trigger a WORKFLOW.md reload. The tracker fields `tracker.kind`, `tracker.endpoint`, `tracker.api_key`, `tracker.project`, `tracker.query_filter`, and `tracker.api_version` are the exception: the tracker adapter reads them once at startup, so they take effect at the next restart, also when set through `.env`.
+For configuration values that need to change without restarting, use the `.env` file and trigger a WORKFLOW.md reload. The tracker fields `tracker.kind`, `tracker.endpoint`, `tracker.api_key`, `tracker.project`, `tracker.query_filter`, `tracker.priority_labels`, and `tracker.api_version` are the exception: the tracker adapter reads them once at startup, so they take effect at the next restart, also when set through `.env`.
 
 ---
 
@@ -5858,6 +5881,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `tracker.api_version`                  | Requires restart.                                                                              |
 | `tracker.active_states`                | Future dispatch and reconciliation, and every tracker operation that starts after the reload.  |
 | `tracker.terminal_states`              | Future dispatch and reconciliation, and every tracker operation that starts after the reload.  |
+| `tracker.priority_labels`              | Requires restart.                                                                              |
 | `tracker.query_filter`                 | Requires restart.                                                                              |
 | `tracker.handoff_state`                | Future worker exits, not in-flight sessions.                                                   |
 | `tracker.no_change_state`              | Future worker exits, not in-flight sessions.                                                   |
@@ -6128,6 +6152,7 @@ These errors are raised during typed config construction from the parsed front m
 | `config: tracker.endpoint: expected string, got <type>`                         | `tracker.endpoint` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.api_key: expected string, got <type>`                          | `tracker.api_key` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.project: expected string, got <type>`                          | `tracker.project` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.priority_labels: ...`                                          | Unsupported tracker kind, a non-map value, a blank or duplicate lowercase name, a non-integer or out-of-range value, or a workflow state label collision. | Use an explicit label-to-integer map on Gitea, GitHub, or GitLab, with distinct names outside the workflow state vocabulary.         |
 | `config: tracker.query_filter: expected string, got <type>`                     | `tracker.query_filter` is not a string (e.g., integer, boolean, list).   | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.api_version: expected string, got <type>`                      | `tracker.api_version` is a type other than string and other than a whole number (e.g., boolean, list). A bare whole number (e.g., `2`) is coerced to its decimal string instead of raising this error. | Ensure the value is a string or a whole number, quoted if necessary. |
 | `config: <field>: expected string, got timestamp`                               | An unquoted date (e.g., `2026-01-01`) decodes to a YAML timestamp rather than a string. | Quote the value (e.g., `"2026-01-01"`) so it decodes as a string.                                                        |
@@ -6231,6 +6256,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `tracker.project`                       | string           | _(required for `jira`, `github`, `linear`, `gitea`, `gitlab`)_        | `SORTIE_TRACKER_PROJECT`                 | `$VAR` supported                                                                       |
 | `tracker.active_states`                 | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_ACTIVE_STATES`           | CSV; at least one of active/terminal required; no blank entry; no tracker default list |
 | `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_TERMINAL_STATES`         | CSV; at least one of active/terminal required; required for `github`, `gitea`, `gitlab`; no blank entry |
+| `tracker.priority_labels`               | map of integers  | _(absent)_                   | —                                        | Gitea, GitHub, GitLab only; exact case-insensitive names, smallest value wins          |
 | `tracker.query_filter`                  | string           | `""`                         | `SORTIE_TRACKER_QUERY_FILTER`            | Adapter-interpreted                                                                    |
 | `tracker.handoff_state`                 | string           | _(absent)_                   | `SORTIE_TRACKER_HANDOFF_STATE`           | Must not collide with active/terminal                                                  |
 | `tracker.no_change_state`               | string           | `handoff_state`               | `SORTIE_TRACKER_NO_CHANGE_STATE`         | Must equal `handoff_state` or name a member of `terminal_states`; requires `handoff_state` |

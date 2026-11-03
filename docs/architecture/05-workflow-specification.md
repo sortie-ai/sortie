@@ -76,6 +76,11 @@ Fields:
   - No default on any tracker; the workflow's list is the only source of active states. An empty list dispatches no issue and draws a preflight warning. A blank entry (empty or only white space) is a configuration error.
 - `terminal_states` (list of strings)
   - No default on any tracker. A tracker that derives issue state from labels requires a non-empty list, because a closed issue reads as the first entry; an empty list is a configuration error there. A blank entry (empty or only white space) is a configuration error on every tracker.
+- `priority_labels` (map of integers, optional)
+  - Only for `gitea`, `github`, and `gitlab`. The operator declares exact label names and their numeric priority; nothing is inferred from spelling or catalog ordering.
+  - Keys are lowercased, non-blank, and unique after lowercasing. A key that also names a workflow state (active, terminal, handoff, in-progress, or no-change) is a configuration error, ignoring letter case.
+  - Values must be YAML integers within the Go `int` range. The smallest mapped value on an issue becomes its existing `priority`; no match leaves it null. Matching uses the normalized lowercase label set, with no globs.
+  - Default: absent. No environment override or indirection. Changes require restart; malformed maps fail config load and a failed reload retains the previous configuration.
 - `query_filter` (string, optional)
   - Adapter-defined query fragment that narrows the base candidate and terminal-state queries.
   - The orchestrator passes this value to the tracker adapter without interpretation.

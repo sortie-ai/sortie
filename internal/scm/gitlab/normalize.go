@@ -110,13 +110,13 @@ type gitlabErrorBody struct {
 // normalizeIssue maps a gitlabIssue to a [domain.Issue]. ID and Identifier
 // are both the decimal iid; the instance-global id is never read.
 // DisplayID falls back to "<project>#<iid>" when the server-provided
-// reference is empty. Priority, Parent, and BranchName are always nil,
-// nil, and empty; BlockedBy is a non-nil empty slice. State is the model's
+// reference is empty. Parent is nil and BranchName is empty; BlockedBy is
+// a non-nil empty slice. Priority comes only from priorities. State is the model's
 // reading of the labels and the closed status under s.
 //
 // Comments is left nil; callers that fetch comments assign them
 // afterwards.
-func normalizeIssue(gi gitlabIssue, project string, model *issuekit.LabelStateModel, s issuekit.LabelStates) domain.Issue {
+func normalizeIssue(gi gitlabIssue, project string, model *issuekit.LabelStateModel, s issuekit.LabelStates, priorities map[string]int) domain.Issue {
 	iid := strconv.Itoa(gi.IID)
 
 	displayID := gi.References.Full
@@ -129,15 +129,17 @@ func normalizeIssue(gi gitlabIssue, project string, model *issuekit.LabelStateMo
 		assignee = gi.Assignees[0].Username
 	}
 
+	labels := issuekit.NormalizeLabels(gi.Labels)
 	return domain.Issue{
 		ID:          iid,
 		Identifier:  iid,
 		DisplayID:   displayID,
 		Title:       gi.Title,
 		Description: gi.Description,
+		Priority:    issuekit.PriorityFromLabels(labels, priorities),
 		State:       model.Derive(s, iid, gi.Labels, gi.isClosed()),
 		URL:         gi.WebURL,
-		Labels:      issuekit.NormalizeLabels(gi.Labels),
+		Labels:      labels,
 		Assignee:    assignee,
 		IssueType:   gi.IssueType,
 		BlockedBy:   []domain.BlockerRef{},

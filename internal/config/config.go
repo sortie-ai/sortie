@@ -196,6 +196,7 @@ type TrackerConfig struct {
 	ActiveStates    []string
 	TerminalStates  []string
 	QueryFilter     string
+	PriorityLabels  map[string]int // lowercase label names; lower values dispatch first
 	HandoffState    string
 	HandoffEvidence HandoffEvidencePolicy
 	NoChangeState   string
@@ -646,6 +647,11 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 
 	rawTracker := extractSubMap(raw, "tracker")
 	tracker, err := buildTrackerConfig(rawTracker, envKeys)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
+	tracker.PriorityLabels, err = buildPriorityLabels(rawTracker, tracker)
 	if err != nil {
 		return ServiceConfig{}, err
 	}

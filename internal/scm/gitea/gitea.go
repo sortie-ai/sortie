@@ -1,10 +1,11 @@
 // Package gitea implements [domain.TrackerAdapter] for the Gitea REST API v1.
 // It talks to a self-hosted Gitea instance over the shared HTTP transport with
 // no third-party Gitea client library, normalizing issue responses to domain
-// types: labels lowercased, priority always nil (Gitea exposes no priority
-// field), parent always nil (Gitea has no sub-issue concept), state derived
-// from labels against the configured active, terminal, and handoff lists (an
-// open issue carrying none reads no state and is never a candidate), and
+// types: labels lowercased, priority taken only from the operator-declared
+// priority_labels map, parent always nil (Gitea has no sub-issue concept),
+// state derived from labels against the configured active, terminal, and
+// handoff lists (an open issue carrying none reads no state and is never
+// a candidate), and
 // blocker refs read from the issue dependencies route.
 //
 // The constructor runs a two-call preflight (GET /user and GET
@@ -20,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -60,14 +62,15 @@ const maxPages = 200
 // workflow's state lists, which an operation reads once at its start.
 type GiteaAdapter struct {
 	*issuekit.StateSource
-	client      *httpkit.Client
-	owner       string
-	repo        string
-	model       *issuekit.LabelStateModel
-	queryFilter url.Values // parsed tracker.query_filter; nil or empty when unset
-	log         *slog.Logger
-	metrics     domain.Metrics
-	access      *scmcore.WriteAccessCache
+	priorityLabels map[string]int
+	client         *httpkit.Client
+	owner          string
+	repo           string
+	model          *issuekit.LabelStateModel
+	queryFilter    url.Values // parsed tracker.query_filter; nil or empty when unset
+	log            *slog.Logger
+	metrics        domain.Metrics
+	access         *scmcore.WriteAccessCache
 }
 
 // NewGiteaAdapter creates a [GiteaAdapter] from adapter configuration and runs a
@@ -77,8 +80,9 @@ type GiteaAdapter struct {
 // "endpoint" (instance base URL, which must parse as an absolute http(s) URL
 // with a host; there is no default host). Optional: "active_states",
 // "terminal_states", "handoff_state", "in_progress_state" (label names, with no
-// default list), and "user_agent". A missing or malformed key, or a preflight failure (invalid
-// token or unknown repository), returns a [*domain.TrackerError] and blocks
+// default list), "priority_labels" (label-to-integer map), and "user_agent".
+// A missing or malformed key, or a preflight failure (invalid token or
+// unknown repository), returns a [*domain.TrackerError] and blocks
 // construction.
 func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	apiKey, fault := typeutil.StringField(config, "api_key")
@@ -133,6 +137,11 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		baseURL += "/api/v1"
 	}
 
+	priorityLabels, err := issuekit.ParsePriorityLabels(config["priority_labels"])
+	if err != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: err.Error()}
+	}
+
 	trackerStates, err := issuekit.TrackerStatesFromConfig(config)
 	if err != nil {
 		return nil, err
@@ -166,24 +175,29 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 
 	source := issuekit.NewStateSource(trackerStates)
 	adapter := &GiteaAdapter{
-		StateSource: source,
-		client:      client,
-		owner:       owner,
-		repo:        repo,
-		model:       issuekit.NewLabelStateModel(source, slog.Default()),
-		queryFilter: filter,
-		log:         slog.Default(),
+		StateSource:    source,
+		priorityLabels: priorityLabels,
+		client:         client,
+		owner:          owner,
+		repo:           repo,
+		model:          issuekit.NewLabelStateModel(source, slog.Default()),
+		queryFilter:    filter,
+		log:            slog.Default(),
 	}
 	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 
 	warnUnrecognizedFilterKeys(adapter.log, filter)
-	if hasNonEmptyLabel(filter["labels"]) {
+	if hasNonEmptyLabel(filter["labels"]) || len(priorityLabels) > 0 {
 		known, fetchErr := adapter.fetchLabelNames(context.Background())
 		if fetchErr != nil {
-			adapter.log.Warn("failed to fetch labels for query_filter diagnostic",
-				slog.Any("error", fetchErr))
+			if hasNonEmptyLabel(filter["labels"]) {
+				adapter.log.Warn("failed to fetch labels for query_filter diagnostic", slog.Any("error", fetchErr))
+			} else {
+				adapter.log.Warn("failed to fetch labels for priority_labels diagnostic", slog.Any("error", fetchErr))
+			}
 		} else {
 			reportUnresolvedLabels(adapter.log, filter["labels"], known)
+			issuekit.WarnUnresolvedPriorityLabels(adapter.log, priorityLabels, slices.Collect(maps.Keys(known)))
 		}
 	}
 
@@ -510,7 +524,7 @@ func (a *GiteaAdapter) listIssues(ctx context.Context, nativeState string, state
 		if isPullRequest(gi) {
 			continue
 		}
-		issue := normalizeIssue(gi, a.model, states)
+		issue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 		setDisplayID(&issue, a.owner, a.repo)
 		issue.Comments = nil
 		issues = append(issues, issue)
@@ -600,7 +614,7 @@ func (a *GiteaAdapter) FetchIssueByID(ctx context.Context, issueID string) (doma
 			}
 		}
 
-		fetched := normalizeIssue(gi, a.model, states)
+		fetched := normalizeIssue(gi, a.model, states, a.priorityLabels)
 		setDisplayID(&fetched, a.owner, a.repo)
 
 		blockers, err := a.fetchBlockers(ctx, issueID, states)
