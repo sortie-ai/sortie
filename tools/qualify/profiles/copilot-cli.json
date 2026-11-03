@@ -172,6 +172,22 @@
       "case": "runtime_failure",
       "reason": "outcome_folded_into_another",
       "surface": "protocol"
+    },
+    {
+      "capability": "turn_disposition",
+      "case": "runtime_refusal",
+      "reason": "outcome_never_produced"
+    },
+    {
+      "capability": "retry_classification",
+      "case": "non_retryable_refusal",
+      "reason": "outcome_never_produced"
+    },
+    {
+      "capability": "turn_disposition",
+      "case": "limit_reached",
+      "reason": "outcome_folded_into_another",
+      "surface": "protocol"
     }
   ],
   "absent_surfaces": [
