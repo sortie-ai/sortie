@@ -762,11 +762,15 @@ func TestLaunchTarget_AuxiliaryCommand_Remote(t *testing.T) {
 		RemoteCommand: "kiro-cli",
 		SSHHost:       "worker-host",
 		SSHEnvNames:   []string{"AUX_CARRIED_VAR"},
+		ConfiguredEnv: []sshutil.EnvVar{{Name: "SSH_AUTH_SOCK", Value: "/remote/agent.sock"}},
 	}
 
 	cmd, agentErr := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, strings.NewReader("aux-stdin"), nil)
 	if agentErr != nil {
 		t.Fatalf("AuxiliaryCommand() error = %v, want nil", agentErr)
+	}
+	if slices.Contains(cmd.Env, "SSH_AUTH_SOCK=/remote/agent.sock") {
+		t.Errorf("AuxiliaryCommand().Env carries the configured SSH_AUTH_SOCK, want the local ssh client on Sortie's own environment")
 	}
 
 	joined := strings.Join(cmd.Args, " ")

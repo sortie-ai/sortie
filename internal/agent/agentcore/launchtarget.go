@@ -314,6 +314,16 @@ func (t LaunchTarget) RuntimeEnv(env []string, name string) (string, bool) {
 	return value, found
 }
 
+// launcherEnviron returns the environment of the process Sortie starts. The
+// local ssh client of a remote launch keeps Sortie's own, because the configured
+// variables are meant for the remote runtime and travel on the preamble.
+func (t LaunchTarget) launcherEnviron() []string {
+	if t.RemoteCommand != "" {
+		return os.Environ()
+	}
+	return t.Environ()
+}
+
 // Environ returns the environment a local launch starts from: [os.Environ]
 // less every entry that names a t.ConfiguredEnv variable, then t.ConfiguredEnv
 // in order. A configured name replaces the inherited entry, whatever its
@@ -331,7 +341,8 @@ func (t LaunchTarget) Environ() []string {
 }
 
 // BindWorkspace re-verifies t.WorkspacePath and, on success, sets
-// cmd.Dir to it, sets cmd.Env to [LaunchTarget.Environ] when it is nil, and
+// cmd.Dir to it, sets cmd.Env when it is nil to [LaunchTarget.Environ], or to
+// Sortie's own environment for the ssh client of a remote launch, and
 // replaces every PWD entry already in cmd.Env with one naming the same
 // verified path, so a subprocess that trusts PWD over its own working
 // directory still lands in the workspace. It also removes every entry
@@ -348,7 +359,7 @@ func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
 	}
 	cmd.Dir = absPath
 	if cmd.Env == nil {
-		cmd.Env = t.Environ()
+		cmd.Env = t.launcherEnviron()
 	}
 	cmd.Env = dropEnvNames(cmd.Env, t.WithheldEnv)
 	cmd.Env = setPWD(cmd.Env, absPath)
@@ -405,7 +416,7 @@ func IsEnvEntryNamed(entry, name string) bool {
 
 // AuxiliaryCommand builds a one-shot runtime subcommand run in the
 // workspace, locally or over ssh like the session itself. A nil env
-// means [BindWorkspace] supplies [LaunchTarget.Environ] with PWD replaced;
+// means [BindWorkspace] supplies the launcher's environment with PWD replaced;
 // stdin may be nil. Returns a non-nil [*domain.AgentError] and a nil
 // *[exec.Cmd] when the workspace path fails re-verification immediately
 // before launch.
