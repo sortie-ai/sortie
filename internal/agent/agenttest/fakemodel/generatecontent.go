@@ -176,10 +176,14 @@ func (generateContentCodec) render(r reply) rendered {
 	if r.call != nil {
 		part = generateContentPart{FunctionCall: &generateContentFunctionCall{Name: r.call.Name, Args: r.call.Arguments}}
 	}
+	finishReason := "STOP"
+	if r.truncated {
+		finishReason = "MAX_TOKENS"
+	}
 	chunk := encodeJSON(generateContentChunk{
 		Candidates: []generateContentCandidate{{
 			Content:      generateContentContent{Role: "model", Parts: []generateContentPart{part}},
-			FinishReason: "STOP",
+			FinishReason: finishReason,
 		}},
 		UsageMetadata: generateContentUsage{
 			PromptTokenCount:        r.usage.Prompt,

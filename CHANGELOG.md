@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The first prompt after a person releases a parked issue no longer repeats the agent's stop statement through Sortie's own stop comment, and it includes comments written while the parked run's last turn was still running. ([#1582](https://github.com/sortie-ai/sortie/issues/1582))
 - Claude Code and Copilot CLI runs no longer fail on every retry when the agent's earlier session has been deleted or has expired; the agent starts a new session instead. ([#1584](https://github.com/sortie-ai/sortie/issues/1584))
+- With `opencode.dangerously_skip_permissions: false`, the `opencode` agent now refuses every tool call that `opencode.allowed_tools` does not allow, as documented, instead of performing the calls the tool lists leave undecided. ([#1593](https://github.com/sortie-ai/sortie/issues/1593))
 
 ## [1.31.0] - 2026-10-31
 

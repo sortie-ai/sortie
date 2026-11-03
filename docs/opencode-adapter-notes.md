@@ -4,11 +4,11 @@ Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/o
 
 Last updated: November 2026
 
-Eligibility: unmeasured
+Eligibility: qualified
 
-Product conformance: unmeasured
+Product conformance: qualified
 
-Neither verdict is a failure: no measured row puts the protocol surface below the native reference. Both are unmeasured because several load-bearing rows were not measured: permission handling, where the runtime raised no permission request under the asking posture; the policy precondition, where no refusal was answered; the human-input case of protocol retry classification, where no request of either class was raised; and protocol runtime failure, where the refused-model inducer yields a completed turn because the runtime replaces an unresolvable model id with its default model. Product conformance waits on permission handling, the policy precondition, the human-input case, and protocol runtime failure. The protocol `limit_reached` case stays unmeasured because the prompt channel cannot carry a request big enough to reach the runtime's limit.
+Every load-bearing row was measured, and no measured row puts the protocol surface below the native reference, so the protocol route can stand in for the native one. The effective adapter meets every load-bearing obligation, counting what Sortie's own code supplies outside the protocol.
 
 This file is checked against the tracked measurement under `tools/qualify/probe/testdata/opencode/`. Changing a grade row below fails the staleness gate until a fresh run replaces that measurement.
 
@@ -80,7 +80,7 @@ Sessions are persisted in one global database under the user's home directory, n
 
 ## Permissions
 
-OpenCode's permission control is config-driven. Each key resolves to allow, ask, or deny through an ordered rule list; the last matching rule wins. The documented default is ask, but OpenCode 2.x does not apply it to `external_directory`: with no rule for that key, the runtime reads outside the workspace without asking. So when bypass is off and the tool lists leave `external_directory` undecided, the adapter writes `ask` for it itself, and `opencode run` refuses the access and reports it like any other refused call. A list that names the key sets its action as written.
+OpenCode's permission control is config-driven. Each key resolves to allow, ask, or deny through an ordered rule list; the last matching rule wins. The runtime's own default allows every tool except reads of `.env` files, which ask. A project's saved approvals apply after every configured rule and override any of them except a deny. So when bypass is off and the tool lists do not name `*`, the adapter writes `deny` for `*` as the first rule of its policy: every tool the lists leave undecided is left out of the model's tool list, and an undecided `external_directory` access is refused, whatever approvals the project has saved. The rules the lists produce follow the base rule, so each still decides its own key, and a list that names a key sets its action as written. The inline document applies after the operator's own configuration files, so the base rule overrides the operator's own top-level rules for every key the lists do not name. Rules the operator writes for one agent apply after it, for the agent `opencode.agent` selects and for the default agent alike, and still decide their keys.
 
 The adapter sends its policy in the inline configuration document. OpenCode deep-merges that document into the rules from every other configuration source; it does not replace them. So a value inherited from the operator's shell would leak into the result. The adapter removes every variable it manages from the inherited environment before adding its own. Keep that scrub in step with the managed set: a new managed variable that is not scrubbed is a leak.
 
@@ -198,33 +198,33 @@ Two routes drive this runtime. The `opencode` kind, described in the sections ab
 
 The `acp` subcommand is the only protocol entry point, and it takes no model switch; the protocol observations below say where the model comes from. The route carries session continuation and Sortie's own tool server over HTTP, and its spend comes from the runtime's session export.
 
-The native entry point is `opencode run --standalone --format json`, with `--session` to resume. `--auto` approves permission requests, and the asking posture leaves it out.
+The native entry point is `opencode run --standalone --format json`, with `--session` to resume. `--auto` approves permission requests, and the asking posture leaves it out. On both surfaces the asking posture also adds an ask-every-tool `permission` rule to the configuration document, because without it the runtime asks about none of the probe's tool calls.
 
 A stored provider login authenticates a run. Every grade on this page was measured under a stored provider credential.
 
 ## Load-bearing capability observations
 
-Session continuation is usable on both surfaces. Permission handling, the human-input case on the protocol surface, and the runtime failure case on the protocol surface stay unmeasured. Token accounting is a gap on both surfaces, so it does not separate the routes.
+Session continuation is usable on both surfaces. Permission handling and the runtime failure case are observed on the protocol surface, and the runtime failure case is observed on the native stream. Token accounting is a gap on both surfaces, so it does not separate the routes.
 
 No prompt response in the capture carried a token figure, although Sortie reads one from the wire when it is present. Sortie took the figure from the runtime's session export, the same source the native kind settles from. The ceiling stop worked: a live run through Sortie's orchestrator stopped at the figure ("stopped at 53750 token(s) ... token budget hold"). The grade stays a gap because it describes the wire, the way the Gemini notes record theirs.
 
-The native stream carries no token figure on its terminal either: `opencode run --format json` has no terminal envelope, and a `step_finish` event closes each step. The success turn is recognized. Turn disposition on this surface stays not observed because the runtime failure case ended with no recognized error terminal.
+The native stream carries no token figure on its terminal either: `opencode run --format json` has no terminal envelope, and a `step_finish` event closes each step. The success turn is recognized, and so is the runtime failure case: the run emits an `error` event, which the recognizer reads as the error terminal. The limit case passes too: the recognized terminal matched the induced case. Turn disposition on this surface is still a gap because cancellation is surface-silent: the runtime writes its terminal only at exit.
 
-Retry classification on the native stream is a gap because the run stream has no human-input terminal. The case was induced and the surface reported no outcome, so it counts against the surface. On the protocol surface the same case is not observed, because no request of either class was raised under the posture the probe ran in.
+Retry classification on the native stream is a gap because the run stream has no human-input terminal. `opencode run` cannot ask a person: it rejects a permission request itself, with feedback telling the model to continue without the action, and prints a notice on standard error. The tool part fails, the turn goes on, and the run exits 0. The case was induced and the surface reported no outcome, so it counts against the surface. On the protocol surface the human-input case is not applicable: the request offered a refusing option and Sortie refused it inside the protocol, so the turn went on and no human-input outcome arose.
 
-Cancellation passed on the protocol surface, where the turn ended in cancellation after its own context was cancelled. On the native stream SIGINT yields an `error` event, never a cancellation terminal, and the runtime writes its terminal only at exit, so cancellation cannot be induced there. The retryable failure case passed on both surfaces: after one SIGKILL to its group, the launch reported transport loss.
+Cancellation passed on the protocol surface, where the turn ended in cancellation after its own context was cancelled. On the native stream the run has no cancellation event. An interrupt or termination signal makes it write one `error` event that reports the lost connection to its own server, with type `unknown`, and exit with status 130. Only the exit status marks the cancellation, so the case stays surface-silent: it was induced and the surface reported no outcome. The retryable failure case passed on both surfaces: after one SIGKILL to its group, the launch reported transport loss.
 
-Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. A request built to trigger one completed normally, so the case is recorded as `outcome_never_produced`. The runtime failure case is not declared. The runtime reports an endpoint failure as a failed turn on the protocol, but the qualification's refused-model inducer cannot induce one: an unresolvable model id is silently replaced by the default model, so the turn completes and the case is not observed on either surface. The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation. `limit_reached` was not induced on either surface.
+Two cases are declared, not measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as `non_retryable_refusal`. A request built to trigger one completed normally, so the case is recorded as `outcome_never_produced`. The runtime failure case is not declared. It is induced through a provider the configuration document declares, pointed at a local stand-in upstream that answers HTTP 400. The protocol turn ends with a protocol-level error response, and the native run emits an `error` event that the recognizer reads as the error terminal; both pass. A refused model id cannot induce the case, because an unresolvable model id is replaced by the default model and the turn completes. The `unknown_outcome` case has no deterministic inducer on either surface, so it carries no obligation. The protocol `limit_reached` case is declared `outcome_folded_into_another`, because the runtime never ends a protocol prompt with a limit stop reason; the next section describes why.
 
-Permission handling is not observed. Under the asking posture the runtime raised no permission request, and the policy precondition found no refusal answered, so the probe has nothing to grade. That says nothing about how the runtime behaves when it does ask.
+Permission handling is usable on the protocol surface. Under the asking posture the runtime raises a permission request for the declared tool server's tool. Sortie refuses it with the reject option, and the tool does not run: the tool part fails as declined and the policy marker stays absent. The model carries on and finishes the turn normally, so the turn stays open and succeeds. The policy precondition passes for the same reason: the refusal was answered and the marker stayed absent.
 
-- protocol turn_disposition: Not observed: not_observed
-- protocol retry_classification: Not observed: not_observed
+- protocol turn_disposition: Observed: usable
+- protocol retry_classification: Observed: usable
 - protocol token_ceiling: Observed: gap
 - protocol tool_server_delivery: Observed: usable
 - protocol session_continuation: Observed: usable
-- protocol permission_handling: Not observed: not_observed
-- native_stream_json turn_disposition: Not observed: not_observed
+- protocol permission_handling: Observed: usable
+- native_stream_json turn_disposition: Observed: gap
 - native_stream_json retry_classification: Observed: gap
 - native_stream_json token_ceiling: Observed: gap
 - native_stream_json session_continuation: Observed: usable
@@ -241,7 +241,7 @@ The handshake reports the agent's own name, `OpenCode`, and its version, which t
 
 Tool servers declared in `session/new` reach OpenCode over HTTP.
 
-`opencode acp` takes no model switch. The model comes from OpenCode's configuration, and the qualification passes it through `OPENCODE_CONFIG_CONTENT` as a document with a `model` key holding the model id. An id OpenCode cannot resolve does not fail: the runtime silently selects its default model instead. The refused-model inducer, which names an id no provider serves, was served `openrouter/particle-ai/particle-1`, on this surface and on `run`. That is why the refused-model inducer cannot induce a runtime failure. It also means a mistyped model id runs the turn on a model nobody chose, with nothing in the output marking it.
+`opencode acp` takes no model switch. The model comes from OpenCode's configuration, and the qualification passes it through `OPENCODE_CONFIG_CONTENT` as a document with a `model` key holding the model id. An id OpenCode cannot resolve does not fail: the runtime silently selects its default model instead, on this surface and on `run`. That is why a refused model id cannot induce a runtime failure. It also means a mistyped model id runs the turn on a model nobody chose, with nothing in the output marking it.
 
 The title agent makes a billed request that no exported message records. With the model pinned in the environment of the Sortie process, the money run served exactly one model and no request attributed to a title agent. The credential-verification session was deleted through the protocol before it could be re-read, so that check covers the run's session only.
 
@@ -249,13 +249,21 @@ On the release the qualification ran on, the usage-limits pull fails: the `exper
 
 Session continuation is proven only by the recall answer: a successful load alone does not show that the history came back. On the native stream, resuming through `--session` returned the phrase the seed asked the runtime to remember. On the protocol surface the recall turn runs under the seed's own session identifier and returns the phrase too. A recall prompt that asks for "the phrase from earlier" lets a small model answer with its own earlier reply, `STORED`, which reads as lost history; the profile asks which phrase it was told to remember.
 
+## Output-token limit
+
+When a provider cuts a reply at its output-token limit (finish reason `length`), the runtime's core does not end the turn. It inserts a hidden continue message and runs the step again. If a later reply finishes normally, the turn ends normally. After the third consecutive truncated reply the runtime fails the turn with an `output-limit` error, "Response still truncated after two output token limit continuations". A step limit configured for the agent ends the turn normally. There is no request-count stop. Both surfaces share this behavior.
+
+On the protocol, `opencode acp` therefore never ends a prompt with `max_tokens` or `max_turn_requests`. A truncated reply that the continuation completes ends with `end_turn`, and three truncated replies end with a JSON-RPC internal error that names `output-limit`. The qualification confirms the declaration with a turn whose first reply comes from a local stand-in upstream and stops at the output-token limit; the turn then completes normally.
+
+On the native stream, the run writes a `step_finish` with reason `length` for each truncated reply, then an `error` line whose `error.type` is `output-limit`. That line can precede the last step's lines. The recognizer reads it as the limit terminal: a limit locator keyed on the nested `error.type` value is consulted before the error locator, so the line is not read as a runtime failure. The qualification induces the case offline, through the same declared provider pointed at the local stand-in, which answers with truncated replies.
+
 ## Native headless observations
 
-`opencode run --standalone --format json` prints JSON Lines on stdout, one event per line: `step_start`, `tool_use`, `step_finish`, and `text`. Current releases also close the final text step with a `step_finish` whose `reason` is `stop`; earlier 2.x releases usually drop that one. A tool step's `step_finish` carries every token counter, zeros included, and its `messageID` names an export message with identical tokens. A subagent call prints one `tool_use` whose `tool` is `subagent`; the child's events never reach the stream. There is no run-started envelope and no final result envelope. The stream ends with the final `text` event, that step's `step_finish`, or nothing, so the profile's recognizer keys on the first `text` event. A turn that ends without one has no terminal.
+`opencode run --standalone --format json` prints JSON Lines on stdout, one event per line: `step_start`, `tool_use`, `step_finish`, and `text`. Current releases also close the final text step with a `step_finish` whose `reason` is `stop`; earlier 2.x releases usually drop that one. A tool step's `step_finish` carries every token counter, zeros included, and its `messageID` names an export message with identical tokens. A subagent call prints one `tool_use` whose `tool` is `subagent`; the child's events never reach the stream. There is no run-started envelope and no final result envelope. The stream ends with the final `text` event, that step's `step_finish`, or nothing, so the profile's recognizer keys on the first `text` event for a completed turn, on an `error` line whose nested `error.type` is `output-limit` for a limit stop, and on any other `error` event for a failed one. A turn that ends with neither has no terminal.
 
 `--standalone` is required. Without it, `opencode run` attaches to the host's shared background service, which keeps the environment of the client that started it first. It then ignores the per-launch model variable and serves its own default model on every launch.
 
-A cancelled turn leaves an `error` event, never a cancellation terminal. The stream has no terminal for a request addressed to a person.
+A cancelled turn leaves an `error` event and exit status 130, never a cancellation terminal. A failed run, such as a provider answering HTTP 400, ends in an `error` event too. The stream has no terminal for a request addressed to a person.
 
 The profile treats the plain-JSON surface as absent. The output-format flag accepts a default text format and JSON Lines, and no structured single-document format. A declared absence is checked by running the ordinary headless invocation and finding no structured terminal; a launch that fails to start would prove nothing.
 
@@ -266,16 +274,13 @@ The containment boundary held under measurement: every launch ran inside the run
 ## Excluded capability cases
 
 - retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation
+- retry_classification human_input: not applicable on protocol: the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose
 - retry_classification non_retryable_refusal: declared outcome_never_produced
 - retry_classification unknown_outcome: no deterministic inducer on any runtime, so the case carries no obligation
 - turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation
-- turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface
+- turn_disposition limit_reached: declared outcome_folded_into_another
 - turn_disposition runtime_refusal: declared outcome_never_produced
 
 ## Unobserved surfaces
 
 Windows live qualification is unobserved.
-
-- native_stream_json turn_disposition runtime_failure: fixture_induction_failed
-- protocol retry_classification human_input: fixture_induction_failed
-- protocol turn_disposition runtime_failure: fixture_induction_failed

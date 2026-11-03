@@ -1,58 +1,62 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-11-02T09:10:56Z",
-  "profile_digest": "2f09c13a9bababd9902b0d16cbb7e0c435e397df3e0695ac7861ea2692e4fffe",
-  "collector_digest": "18494c2a1c2423cd1faf9e502c958e7b6d42f09c06866b71b99fa2cb16e4b521",
+  "observed_at": "2026-11-03T12:45:28Z",
+  "profile_digest": "3ede34acc4acd008dbcf4ca2ce80354155e4c5be8d23fcada0c476da793ad607",
+  "collector_digest": "cd6d25465670bf74bd68ecbf39bed3d250c8bda67d6214e3a0d63dc6b23ce4d5",
   "evidence_file": "evidence.jsonl",
-  "evidence_digest": "08de4b6a447d5f8b845cce690905c24256767c0e81d38656a8d6f356fdddd14e",
+  "evidence_digest": "6b780f33691d7feeb2f60aa6dc06cf8d13b3550a85377d6d143347889d0400a1",
   "requested_model": "google/gemini-3.5-flash",
   "protocol_version": 1,
   "session_agents": {
-    "ses_e6475d47cffedxfkxid8OTN9Ez": {
+    "ses_e5e8b873fffeDlCbrYuHtcK2mj": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e6475fd02ffeEJFPbfMV2BPUl7": {
+    "ses_e5e8baf87ffeFkyhVT4pTb5B8d": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e647609caffebrtLkqETshsnBv": {
+    "ses_e5e8bbd69ffeCzrl91bgxI6TEP": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e647757bdffeL3N1S44J3H5G3b": {
+    "ses_e5e8d26d1ffeQedq5fqw049zB0": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e64777ef9ffeC9zw0etkkdEgHn": {
+    "ses_e5e8d4e98ffeYjT60j4AL560MW": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e6477a2c7ffe3Xgg6eZejBXdzs": {
+    "ses_e5e8d7b08ffe78Vl4a566vKzY2": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e6477b2b6ffe9jRw6pyRrJV57k": {
+    "ses_e5e8d8941ffef4HSqFRKAmsE4d": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e6477c4d3ffeKudnKh4FNcZpVJ": {
+    "ses_e5e8d9ccbffezbZPdURZ8il3LP": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e6477e58dffe5rUKcF44eJ7m1j": {
+    "ses_e5e8dadafffeXPTMj3H7v6Ei7y": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e647805f0ffe8KxAH7IUdoDZDb": {
+    "ses_e5e8de4a9ffeFmI3Jaq3kCmWfe": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e64781bcaffeIxPXTSxeRxDOs8": {
+    "ses_e5e8dfab6ffeCUpyQOkJAu4o9I": {
       "name": "OpenCode",
       "version": "2.2.5"
     },
-    "ses_e64795039ffeQAGaJF5p9neDAa": {
+    "ses_e5e8e0c04ffeoTNB30G0edBL8p": {
+      "name": "OpenCode",
+      "version": "2.2.5"
+    },
+    "ses_e5e8e899bffeVfwJvmZ0pgfvpd": {
       "name": "OpenCode",
       "version": "2.2.5"
     }
