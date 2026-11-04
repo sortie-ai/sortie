@@ -712,7 +712,8 @@ type effortBody struct {
 	StopReason    string         `json:"stopReason"`
 	ConfigOptions []effortOption `json:"configOptions"`
 	Update        struct {
-		SessionUpdate string `json:"sessionUpdate"`
+		SessionUpdate string         `json:"sessionUpdate"`
+		ConfigOptions []effortOption `json:"configOptions"`
 	} `json:"update"`
 }
 
@@ -780,8 +781,8 @@ func assertEffortForwarded(t *testing.T, streams []string, level string) {
 	}
 	for _, update := range updates {
 		if update.SessionID == opened.SessionID && update.Update.SessionUpdate == sessionUpdateConfigOptionUpdate &&
-			slices.ContainsFunc(update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != level }) {
-			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.ConfigOptions, configID, level)
+			slices.ContainsFunc(update.Update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != level }) {
+			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.Update.ConfigOptions, configID, level)
 		}
 	}
 	if ended.StopReason != "end_turn" {
