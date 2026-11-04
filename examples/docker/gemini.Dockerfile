@@ -15,7 +15,7 @@
 #     -e GEMINI_API_KEY \
 #     -v "$(pwd)/workspaces:/home/sortie/workspaces" \
 #     -v "$(pwd)/WORKFLOW.md:/home/sortie/WORKFLOW.md:ro" \
-#     -p 7678:7678 \
+#     -p 127.0.0.1:7678:7678 \
 #     sortie-gemini /home/sortie/WORKFLOW.md
 
 FROM ghcr.io/sortie-ai/sortie:latest AS sortie
