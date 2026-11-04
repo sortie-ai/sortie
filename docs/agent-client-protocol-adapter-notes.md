@@ -162,7 +162,33 @@ That record comes from a refused permission request. Under a posture that never 
 
 ## Reasoning level
 
-The kind forwards no reasoning level. It reads no `effort` key and never sets a session configuration option for one, because the option ids differ per runtime and some runtimes offer none. The operator writes the runtime's own reasoning option in `agent.command`. The registration declares `EffortNotForwarded`, so a workflow that sets `effort` in this kind's block gets `agent.effort.not_forwarded` instead of a silent drop. A completeness test fails when a non-test file of this package reads the key.
+The kind forwards the `effort` key of its block. The registration declares `EffortForwarded`, and the key is read through the shared reader, so a non-string value refuses the start with the type fault that `sortie validate` reports as `agent-client-protocol.effort.wrong_type`.
+
+Selection is by category. The target is the first select option, in the order the runtime sent them, whose category is the protocol's reasoning-level category (`thought_level`). The runtime's option id is never consulted, because ids differ per runtime and a table of them would put runtime identity in the generic kind. A `boolean` option and a select of another category never qualify. Reading the options picks a target and changes no capability record.
+
+Timing is once per session open, on created, loaded, resumed, and credential-verification sessions alike, before the session's first prompt and never per turn. The level is sent with `session/set_config_option` only when the target option offers a value equal to it. The request is declared by hand in the package, because the schema generator cannot emit it. Every outcome other than a lost connection lets the session start at the runtime's current level and writes at most one warning through the shared `agentcore` helper, with the message `reasoning level not applied by the agent` and these `reason` values:
+
+| `reason` | Condition | Extra attributes |
+| --- | --- | --- |
+| `no_option` | The session lists no select option of the reasoning-level category | none |
+| `not_offered` | The option lists no value equal to the level | `option`, `offered` |
+| `rejected` | The runtime answers the request with an error | `option`, `agent_error` |
+| `no_answer` | No answer arrives within `agent.read_timeout_ms` | `option`, `read_timeout_ms` |
+| `other_value` | The answer lists the option at another current value | `option`, `current` |
+
+A late answer to an abandoned request leaves the session unaffected. A lost connection or an ended start context fails the start as it fails any start request.
+
+A continued session with no `effort` sends nothing and runs at the level its runtime holds, which an earlier session may have set. When the result that opened it lists a target option with a current value, the kind writes one `Info` record, `continued session keeps the agent's reasoning level`, with `option` and `current`.
+
+A `variant` key in the block is not read. `sortie validate` warns under `agent-client-protocol.variant.not_read` while the `opencode` kind is registered, so a block carried over from that kind does not lose its level without a word.
+
+What runtimes showed:
+
+- OpenCode lists an `effort` option under the reasoning-level category when its model has levels.
+- The Gemini CLI and Kiro CLI captures list no reasoning option, so `effort` there draws `no_option` and the runtime's own switch in `agent.command` stays the route.
+- The category of Copilot CLI's `reasoning_effort` option is not established, so its notes keep `--reasoning-effort` in `agent.command` as the route.
+
+The completeness test requires the shared effort assertion in this package now that the kind declares `forwarded`. Its probe reads each turn's level off the last `session/set_config_option` request the kind sent in that session before the turn's prompt, and `""` when none. The gated case in `TestIntegration_ScriptedModel` runs under `SORTIE_CLIENTPROTOCOL_EFFORT`.
 
 ## Verifying a change
 

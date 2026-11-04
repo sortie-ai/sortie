@@ -83,26 +83,37 @@ func TestPermissionsSetting(t *testing.T) {
 func TestSettingFaultsReachValidateAndSessionStart(t *testing.T) {
 	t.Parallel()
 
-	for _, settings := range []map[string]any{
-		{"env": map[string]any{"1BAD": "x"}},
-		{"permissions": "approve"},
-	} {
-		adapter, _ := NewClientProtocolAdapter()
-		_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-			WorkspacePath: t.TempDir(),
-			AgentConfig:   domain.AgentConfig{Command: "sortie-never-launched"},
-			Settings:      settings,
-		})
-		diags := validateConfig(registry.AgentConfigFields{Kind: "agent-client-protocol", Passthrough: settings})
+	tests := []struct {
+		name     string
+		settings map[string]any
+		check    string
+	}{
+		{"env", map[string]any{"env": map[string]any{"1BAD": "x"}}, "agent-client-protocol.env.invalid_name"},
+		{"permissions", map[string]any{"permissions": "approve"}, "agent-client-protocol.permissions.invalid_value"},
+		{"mcp_config", map[string]any{mcpConfigKey: 123}, "agent-client-protocol.mcp_config.wrong_type"},
+		{"effort", map[string]any{registry.EffortKey: 7}, "agent-client-protocol.effort.wrong_type"},
+	}
 
-		agentErr, ok := errors.AsType[*domain.AgentError](err)
-		fault, wrapped := errors.AsType[*settingFault](err)
-		if !ok || !wrapped {
-			t.Fatalf("StartSession(%v) error = %v, want a *domain.AgentError wrapping a *settingFault", settings, err)
-		}
-		want := registry.ValidationDiag{Severity: "error", Check: fault.check, Message: agentErr.Message}
-		if len(diags) != 1 || diags[0] != want {
-			t.Errorf("validateConfig(%v) = %+v, want [%+v]", settings, diags, want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			adapter, _ := NewClientProtocolAdapter()
+			_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+				WorkspacePath: t.TempDir(),
+				AgentConfig:   domain.AgentConfig{Command: "sortie-never-launched"},
+				Settings:      tt.settings,
+			})
+			diags := validateConfig(registry.AgentConfigFields{Kind: "agent-client-protocol", Passthrough: tt.settings})
+
+			agentErr, ok := errors.AsType[*domain.AgentError](err)
+			if !ok || agentErr.Kind != domain.ErrAgentNotFound {
+				t.Fatalf("StartSession(%v) error = %v, want a *domain.AgentError of kind %q", tt.settings, err, domain.ErrAgentNotFound)
+			}
+			want := registry.ValidationDiag{Severity: "error", Check: tt.check, Message: agentErr.Message}
+			if len(diags) != 1 || diags[0] != want {
+				t.Errorf("validateConfig(%v) = %+v, want [%+v]", tt.settings, diags, want)
+			}
+		})
 	}
 }

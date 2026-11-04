@@ -88,6 +88,11 @@ type sessionState struct {
 
 	permissions agentcore.PermissionDeclaration
 
+	// effort is the reasoning level of the settings block, empty when unset.
+	// startSession writes it and applyReasoningLevel reads it, both before the
+	// pump learns the handshake.
+	effort string
+
 	launchEnv []string
 
 	// launchAddition is what the launch carried for the selected declaration's
@@ -251,6 +256,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		return domain.Session{}, agentcore.SettingsError(permissionsFault.Error(), permissionsFault)
 	}
 
+	effort, effortFault := registry.EffortSetting(params.Settings)
+	if effortFault != nil {
+		return domain.Session{}, agentcore.SettingsError(effortFault.Error(), effortFault)
+	}
+
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -310,6 +320,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		initializeMeta:         launchChoice.InitializeMeta,
 		configuredModel:        configuredModel,
 		permissions:            permissions,
+		effort:                 effort,
 	}
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -381,7 +392,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		case procutil.StageStderrPipe:
 			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
-		default: // procutil.StageProcessStart, procutil.StageProcessResume
+		default:
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
 		}
 	}
@@ -473,6 +484,17 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 	if startErr == nil && !start.CarriedHistory() {
 		sessionID, session, newErr = createNewSession(ctx, state, target.WorkspacePath, wired)
 	}
+	if startErr == nil && newErr == nil {
+		switch {
+		case params.CredentialVerification && advertisesSessionDelete(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionDelete
+		case advertisesSessionClose(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionClose
+		}
+		newErr = applyReasoningLevel(ctx, state, sessionId(sessionID), session, start.CarriedHistory())
+	}
 	if startErr != nil || newErr != nil {
 		teardownWithinStopGrace(ctx, state)
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
@@ -483,14 +505,6 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 			return domain.Session{}, report
 		}
 		return domain.Session{}, newErr
-	}
-	switch {
-	case params.CredentialVerification && advertisesSessionDelete(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionDelete
-	case advertisesSessionClose(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionClose
 	}
 
 	choice := chooseDeclaration(declarations, initResp.AgentInfo, target)

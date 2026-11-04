@@ -325,7 +325,7 @@ func TestDispatchRuleEffortAdvisories(t *testing.T) {
 				}
 				return
 			}
-			const text = `dispatch rule "cheap" (dispatch.rules[0].forwarding-fixture) sets model and inherits effort "high" from the top-level forwarding-fixture block; level names depend on the model, so write effort in the rule to choose the level for its model, or effort: null to clear it`
+			const text = `dispatch rule "cheap" (dispatch.rules[0].forwarding-fixture) sets model and inherits effort "high" from the top-level forwarding-fixture block; level names depend on the model, so write effort in the rule to choose the level for its model, or effort: null to send no level`
 			requireOneAdvisory(t, got, "agent.effort.inherited", text, map[string]string{"rule_name": "cheap", "agent_kind": kind, "effort": "high"})
 		})
 	}

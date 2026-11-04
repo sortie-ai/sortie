@@ -125,6 +125,9 @@ func TestEffortReport(t *testing.T) {
 				if got := report.Attrs[registry.EffortKey]; got != "bogus-level" {
 					t.Errorf("report %s = %q, want %q", registry.EffortKey, got, "bogus-level")
 				}
+				if got := report.Attrs["reason"]; got != "rejected" {
+					t.Errorf("report reason = %q, want %q", got, "rejected")
+				}
 				if report.Line != unknownEffortLine {
 					t.Errorf("report line = %q, want %q", report.Line, unknownEffortLine)
 				}

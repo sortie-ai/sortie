@@ -622,6 +622,7 @@ jobs:
       SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: scripted/
       SORTIE_CLIENTPROTOCOL_STATUS_CALL: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
       SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: testdata/usage_limit/opencode_free_limit_answer.json
+      SORTIE_CLIENTPROTOCOL_EFFORT: high
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
