@@ -748,11 +748,12 @@ func assertEffortForwarded(t *testing.T, streams []string, level string) {
 
 	var opened, applied, ended effortBody
 	var updates []effortBody
+	var answered bool
 	for _, line := range capturedJSONLines(t, streams[1]) {
 		var frame liveEnvelope
 		_ = json.Unmarshal(line, &frame)
 		switch {
-		case frame.Method == methodSessionUpdate && ended.StopReason == "":
+		case frame.Method == methodSessionUpdate && answered && ended.StopReason == "":
 			var update effortBody
 			_ = json.Unmarshal(frame.Params, &update)
 			updates = append(updates, update)
@@ -760,6 +761,7 @@ func assertEffortForwarded(t *testing.T, streams []string, level string) {
 		case string(frame.ID) == string(newID):
 			_ = json.Unmarshal(frame.Result, &opened)
 		case string(frame.ID) == string(setID):
+			answered = true
 			_ = json.Unmarshal(frame.Result, &applied)
 		case string(frame.ID) == string(promptID):
 			_ = json.Unmarshal(frame.Result, &ended)
