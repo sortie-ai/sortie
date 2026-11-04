@@ -5037,7 +5037,7 @@ The `claude-code` block is forwarded to the Claude Code adapter, which runs `cla
 
 ```yaml
 copilot-cli:
-  model: claude-haiku-4.5
+  model: claude-haiku-5.5
   effort: high
   max_autopilot_continues: 100
   agent: coding-agent
