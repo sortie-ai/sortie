@@ -334,13 +334,14 @@ func TestTokenUsage_Uncached(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		usage TokenUsage
-		want  int64
+		name      string
+		usage     TokenUsage
+		want      int64
+		wantFresh int64
 	}{
-		{"zero value", TokenUsage{}, 0},
-		{"subtracts cache reads and keeps cache writes", TokenUsage{TotalTokens: 1000, CacheReadTokens: 300, CacheWriteTokens: 200}, 700},
-		{"cache reads above the total floor at zero", TokenUsage{TotalTokens: 100, CacheReadTokens: 250}, 0},
+		{"zero value", TokenUsage{}, 0, 0},
+		{"subtracts cache counters and the kinds add up to uncached", TokenUsage{InputTokens: 800, OutputTokens: 200, TotalTokens: 1000, CacheReadTokens: 300, CacheWriteTokens: 200}, 700, 300},
+		{"cache reads above the total and input floor at zero", TokenUsage{InputTokens: 100, TotalTokens: 100, CacheReadTokens: 250}, 0, 0},
 	}
 
 	for _, tt := range tests {
@@ -348,9 +349,13 @@ func TestTokenUsage_Uncached(t *testing.T) {
 			t.Parallel()
 
 			got := tt.usage.Uncached()
+			gotFresh := tt.usage.FreshInput()
 
 			if got != tt.want {
 				t.Errorf("%+v.Uncached() = %d, want %d", tt.usage, got, tt.want)
+			}
+			if gotFresh != tt.wantFresh {
+				t.Errorf("%+v.FreshInput() = %d, want %d", tt.usage, gotFresh, tt.wantFresh)
 			}
 		})
 	}

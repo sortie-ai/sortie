@@ -571,7 +571,7 @@ export interface Report {
   schema_tier: string;
   warnings: string[] | null;
   summary: Summary;
-  spend: Spend | null;
+  spend: Spend;
   by_status: Group[] | null;
   by_adapter: Group[] | null;
   by_rule: Group[] | null;
@@ -977,10 +977,13 @@ export interface Spend {
 export interface SpendBucket {
   start: string;
   runs: number;
+  tokens: Tokens | null;
   cost_usd: number | null;
   tokens_unmeasured_runs: number;
   cost_unpriced_runs: number;
   cost_partial_runs: number;
+  tokens_lower_bound_runs: number;
+  tokens_lower_bound: boolean;
   cost_lower_bound: boolean;
   agent_priced_usd: number | null;
 }
@@ -1154,6 +1157,7 @@ export interface Tokens {
   cache_read: number;
   cache_write: number;
   uncached: number;
+  fresh_input: number;
 }
 
 export interface UnitAmountResponse {

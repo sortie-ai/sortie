@@ -367,16 +367,24 @@ type totalAccum struct {
 }
 
 // dayAccum accumulates the runs that completed within one UTC calendar day.
+// Token and bound fields fill only on the full tier.
 type dayAccum struct {
-	runs       int
-	unmeasured int
+	runs           int
+	unmeasured     int
+	measured       int
+	lowerBoundRuns int
+	tokens         Tokens
 	costAccum
 }
 
-// withUncached returns t with Uncached derived from its Total and
-// CacheRead sums.
-func withUncached(t Tokens) Tokens {
+// withDerived returns t with Uncached and FreshInput derived from its sums.
+func withDerived(t Tokens) Tokens {
 	t.Uncached = domain.TokenUsage{TotalTokens: t.Total, CacheReadTokens: t.CacheRead}.Uncached()
+	t.FreshInput = domain.TokenUsage{
+		InputTokens:      t.Input,
+		CacheReadTokens:  t.CacheRead,
+		CacheWriteTokens: t.CacheWrite,
+	}.FreshInput()
 	return t
 }
 
@@ -739,9 +747,7 @@ func (a *Aggregator) Add(row storage.RunStatsRow) error {
 		}
 	}
 
-	if a.caps.RecordedCost() {
-		a.foldSpend(row, cost)
-	}
+	a.foldSpend(row, cost)
 
 	if !hasDuration {
 		a.total.durationExcludedRuns++
@@ -835,8 +841,9 @@ func utcDay(t time.Time) time.Time {
 }
 
 // foldSpend folds row into the accumulator of the UTC day it completed on. A
-// run whose completion time does not parse joins no day. cost is the zero
-// outcome for a run whose tokens were not measured.
+// run whose completion time does not parse joins no day. Token, bound, and cost
+// state fold only on the full tier. cost is the zero outcome for a run whose
+// tokens were not measured.
 func (a *Aggregator) foldSpend(row storage.RunStatsRow, cost costOutcome) {
 	completed, err := time.Parse(time.RFC3339, row.CompletedAt)
 	if err != nil {
@@ -849,10 +856,22 @@ func (a *Aggregator) foldSpend(row storage.RunStatsRow, cost costOutcome) {
 		a.days[day] = d
 	}
 	d.runs++
+	if !a.caps.Full() {
+		return
+	}
+	if row.TokensMeasured && row.UnaccountedTurns > 0 {
+		d.lowerBoundRuns++
+	}
 	if !row.TokensMeasured {
 		d.unmeasured++
 		return
 	}
+	d.tokens.Input += row.InputTokens
+	d.tokens.Output += row.OutputTokens
+	d.tokens.Total += row.TotalTokens
+	d.tokens.CacheRead += row.CacheReadTokens
+	d.tokens.CacheWrite += row.CacheWriteTokens
+	d.measured++
 	d.add(cost)
 }
 
@@ -1000,20 +1019,16 @@ func nextPeriod(start time.Time, period string) time.Time {
 	return start.AddDate(0, 0, 1)
 }
 
-// spend lists the recorded cost of the folded runs per UTC period, every
-// period from the one holding the range's first instant to the one holding its
-// last, so a period without runs is listed with none. It is nil unless the
-// database records cost.
-func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spend {
-	if !a.caps.RecordedCost() {
-		return nil
-	}
+// spend lists the tokens and recorded cost of the folded runs per UTC period,
+// every period from the one holding the range's first instant to the one
+// holding its last, so a period without runs is listed with none.
+func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) Spend {
 	end := generatedAt
 	if until != nil {
 		end = *until
 	}
 	period := spendPeriod(since, end)
-	out := &Spend{Period: period, Buckets: []SpendBucket{}}
+	out := Spend{Period: period, Buckets: []SpendBucket{}}
 	if len(a.days) == 0 {
 		return out
 	}
@@ -1032,6 +1047,13 @@ func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spen
 		d := a.days[day]
 		sum.runs += d.runs
 		sum.unmeasured += d.unmeasured
+		sum.measured += d.measured
+		sum.lowerBoundRuns += d.lowerBoundRuns
+		sum.tokens.Input += d.tokens.Input
+		sum.tokens.Output += d.tokens.Output
+		sum.tokens.Total += d.tokens.Total
+		sum.tokens.CacheRead += d.tokens.CacheRead
+		sum.tokens.CacheWrite += d.tokens.CacheWrite
 		sum.costUSD += d.costUSD
 		sum.pricedRuns += d.pricedRuns
 		sum.costUnpricedRuns += d.costUnpricedRuns
@@ -1059,6 +1081,12 @@ func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spen
 		if sum, ok := sums[start]; ok {
 			bucket.Runs = sum.runs
 			bucket.TokensUnmeasuredRuns = sum.unmeasured
+			bucket.TokensLowerBoundRuns = sum.lowerBoundRuns
+			if sum.measured > 0 {
+				bucket.Tokens = new(withDerived(sum.tokens))
+			}
+			bucket.TokensLowerBound = bucket.Tokens != nil &&
+				(sum.unmeasured > 0 || sum.lowerBoundRuns > 0)
 			bucket.CostUnpricedRuns = sum.costUnpricedRuns
 			bucket.CostPartialRuns = sum.costPartialRuns
 			if sum.pricedRuns > 0 {
@@ -1111,7 +1139,7 @@ func (a *Aggregator) summary(full bool) Summary {
 		s.TokensUnmeasuredRuns = a.total.unmeasuredRuns
 	}
 	if full && a.total.measuredRuns > 0 {
-		s.Tokens = new(withUncached(a.total.tokens))
+		s.Tokens = new(withDerived(a.total.tokens))
 	}
 	if full && a.total.pricedRuns > 0 {
 		cost := round9(a.total.costUSD)
@@ -1195,7 +1223,7 @@ func (a *Aggregator) groupStat(g *groupAccum, full bool) Group {
 		stat.CostUnpricedRuns = g.costUnpricedRuns
 		stat.CostPartialRuns = g.costPartialRuns
 		if g.measuredRuns > 0 {
-			stat.Tokens = new(withUncached(g.tokens))
+			stat.Tokens = new(withDerived(g.tokens))
 		}
 		if g.pricedRuns > 0 {
 			cost := round9(g.costUSD)

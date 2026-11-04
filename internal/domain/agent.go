@@ -68,6 +68,12 @@ func (u TokenUsage) Uncached() int64 {
 	return max(u.TotalTokens-u.CacheReadTokens, 0)
 }
 
+// FreshInput returns InputTokens less CacheReadTokens and CacheWriteTokens,
+// floored at zero.
+func (u TokenUsage) FreshInput() int64 {
+	return max(u.InputTokens-u.CacheReadTokens-u.CacheWriteTokens, 0)
+}
+
 // ToolKind is the kind of work a tool call does. It picks the call's icon and
 // fold phrase and whether the call has a main argument; empty for any other
 // tool.

@@ -2,6 +2,7 @@ package runstats
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"math"
 	"reflect"
@@ -776,10 +777,16 @@ func TestStatsSpend(t *testing.T) {
 	run := func(completedAt string, usd *float64, costStatus string) storage.RunStatsRow {
 		row := withCost(modelRow("claude-code", "model-a", "succeeded", 1_000), usd, costStatus)
 		row.CompletedAt = completedAt
+		row.OutputTokens, row.TotalTokens, row.CacheReadTokens, row.CacheWriteTokens = 100, 1_100, 200, 300
 		return row
+	}
+	tokens := func(n int64) *Tokens {
+		return &Tokens{Input: 1_000 * n, Output: 100 * n, Total: 1_100 * n, CacheRead: 200 * n, CacheWrite: 300 * n, Uncached: 900 * n, FreshInput: 500 * n}
 	}
 	unmeasured := run("2026-08-04T12:00:00Z", nil, "")
 	unmeasured.TokensMeasured = false
+	unaccounted := run("2026-08-05T10:00:00Z", nil, "unpriced")
+	unaccounted.UnaccountedTurns = 1
 	ciFailed := run("2026-08-04T13:00:00Z", nil, "")
 	ciFailed.Status = "ci_failed"
 	sevenDays := new(fixedNow.Add(-168 * time.Hour))
@@ -798,16 +805,16 @@ func TestStatsSpend(t *testing.T) {
 				run("2026-07-31T12:00:00Z", new(1.0), "estimated"),
 				run("2026-08-02T08:00:00Z", new(0.5), "estimated"),
 				run("2026-08-02T23:30:00Z", new(2.0), "estimated"),
-				run("2026-08-05T10:00:00Z", nil, "unpriced"),
+				unaccounted,
 			},
 			wantPeriod: "day",
 			wantBuckets: []SpendBucket{
-				{Start: "2026-07-31T00:00:00Z", Runs: 1, CostUSD: new(1.0)},
+				{Start: "2026-07-31T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(1.0)},
 				{Start: "2026-08-01T00:00:00Z"},
-				{Start: "2026-08-02T00:00:00Z", Runs: 2, CostUSD: new(2.5)},
+				{Start: "2026-08-02T00:00:00Z", Runs: 2, Tokens: tokens(2), CostUSD: new(2.5)},
 				{Start: "2026-08-03T00:00:00Z"},
 				{Start: "2026-08-04T00:00:00Z"},
-				{Start: "2026-08-05T00:00:00Z", Runs: 1, CostUnpricedRuns: 1},
+				{Start: "2026-08-05T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUnpricedRuns: 1, TokensLowerBoundRuns: 1, TokensLowerBound: true},
 				{Start: "2026-08-06T00:00:00Z"},
 				{Start: "2026-08-07T00:00:00Z"},
 			},
@@ -823,9 +830,9 @@ func TestStatsSpend(t *testing.T) {
 			},
 			wantPeriod: "month",
 			wantBuckets: []SpendBucket{
-				{Start: "2026-06-01T00:00:00Z", Runs: 1, CostUSD: new(4.0)},
-				{Start: "2026-07-01T00:00:00Z", Runs: 1, CostUSD: new(3.0), CostPartialRuns: 1, CostLowerBound: true},
-				{Start: "2026-08-01T00:00:00Z", Runs: 3, CostUnpricedRuns: 1, TokensUnmeasuredRuns: 1},
+				{Start: "2026-06-01T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(4.0)},
+				{Start: "2026-07-01T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(3.0), CostPartialRuns: 1, CostLowerBound: true},
+				{Start: "2026-08-01T00:00:00Z", Runs: 3, Tokens: tokens(2), CostUnpricedRuns: 1, TokensUnmeasuredRuns: 1, TokensLowerBound: true},
 			},
 		},
 		{
@@ -865,32 +872,51 @@ func TestStatsSpend(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	allCaps := []storage.RunHistoryCapabilities{recordedCaps, fullCaps, {}}
+
+	for i := range len(tests) * len(allCaps) {
+		tt, caps := tests[i/len(allCaps)], allCaps[i%len(allCaps)]
+		t.Run(fmt.Sprintf("%s/recorded=%t/full=%t", tt.name, caps.RecordedCost(), caps.Full()), func(t *testing.T) {
 			t.Parallel()
 
-			agg := New(recordedCaps)
+			agg := New(caps)
 			addRows(t, agg, tt.rows...)
 
 			report := agg.Report(fixedNow, "/wf", "/db", tt.since, nil)
 
 			spend := report.Spend
-			if spend == nil {
-				t.Fatalf("Report(since=%v).Spend = nil, want a listing on a database with recorded cost", tt.since)
-			}
 			if spend.Period != tt.wantPeriod {
 				t.Errorf("Report(since=%v).Spend.Period = %q, want %q", tt.since, spend.Period, tt.wantPeriod)
 			}
-			if tt.wantBuckets != nil && !reflect.DeepEqual(spend.Buckets, tt.wantBuckets) {
-				t.Errorf("Report(since=%v).Spend.Buckets = %+v, want %+v", tt.since, spend.Buckets, tt.wantBuckets)
+			gotBuckets, wantBuckets := slices.Clone(spend.Buckets), slices.Clone(tt.wantBuckets)
+			for i := range min(len(gotBuckets), len(wantBuckets)) {
+				if wantBuckets[i].Tokens == nil && wantBuckets[i].Runs > 0 {
+					gotBuckets[i].Tokens, gotBuckets[i].TokensLowerBound, gotBuckets[i].TokensLowerBoundRuns = nil, false, 0
+				}
+				if !caps.RecordedCost() {
+					wantBuckets[i].CostUSD, wantBuckets[i].CostUnpricedRuns, wantBuckets[i].CostPartialRuns, wantBuckets[i].CostLowerBound, wantBuckets[i].AgentPricedUSD = nil, 0, 0, false, nil
+				}
+				if !caps.Full() {
+					wantBuckets[i] = SpendBucket{Start: wantBuckets[i].Start, Runs: wantBuckets[i].Runs}
+				}
+			}
+			if tt.wantBuckets != nil && !reflect.DeepEqual(gotBuckets, wantBuckets) {
+				t.Errorf("Report(since=%v).Spend.Buckets = %+v, want %+v", tt.since, gotBuckets, wantBuckets)
 			}
 			var sum SpendBucket
+			var tok Tokens
+			var measured bool
 			var cost float64
 			for _, b := range spend.Buckets {
 				sum.Runs += b.Runs
 				sum.CostUnpricedRuns += b.CostUnpricedRuns
 				sum.CostPartialRuns += b.CostPartialRuns
 				sum.TokensUnmeasuredRuns += b.TokensUnmeasuredRuns
+				sum.TokensLowerBoundRuns += b.TokensLowerBoundRuns
+				if b.Tokens != nil {
+					measured = true
+					tok = Tokens{tok.Input + b.Tokens.Input, tok.Output + b.Tokens.Output, tok.Total + b.Tokens.Total, tok.CacheRead + b.Tokens.CacheRead, tok.CacheWrite + b.Tokens.CacheWrite, tok.Uncached + b.Tokens.Uncached, tok.FreshInput + b.Tokens.FreshInput}
+				}
 				if b.CostUSD != nil {
 					cost += *b.CostUSD
 				}
@@ -900,6 +926,9 @@ func TestStatsSpend(t *testing.T) {
 				t.Errorf("Spend bucket runs, unpriced, partial, unmeasured sums = %d, %d, %d, %d, want the summary's %d, %d, %d, %d",
 					sum.Runs, sum.CostUnpricedRuns, sum.CostPartialRuns, sum.TokensUnmeasuredRuns,
 					s.Runs, s.CostUnpricedRuns, s.CostPartialRuns, s.TokensUnmeasuredRuns)
+			}
+			if measured != (s.Tokens != nil) || measured && tok != *s.Tokens || sum.TokensLowerBoundRuns != s.TokensLowerBoundRuns {
+				t.Errorf("Spend bucket tokens (measured %t), lower bound runs sum to %+v, %d, want the summary's %+v, %d", measured, tok, sum.TokensLowerBoundRuns, s.Tokens, s.TokensLowerBoundRuns)
 			}
 			var want float64
 			if s.CostUSD != nil {
