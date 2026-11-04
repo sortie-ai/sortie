@@ -588,7 +588,7 @@ jobs:
             install: npm install -g @github/copilot
             version_cmd: copilot --version
             source: "npm: @github/copilot (unpinned, installs latest)"
-            clientprotocol_command: "copilot --acp --allow-all --model gpt-5-mini"
+            clientprotocol_command: "copilot --acp --allow-all --model claude-haiku-4.5"
             clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
 
           - name: Kiro - ACP (live)

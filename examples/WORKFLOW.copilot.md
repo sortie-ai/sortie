@@ -45,7 +45,7 @@ agent:
   max_retry_backoff_ms: 300000
 
 copilot-cli:
-  model: gpt-5-mini
+  model: claude-haiku-4.5
   max_autopilot_continues: 50
 
 server:

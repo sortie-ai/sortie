@@ -7,7 +7,7 @@
 // Optional environment variables:
 //
 //	SORTIE_COPILOT_COMMAND         override the default "copilot" binary
-//	SORTIE_COPILOT_MODEL           override the default "gpt-5-mini" model
+//	SORTIE_COPILOT_MODEL           override the default "claude-haiku-4.5" model
 //
 // Authentication: the live cases need one of COPILOT_GITHUB_TOKEN, GH_TOKEN or
 // GITHUB_TOKEN, or an authenticated gh CLI; the scripted-model case needs only
@@ -46,7 +46,7 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_COPILOT_MODEL")
 	if model == "" {
-		model = "gpt-5-mini"
+		model = "claude-haiku-4.5"
 	}
 	return map[string]any{
 		"max_autopilot_continues": float64(5),
