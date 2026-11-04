@@ -45,7 +45,7 @@ agent:
   max_retry_backoff_ms: 300000
 
 copilot-cli:
-  model: gpt-5-mini
+  model: claude-haiku-4.5
   max_autopilot_continues: 50
 
 server:
@@ -53,6 +53,11 @@ server:
 ---
 
 {{/* Sortie sample workflow, GitHub Issues + Copilot CLI.
+
+     The "copilot-cli" agent kind is deprecated in favor of
+     "agent-client-protocol"; see
+     examples/WORKFLOW.agent-client-protocol.copilot.md for the migrated
+     example.
 
      Required env vars:
        GITHUB_TOKEN          Fine-grained PAT with Issues read/write + Copilot

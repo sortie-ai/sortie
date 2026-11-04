@@ -574,6 +574,23 @@ jobs:
             clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
 
+          - name: GitHub Copilot CLI - ACP (live)
+            adapter: acp-copilot
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: GH_TOKEN
+            run_filter: Integration
+            skip_filter: ^TestIntegration_ScriptedModel$
+            tier: live
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 900s
+            node: true
+            install: npm install -g @github/copilot
+            version_cmd: copilot --version
+            source: "npm: @github/copilot (unpinned, installs latest)"
+            clientprotocol_command: "copilot --acp --allow-all --model claude-haiku-4.5"
+            clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
+
           - name: Kiro - ACP (live)
             adapter: acp-kiro
             kind: agent
