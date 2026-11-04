@@ -3,7 +3,7 @@ FROM ghcr.io/sortie-ai/sortie:latest AS sortie
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git wget && \
+    ca-certificates git wget && \
     rm -rf /var/lib/apt/lists/*
 
 # Sortie refuses an OpenCode major after 2 at session start.
