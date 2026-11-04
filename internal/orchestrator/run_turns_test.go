@@ -201,21 +201,22 @@ func TestRunTurns_Unmeasured(t *testing.T) {
 	}
 }
 
-func TestRunTurns_DroppedEndingFoldsIntoNextRecord(t *testing.T) {
+func TestRunTurns_NextTurnStartBeforeEndingKeepsUnendedTurn(t *testing.T) {
 	t.Parallel()
 
 	state := turnsSession(t)
-	lastEnd := baseTime.Add(20 * time.Second)
+	firstEnd := baseTime.Add(10 * time.Second)
+	feedTurnEvents(state, turnUsage("m1", domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}))
+	state.Running[turnsIssue].TurnCount = 2
 	feedTurnEvents(state,
-		turnUsage("m1", domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}),
+		turnEnd(domain.EventTurnCompleted, firstEnd),
+		turnToolResult(false),
 		turnUsage("m1", domain.TokenUsage{InputTokens: 300, OutputTokens: 90, TotalTokens: 390}),
 	)
-	state.Running[turnsIssue].TurnCount = 2
-	feedTurnEvents(state, turnEnd(domain.EventTurnCompleted, lastEnd))
 
 	run := exitTurnsSession(t, state, WorkerResult{TurnsStarted: 2})
 
-	if len(run.Turns) != 1 || !run.Turns[0].EndedAt.Equal(lastEnd) {
-		t.Fatalf("RunHistory.Turns = %+v, want one record ended at %v", run.Turns, lastEnd)
+	if len(run.Turns) != 2 || !run.Turns[0].EndedAt.Equal(firstEnd) || run.Turns[1].ToolCalls != 1 {
+		t.Fatalf("RunHistory.Turns = %+v, want the first ended at %v and the unended second made at exit with its tool call", run.Turns, firstEnd)
 	}
 }

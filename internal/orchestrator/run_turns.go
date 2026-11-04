@@ -194,7 +194,6 @@ func endTurn(state *State, issueID string, entry *RunningEntry, event domain.Age
 		turn.Models = modelDelta(entry.UsageByModel, entry.turnSpend.Parts)
 	}
 	entry.turns = append(entry.turns, turn)
-	entry.turnsClosed = max(entry.TurnCount, len(entry.turns))
 
 	// applyUsageDelta writes UsageByModel in place, so a baseline sharing its
 	// map would read as zero spend in every later difference.
@@ -246,7 +245,7 @@ func exitTurns(entry *RunningEntry, measured bool, turnsSeen int, now time.Time)
 		pending = modelDelta(entry.UsageByModel, entry.turnSpend.Parts)
 	}
 	switch {
-	case turnsSeen > entry.turnsClosed || (len(turns) == 0 && (pending != nil || entry.turnToolCalls > 0)):
+	case turnsSeen > len(turns) || (len(turns) == 0 && (pending != nil || entry.turnToolCalls > 0)):
 		return append(turns, storage.RunTurn{
 			Seq:            len(turns) + 1,
 			EndedAt:        now.UTC(),
