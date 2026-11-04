@@ -193,7 +193,7 @@ func (s *sessionState) relayEffortReport(effort string, stderrLines []string) {
 	if idx < 0 {
 		return
 	}
-	agentcore.WarnEffortNotApplied(s.logger(), "claude-code", effort, agentcore.EffortRejected,
+	agentcore.WarnEffortNotApplied(s.logger(), "claude-code", effort, agentcore.NotAppliedRejected,
 		slog.String("line", stderrLines[idx]))
 	s.effortReported = true
 }

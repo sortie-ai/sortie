@@ -33,6 +33,7 @@ var envSurfaceOwnedNames = map[string]bool{
 	"SORTIE_CLIENTPROTOCOL_STATUS_CALL":           true,
 	"SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER":    true,
 	"SORTIE_CLIENTPROTOCOL_EFFORT":                true,
+	"SORTIE_CLIENTPROTOCOL_CONFIG_OPTION":         true,
 }
 
 // Matching the selector name alone covers t.Setenv as well as os.Setenv
