@@ -88,6 +88,7 @@ func init() {
 		MCPDialect:            registry.MCPDialectMCPServersJSON,
 		UsageSources:          usageSources,
 		CredentialEnv:         registry.DeclareCredentialEnv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+		Deprecation:           &registry.AgentDeprecation{Replacement: "agent-client-protocol"},
 		VerificationContext:   registry.DeclareVerificationContext(registry.VerificationKeepsSomeTools, registry.VerificationKeepsSystemPrompt),
 		EffortForwarding:      registry.EffortForwarded,
 		UsageLimitRecognition: registry.UsageLimitRecognized,

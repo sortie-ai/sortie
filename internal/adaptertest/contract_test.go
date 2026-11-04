@@ -265,6 +265,9 @@ var contractAllowlist = map[string]map[contractRule]string{
 	"workspacekit": {
 		ruleANCHOR: "owns the workspace-anchoring mechanism",
 	},
+	"copilot": {
+		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
+	},
 }
 
 // The outcomes checkContractCoreImports renders as

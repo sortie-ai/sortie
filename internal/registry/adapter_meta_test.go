@@ -190,18 +190,19 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		t.Parallel()
 
 		tests := []struct {
-			name                   string
-			kind                   string
-			wantCommand            bool
-			wantMCPDialect         registry.MCPDialect
-			wantUsageArrival       registry.UsageArrival
-			wantUsageAttribution   registry.UsageAttribution
-			declaresResumeBlocker  bool
-			samplePassthrough      map[string]any
-			wantKey                string
-			wantCredentialEnvNames []string
-			wantEffortForwarding   registry.EffortForwarding
-			wantUsageLimit         registry.UsageLimitRecognition
+			name                       string
+			kind                       string
+			wantCommand                bool
+			wantMCPDialect             registry.MCPDialect
+			wantUsageArrival           registry.UsageArrival
+			wantUsageAttribution       registry.UsageAttribution
+			declaresResumeBlocker      bool
+			samplePassthrough          map[string]any
+			wantKey                    string
+			wantCredentialEnvNames     []string
+			wantEffortForwarding       registry.EffortForwarding
+			wantUsageLimit             registry.UsageLimitRecognition
+			wantDeprecationReplacement string
 		}{
 			{
 				name:                   "agent-client-protocol requires command, declares MCP dialect acp_session, derives turn_end/session_total usage, declares no resume blocker, and declares no credential names",
@@ -229,15 +230,16 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{
-				name:                   "copilot-cli requires command, declares MCP dialect mcp_servers_json, derives turn_end/per_model usage, declares no resume blocker, and declares its GitHub-token credential names",
-				kind:                   "copilot-cli",
-				wantCommand:            true,
-				wantMCPDialect:         registry.MCPDialectMCPServersJSON,
-				wantUsageArrival:       registry.UsageArrivalTurnEnd,
-				wantUsageAttribution:   registry.UsageAttributionPerModel,
-				wantCredentialEnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
-				wantEffortForwarding:   registry.EffortForwarded,
-				wantUsageLimit:         registry.UsageLimitRecognized,
+				name:                       "copilot-cli requires command, declares MCP dialect mcp_servers_json, derives turn_end/per_model usage, declares no resume blocker, declares its GitHub-token credential names, and is deprecated in favor of agent-client-protocol",
+				kind:                       "copilot-cli",
+				wantCommand:                true,
+				wantMCPDialect:             registry.MCPDialectMCPServersJSON,
+				wantUsageArrival:           registry.UsageArrivalTurnEnd,
+				wantUsageAttribution:       registry.UsageAttributionPerModel,
+				wantCredentialEnvNames:     []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
+				wantEffortForwarding:       registry.EffortForwarded,
+				wantUsageLimit:             registry.UsageLimitRecognized,
+				wantDeprecationReplacement: "agent-client-protocol",
 			},
 			{
 				name:                   "codex requires command, declares MCP dialect mcp_servers_toml, derives incremental/per_model usage, declares no resume blocker, and declares no credential names",
@@ -333,8 +335,17 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 					t.Errorf("Agents.Meta(%q) usage-limit declaration is invalid: %s", tt.kind, problem)
 				}
 
-				if meta.Deprecation != nil {
-					t.Errorf("Agents.Meta(%q).Deprecation = %+v, want nil", tt.kind, meta.Deprecation)
+				if tt.wantDeprecationReplacement == "" {
+					if meta.Deprecation != nil {
+						t.Errorf("Agents.Meta(%q).Deprecation = %+v, want nil", tt.kind, meta.Deprecation)
+					}
+				} else {
+					if meta.Deprecation == nil {
+						t.Fatalf("Agents.Meta(%q).Deprecation = nil, want non-nil naming replacement %q", tt.kind, tt.wantDeprecationReplacement)
+					}
+					if meta.Deprecation.Replacement != tt.wantDeprecationReplacement {
+						t.Errorf("Agents.Meta(%q).Deprecation.Replacement = %q, want %q", tt.kind, meta.Deprecation.Replacement, tt.wantDeprecationReplacement)
+					}
 				}
 
 				if !tt.declaresResumeBlocker {

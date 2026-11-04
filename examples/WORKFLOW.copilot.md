@@ -54,6 +54,11 @@ server:
 
 {{/* Sortie sample workflow, GitHub Issues + Copilot CLI.
 
+     The "copilot-cli" agent kind is deprecated in favor of
+     "agent-client-protocol"; see
+     examples/WORKFLOW.agent-client-protocol.copilot.md for the migrated
+     example.
+
      Required env vars:
        GITHUB_TOKEN          Fine-grained PAT with Issues read/write + Copilot
                              Requests permissions. Serves double duty: the tracker
