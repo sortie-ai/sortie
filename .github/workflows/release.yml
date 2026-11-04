@@ -565,6 +565,45 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/clientprotocol/...
 
+  test-integration-acp-copilot:
+    name: "Integration: Copilot - ACP"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CLIENTPROTOCOL_TEST: "1"
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: COPILOT_PROVIDER_API_KEY
+      SORTIE_CLIENTPROTOCOL_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
+      SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+      SORTIE_CLIENTPROTOCOL_SSH_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
+      SORTIE_CLIENTPROTOCOL_SSH_INSTALL: npm install -g @github/copilot
+      SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: "1"
+      SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: COPILOT_PROVIDER_BASE_URL
+      SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS: .copilot/copilot-instructions.md
+      SORTIE_CLIENTPROTOCOL_PROFILE: tools/qualify/profiles/copilot-cli.json
+      SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: Copilot
+      SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: testdata/usage_limit/copilot_rate_limit_answer.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 600s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+
   announcement:
     name: Release announcement
     needs: [validate]
@@ -630,6 +669,7 @@ jobs:
       - test-integration-opencode
       - test-integration-acp-gemini
       - test-integration-acp-kiro
+      - test-integration-acp-copilot
     runs-on: ubuntu-latest
     permissions:
       contents: write
