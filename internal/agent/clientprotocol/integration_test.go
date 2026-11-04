@@ -98,6 +98,15 @@
 //	                                  unset skips the effort case, which runs
 //	                                  one scripted turn under that level and
 //	                                  holds the runtime to applying it
+//	SORTIE_CLIENTPROTOCOL_CONFIG_OPTION
+//	                                  path of a JSON document {"option", "value",
+//	                                  "files", "marker"}: a session option the
+//	                                  runtime offers once the files (work tree
+//	                                  path to content) exist, the value to set,
+//	                                  and a word the value's instructions make
+//	                                  the model request carry; unset skips the
+//	                                  session option case, which runs one
+//	                                  scripted turn with that option set
 //
 // Run:
 //
@@ -717,12 +726,18 @@ type effortBody struct {
 	} `json:"update"`
 }
 
-func assertEffortForwarded(t *testing.T, streams []string, level string) {
+type optionCapture struct {
+	sets                       int
+	sentAfterPrompt            bool
+	sent, opened, applied, end effortBody
+	updates                    []effortBody
+}
+
+func readOptionCapture(t *testing.T, streams []string) optionCapture {
 	t.Helper()
 
-	var sets int
+	var got optionCapture
 	var newID, setID, promptID json.RawMessage
-	var sent effortBody
 	for _, line := range capturedJSONLines(t, streams[0]) {
 		var frame liveEnvelope
 		_ = json.Unmarshal(line, &frame)
@@ -734,61 +749,133 @@ func assertEffortForwarded(t *testing.T, streams []string, level string) {
 				promptID = frame.ID
 			}
 		case methodSessionSetConfigOption:
-			sets++
+			got.sets++
 			setID = frame.ID
-			_ = json.Unmarshal(frame.Params, &sent)
-			if promptID != nil {
-				t.Errorf("session/set_config_option sent after the first session/prompt, want before")
-			}
+			_ = json.Unmarshal(frame.Params, &got.sent)
+			got.sentAfterPrompt = got.sentAfterPrompt || promptID != nil
 		}
 	}
-	if sets != 1 {
-		t.Fatalf("session/set_config_option requests = %d, want 1", sets)
-	}
 
-	var opened, applied, ended effortBody
-	var updates []effortBody
 	var answered bool
 	for _, line := range capturedJSONLines(t, streams[1]) {
 		var frame liveEnvelope
 		_ = json.Unmarshal(line, &frame)
 		switch {
-		case frame.Method == methodSessionUpdate && answered && ended.StopReason == "":
+		case frame.Method == methodSessionUpdate && answered && got.end.StopReason == "":
 			var update effortBody
 			_ = json.Unmarshal(frame.Params, &update)
-			updates = append(updates, update)
+			got.updates = append(got.updates, update)
 		case frame.Method != "":
 		case string(frame.ID) == string(newID):
-			_ = json.Unmarshal(frame.Result, &opened)
+			_ = json.Unmarshal(frame.Result, &got.opened)
 		case string(frame.ID) == string(setID):
 			answered = true
-			_ = json.Unmarshal(frame.Result, &applied)
+			_ = json.Unmarshal(frame.Result, &got.applied)
 		case string(frame.ID) == string(promptID):
-			_ = json.Unmarshal(frame.Result, &ended)
+			_ = json.Unmarshal(frame.Result, &got.end)
 		}
 	}
+	return got
+}
 
-	target := slices.IndexFunc(opened.ConfigOptions, func(option effortOption) bool {
+func assertOptionForwarded(t *testing.T, got optionCapture, configID, value string) {
+	t.Helper()
+
+	if got.sets != 1 {
+		t.Fatalf("session/set_config_option requests = %d, want 1", got.sets)
+	}
+	if got.sentAfterPrompt {
+		t.Errorf("session/set_config_option sent after the first session/prompt, want before")
+	}
+	if got.sent.ConfigID != configID || got.sent.Value != value {
+		t.Errorf("session/set_config_option = {configId %q, value %q}, want {configId %q, value %q}", got.sent.ConfigID, got.sent.Value, configID, value)
+	}
+	if !slices.ContainsFunc(got.applied.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue == value }) {
+		t.Errorf("session/set_config_option result options = %+v, want %q at %q", got.applied.ConfigOptions, configID, value)
+	}
+	for _, update := range got.updates {
+		if update.SessionID == got.opened.SessionID && update.Update.SessionUpdate == sessionUpdateConfigOptionUpdate &&
+			slices.ContainsFunc(update.Update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != value }) {
+			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.Update.ConfigOptions, configID, value)
+		}
+	}
+	if got.end.StopReason != "end_turn" {
+		t.Errorf("session/prompt stopReason = %q, want %q", got.end.StopReason, "end_turn")
+	}
+}
+
+func assertEffortForwarded(t *testing.T, streams []string, level string) {
+	t.Helper()
+
+	got := readOptionCapture(t, streams)
+	target := slices.IndexFunc(got.opened.ConfigOptions, func(option effortOption) bool {
 		return option.Type == "select" && option.Category == "thought_level"
 	})
 	if target < 0 {
-		t.Fatalf("session/new configOptions = %+v, want a thought_level select option", opened.ConfigOptions)
+		t.Fatalf("session/new configOptions = %+v, want a thought_level select option", got.opened.ConfigOptions)
 	}
-	configID := opened.ConfigOptions[target].ID
-	if sent.ConfigID != configID || sent.Value != level {
-		t.Errorf("session/set_config_option = {configId %q, value %q}, want {configId %q, value %q}", sent.ConfigID, sent.Value, configID, level)
+
+	assertOptionForwarded(t, got, got.opened.ConfigOptions[target].ID, level)
+}
+
+type sessionOptionDocument struct {
+	Option string            `json:"option"`
+	Value  string            `json:"value"`
+	Files  map[string]string `json:"files"`
+	Marker string            `json:"marker"`
+}
+
+func sessionOptionDocumentFromEnv(t *testing.T) sessionOptionDocument {
+	t.Helper()
+
+	const variable = "SORTIE_CLIENTPROTOCOL_CONFIG_OPTION"
+	path := os.Getenv(variable)
+	if path == "" {
+		t.Skipf("skipping session option case: %s must name the JSON document of the option, its value, the files that make the value available and the marker the instructions produce", variable)
 	}
-	if !slices.ContainsFunc(applied.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue == level }) {
-		t.Errorf("session/set_config_option result options = %+v, want %q at %q", applied.ConfigOptions, configID, level)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator names the document
+	if err != nil {
+		t.Fatalf("%s = %q: %v", variable, path, err)
 	}
-	for _, update := range updates {
-		if update.SessionID == opened.SessionID && update.Update.SessionUpdate == sessionUpdateConfigOptionUpdate &&
-			slices.ContainsFunc(update.Update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != level }) {
-			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.Update.ConfigOptions, configID, level)
+	var doc sessionOptionDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("%s = %q, want a JSON object with option, value, files and marker: %v", variable, path, err)
+	}
+	if doc.Option == "" || doc.Value == "" || doc.Marker == "" {
+		t.Fatalf("%s = %q holds option %q, value %q, marker %q, want all three non-empty", variable, path, doc.Option, doc.Value, doc.Marker)
+	}
+	return doc
+}
+
+func writeWorkspaceFiles(t *testing.T, workspace string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		if !filepath.IsLocal(name) {
+			t.Fatalf("writeWorkspaceFiles: %q is not a path inside the work tree", name)
+		}
+		path := filepath.Join(workspace, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("writeWorkspaceFiles: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("writeWorkspaceFiles: %v", err)
 		}
 	}
-	if ended.StopReason != "end_turn" {
-		t.Errorf("session/prompt stopReason = %q, want %q", ended.StopReason, "end_turn")
+}
+
+func assertSessionOptionApplied(t *testing.T, run fakemodel.Run, doc sessionOptionDocument) {
+	t.Helper()
+
+	got := readOptionCapture(t, run.Streams)
+	if !slices.ContainsFunc(got.opened.ConfigOptions, func(option effortOption) bool { return option.ID == doc.Option }) {
+		t.Fatalf("session/new configOptions = %+v, want an option %q", got.opened.ConfigOptions, doc.Option)
+	}
+
+	assertOptionForwarded(t, got, doc.Option, doc.Value)
+	if !slices.ContainsFunc(run.Exchanges, func(ex fakemodel.Exchange) bool {
+		return ex.Kind == fakemodel.ExchangeTurn && strings.Contains(string(ex.Body), doc.Marker)
+	}) {
+		t.Errorf("model requests of the turn = %d, want one carrying %q", len(run.Exchanges), doc.Marker)
 	}
 }
 
@@ -955,5 +1042,20 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		})
 
 		assertEffortForwarded(t, run.Streams, level)
+	})
+	t.Run("session_option", func(t *testing.T) {
+		doc := sessionOptionDocumentFromEnv(t)
+		turnExpect = expectCompletedTurn
+		workspace := gitInitWorkspace(t)
+		writeWorkspaceFiles(t, workspace, doc.Files)
+
+		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+			Script:    []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 101, Candidates: 7}}},
+			Prompt:    "Reply with the word ok.",
+			Settings:  map[string]any{configOptionsKey: map[string]any{doc.Option: doc.Value}},
+			Workspace: workspace,
+		})
+
+		assertSessionOptionApplied(t, run, doc)
 	})
 }

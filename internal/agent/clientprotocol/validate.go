@@ -45,6 +45,10 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 		diags = append(diags, faultDiag(fault))
 	}
 
+	if _, fault := configOptionsSetting(fields.Passthrough); fault != nil {
+		diags = append(diags, faultDiag(fault))
+	}
+
 	return diags
 }
 

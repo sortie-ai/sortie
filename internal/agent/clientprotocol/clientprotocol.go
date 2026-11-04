@@ -66,9 +66,9 @@ type ClientProtocolAdapter struct {
 }
 
 // NewClientProtocolAdapter constructs a [ClientProtocolAdapter]; the kind's
-// settings arrive per session. The env values load as written, because a
-// runtime's own configuration document carries "$" characters that variable
-// resolution would corrupt.
+// settings arrive per session, config_options among them. The env values load
+// as written, because a runtime's own configuration document carries "$"
+// characters that variable resolution would corrupt.
 func NewClientProtocolAdapter() (domain.AgentAdapter, error) {
 	return &ClientProtocolAdapter{}, nil
 }

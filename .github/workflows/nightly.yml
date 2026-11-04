@@ -136,6 +136,7 @@ jobs:
             clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: Copilot
             clientprotocol_usage_limit_answer: testdata/usage_limit/copilot_rate_limit_answer.json
+            clientprotocol_config_option: testdata/config_option/copilot_agent.json
 
           - name: GitHub Copilot CLI - ACP (default declaration)
             adapter: acp-copilot-default
@@ -380,6 +381,7 @@ jobs:
           SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
           SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: ${{ matrix.clientprotocol_usage_limit_answer }}
           SORTIE_CLIENTPROTOCOL_EFFORT: ${{ matrix.clientprotocol_effort }}
+          SORTIE_CLIENTPROTOCOL_CONFIG_OPTION: ${{ matrix.clientprotocol_config_option }}
           SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
           SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
           SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}

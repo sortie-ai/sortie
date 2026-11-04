@@ -88,6 +88,10 @@ type sessionState struct {
 
 	permissions agentcore.PermissionDeclaration
 
+	// configOptions is the config_options setting, nil when unset. It is read
+	// once, when the session opens.
+	configOptions map[string]string
+
 	launchEnv []string
 
 	// launchAddition is what the launch carried for the selected declaration's
@@ -251,6 +255,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		return domain.Session{}, agentcore.SettingsError(permissionsFault.Error(), permissionsFault)
 	}
 
+	configOptions, configOptionsFault := configOptionsSetting(params.Settings)
+	if configOptionsFault != nil {
+		return domain.Session{}, agentcore.SettingsError(configOptionsFault.Error(), configOptionsFault)
+	}
+
 	if _, effortFault := registry.EffortSetting(params.Settings); effortFault != nil {
 		return domain.Session{}, agentcore.SettingsError(effortFault.Error(), effortFault)
 	}
@@ -314,6 +323,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		initializeMeta:         launchChoice.InitializeMeta,
 		configuredModel:        configuredModel,
 		permissions:            permissions,
+		configOptions:          configOptions,
 	}
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -487,7 +497,7 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 			state.closeMethod = methodSessionClose
 		}
 		effort, _ := registry.EffortSetting(params.Settings) // startSession refused a non-string level before launch
-		newErr = applyReasoningLevel(ctx, state, effort, sessionId(sessionID), session, start.CarriedHistory())
+		newErr = applySessionOptions(ctx, state, effort, sessionId(sessionID), session, start.CarriedHistory())
 	}
 	if startErr != nil || newErr != nil {
 		teardownWithinStopGrace(ctx, state)
