@@ -11,6 +11,7 @@ import { ServedText } from "@/components/ServedText";
 import { Parts } from "@/components/Parts";
 import { StatusMark } from "@/components/StatusMark";
 import { Beat, TIME_EDGE, Timeline } from "@/components/Timeline";
+import { KindsFigure, kindsOfTokenInfo } from "@/components/TokenKinds";
 import { Link } from "@/components/carried-links";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { MONO } from "@/components/ui/mono";
@@ -22,6 +23,7 @@ import {
   runCostFigure,
   runningTokensText,
   runTokensFigure,
+  tokensKindFigure,
 } from "@/lib/figures";
 import { closingClock } from "@/lib/ended";
 import { fmtClock, fmtDuration, lowerFirst, parseInstant, plural, pluralVerb } from "@/lib/format";
@@ -207,7 +209,15 @@ function RunCard({ item, identifier, now, hasEstimates }: RunCardProps) {
   const end = endOf(item);
   const duration = fmtDuration(secondsBetween(started, end === null ? now : parseInstant(end)));
   const turns = isLive ? item.running.turn_count : item.run.turns_completed;
-  const tokens = isLive ? { text: runningTokensText(item.running) } : runTokensFigure(item.run);
+  const tokens = isLive ? (
+    <NotedFigure figure={{ text: runningTokensText(item.running) }} />
+  ) : (
+    <KindsFigure
+      figure={runTokensFigure(item.run)}
+      kinds={item.run.uncached_tokens === null ? null : kindsOfTokenInfo(item.run.tokens)}
+      figureOf={tokensKindFigure(item.run.usage_completeness === "lower_bound")}
+    />
+  );
   const cost = isLive
     ? liveCostFigure(item.running.cost_status, item.running.estimated_cost_usd, "session")
     : runCostFigure(item.run);
@@ -264,10 +274,7 @@ function RunCard({ item, identifier, now, hasEstimates }: RunCardProps) {
                 ]
               : []),
             <span key="tokens">
-              Tokens{" "}
-              <b className="font-medium text-ink-body tabular-nums">
-                <NotedFigure figure={tokens} />
-              </b>
+              Tokens <b className="font-medium text-ink-body tabular-nums">{tokens}</b>
             </span>,
             ...(hasEstimates && cost.text !== NOT_MEASURED
               ? [

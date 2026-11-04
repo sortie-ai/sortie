@@ -80,7 +80,7 @@ export function Pairs({ children }: PairsProps) {
 }
 
 export interface PairProps {
-  label: string;
+  label: ReactNode;
   children: ReactNode;
 }
 

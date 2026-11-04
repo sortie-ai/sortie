@@ -12,6 +12,7 @@ import { ServedText } from "@/components/ServedText";
 import { StateBadge } from "@/components/StateBadge";
 import { TrackerLabel } from "@/components/TrackerLabel";
 import { StatusMark } from "@/components/StatusMark";
+import { EMPTY_KINDS, SplitBar, hitRateOfKinds, kindsOfTokenInfo } from "@/components/TokenKinds";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { MONO } from "@/components/ui/mono";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,13 +21,22 @@ import { useIssueActions } from "@/components/use-issue-actions";
 import { rowMark } from "@/lib/active-rows";
 import { budgetOf, moneyBudgetFigure } from "@/lib/budget";
 import { cn } from "@/lib/cn";
-import { NOT_MEASURED, issueCostFigure, liveCostFigure, liveTokensFigure } from "@/lib/figures";
+import {
+  LABEL_CACHE_HIT_RATE,
+  NOT_MEASURED,
+  TOKENS_LOWER_BOUND,
+  issueCostFigure,
+  liveCostFigure,
+  liveTokensFigure,
+  tokensKindFigure,
+} from "@/lib/figures";
 import {
   fmtAgo,
   fmtClock,
   fmtCount,
   fmtDue,
   fmtMoney,
+  fmtPercent,
   fmtStamp,
   fmtTokens,
   parseInstant,
@@ -46,6 +56,7 @@ import type {
   RunResponse,
   StateResponse,
 } from "@/api/types.gen";
+import type { KindValues } from "@/components/TokenKinds";
 import type { BudgetLine } from "@/lib/budget";
 import type { StagePosition } from "@/lib/lane";
 import type { Mark } from "@/lib/run-status";
@@ -514,6 +525,58 @@ function ShareLine<T extends ShareName>({ shares, figureOf }: ShareLineProps<T>)
   );
 }
 
+/** The kinds of the issue's finished runs plus the running session; null while either is not known. */
+function issueKindsOf(detail: IssueDetailResponse): KindValues | null {
+  const finished =
+    detail.history === null ? EMPTY_KINDS : kindsOfTokenInfo(detail.history.totals.tokens);
+  const { running } = detail;
+  if (
+    finished === null ||
+    detail.status !== "running" ||
+    running === null ||
+    !running.tokens_measured
+  ) {
+    return finished;
+  }
+  const live = kindsOfTokenInfo(running.tokens);
+  return live === null
+    ? null
+    : {
+        input: finished.input + live.input,
+        output: finished.output + live.output,
+        cache_write: finished.cache_write + live.cache_write,
+        cache_read: finished.cache_read + live.cache_read,
+      };
+}
+
+interface IssueKindLinesProps {
+  detail: IssueDetailResponse;
+  tokens: BudgetLine & { complete: boolean };
+}
+
+function IssueKindLines({ detail, tokens }: IssueKindLinesProps) {
+  const kinds = issueKindsOf(detail);
+  if (kinds === null || tokens.used === null || tokens.used === 0) {
+    return undefined;
+  }
+  const rate = hitRateOfKinds(kinds);
+  return (
+    <div className="flex flex-col gap-xxs">
+      <div className="grid grid-cols-2 items-center gap-x-sm text-body-md">
+        <span className="text-ink">Split</span>
+        <SplitBar
+          kinds={kinds}
+          figureOf={tokensKindFigure(!tokens.complete)}
+          footnote={tokens.complete ? undefined : TOKENS_LOWER_BOUND}
+        />
+      </div>
+      {rate === null ? undefined : (
+        <FigureLine name={LABEL_CACHE_HIT_RATE}>{fmtPercent(rate)}</FigureLine>
+      )}
+    </div>
+  );
+}
+
 interface BudgetPanelProps {
   detail: IssueDetailResponse;
   state: StateResponse | undefined;
@@ -562,6 +625,7 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
           )}
           <ShareLine shares={tokenShares(runs, chained)} figureOf={shareTokensText} />
         </div>
+        <IssueKindLines detail={detail} tokens={tokens} />
         {cost === null ? undefined : (
           <div className="flex flex-col gap-xxs">
             {moneyText === undefined ? (

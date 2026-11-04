@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NotedFigure } from "@/components/NotedFigure";
-import { SplitBar, kindsOfStats } from "@/components/TokenKinds";
+import { SplitBar, cacheHitRate, kindsOfStats } from "@/components/TokenKinds";
 import { Button } from "@/components/ui/button";
 import {
   SortableHead,
@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/table";
 import { useTableSort } from "@/components/use-table-sort";
 import {
+  CACHE_HIT_RATE_HINT,
+  LABEL_CACHE_HIT_RATE,
   TOKENS_LOWER_BOUND,
   statsCostFigure,
   statsCostPerSucceededFigure,
@@ -126,6 +128,12 @@ export interface GroupTableProps<Row extends Group> {
   measure?: "success" | "share";
 }
 
+function hitRateOf(row: Group, tier: string): number | null {
+  return tier === "base" || row.tokens === null
+    ? null
+    : cacheHitRate(row.tokens.input, row.tokens.cache_read);
+}
+
 function sortColumns<Row extends Group>(
   nameColumns: readonly NameColumn<Row>[],
   tier: string,
@@ -140,6 +148,7 @@ function sortColumns<Row extends Group>(
             id: "tokens",
             value: (row: Row) => (isRecorded && row.tokens !== null ? row.tokens.uncached : null),
           },
+          { id: "hit-rate", value: (row: Row) => hitRateOf(row, tier) },
         ]
       : [
           { id: "cost", value: (row: Row) => (isRecorded ? row.cost_usd : null) },
@@ -172,12 +181,12 @@ function splitFigureOf(isLowerBound: boolean): (n: number) => Figure {
     isLowerBound ? { text: fmtTokensCut(n), note: TOKENS_LOWER_BOUND } : { text: fmtTokens(n) };
 }
 
-interface SplitCellProps {
+interface RowCellProps {
   row: Group;
   tier: string;
 }
 
-function SplitCell({ row, tier }: SplitCellProps) {
+function SplitCell({ row, tier }: RowCellProps) {
   if (tier === "base" || row.tokens === null || row.tokens.uncached === 0) {
     return <TableCell />;
   }
@@ -190,6 +199,11 @@ function SplitCell({ row, tier }: SplitCellProps) {
       />
     </TableCell>
   );
+}
+
+function HitRateCell({ row, tier }: RowCellProps) {
+  const rate = hitRateOf(row, tier);
+  return <TableCell look="number">{rate === null ? undefined : fmtPercent(rate)}</TableCell>;
 }
 
 /** The shown count lives in state, so mount the table with a key that changes with the range. */
@@ -212,7 +226,7 @@ export function GroupTable<Row extends Group>({
   return (
     <Panel title={title}>
       <Table
-        className={units === "tokens" ? "table-fixed min-w-242" : "table-fixed min-w-244"}
+        className={units === "tokens" ? "table-fixed min-w-274" : "table-fixed min-w-244"}
         frozenColumns={1}
       >
         <TableHeader>
@@ -254,12 +268,20 @@ export function GroupTable<Row extends Group>({
                 columnId="tokens"
                 sort={sort}
                 align="right"
-                title="Cache reads not included"
                 className={COLUMN_WIDTH.figure}
               >
                 Tokens
               </SortableHead>
               <TableHead className={COLUMN_WIDTH.turns}>Split</TableHead>
+              <SortableHead
+                columnId="hit-rate"
+                sort={sort}
+                align="right"
+                title={CACHE_HIT_RATE_HINT}
+                className={COLUMN_WIDTH.figure}
+              >
+                {LABEL_CACHE_HIT_RATE}
+              </SortableHead>
             </>
           ) : (
             <>
@@ -310,6 +332,7 @@ export function GroupTable<Row extends Group>({
                     <NotedFigure figure={statsTokensFigure(row, tier)} />
                   </TableCell>
                   <SplitCell row={row} tier={tier} />
+                  <HitRateCell row={row} tier={tier} />
                 </>
               ) : (
                 <>

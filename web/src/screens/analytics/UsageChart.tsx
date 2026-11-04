@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { ChartFrame, useChart } from "@/components/ChartFrame";
 import { Panel } from "@/components/Panel";
 import {
+  CacheReadColumn,
   KindLegend,
   KindRows,
   KindStack,
@@ -209,30 +210,6 @@ function UsageSlot({ bar, note, tick }: UsageSlotProps) {
             {tick}
           </span>
         )}
-      </TooltipTrigger>
-      <TooltipPopup besideChart={chart}>{note}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
-interface CacheReadColumnProps {
-  cacheRead: number;
-  top: number;
-  note: ReactNode;
-}
-
-// The slot above is the keyboard stop, so a column takes no focus of its own.
-function CacheReadColumn({ cacheRead, top, note }: CacheReadColumnProps) {
-  const chart = useChart();
-  return (
-    <Tooltip>
-      <TooltipTrigger delay={0} render={<div className="flex h-full items-end justify-center" />}>
-        {cacheRead > 0 ? (
-          <div
-            className="w-[max(1px,calc(100%-4px))] max-w-10 rounded-t bg-chart-d"
-            style={{ height: `${(cacheRead / top) * 100}%` }}
-          />
-        ) : undefined}
       </TooltipTrigger>
       <TooltipPopup besideChart={chart}>{note}</TooltipPopup>
     </Tooltip>

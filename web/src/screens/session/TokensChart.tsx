@@ -1,10 +1,20 @@
 import { useRef } from "react";
 
 import { ChartFrame, useChart } from "@/components/ChartFrame";
+import {
+  CacheReadColumn,
+  KindLegend,
+  KindRows,
+  KindStack,
+  STACKED_KINDS,
+} from "@/components/TokenKinds";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
 import { fmtClockSec, fmtCount, fmtDuration, fmtTokens } from "@/lib/format";
+
+import type { KindValues } from "@/components/TokenKinds";
+import type { ReactNode } from "react";
 
 import type { TurnBar } from "./timeline";
 
@@ -17,6 +27,34 @@ function topOf(max: number): number {
   const magnitude = 10 ** Math.floor(Math.log10(Math.max(max, 1)));
   const step = [1, 2, 5].find((candidate) => candidate * magnitude >= max) ?? 10;
   return step * magnitude;
+}
+
+/** The kinds a turn stacks, `null` for a plain bar and for the turn in progress, which stays hollow. */
+function stackedKindsOf(bar: TurnBar): KindValues | null {
+  return bar.inProgress ? null : bar.kinds;
+}
+
+function noteOf(bar: TurnBar): ReactNode {
+  const kinds = stackedKindsOf(bar);
+  return (
+    <div className="min-w-35">
+      <div className="mb-xxs font-bold">{headingOf(bar)}</div>
+      {kinds === null ? (
+        <div className="flex items-center gap-xs">
+          Tokens
+          <b className="ml-auto font-medium tabular-nums">{fmtCount(bar.tokens)}</b>
+        </div>
+      ) : (
+        <KindRows kinds={kinds} figureOf={(n) => ({ text: fmtCount(n) })} />
+      )}
+      {bar.seconds === null ? undefined : (
+        <div className="flex items-center gap-xs">
+          Duration
+          <b className="ml-auto font-medium tabular-nums">{fmtDuration(bar.seconds)}</b>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function headingOf(bar: TurnBar): string {
@@ -41,44 +79,47 @@ interface BarSlotProps {
   bar: TurnBar;
   top: number;
   hasLabel: boolean;
+  note: ReactNode;
 }
 
-function BarSlot({ bar, top, hasLabel }: BarSlotProps) {
+function BarSlot({ bar, top, hasLabel, note }: BarSlotProps) {
   const chart = useChart();
+  const kinds = stackedKindsOf(bar);
   return (
     <Tooltip>
       <TooltipTrigger
         delay={0}
-        render={<div className="relative flex h-full items-end justify-center" />}
+        render={
+          <div
+            tabIndex={0}
+            className="relative flex h-full items-end justify-center outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
+          />
+        }
       >
-        <div
-          className={cn(
-            "w-[max(1px,calc(100%-4px))] max-w-10 rounded-t",
-            bar.inProgress ? "border border-primary bg-surface-raised" : "bg-primary",
-          )}
-          style={{ height: `${(bar.tokens / top) * 100}%` }}
-        />
+        {kinds === null ? (
+          <div
+            className={cn(
+              "w-[max(1px,calc(100%-4px))] max-w-10 rounded-t",
+              bar.inProgress ? "border border-primary bg-surface-raised" : "bg-primary",
+            )}
+            style={{ height: `${(bar.tokens / top) * 100}%` }}
+          />
+        ) : (
+          <KindStack
+            kinds={STACKED_KINDS}
+            values={kinds}
+            heightPercent={(100 * bar.tokens) / top}
+            width="w-[max(1px,calc(100%-4px))] max-w-10"
+            isLowerBound={false}
+          />
+        )}
         {hasLabel ? (
           <span className="absolute top-full left-1/2 mt-0.5 -translate-x-1/2 text-body-sm whitespace-nowrap text-ink-muted">
             {bar.turn}
           </span>
         ) : undefined}
       </TooltipTrigger>
-      <TooltipPopup besideChart={chart}>
-        <div className="min-w-35">
-          <div className="mb-xxs font-bold">{headingOf(bar)}</div>
-          <div className="flex items-center gap-xs">
-            Tokens
-            <b className="ml-auto font-medium tabular-nums">{fmtCount(bar.tokens)}</b>
-          </div>
-          {bar.seconds === null ? undefined : (
-            <div className="flex items-center gap-xs">
-              Duration
-              <b className="ml-auto font-medium tabular-nums">{fmtDuration(bar.seconds)}</b>
-            </div>
-          )}
-        </div>
-      </TooltipPopup>
+      <TooltipPopup besideChart={chart}>{note}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -89,11 +130,7 @@ export interface TokensLegendProps {
 
 export function TokensLegend({ hasInProgress }: TokensLegendProps) {
   return (
-    <span className="inline-flex flex-wrap items-baseline gap-x-md gap-y-xxs">
-      <span className="inline-flex items-center gap-xs">
-        <span aria-hidden="true" className="size-sm rounded bg-primary" />
-        <span className="self-baseline">Completed turn</span>
-      </span>
+    <KindLegend>
       {hasInProgress ? (
         <span className="inline-flex items-center gap-xs">
           <span
@@ -103,7 +140,7 @@ export function TokensLegend({ hasInProgress }: TokensLegendProps) {
           <span className="self-baseline">In progress</span>
         </span>
       ) : undefined}
-    </span>
+    </KindLegend>
   );
 }
 
@@ -117,14 +154,34 @@ export function TokensChart({ bars }: TokensChartProps) {
   const plotWidth = useWidth(plotRef);
   const stride = labelStrideOf(bars, plotWidth);
   const top = topOf(Math.max(...bars.map((bar) => bar.tokens)));
+  const turns = `${bars.length} ${bars.length === 1 ? "turn" : "turns"}`;
+  const notes = bars.map(noteOf);
+  const cacheReads = bars.map((bar) => stackedKindsOf(bar)?.cache_read ?? 0);
+  const cacheTop = topOf(Math.max(0, ...cacheReads));
+  const subplot = cacheReads.some((n) => n > 0)
+    ? {
+        label: `Cache read per turn, ${turns}`,
+        valueName: "Cache read",
+        ticks: [fmtTokens(cacheTop), fmtTokens(0)],
+        children: bars.map((_, index) => (
+          <CacheReadColumn
+            key={index}
+            cacheRead={cacheReads[index] ?? 0}
+            top={cacheTop}
+            note={notes[index]}
+          />
+        )),
+      }
+    : undefined;
 
   return (
     <ChartFrame
-      label={`Tokens per turn, ${bars.length} ${bars.length === 1 ? "turn" : "turns"}`}
+      label={`Tokens per turn, ${turns}`}
       valueName="Tokens"
       categoryName="Turn"
       ticks={[1, 0.5, 0].map((fraction) => fmtTokens(top * fraction))}
       plotRef={plotRef}
+      subplot={subplot}
     >
       {bars.map((bar, index) => (
         <BarSlot
@@ -132,6 +189,7 @@ export function TokensChart({ bars }: TokensChartProps) {
           bar={bar}
           top={top}
           hasLabel={bar.turn !== null && index % stride === 0}
+          note={notes[index]}
         />
       ))}
     </ChartFrame>
