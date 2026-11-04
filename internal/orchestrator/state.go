@@ -160,6 +160,11 @@ type RunningEntry struct {
 	// turnToolCalls and turnErrors count since the latest turn record.
 	turnToolCalls, turnErrors int
 
+	// turnsClosed is the number of turns started when the latest turn record
+	// was made. A turn-ending event the loop never received folds into the
+	// next record, so only a started turn above it lacks a record at exit.
+	turnsClosed int
+
 	// ReportedAmounts is the run's amounts the agent reported, each in its
 	// own unit, sorted by unit then model. Written only by [HandleAgentEvent]
 	// and never added to a token or money total outside the pricing fallback.

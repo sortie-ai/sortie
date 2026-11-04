@@ -200,3 +200,22 @@ func TestRunTurns_Unmeasured(t *testing.T) {
 		}
 	}
 }
+
+func TestRunTurns_DroppedEndingFoldsIntoNextRecord(t *testing.T) {
+	t.Parallel()
+
+	state := turnsSession(t)
+	lastEnd := baseTime.Add(20 * time.Second)
+	feedTurnEvents(state,
+		turnUsage("m1", domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}),
+		turnUsage("m1", domain.TokenUsage{InputTokens: 300, OutputTokens: 90, TotalTokens: 390}),
+	)
+	state.Running[turnsIssue].TurnCount = 2
+	feedTurnEvents(state, turnEnd(domain.EventTurnCompleted, lastEnd))
+
+	run := exitTurnsSession(t, state, WorkerResult{TurnsStarted: 2})
+
+	if len(run.Turns) != 1 || !run.Turns[0].EndedAt.Equal(lastEnd) {
+		t.Fatalf("RunHistory.Turns = %+v, want one record ended at %v", run.Turns, lastEnd)
+	}
+}
