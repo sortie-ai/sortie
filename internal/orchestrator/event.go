@@ -129,6 +129,10 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	}
 
 	if event.Type == domain.EventToolResult {
+		entry.turnToolCalls++
+		if event.ToolError {
+			entry.turnErrors++
+		}
 		tool := toolLabel(event.ToolName, event.ToolKind)
 		outcome := outcomeSuccess
 		if event.ToolError {
@@ -268,6 +272,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	// current turn only, never against a session-wide total.
 	if isTurnTerminalEvent(event.Type) {
 		entry.APIRequestCountAtLastTurnEnd = entry.APIRequestCount
+		endTurn(state, issueID, entry, event)
 	}
 
 	retainEvent(entry, event)

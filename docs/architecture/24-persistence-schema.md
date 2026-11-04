@@ -4,7 +4,7 @@
 
 Sortie uses an embedded SQLite database for durable state. The database file path defaults to `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path` front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and runs all pending schema migrations before beginning normal operation. The last price tables accepted from a download (Section 13.5) are files beside the database file, outside the schema.
 
-Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts in a component of its own, which holds everything specific to SQLite: the database driver, the connection setup, the SQL dialect, and the schema migrations. Any other backend implements the same contracts the same way, as a sibling component that holds its own, so adding one changes neither the contracts nor their callers. The database is opened at one place, which applies the pending migrations when the orchestrator starts and applies none when a process that only reads opens the database read-only. Only that place depends on the SQLite store itself; every other component depends on the contracts. An operation that must see or change two domains at one instant is a single operation of one contract, which every implementation carries out atomically: appending a finished run with its events, recording a stage hop with the deletion of the issue's retry entry, and listing the live passes with the retry entries.
+Callers reach durable state through backend-neutral storage contracts, one per storage domain: the records the domain stores and the operations on them, with no SQL and no database driver. The SQLite store implements the contracts in a component of its own, which holds everything specific to SQLite: the database driver, the connection setup, the SQL dialect, and the schema migrations. Any other backend implements the same contracts the same way, as a sibling component that holds its own, so adding one changes neither the contracts nor their callers. The database is opened at one place, which applies the pending migrations when the orchestrator starts and applies none when a process that only reads opens the database read-only. Only that place depends on the SQLite store itself; every other component depends on the contracts. An operation that must see or change two domains at one instant is a single operation of one contract, which every implementation carries out atomically: appending a finished run with its turn records and events, recording a stage hop with the deletion of the issue's retry entry, and listing the live passes with the retry entries.
 
 ### 19.2 Tables
 
@@ -159,6 +159,40 @@ A recorded value is written in the statement that writes the share's cost, and a
 | `lower_bound` | INTEGER | `1` when the run may have spent more in `unit` than `amount` states, `0` otherwise |
 
 A run writes one row per unit and model of its reported amounts, in the same transaction as its `run_history` row, whether or not the run's token figure is measured. A run whose runtime reported no amount writes none. A run whose `usage_provenance` is `NULL` has no row, and its amounts are not recorded rather than absent. An amount in a unit other than `USD` is read for display, per run and summed per unit for an issue, and by no ceiling, cost total, or token total; a `USD` amount is never listed among the displayed amounts. A `USD` amount prices a per-model share only where no rate layer prices the model, and that share records the price source `agent`.
+
+**`run_turns`**: each run's turns, one record per turn
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `run_id` | INTEGER NOT NULL | The `run_history.id` of the run (composite PK with `seq`) |
+| `seq` | INTEGER NOT NULL | The record's position in its run: 1 for the first, rising by one in the order the records are made |
+| `ended_at` | TEXT NOT NULL | The turn's end instant in UTC, in a fixed-width layout with nine fractional digits, so text order is time order: the timestamp of the turn-ending event, or the run's completion instant for a record made at exit (Section 13.5) |
+| `tokens_measured` | INTEGER NOT NULL | `1` when the turn carries a token figure; `0` when its usage was not measured, in which case the turn has no `run_turn_models` row and `NULL` in every cost column, never zero |
+| `tool_calls` | INTEGER NOT NULL | The `tool_result` events of the turn |
+| `errors` | INTEGER NOT NULL | The tool calls that returned an error, plus one when the turn ended in `turn_failed` or `turn_ended_with_error` |
+| `estimated_cost_usd` | REAL | The turn's share of the run's cost (Section 13.5); `NULL` when `tokens_measured` is `0` or the run's `estimated_cost_usd` is `NULL` |
+| `input_cost_usd` | REAL | The part of the turn's cost spent on fresh input, which is input tokens less cache reads and cache writes; `NULL` exactly when `estimated_cost_usd` is `NULL` |
+| `output_cost_usd` | REAL | The part spent on output tokens; `NULL` exactly when `estimated_cost_usd` is `NULL` |
+| `cache_read_cost_usd` | REAL | The part spent on cache reads; `NULL` exactly when `estimated_cost_usd` is `NULL` |
+| `cache_write_cost_usd` | REAL | The part spent on cache writes; `NULL` exactly when `estimated_cost_usd` is `NULL` |
+
+The class costs sum to `estimated_cost_usd`. An index on `ended_at` serves reads by time range.
+
+**`run_turn_models`**: each turn's token counts per model
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `run_id` | INTEGER NOT NULL | The `run_history.id` of the run (composite PK with `seq` and `model`) |
+| `seq` | INTEGER NOT NULL | The `run_turns.seq` of the turn |
+| `model` | TEXT NOT NULL | The model the tokens were spent on, attributed as in `run_model_usage.model` |
+| `input_tokens` | INTEGER NOT NULL | Input tokens spent on the model in the turn, cache counters included as in `run_model_usage.input_tokens` |
+| `output_tokens` | INTEGER NOT NULL | Output tokens spent on the model in the turn |
+| `cache_read_tokens` | INTEGER NOT NULL | Cache-read tokens spent on the model in the turn |
+| `cache_write_tokens` | INTEGER NOT NULL | Cache-write tokens spent on the model in the turn |
+
+A turn writes one row per model that spent tokens in some class. Across a run, the rows of a model sum to that model's `run_model_usage` row, class by class. The rows carry no cost: the turn's cost and its split by class live on `run_turns`.
+
+A run's turn records are written once, at worker exit, in the same transaction as its `run_history` row, after the reported amounts and before the events. A failure writing them fails the whole append, so no run is stored without its turn records; a failure writing the events leaves the run, its amounts, and its turn records stored. The costs are priced with the run under the rates in force at exit and no writer changes them afterwards. A turn record carries no completeness of its own: it reads the `cost_status` and `usage_completeness` of its run. The records are kept as long as the `run_history` row, and event pruning deletes none of them. The `ci_failed` row has none, and a run recorded before the tables existed has none. Their meaning is described in Section 13.5.
 
 **`session_metadata`**: last known session metadata per issue (for observability and debug)
 
@@ -476,3 +510,4 @@ Every write of `run_events` updates `bytes` in its own transaction, so the figur
 - Migrations are additive (new columns/tables) where possible; destructive migrations require explicit versioning.
 - The migration that adds the recorded cost leaves the pricing of the rows written before it to the first start that applies it, which prices them once under the rates in force at that start and never again (Section 19.2).
 - The migration that adds provenance, completeness, and reported amounts adds nullable columns with no default and backfills nothing, so a row written before it reads as provenance unknown and has no amount row (Section 19.2).
+- The migration that adds the turn tables creates `run_turns` and `run_turn_models` empty and backfills nothing, so a run recorded before it has no turn record (Section 19.2).

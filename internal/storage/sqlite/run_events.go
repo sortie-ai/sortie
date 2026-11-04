@@ -16,9 +16,10 @@ const runEventsSavepoint = "run_events"
 
 // AppendRunHistoryWithEvents appends run, its [storage.RunHistory.ModelUsage] with
 // the [storage.RunHistory.ModelCosts] pricing it, its [storage.RunHistory.ReportedAmounts],
-// and events under *run.DispatchID in one transaction, then prunes under
-// limits. A *[storage.RunEventsError] means the
-// row was stored and the events were not; any other error means neither was.
+// its [storage.RunHistory.Turns], and events under *run.DispatchID in one
+// transaction, then prunes under limits. A *[storage.RunEventsError] means the
+// row, its parts, its amounts, and its turn records were stored and the events
+// were not; any other error means none of them was.
 func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunHistory, events []storage.RunEvent, limits storage.RunEventLimits) (storage.RunHistory, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -36,6 +37,10 @@ func (s *Store) AppendRunHistoryWithEvents(ctx context.Context, run storage.RunH
 	}
 
 	if err := insertRunReportedAmounts(ctx, tx, row.ID, run.ReportedAmounts); err != nil {
+		return storage.RunHistory{}, err
+	}
+
+	if err := insertRunTurns(ctx, tx, row.ID, run.Turns); err != nil {
 		return storage.RunHistory{}, err
 	}
 

@@ -149,6 +149,17 @@ type RunningEntry struct {
 	// run's token counters in every class. Written only by applyUsageDelta.
 	UsageByModel map[string]domain.TokenUsage
 
+	// turns is the session's turn records, costs unset. Only the event loop
+	// reads and writes it, and the fields below.
+	turns []storage.RunTurn
+
+	// turnSpend is the session's spend at its latest turn record; its Parts
+	// is the per-model baseline of the next record.
+	turnSpend pricing.Spend
+
+	// turnToolCalls and turnErrors count since the latest turn record.
+	turnToolCalls, turnErrors int
+
 	// ReportedAmounts is the run's amounts the agent reported, each in its
 	// own unit, sorted by unit then model. Written only by [HandleAgentEvent]
 	// and never added to a token or money total outside the pricing fallback.
@@ -1346,6 +1357,10 @@ type State struct {
 	// retains nothing.
 	RetainedEvents *RunEventLog
 
+	// RunningTurns holds the turn records of every running session that has
+	// one. Nil publishes nothing.
+	RunningTurns *TurnLog
+
 	// StageChains and HopCeiling mirror config.Dispatch.Chains and
 	// config.Dispatch.HopCeiling, refreshed on every poll tick. Set before the
 	// event loop serves a snapshot. Written only on the event-loop goroutine.
@@ -1613,6 +1628,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentB
 		ActiveOrder:               make(map[string]time.Time),
 		AgentTotals:               totals,
 		RetainedEvents:            NewRunEventLog(),
+		RunningTurns:              NewTurnLog(),
 		ReactionAttempts:          make(map[string]int),
 		ReactionHandedOffComments: make(map[string]map[string]struct{}),
 		ReactionReportedComments:  make(map[string]map[string]struct{}),

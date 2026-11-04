@@ -47,11 +47,13 @@ func (e *RunEventsError) Unwrap() error {
 
 // RunEventStore records the events of finished runs.
 type RunEventStore interface {
-	// AppendRunHistoryWithEvents stores run, with its model usage and reported
-	// amounts, and its events in one write, then prunes the stored events under
-	// limits; a crash leaves the run and its events both stored or neither. A
-	// *[RunEventsError] means run was stored and events were not; any other
-	// error means neither was.
+	// AppendRunHistoryWithEvents stores run, with its model usage, reported
+	// amounts, and turn records, and its events in one write, then prunes the
+	// stored events under limits; a crash leaves the run and its events both
+	// stored or neither. A *[RunEventsError] means run, its parts, its amounts,
+	// and its turn records were stored and events were not; any other error
+	// means none of them was. [RunHistoryStore.AppendRunHistory] writes no turn
+	// records.
 	AppendRunHistoryWithEvents(ctx context.Context, run RunHistory, events []RunEvent, limits RunEventLimits) (RunHistory, error)
 	AppendRunEvents(ctx context.Context, dispatchID, completedAt string, events []RunEvent, limits RunEventLimits) error
 	RunEvents(ctx context.Context, dispatchID string, newest int) ([]RunEvent, error)

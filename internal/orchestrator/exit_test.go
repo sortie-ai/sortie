@@ -558,97 +558,75 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 	}
 }
 
-func TestHandleWorkerExit_UsageReconciliation_NoDoubleCount(t *testing.T) {
+func TestHandleWorkerExit_UsageReconciliation(t *testing.T) {
 	t.Parallel()
 
-	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-USG1", nil)
-	entry := state.Running["ISSUE-USG1"]
-	entry.UsageMeasured = true
-	entry.AgentInputTokens = 100
-	entry.AgentOutputTokens = 50
-	entry.AgentTotalTokens = 150
-	entry.CacheReadTokens = 10
-	entry.LastReportedInputTokens = 100
-	entry.LastReportedOutputTokens = 50
-	entry.LastReportedTotalTokens = 150
-	entry.LastReportedCacheReadTokens = 10
-	state.AgentTotals.InputTokens = 100
-	state.AgentTotals.OutputTokens = 50
-	state.AgentTotals.TotalTokens = 150
-	state.AgentTotals.CacheReadTokens = 10
+	entryUsage := domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CacheReadTokens: 10}
 
-	HandleWorkerExit(state, WorkerResult{
-		IssueID:      "ISSUE-USG1",
-		Identifier:   "ISSUE-USG1-ident",
-		ExitKind:     WorkerExitNormal,
-		AgentAdapter: "mock",
-		Usage:        domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CacheReadTokens: 10},
-	}, defaultExitParams(t, store))
-
-	if len(store.runHistories) != 1 {
-		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
-	}
-	run := store.runHistories[0]
-	if run.InputTokens != 100 || run.OutputTokens != 50 || run.TotalTokens != 150 || run.CacheReadTokens != 10 {
-		t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want (100, 50, 150, 10) (no counter advance)",
-			run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
-	}
-	if state.AgentTotals.TotalTokens != 150 {
-		t.Errorf("AgentTotals.TotalTokens = %d, want 150 (unchanged)", state.AgentTotals.TotalTokens)
-	}
-}
-
-func TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent(t *testing.T) {
-	t.Parallel()
-
-	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-USG2", nil)
-	entry := state.Running["ISSUE-USG2"]
-	entry.UsageMeasured = true
-	entry.AgentInputTokens = 100
-	entry.AgentOutputTokens = 50
-	entry.AgentTotalTokens = 150
-	entry.CacheReadTokens = 10
-	entry.LastReportedInputTokens = 100
-	entry.LastReportedOutputTokens = 50
-	entry.LastReportedTotalTokens = 150
-	entry.LastReportedCacheReadTokens = 10
-	state.AgentTotals.InputTokens = 100
-	state.AgentTotals.OutputTokens = 50
-	state.AgentTotals.TotalTokens = 150
-	state.AgentTotals.CacheReadTokens = 10
-
-	// The worker's own mirror observed more than the entry's last
-	// processed event: the trailing token_usage event never reached
-	// HandleAgentEvent because a full agentEventCh dropped it.
-	workerUsage := domain.TokenUsage{InputTokens: 180, OutputTokens: 90, TotalTokens: 270, CacheReadTokens: 15}
-
-	HandleWorkerExit(state, WorkerResult{
-		IssueID:      "ISSUE-USG2",
-		Identifier:   "ISSUE-USG2-ident",
-		ExitKind:     WorkerExitNormal,
-		AgentAdapter: "mock",
-		Usage:        workerUsage,
-	}, defaultExitParams(t, store))
-
-	if len(store.runHistories) != 1 {
-		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
-	}
-	run := store.runHistories[0]
-	if run.InputTokens != 180 || run.OutputTokens != 90 || run.TotalTokens != 270 || run.CacheReadTokens != 15 {
-		t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want (180, 90, 270, 15) (worker's figure)",
-			run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+	tests := []struct {
+		name        string
+		workerUsage domain.TokenUsage
+		want        domain.TokenUsage
+	}{
+		{
+			name:        "result equal to the entry advances nothing",
+			workerUsage: entryUsage,
+			want:        entryUsage,
+		},
+		{
+			name:        "result ahead of the entry after a dropped trailing event adds exactly the difference",
+			workerUsage: domain.TokenUsage{InputTokens: 180, OutputTokens: 90, TotalTokens: 270, CacheReadTokens: 15},
+			want:        domain.TokenUsage{InputTokens: 180, OutputTokens: 90, TotalTokens: 270, CacheReadTokens: 15},
+		},
 	}
 
-	// state.AgentTotals started at 150 (total) and must increase by
-	// exactly the difference (270 - 150 = 120), not by workerUsage.TotalTokens
-	// applied on top of an unreconciled baseline.
-	if state.AgentTotals.TotalTokens != 270 {
-		t.Errorf("AgentTotals.TotalTokens = %d, want 270 (150 + exactly the 120 difference)", state.AgentTotals.TotalTokens)
-	}
-	if state.AgentTotals.InputTokens != 180 {
-		t.Errorf("AgentTotals.InputTokens = %d, want 180", state.AgentTotals.InputTokens)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &mockExitStore{}
+			state := exitState(t, "ISSUE-USG", nil)
+			entry := state.Running["ISSUE-USG"]
+			entry.UsageMeasured = true
+			entry.AgentInputTokens = entryUsage.InputTokens
+			entry.AgentOutputTokens = entryUsage.OutputTokens
+			entry.AgentTotalTokens = entryUsage.TotalTokens
+			entry.CacheReadTokens = entryUsage.CacheReadTokens
+			entry.LastReportedInputTokens = entryUsage.InputTokens
+			entry.LastReportedOutputTokens = entryUsage.OutputTokens
+			entry.LastReportedTotalTokens = entryUsage.TotalTokens
+			entry.LastReportedCacheReadTokens = entryUsage.CacheReadTokens
+			state.AgentTotals.InputTokens = entryUsage.InputTokens
+			state.AgentTotals.OutputTokens = entryUsage.OutputTokens
+			state.AgentTotals.TotalTokens = entryUsage.TotalTokens
+			state.AgentTotals.CacheReadTokens = entryUsage.CacheReadTokens
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:      "ISSUE-USG",
+				Identifier:   "ISSUE-USG-ident",
+				ExitKind:     WorkerExitNormal,
+				AgentAdapter: "mock",
+				Usage:        tt.workerUsage,
+			}, defaultExitParams(t, store))
+
+			if len(store.runHistories) != 1 {
+				t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+			}
+			run := store.runHistories[0]
+			gotRun := domain.TokenUsage{InputTokens: run.InputTokens, OutputTokens: run.OutputTokens, TotalTokens: run.TotalTokens, CacheReadTokens: run.CacheReadTokens}
+			if gotRun != tt.want {
+				t.Errorf("RunHistory tokens = %+v, want %+v", gotRun, tt.want)
+			}
+			gotTotals := domain.TokenUsage{
+				InputTokens:     state.AgentTotals.InputTokens,
+				OutputTokens:    state.AgentTotals.OutputTokens,
+				TotalTokens:     state.AgentTotals.TotalTokens,
+				CacheReadTokens: state.AgentTotals.CacheReadTokens,
+			}
+			if gotTotals != tt.want {
+				t.Errorf("AgentTotals = %+v, want %+v", gotTotals, tt.want)
+			}
+		})
 	}
 }
 

@@ -170,6 +170,9 @@ var migration052SQL string
 //go:embed sql/053_last_prompt_at.sql
 var migration053SQL string
 
+//go:embed sql/054_run_turns.sql
+var migration054SQL string
+
 // reactionActivityMigration is the version of the migration that creates the
 // reaction_activity table.
 const reactionActivityMigration = 38
@@ -228,4 +231,5 @@ var migrations = []Migration{
 	{Version: 51, Description: "identities of the tracker comments Sortie posts", SQL: migration051SQL},
 	{Version: 52, Description: "comments each agent conversation was given", SQL: migration052SQL},
 	{Version: 53, Description: "moment a run began its last turn, on run history and parks", SQL: migration053SQL},
+	{Version: 54, Description: "turn records of a run and their per-model tokens", SQL: migration054SQL},
 }
