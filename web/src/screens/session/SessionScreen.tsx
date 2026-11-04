@@ -254,7 +254,7 @@ function SessionBody({ identifier, dispatchId, session, log, config }: SessionBo
             <SessionsPanel identifier={identifier} dispatchId={dispatchId} />
           </div>
           <UsagePanel session={session} />
-          {modelUsage.length > 0 ? <ModelCostPanel parts={modelUsage} /> : undefined}
+          {modelUsage.length > 1 ? <ModelCostPanel parts={modelUsage} /> : undefined}
           {skills.length > 0 ? <SkillsPanel skills={skills} /> : undefined}
           <SessionPanel session={session} config={config} />
         </div>

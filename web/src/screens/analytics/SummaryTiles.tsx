@@ -1,9 +1,13 @@
 import { NotedFigure } from "@/components/NotedFigure";
+import { cacheHitRate } from "@/components/TokenKinds";
 import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/cn";
 import {
+  CACHE_HIT_RATE_HINT,
   COST_PER_RUN_TILE_CAPTION,
+  LABEL_CACHE_HIT_RATE,
   TOKENS_TILE_CAPTION,
+  liveTokensFigure,
   statsCostFigure,
   statsCostPerSucceededFigure,
   statsTokensFigure,
@@ -110,6 +114,33 @@ export function SummaryTiles({ report, units }: SummaryTilesProps) {
       tier === "full" &&
       summary.tokens_unmeasured_runs === 0 &&
       summary.tokens_lower_bound_runs === 0;
+    const tokens = tier === "base" ? null : summary.tokens;
+    if (tokens !== null && tokens.cache_read > 0) {
+      const isExact = !summary.tokens_lower_bound;
+      tiles.push(
+        <Tile
+          key="cache-write"
+          label="Cache write"
+          value={liveTokensFigure(tokens.cache_write, isExact)}
+        />,
+        <Tile
+          key="cache-read"
+          label="Cache read"
+          value={liveTokensFigure(tokens.cache_read, isExact)}
+        />,
+      );
+    }
+    const rate = tokens === null ? null : cacheHitRate(tokens.input, tokens.cache_read);
+    if (rate !== null) {
+      tiles.push(
+        <Tile
+          key="cache-hit-rate"
+          label={LABEL_CACHE_HIT_RATE}
+          value={{ text: fmtPercent(rate) }}
+          hint={CACHE_HIT_RATE_HINT}
+        />,
+      );
+    }
     tiles.push(
       <Tile
         key="tokens"

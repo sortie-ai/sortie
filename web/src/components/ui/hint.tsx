@@ -13,14 +13,17 @@ function keepClickInside(event: MouseEvent) {
 export interface HintProps {
   hint: ReactNode;
   children: ReactNode;
+  /** Hover delay before the hint opens, in ms; omitted, Base UI's default applies. */
+  delay?: number;
 }
 
 /** A popover rather than a tooltip, because touch devices never open a tooltip. */
-export function Hint({ hint, children }: HintProps) {
+export function Hint({ hint, children, delay }: HintProps) {
   return (
     <BasePopover.Root>
       <BasePopover.Trigger
         openOnHover
+        delay={delay}
         onClick={keepClickInside}
         className="cursor-help underline decoration-line-strong decoration-dotted underline-offset-4 transition-colors duration-(--duration-feedback) outline-none hover:decoration-ink-body focus-visible:rounded-xs focus-visible:outline-2 focus-visible:outline-focus-ring data-popup-open:decoration-ink-body"
       >

@@ -1,6 +1,8 @@
+import { EMPTY_KINDS, kindsOfTokenInfo } from "@/components/TokenKinds";
 import { parseInstant } from "@/lib/format";
 
 import type { RunEventResponse, RunningEntryResponse, TokenInfo } from "@/api/types.gen";
+import type { KindValues } from "@/components/TokenKinds";
 import type { RunItem } from "@/stream/core";
 
 export type TimelineLine =
@@ -14,6 +16,8 @@ export type TimelineLine =
       turn: number | null;
       /** The turn's own tokens, `null` when not known. */
       tokens: number | null;
+      /** The turn's own kinds, `null` when not known. */
+      kinds: KindValues | null;
       /** Time since the previous turn end or the session start, `null` when not known. */
       seconds: number | null;
     }
@@ -31,6 +35,8 @@ export interface TurnBar {
   turn: number | null;
   at: string | null;
   tokens: number;
+  /** `null` for a turn whose kinds are not known, and always for the turn in progress. */
+  kinds: KindValues | null;
   seconds: number | null;
   inProgress: boolean;
 }
@@ -51,6 +57,24 @@ function uncachedOf(usage: TokenInfo | null): number | null {
   return Math.max(0, usage.total_tokens - usage.cache_read_tokens);
 }
 
+function kindsOfUsage(usage: TokenInfo | null): KindValues | null {
+  return usage === null ? null : kindsOfTokenInfo(usage);
+}
+
+/** A kind that shrank means the counters were reset or reordered, so no turn owns the difference. */
+function delta(now: KindValues | null, before: KindValues | null): KindValues | null {
+  if (now === null || before === null) {
+    return null;
+  }
+  const kinds: KindValues = {
+    input: now.input - before.input,
+    output: now.output - before.output,
+    cache_write: now.cache_write - before.cache_write,
+    cache_read: now.cache_read - before.cache_read,
+  };
+  return Object.values(kinds).every((amount) => amount >= 0) ? kinds : null;
+}
+
 /** A figure is set only when no event it counts is missing, so nothing is attributed across a gap. */
 export function timelineOf(items: readonly RunItem[]): Timeline {
   const lines: TimelineLine[] = [];
@@ -59,6 +83,7 @@ export function timelineOf(items: readonly RunItem[]): Timeline {
   const first = items[0];
   const isFromStart = first?.kind === "event" && first.event.seq === 1;
   let baseline: number | null = isFromStart ? 0 : null;
+  let kindsBase: KindValues | null = isFromStart ? EMPTY_KINDS : null;
   let turn: number | null = isFromStart ? 0 : null;
   let since: number | null = null;
 
@@ -76,6 +101,7 @@ export function timelineOf(items: readonly RunItem[]): Timeline {
       flush();
       lines.push({ kind: "gap", key: `g${item.fromSeq}`, missing: item.toSeq - item.fromSeq + 1 });
       baseline = null;
+      kindsBase = null;
       since = null;
       turn = null;
       continue;
@@ -97,14 +123,16 @@ export function timelineOf(items: readonly RunItem[]): Timeline {
       const figure = uncachedOf(usage);
       const difference = figure !== null && baseline !== null ? figure - baseline : null;
       const tokens = difference !== null && difference >= 0 ? difference : null;
+      const kinds = tokens === null ? null : delta(kindsOfUsage(usage), kindsBase);
       baseline = usage === null ? 0 : figure;
+      kindsBase = usage === null ? EMPTY_KINDS : kindsOfUsage(usage);
 
       const at = parseInstant(event.at);
       const seconds = since !== null && at !== null ? (at - since) / 1000 : null;
       since = at;
 
       turn = turn === null ? null : turn + 1;
-      lines.push({ kind: "turn", key, event, turn, tokens, seconds });
+      lines.push({ kind: "turn", key, event, turn, tokens, kinds, seconds });
     } else {
       lines.push({ kind: "event", key, event });
     }
@@ -123,6 +151,7 @@ export function turnBarsOf(timeline: Timeline, running: RunningEntryResponse | n
         turn: line.turn,
         at: line.event.at,
         tokens: line.tokens,
+        kinds: line.kinds,
         seconds: line.seconds,
         inProgress: false,
       });
@@ -140,6 +169,7 @@ export function turnBarsOf(timeline: Timeline, running: RunningEntryResponse | n
       turn: timeline.nextTurn,
       at: null,
       tokens: figure - timeline.baseline,
+      kinds: null,
       seconds: null,
       inProgress: true,
     });

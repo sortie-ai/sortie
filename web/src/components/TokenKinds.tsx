@@ -1,9 +1,14 @@
+import { useChart } from "@/components/ChartFrame";
 import { NotedFigure } from "@/components/NotedFigure";
+import { Hint } from "@/components/ui/hint";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { LABEL_CACHE_HIT_RATE } from "@/lib/figures";
+import { fmtPercent } from "@/lib/format";
 
-import type { Tokens } from "@/api/types.gen";
+import type { TokenInfo, Tokens } from "@/api/types.gen";
 import type { Figure } from "@/lib/figures";
+import type { ReactNode } from "react";
 
 /** The amounts of one token figure, split by kind. */
 export type KindValues = Record<"input" | "output" | "cache_write" | "cache_read", number>;
@@ -36,6 +41,41 @@ export function kindsOfStats(tokens: Tokens): KindValues {
   };
 }
 
+/** Every kind at zero: the base of a run read from its first event, and an issue with no run history. */
+export const EMPTY_KINDS: KindValues = { input: 0, output: 0, cache_write: 0, cache_read: 0 };
+
+/** Input less both cache counters, floored at zero; null while input, cache read, or cache write is null. Input arrives cache-inclusive. */
+export function freshInputOf(tokens: TokenInfo): number | null {
+  const { input_tokens: input, cache_read_tokens: read, cache_write_tokens: write } = tokens;
+  if (input === null || read === null || write === null) {
+    return null;
+  }
+  return Math.max(0, input - read - write);
+}
+
+/** The kinds of a served TokenInfo; null while any of its counters is null. */
+export function kindsOfTokenInfo(tokens: TokenInfo): KindValues | null {
+  const input = freshInputOf(tokens);
+  const { output_tokens: output, cache_write_tokens: write, cache_read_tokens: read } = tokens;
+  if (input === null || output === null || write === null || read === null) {
+    return null;
+  }
+  return { input, output, cache_write: write, cache_read: read };
+}
+
+/** Cache reads over the cache-inclusive input; null while either is null or not above zero. A zero cache read also means an agent that reports no cache data, so it states no rate. */
+export function cacheHitRate(input: number | null, cacheRead: number | null): number | null {
+  if (input === null || cacheRead === null || input <= 0 || cacheRead <= 0) {
+    return null;
+  }
+  return cacheRead / input;
+}
+
+/** The cache hit rate of a set of kinds, whose input is the fresh input plus both cache kinds. */
+export function hitRateOfKinds(kinds: KindValues): number | null {
+  return cacheHitRate(kinds.input + kinds.cache_write + kinds.cache_read, kinds.cache_read);
+}
+
 // A gap parts the kinds of a bar only while every segment stands at least SEGMENT_MIN_PX tall;
 // PLOT_PX is the height the chart frame gives its plot.
 const PLOT_PX = 112;
@@ -48,16 +88,33 @@ function KindSwatch({ kind }: { kind: TokenKind }) {
   return <span aria-hidden="true" className={cn("size-sm shrink-0 rounded", kind.fill)} />;
 }
 
+export interface KindLabelProps {
+  kind: TokenKind;
+}
+
+/** Names one kind beside its swatch. */
+export function KindLabel({ kind }: KindLabelProps) {
+  return (
+    <span className="inline-flex items-center gap-xs">
+      <KindSwatch kind={kind} />
+      <span className="self-baseline">{kind.label}</span>
+    </span>
+  );
+}
+
+export interface KindLegendProps {
+  /** Rendered after the kinds, inside the same wrapper. */
+  children?: ReactNode;
+}
+
 /** Names every kind beside its swatch, for the note of a panel that draws them. */
-export function KindLegend() {
+export function KindLegend({ children }: KindLegendProps) {
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-md gap-y-xxs">
       {KIND_ORDER.map((kind) => (
-        <span key={kind.key} className="inline-flex items-center gap-xs">
-          <KindSwatch kind={kind} />
-          <span className="self-baseline">{kind.label}</span>
-        </span>
+        <KindLabel key={kind.key} kind={kind} />
       ))}
+      {children}
     </span>
   );
 }
@@ -67,9 +124,10 @@ export interface KindRowsProps {
   figureOf: (n: number) => Figure;
 }
 
-/** Lists each kind with its figure, one row apiece, for the body of a note. */
+/** Lists each kind with its figure, one row apiece, then the cache hit rate while it has a value, for the body of a note. */
 export function KindRows({ kinds, figureOf }: KindRowsProps) {
-  return KIND_ORDER.map((kind) => (
+  const rate = hitRateOfKinds(kinds);
+  const rows = KIND_ORDER.map((kind) => (
     <div key={kind.key} className="flex items-center gap-xs">
       <KindSwatch kind={kind} />
       {kind.label}
@@ -78,6 +136,28 @@ export function KindRows({ kinds, figureOf }: KindRowsProps) {
       </b>
     </div>
   ));
+  return rate === null
+    ? rows
+    : [
+        ...rows,
+        <div key="hit-rate" className="flex items-center gap-xs">
+          {LABEL_CACHE_HIT_RATE}
+          <b className="ml-auto text-body-sm font-medium tabular-nums">{fmtPercent(rate)}</b>
+        </div>,
+      ];
+}
+
+interface KindsNoteProps extends KindRowsProps {
+  footnote?: string | undefined;
+}
+
+function KindsNote({ kinds, figureOf, footnote }: KindsNoteProps) {
+  return (
+    <div className="min-w-35">
+      <KindRows kinds={kinds} figureOf={figureOf} />
+      {footnote === undefined ? undefined : <div className="mt-xxs">{footnote}</div>}
+    </div>
+  );
 }
 
 export interface KindStackProps {
@@ -129,6 +209,7 @@ export interface SplitBarProps {
 
 /** Draws the stacked kinds as one bar across a cell, with every kind's figure in its note. */
 export function SplitBar({ kinds, figureOf, footnote }: SplitBarProps) {
+  const rate = hitRateOfKinds(kinds);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -139,6 +220,7 @@ export function SplitBar({ kinds, figureOf, footnote }: SplitBarProps) {
             role="img"
             aria-label={[
               ...KIND_ORDER.map((kind) => `${kind.label} ${figureOf(kinds[kind.key]).text}`),
+              ...(rate === null ? [] : [`${LABEL_CACHE_HIT_RATE} ${fmtPercent(rate)}`]),
               ...(footnote === undefined ? [] : [footnote]),
             ].join(", ")}
             className="flex h-sm w-full gap-[2px] overflow-hidden rounded"
@@ -154,11 +236,52 @@ export function SplitBar({ kinds, figureOf, footnote }: SplitBarProps) {
         ))}
       </TooltipTrigger>
       <TooltipPopup>
-        <div className="min-w-35">
-          <KindRows kinds={kinds} figureOf={figureOf} />
-          {footnote === undefined ? undefined : <div className="mt-xxs">{footnote}</div>}
-        </div>
+        <KindsNote kinds={kinds} figureOf={figureOf} footnote={footnote} />
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export interface KindsFigureProps {
+  /** The Tokens figure; its note becomes the kinds tooltip's footnote. */
+  figure: Figure;
+  /** null renders the figure as NotedFigure renders it. */
+  kinds: KindValues | null;
+  figureOf: (n: number) => Figure;
+}
+
+/** Renders a Tokens figure that opens the kinds of its amount in a hint, which a touch device opens too. */
+export function KindsFigure({ figure, kinds, figureOf }: KindsFigureProps) {
+  if (kinds === null) {
+    return <NotedFigure figure={figure} />;
+  }
+  return (
+    <Hint delay={0} hint={<KindsNote kinds={kinds} figureOf={figureOf} footnote={figure.note} />}>
+      {figure.text}
+    </Hint>
+  );
+}
+
+export interface CacheReadColumnProps {
+  cacheRead: number;
+  top: number;
+  note: ReactNode;
+}
+
+/** Draws one period's cache reads as a column of the plot under the kinds' stacks, opening the same note as its slot. The slot above is the keyboard stop, so a column takes no focus of its own. */
+export function CacheReadColumn({ cacheRead, top, note }: CacheReadColumnProps) {
+  const chart = useChart();
+  return (
+    <Tooltip>
+      <TooltipTrigger delay={0} render={<div className="flex h-full items-end justify-center" />}>
+        {cacheRead > 0 ? (
+          <div
+            className="w-[max(1px,calc(100%-4px))] max-w-10 rounded-t bg-chart-d"
+            style={{ height: `${(cacheRead / top) * 100}%` }}
+          />
+        ) : undefined}
+      </TooltipTrigger>
+      <TooltipPopup besideChart={chart}>{note}</TooltipPopup>
     </Tooltip>
   );
 }

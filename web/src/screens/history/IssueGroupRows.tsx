@@ -10,6 +10,7 @@ import { Parts } from "@/components/Parts";
 import { ServedText } from "@/components/ServedText";
 import { MarkSlot } from "@/components/Lane";
 import { StatusMark } from "@/components/StatusMark";
+import { KindsFigure, kindsOfTokenInfo } from "@/components/TokenKinds";
 import { Button } from "@/components/ui/button";
 import { MONO } from "@/components/ui/mono";
 import {
@@ -24,7 +25,7 @@ import { cn } from "@/lib/cn";
 import {
   runCostFigure,
   runTokensFigure,
-  totalsCacheReadsText,
+  tokensKindFigure,
   totalsCostFigure,
   totalsTokensFigure,
   vendorAmountFigure,
@@ -78,9 +79,7 @@ export function HistoryTableHead({ state, units }: HistoryTableHeadProps) {
       <TableHead align="right">Duration</TableHead>
       <TableHead align="right">Turns</TableHead>
       {units === "tokens" ? (
-        <TableHead align="right" title="Cache reads not included">
-          Tokens
-        </TableHead>
+        <TableHead align="right">Tokens</TableHead>
       ) : (
         <TableHead align="right">Est. cost</TableHead>
       )}
@@ -105,7 +104,13 @@ function hopText(run: RunResponse): string | undefined {
 }
 
 function tokensPart(totals: HistoryTotalsResponse): ReactNode {
-  const figure = <NotedFigure figure={totalsTokensFigure(totals)} />;
+  const figure = (
+    <KindsFigure
+      figure={totalsTokensFigure(totals)}
+      kinds={totals.uncached_tokens === null ? null : kindsOfTokenInfo(totals.tokens)}
+      figureOf={tokensKindFigure(!totals.tokens_complete)}
+    />
+  );
   return totals.uncached_tokens === null ? <>tokens {figure}</> : <>{figure} tokens</>;
 }
 
@@ -211,9 +216,15 @@ function RunRow({ run, columns }: RunRowProps) {
       <TableCell look="number">{fmtDuration(runSeconds(run))}</TableCell>
       <TableCell look="number">{fmtCount(run.turns_completed)}</TableCell>
       <TableCell look="number">
-        <NotedFigure
-          figure={columns.units === "tokens" ? runTokensFigure(run) : runCostFigure(run)}
-        />
+        {columns.units === "tokens" ? (
+          <KindsFigure
+            figure={runTokensFigure(run)}
+            kinds={run.uncached_tokens === null ? null : kindsOfTokenInfo(run.tokens)}
+            figureOf={tokensKindFigure(run.usage_completeness === "lower_bound")}
+          />
+        ) : (
+          <NotedFigure figure={runCostFigure(run)} />
+        )}
       </TableCell>
       <TableCell look="number">{fmtStamp(run.completed_at)}</TableCell>
     </TableRow>
@@ -246,13 +257,9 @@ export function IssueGroupRows({ group, filter, state, units }: IssueGroupRowsPr
     issueAwaitsApproval(state, group.issue_id),
   );
   const ending = group.status === "history" ? group.issue_outcome : null;
-  const cacheReads = totalsCacheReadsText(group.totals);
   const unitParts: [string, ReactNode][] =
     units === "tokens"
-      ? [
-          ["tokens", tokensPart(group.totals)],
-          ["cache-reads", cacheReads === null ? undefined : `${cacheReads} cache reads`],
-        ]
+      ? [["tokens", tokensPart(group.totals)]]
       : [
           ["cost", costPart(group.totals)],
           ...(group.totals.vendor_amounts ?? []).map((amount): [string, ReactNode] => [
