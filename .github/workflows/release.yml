@@ -604,6 +604,46 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 600s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
 
+  test-integration-acp-opencode:
+    name: "Integration: OpenCode - ACP"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CLIENTPROTOCOL_TEST: "1"
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: GOOGLE_GENERATIVE_AI_API_KEY
+      SORTIE_CLIENTPROTOCOL_COMMAND: "opencode acp"
+      SORTIE_CLIENTPROTOCOL_SSH_COMMAND: "opencode acp"
+      SORTIE_CLIENTPROTOCOL_SSH_INSTALL: npm install -g --ignore-scripts=false @opencode/cli@2
+      SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: "1"
+      SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: OPENCODE_CONFIG
+      SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT: '{"$schema":"https://opencode.ai/config.json","model":"scripted/scripted-model","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"{url}/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}'
+      SORTIE_CLIENTPROTOCOL_PROFILE: tools/qualify/profiles/opencode.json
+      SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: OpenCode
+      SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: scripted/
+      SORTIE_CLIENTPROTOCOL_STATUS_CALL: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
+      SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: testdata/usage_limit/opencode_free_limit_answer.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install OpenCode CLI
+        run: npm install -g --ignore-scripts=false @opencode/cli@2
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 300s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+
   announcement:
     name: Release announcement
     needs: [validate]
@@ -670,6 +710,7 @@ jobs:
       - test-integration-acp-gemini
       - test-integration-acp-kiro
       - test-integration-acp-copilot
+      - test-integration-acp-opencode
     runs-on: ubuntu-latest
     permissions:
       contents: write
