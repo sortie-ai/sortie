@@ -34,8 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN set -eux; \
     curl -fsSL https://cli.kiro.dev/install | bash; \
     mv /root/.local/bin/kiro-cli /usr/local/bin/kiro-cli; \
-    mv /root/.local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-chat; \
-    chmod +x /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat; \
+    chmod +x /usr/local/bin/kiro-cli; \
     rm -rf /root/.local
 
 # Create a non-root user.

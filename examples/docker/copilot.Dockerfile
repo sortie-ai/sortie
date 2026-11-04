@@ -20,6 +20,11 @@ FROM ghcr.io/sortie-ai/sortie:latest AS sortie
 
 FROM node:24-slim
 
+# Install git for repository-backed runs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git wget && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install Copilot CLI globally.
 RUN npm install -g @github/copilot@latest && npm cache clean --force
 
