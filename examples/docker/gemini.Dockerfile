@@ -42,6 +42,10 @@ COPY --from=sortie /usr/bin/sortie /usr/bin/sortie
 USER sortie
 WORKDIR /home/sortie
 
+# Keep per-issue workspaces on the mounted volume, whatever workspace.root
+# the workflow sets.
+ENV SORTIE_WORKSPACE_ROOT=/home/sortie/workspaces
+
 # The HTTP observability server listens on all interfaces, on the port the
 # health check probes, whatever server.port the workflow sets, so the host
 # can reach it through the published port.
