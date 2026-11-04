@@ -251,6 +251,10 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		return domain.Session{}, agentcore.SettingsError(permissionsFault.Error(), permissionsFault)
 	}
 
+	if _, effortFault := registry.EffortSetting(params.Settings); effortFault != nil {
+		return domain.Session{}, agentcore.SettingsError(effortFault.Error(), effortFault)
+	}
+
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -381,7 +385,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		case procutil.StageStderrPipe:
 			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
-		default: // procutil.StageProcessStart, procutil.StageProcessResume
+		default:
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
 		}
 	}
@@ -473,6 +477,18 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 	if startErr == nil && !start.CarriedHistory() {
 		sessionID, session, newErr = createNewSession(ctx, state, target.WorkspacePath, wired)
 	}
+	if startErr == nil && newErr == nil {
+		switch {
+		case params.CredentialVerification && advertisesSessionDelete(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionDelete
+		case advertisesSessionClose(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionClose
+		}
+		effort, _ := registry.EffortSetting(params.Settings) // startSession refused a non-string level before launch
+		newErr = applyReasoningLevel(ctx, state, effort, sessionId(sessionID), session, start.CarriedHistory())
+	}
 	if startErr != nil || newErr != nil {
 		teardownWithinStopGrace(ctx, state)
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
@@ -483,14 +499,6 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 			return domain.Session{}, report
 		}
 		return domain.Session{}, newErr
-	}
-	switch {
-	case params.CredentialVerification && advertisesSessionDelete(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionDelete
-	case advertisesSessionClose(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionClose
 	}
 
 	choice := chooseDeclaration(declarations, initResp.AgentInfo, target)

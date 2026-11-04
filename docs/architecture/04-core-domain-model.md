@@ -100,7 +100,7 @@ Fields (logical):
 - `configured_model` (string)
   - The `model` the attempt's resolved settings block carried. Empty when none was set, which leaves the runtime's own default in charge. It records what the operator asked for.
 - `configured_effort` (string)
-  - The `effort` the attempt's resolved settings block carried, empty by the same rule.
+  - The `effort` the attempt's resolved settings block carried. Empty when none was set, which leaves the runtime's own default in charge, except on a continued session of a kind that sets the level through the runtime's session configuration, which runs at the level its runtime holds for that session.
 - `reported_model` (string)
   - The model the runtime reported running, taken from the last token-usage event that named one. Empty when the runtime reported none. A reported model never overwrites a configured one, and nothing compares the two: routing aliases and runtime fallbacks make them differ legitimately.
 - `stage_previous` (string)

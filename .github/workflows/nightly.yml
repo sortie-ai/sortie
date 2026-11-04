@@ -182,6 +182,7 @@ jobs:
             clientprotocol_reported_model_prefix: scripted/
             clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
             clientprotocol_usage_limit_answer: testdata/usage_limit/opencode_free_limit_answer.json
+            clientprotocol_effort: high
 
           - name: Kiro CLI - ACP (scripted)
             adapter: acp-kiro
@@ -378,6 +379,7 @@ jobs:
           SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: ${{ matrix.clientprotocol_reported_model_prefix }}
           SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
           SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: ${{ matrix.clientprotocol_usage_limit_answer }}
+          SORTIE_CLIENTPROTOCOL_EFFORT: ${{ matrix.clientprotocol_effort }}
           SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
           SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
           SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}

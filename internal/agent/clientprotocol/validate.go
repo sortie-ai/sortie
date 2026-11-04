@@ -21,6 +21,22 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 		})
 	}
 
+	if _, fault := registry.EffortSetting(fields.Passthrough); fault != nil {
+		diags = append(diags, registry.ValidationDiag{
+			Severity: string(registry.SeverityError),
+			Check:    "agent-client-protocol.effort.wrong_type",
+			Message:  fault.Error(),
+		})
+	}
+
+	if variant, present := fields.Passthrough[variantKey]; present && variant != nil {
+		diags = append(diags, registry.ValidationDiag{
+			Severity: string(registry.SeverityWarning),
+			Check:    "agent-client-protocol.variant.not_read",
+			Message:  "agent-client-protocol.variant has no effect: this kind reads the reasoning level from agent-client-protocol.effort",
+		})
+	}
+
 	if _, fault := envSetting(fields.Passthrough); fault != nil {
 		diags = append(diags, faultDiag(fault))
 	}

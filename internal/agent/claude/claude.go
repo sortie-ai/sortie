@@ -27,7 +27,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "claude"
 
 // effortEnvName is the variable Claude Code lets outrank --effort without
@@ -88,8 +87,6 @@ func init() {
 
 var _ domain.AgentAdapter = (*ClaudeCodeAdapter)(nil)
 
-// ansiEscapeRE matches the ANSI color and formatting sequences CLI tools
-// write into their output.
 var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // syntheticModel is the model Claude Code stamps on a message it writes
@@ -103,8 +100,6 @@ const authenticationFailedError = "authentication_failed"
 // One instance serves all concurrent sessions.
 type ClaudeCodeAdapter struct{}
 
-// sessionState is the adapter's per-session state, held in
-// [domain.Session] Internal.
 type sessionState struct {
 	target          agentcore.LaunchTarget
 	claudeSessionID string
@@ -198,9 +193,7 @@ func (s *sessionState) relayEffortReport(effort string, stderrLines []string) {
 	if idx < 0 {
 		return
 	}
-	s.logger().Warn("reasoning level not applied by the agent",
-		slog.String("agent_kind", "claude-code"),
-		slog.String(registry.EffortKey, effort),
+	agentcore.WarnEffortNotApplied(s.logger(), "claude-code", effort, agentcore.EffortRejected,
 		slog.String("line", stderrLines[idx]))
 	s.effortReported = true
 }

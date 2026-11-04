@@ -212,7 +212,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalTurnEnd,
 				wantUsageAttribution:   registry.UsageAttributionSessionTotal,
 				wantCredentialEnvNames: nil,
-				wantEffortForwarding:   registry.EffortNotForwarded,
+				wantEffortForwarding:   registry.EffortForwarded,
 				wantUsageLimit:         registry.UsageLimitRecognized,
 			},
 			{

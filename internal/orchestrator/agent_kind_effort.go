@@ -82,7 +82,7 @@ func DispatchRuleEffortAdvisories(cfg config.ServiceConfig) []config.Advisory {
 		advisories = append(advisories, config.Advisory{
 			Check:   "agent.effort.inherited",
 			Message: "dispatch rule sets a model and inherits an effort level chosen for another model",
-			Text: fmt.Sprintf("dispatch rule %s (dispatch.rules[%d].%s) sets model and inherits effort %s from the top-level %s block; level names depend on the model, so write effort in the rule to choose the level for its model, or effort: null to clear it",
+			Text: fmt.Sprintf("dispatch rule %s (dispatch.rules[%d].%s) sets model and inherits effort %s from the top-level %s block; level names depend on the model, so write effort in the rule to choose the level for its model, or effort: null to send no level",
 				strconv.Quote(rule.Name), i, rule.SettingsKind, strconv.Quote(inherited), rule.SettingsKind),
 			Attrs: []slog.Attr{
 				slog.String("rule_name", rule.Name),

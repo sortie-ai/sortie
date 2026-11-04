@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard: long code blocks and JSON in messages fold to one line and expand on a click. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 - Dashboard: issue titles in Overview, Pipeline, and History are links, so an issue page opens in a new tab or from the keyboard. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
 - Dashboard: the command palette's search field has a clear button. ([#1630](https://github.com/sortie-ai/sortie/pull/1630))
+- Agents on `agent-client-protocol` can now be given a reasoning level with `agent-client-protocol.effort`. If an agent doesn't offer the requested level, it keeps its own and Sortie logs a warning. ([#1636](https://github.com/sortie-ai/sortie/issues/1636))
+- `sortie validate` flags an `agent-client-protocol.effort` value that isn't text, and warns that `agent-client-protocol.variant` has no effect. ([#1636](https://github.com/sortie-ai/sortie/issues/1636))
 
 ### Changed
 
@@ -33,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The `copilot-cli` agent kind is deprecated. Copilot CLI now runs through the `agent-client-protocol` kind with `copilot --acp --allow-all`. Workflows naming `copilot-cli` keep working; each run and `sortie validate` warn once, naming `agent-client-protocol`. On that route no named agent applies and the repository's instruction files always load, so a workflow relying on the `agent` or `no_custom_instructions` setting should keep `copilot-cli` for now. A later release removes the kind.
   ([#1488](https://github.com/sortie-ai/sortie/issues/1488))
-- The `opencode` agent kind is deprecated. OpenCode now runs through the `agent-client-protocol` kind with `opencode acp` and `permissions: approve-all`. Workflows naming `opencode` keep working; each run and `sortie validate` warn once, naming `agent-client-protocol`. On that route nothing sets OpenCode's reasoning level, so a workflow relying on the `effort` or `variant` setting should keep `opencode` for now. A later release removes the kind.
+- The `opencode` agent kind is deprecated. OpenCode now runs through the `agent-client-protocol` kind with `opencode acp` and `permissions: approve-all`. Workflows naming `opencode` keep working; each run and `sortie validate` warn once, naming `agent-client-protocol`. Move an `effort` or `variant` setting to `agent-client-protocol.effort`. A later release removes the kind.
   ([#1489](https://github.com/sortie-ai/sortie/issues/1489))
 
 ### Removed

@@ -93,6 +93,11 @@
 //	                                  report, and how many requests the runtime
 //	                                  makes before it gives up (default 1); unset
 //	                                  skips the usage-limit case
+//	SORTIE_CLIENTPROTOCOL_EFFORT      a reasoning level the runtime offers on
+//	                                  its thought_level option, such as high;
+//	                                  unset skips the effort case, which runs
+//	                                  one scripted turn under that level and
+//	                                  holds the runtime to applying it
 //
 // Run:
 //
@@ -124,6 +129,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+const (
+	realModelTurnTimeoutMS = 300000
+	realModelReadTimeoutMS = 30000
 )
 
 type liveProtocolCapture struct {
@@ -168,10 +178,9 @@ func captureAgentConfig(t *testing.T, command string, expect captureExpectation,
 	t.Cleanup(func() { assertLiveProtocolConformance(t, capture) })
 
 	return domain.AgentConfig{
-		Command: wrapperPath + " " + command,
-		// Generous for a real model's latency.
-		TurnTimeoutMS: 300000,
-		ReadTimeoutMS: 30000,
+		Command:       wrapperPath + " " + command,
+		TurnTimeoutMS: realModelTurnTimeoutMS,
+		ReadTimeoutMS: realModelReadTimeoutMS,
 	}, capture
 }
 
@@ -488,8 +497,8 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 			WorkspacePath: gitInitWorkspace(t),
 			AgentConfig: domain.AgentConfig{
 				Command:       os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND"),
-				TurnTimeoutMS: 300000,
-				ReadTimeoutMS: 30000,
+				TurnTimeoutMS: realModelTurnTimeoutMS,
+				ReadTimeoutMS: realModelReadTimeoutMS,
 			},
 		}
 	}
@@ -499,7 +508,6 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
-		// Not parallel: t.Setenv carries the invalid credential.
 		credentialtest.SetRefusedCredential(t, "SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
@@ -516,8 +524,8 @@ func TestIntegration_EarlyExit(t *testing.T) {
 	}
 	unknownSwitchConfig := domain.AgentConfig{
 		Command:       os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND") + " --sortie-unknown-switch",
-		TurnTimeoutMS: 300000,
-		ReadTimeoutMS: 30000,
+		TurnTimeoutMS: realModelTurnTimeoutMS,
+		ReadTimeoutMS: realModelReadTimeoutMS,
 	}
 
 	t.Run("verification session with an unknown switch", func(t *testing.T) {
@@ -690,6 +698,100 @@ func spendSources(t *testing.T) *fakemodel.SpendSources {
 	}
 }
 
+type effortOption struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	Category     string `json:"category"`
+	CurrentValue string `json:"currentValue"`
+}
+
+type effortBody struct {
+	SessionID     string         `json:"sessionId"`
+	ConfigID      string         `json:"configId"`
+	Value         string         `json:"value"`
+	StopReason    string         `json:"stopReason"`
+	ConfigOptions []effortOption `json:"configOptions"`
+	Update        struct {
+		SessionUpdate string         `json:"sessionUpdate"`
+		ConfigOptions []effortOption `json:"configOptions"`
+	} `json:"update"`
+}
+
+func assertEffortForwarded(t *testing.T, streams []string, level string) {
+	t.Helper()
+
+	var sets int
+	var newID, setID, promptID json.RawMessage
+	var sent effortBody
+	for _, line := range capturedJSONLines(t, streams[0]) {
+		var frame liveEnvelope
+		_ = json.Unmarshal(line, &frame)
+		switch frame.Method {
+		case methodSessionNew:
+			newID = frame.ID
+		case methodSessionPrompt:
+			if promptID == nil {
+				promptID = frame.ID
+			}
+		case methodSessionSetConfigOption:
+			sets++
+			setID = frame.ID
+			_ = json.Unmarshal(frame.Params, &sent)
+			if promptID != nil {
+				t.Errorf("session/set_config_option sent after the first session/prompt, want before")
+			}
+		}
+	}
+	if sets != 1 {
+		t.Fatalf("session/set_config_option requests = %d, want 1", sets)
+	}
+
+	var opened, applied, ended effortBody
+	var updates []effortBody
+	var answered bool
+	for _, line := range capturedJSONLines(t, streams[1]) {
+		var frame liveEnvelope
+		_ = json.Unmarshal(line, &frame)
+		switch {
+		case frame.Method == methodSessionUpdate && answered && ended.StopReason == "":
+			var update effortBody
+			_ = json.Unmarshal(frame.Params, &update)
+			updates = append(updates, update)
+		case frame.Method != "":
+		case string(frame.ID) == string(newID):
+			_ = json.Unmarshal(frame.Result, &opened)
+		case string(frame.ID) == string(setID):
+			answered = true
+			_ = json.Unmarshal(frame.Result, &applied)
+		case string(frame.ID) == string(promptID):
+			_ = json.Unmarshal(frame.Result, &ended)
+		}
+	}
+
+	target := slices.IndexFunc(opened.ConfigOptions, func(option effortOption) bool {
+		return option.Type == "select" && option.Category == "thought_level"
+	})
+	if target < 0 {
+		t.Fatalf("session/new configOptions = %+v, want a thought_level select option", opened.ConfigOptions)
+	}
+	configID := opened.ConfigOptions[target].ID
+	if sent.ConfigID != configID || sent.Value != level {
+		t.Errorf("session/set_config_option = {configId %q, value %q}, want {configId %q, value %q}", sent.ConfigID, sent.Value, configID, level)
+	}
+	if !slices.ContainsFunc(applied.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue == level }) {
+		t.Errorf("session/set_config_option result options = %+v, want %q at %q", applied.ConfigOptions, configID, level)
+	}
+	for _, update := range updates {
+		if update.SessionID == opened.SessionID && update.Update.SessionUpdate == sessionUpdateConfigOptionUpdate &&
+			slices.ContainsFunc(update.Update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != level }) {
+			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.Update.ConfigOptions, configID, level)
+		}
+	}
+	if ended.StopReason != "end_turn" {
+		t.Errorf("session/prompt stopReason = %q, want %q", ended.StopReason, "end_turn")
+	}
+}
+
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
@@ -761,7 +863,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 					launchEnv["HOME"] = env.Home
 				}
 				return fakemodel.Launch{
-					Config: domain.AgentConfig{TurnTimeoutMS: 300000, ReadTimeoutMS: 30000},
+					Config: domain.AgentConfig{TurnTimeoutMS: realModelTurnTimeoutMS, ReadTimeoutMS: realModelReadTimeoutMS},
 					Env:    launchEnv,
 				}
 			}
@@ -837,5 +939,21 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("effort_forwarding", func(t *testing.T) {
+		level := os.Getenv("SORTIE_CLIENTPROTOCOL_EFFORT")
+		if level == "" {
+			t.Skip("skipping effort case: SORTIE_CLIENTPROTOCOL_EFFORT must name a reasoning level the runtime offers")
+		}
+		turnExpect = expectCompletedTurn
+
+		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+			Script:   []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 101, Candidates: 7}}},
+			Prompt:   "Reply with the word ok.",
+			Settings: map[string]any{registry.EffortKey: level},
+		})
+
+		assertEffortForwarded(t, run.Streams, level)
 	})
 }
