@@ -4,7 +4,6 @@ import { cn } from "@/lib/cn";
 
 import type { Tokens } from "@/api/types.gen";
 import type { Figure } from "@/lib/figures";
-import type { ReactNode } from "react";
 
 /** The amounts of one token figure, split by kind. */
 export type KindValues = Record<"input" | "output" | "cache_write" | "cache_read", number>;
@@ -125,7 +124,7 @@ export interface SplitBarProps {
   kinds: KindValues;
   figureOf: (n: number) => Figure;
   /** A sentence under the kinds' rows, in the note. */
-  footnote?: ReactNode;
+  footnote?: string;
 }
 
 /** Draws the stacked kinds as one bar across a cell, with every kind's figure in its note. */
@@ -138,9 +137,10 @@ export function SplitBar({ kinds, figureOf, footnote }: SplitBarProps) {
           <span
             tabIndex={0}
             role="img"
-            aria-label={KIND_ORDER.map(
-              (kind) => `${kind.label} ${figureOf(kinds[kind.key]).text}`,
-            ).join(", ")}
+            aria-label={[
+              ...KIND_ORDER.map((kind) => `${kind.label} ${figureOf(kinds[kind.key]).text}`),
+              ...(footnote === undefined ? [] : [footnote]),
+            ].join(", ")}
             className="flex h-sm w-full gap-[2px] overflow-hidden rounded"
           />
         }
