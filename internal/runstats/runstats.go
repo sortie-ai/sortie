@@ -11,8 +11,7 @@ package runstats
 // Report is the "sortie stats --format json" envelope. Every slice
 // field, by_trigger, by_origin, by_provenance, and chain_funnels included, is
 // never nil; every pointer field is null when the figure it carries is
-// unavailable. Spend is nil unless
-// [storage.RunHistoryCapabilities.RecordedCost] reports true.
+// unavailable. Spend is present on every report.
 type Report struct {
 	GeneratedAt  string           `json:"generated_at"`
 	WorkflowPath string           `json:"workflow_path"`
@@ -22,7 +21,7 @@ type Report struct {
 	SchemaTier   string           `json:"schema_tier"`
 	Warnings     []string         `json:"warnings"`
 	Summary      Summary          `json:"summary"`
-	Spend        *Spend           `json:"spend"`
+	Spend        Spend            `json:"spend"`
 	ByStatus     []Group          `json:"by_status"`
 	ByAdapter    []Group          `json:"by_adapter"`
 	ByRule       []Group          `json:"by_rule"`
@@ -76,27 +75,32 @@ type Summary struct {
 	UnmeasuredUnits        []string `json:"unmeasured_units"`
 }
 
-// Spend is the recorded cost of the report's runs per UTC calendar period.
-// Report.Spend is nil unless [storage.RunHistoryCapabilities.RecordedCost]
-// reports true.
+// Spend is the tokens and recorded cost of the report's runs per UTC calendar
+// period.
 type Spend struct {
 	Period  string        `json:"period"`  // "day" or "month"
 	Buckets []SpendBucket `json:"buckets"` // never nil; ascending by Start
 }
 
 // SpendBucket covers the report's runs whose completed_at falls in one UTC
-// period. CostUSD is null when no run of the bucket is priced, and is the
-// bucket's whole spend only while CostUnpricedRuns, CostPartialRuns, and
-// TokensUnmeasuredRuns are all 0. CostLowerBound marks a bucket whose cost
-// counts only part of its runs, and AgentPricedUSD is the share of CostUSD
-// priced from amounts the agent reported.
+// period. Tokens sums the bucket's measured runs and is null when it holds
+// none and on the base schema tier. TokensLowerBound marks a Tokens that leaves
+// out unmeasured runs or counts runs with unaccounted turns. CostUSD is null
+// when no run of the bucket is priced, and is the bucket's whole spend only
+// while CostUnpricedRuns, CostPartialRuns, and TokensUnmeasuredRuns are all 0.
+// CostLowerBound marks a bucket whose cost counts only part of its runs, and
+// AgentPricedUSD is the share of CostUSD priced from amounts the agent
+// reported.
 type SpendBucket struct {
 	Start                string   `json:"start"` // first instant of the period, RFC 3339 in UTC
 	Runs                 int      `json:"runs"`
+	Tokens               *Tokens  `json:"tokens"`
 	CostUSD              *float64 `json:"cost_usd"`
 	TokensUnmeasuredRuns int      `json:"tokens_unmeasured_runs"`
 	CostUnpricedRuns     int      `json:"cost_unpriced_runs"`
 	CostPartialRuns      int      `json:"cost_partial_runs"`
+	TokensLowerBoundRuns int      `json:"tokens_lower_bound_runs"`
+	TokensLowerBound     bool     `json:"tokens_lower_bound"`
 	CostLowerBound       bool     `json:"cost_lower_bound"`
 	AgentPricedUSD       *float64 `json:"agent_priced_usd"`
 }
@@ -110,9 +114,12 @@ type Duration struct {
 	Samples int      `json:"samples"`
 }
 
-// Tokens reports the stored token sums, never recomputed, and Uncached,
-// which the report derives from Total and CacheRead so that Uncached plus
-// CacheRead equals Total.
+// Tokens reports the stored token sums, never recomputed, and two figures the
+// report derives from them. Uncached is Total less CacheRead, so Uncached plus
+// CacheRead equals Total. FreshInput is Input, which counts both cache
+// counters, less CacheRead and CacheWrite, floored at zero; FreshInput plus
+// Output plus CacheWrite equals Uncached while CacheRead plus CacheWrite does
+// not exceed Input.
 type Tokens struct {
 	Input      int64 `json:"input"`
 	Output     int64 `json:"output"`
@@ -120,6 +127,7 @@ type Tokens struct {
 	CacheRead  int64 `json:"cache_read"`
 	CacheWrite int64 `json:"cache_write"`
 	Uncached   int64 `json:"uncached"`
+	FreshInput int64 `json:"fresh_input"`
 }
 
 // Group is one row of a by_status, by_adapter, by_rule, by_template,

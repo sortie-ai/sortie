@@ -2939,14 +2939,7 @@
           ]
         },
         "spend": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Spend"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/Spend"
         },
         "summary": {
           "$ref": "#/$defs/Summary"
@@ -4949,6 +4942,22 @@
         "start": {
           "type": "string"
         },
+        "tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tokens"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens_lower_bound": {
+          "type": "boolean"
+        },
+        "tokens_lower_bound_runs": {
+          "type": "integer"
+        },
         "tokens_unmeasured_runs": {
           "type": "integer"
         }
@@ -4956,10 +4965,13 @@
       "required": [
         "start",
         "runs",
+        "tokens",
         "cost_usd",
         "tokens_unmeasured_runs",
         "cost_unpriced_runs",
         "cost_partial_runs",
+        "tokens_lower_bound_runs",
+        "tokens_lower_bound",
         "cost_lower_bound",
         "agent_priced_usd"
       ],
@@ -5892,6 +5904,9 @@
         "cache_write": {
           "type": "integer"
         },
+        "fresh_input": {
+          "type": "integer"
+        },
         "input": {
           "type": "integer"
         },
@@ -5911,7 +5926,8 @@
         "total",
         "cache_read",
         "cache_write",
-        "uncached"
+        "uncached",
+        "fresh_input"
       ],
       "type": "object"
     },
