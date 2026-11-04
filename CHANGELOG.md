@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `sortie validate` flags an `agent-client-protocol.effort` value that isn't text, and warns that `agent-client-protocol.variant` has no effect. ([#1636](https://github.com/sortie-ai/sortie/issues/1636))
 - Agents on `agent-client-protocol` can now be set to one of their own session options with `agent-client-protocol.config_options`, for example a named Copilot CLI agent with `agent: <name>`. If the session doesn't offer the option or the value, the agent keeps its own and Sortie logs a warning. ([#1635](https://github.com/sortie-ai/sortie/issues/1635))
 - `sortie validate` flags an `agent-client-protocol.config_options` value that isn't a mapping of text values. ([#1635](https://github.com/sortie-ai/sortie/issues/1635))
+- `sortie stats --format json` and the stats API now report the input, output, cache-read, and cache-write tokens of the runs for each day or month, whether or not the runs have a price, and every token figure of the report also gives the input tokens that were neither read from nor written to the prompt cache. ([#1610](https://github.com/sortie-ai/sortie/issues/1610))
 
 ### Changed
 

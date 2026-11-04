@@ -3957,7 +3957,7 @@ A running run keeps its newest 1,000 retained events, within 256 KiB, in memory,
 
 #### `GET /api/v1/stats`: run statistics
 
-Returns the report that `sortie stats --format json` prints, over the finished runs of run history in a range: how many runs and issues there were, how many succeeded and how many failed, stopped, or were cancelled, how long they took, the tokens they spent, what they cost as recorded with each run, and that cost per UTC day or month, with breakdowns by outcome, agent, dispatch rule, prompt template, model (a run counts under every model it spent tokens on), stage chain, retry trigger, run origin, and the sources of the token figure, and a funnel for each stage chain whose stages also count the passes running, retrying, or held by a budget now, and the runs, calls, and failed calls of each skill the runs called. The route computes the report through the aggregation the command uses and serves it unchanged, so for one database, one workflow, and absolute bounds the body equals the command's output except `generated_at`.
+Returns the report that `sortie stats --format json` prints, over the finished runs of run history in a range: how many runs and issues there were, how many succeeded and how many failed, stopped, or were cancelled, how long they took, the tokens they spent, what they cost as recorded with each run, and those tokens and that cost per UTC day or month, with breakdowns by outcome, agent, dispatch rule, prompt template, model (a run counts under every model it spent tokens on), stage chain, retry trigger, run origin, and the sources of the token figure, and a funnel for each stage chain whose stages also count the passes running, retrying, or held by a budget now, and the runs, calls, and failed calls of each skill the runs called. The route computes the report through the aggregation the command uses and serves it unchanged, so for one database, one workflow, and absolute bounds the body equals the command's output except `generated_at`.
 
 **Query parameters.** Every parameter is optional. An empty value is the same as an absent one, and an open bound is unlimited, so a request without parameters covers every run on record.
 
@@ -3987,7 +3987,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
     "success_rate": 0.5,
     "duration_seconds": {"p50": 1200, "p95": 1800, "mean": 1200, "samples": 3},
     "mean_turns_succeeded": 4,
-    "tokens": {"input": 3900000, "output": 760000, "total": 4660000, "cache_read": 50000, "cache_write": 10000, "uncached": 4610000},
+    "tokens": {"input": 3900000, "output": 760000, "total": 4660000, "cache_read": 50000, "cache_write": 10000, "uncached": 4610000, "fresh_input": 3840000},
     "cost_usd": 19.52,
     "cost_per_succeeded_run_usd": 6.506666667,
     "zero_duration_runs": 1,
@@ -4005,8 +4005,8 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
   "spend": {
     "period": "day",
     "buckets": [
-      {"start": "2026-02-23T00:00:00Z", "runs": 2, "cost_usd": 7.27, "tokens_unmeasured_runs": 1, "cost_unpriced_runs": 0, "cost_partial_runs": 0, "cost_lower_bound": true, "agent_priced_usd": null},
-      {"start": "2026-02-24T00:00:00Z", "runs": 4, "cost_usd": 12.25, "tokens_unmeasured_runs": 0, "cost_unpriced_runs": 1, "cost_partial_runs": 1, "cost_lower_bound": true, "agent_priced_usd": null}
+      {"start": "2026-02-23T00:00:00Z", "runs": 2, "tokens": {"input": 400000, "output": 60000, "total": 460000, "cache_read": 0, "cache_write": 0, "uncached": 460000, "fresh_input": 400000}, "cost_usd": 7.27, "tokens_unmeasured_runs": 1, "cost_unpriced_runs": 0, "cost_partial_runs": 0, "tokens_lower_bound_runs": 0, "tokens_lower_bound": true, "cost_lower_bound": true, "agent_priced_usd": null},
+      {"start": "2026-02-24T00:00:00Z", "runs": 4, "tokens": {"input": 3500000, "output": 700000, "total": 4200000, "cache_read": 50000, "cache_write": 10000, "uncached": 4150000, "fresh_input": 3440000}, "cost_usd": 12.25, "tokens_unmeasured_runs": 0, "cost_unpriced_runs": 1, "cost_partial_runs": 1, "tokens_lower_bound_runs": 0, "tokens_lower_bound": false, "cost_lower_bound": true, "agent_priced_usd": null}
     ]
   },
   "by_status": [
@@ -4018,7 +4018,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
       "share": 0.5,
       "duration_seconds": {"p50": 1200, "p95": 1800, "mean": 1200, "samples": 3},
       "mean_turns": 4,
-      "tokens": {"input": 3500000, "output": 700000, "total": 4200000, "cache_read": 50000, "cache_write": 10000, "uncached": 4150000},
+      "tokens": {"input": 3500000, "output": 700000, "total": 4200000, "cache_read": 50000, "cache_write": 10000, "uncached": 4150000, "fresh_input": 3440000},
       "cost_usd": 17.87,
       "cost_per_succeeded_run_usd": 5.956666667,
       "tokens_unmeasured_runs": 0,
@@ -4045,7 +4045,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
       "share": 0.3333,
       "duration_seconds": {"p50": 600, "p95": 1800, "mean": 1200, "samples": 2},
       "mean_turns": 4,
-      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 50000, "cache_write": 10000, "uncached": 3550000},
+      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 50000, "cache_write": 10000, "uncached": 3550000, "fresh_input": 2940000},
       "cost_usd": 17.87,
       "cost_per_succeeded_run_usd": 8.935,
       "tokens_unmeasured_runs": 0,
@@ -4091,7 +4091,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
       "share": 0.6667,
       "duration_seconds": {"p50": 600, "p95": 1800, "mean": 900, "samples": 4},
       "mean_turns": 3,
-      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 0, "cache_write": 0, "uncached": 3600000},
+      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 0, "cache_write": 0, "uncached": 3600000, "fresh_input": 3000000},
       "cost_usd": 12.25,
       "cost_per_succeeded_run_usd": 6.13,
       "tokens_unmeasured_runs": 1,
@@ -4114,7 +4114,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
       "share": 0.6667,
       "duration_seconds": {"p50": 600, "p95": 1800, "mean": 900, "samples": 4},
       "mean_turns": 3,
-      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 0, "cache_write": 0, "uncached": 3600000},
+      "tokens": {"input": 3000000, "output": 600000, "total": 3600000, "cache_read": 0, "cache_write": 0, "uncached": 3600000, "fresh_input": 3000000},
       "cost_usd": 12.25,
       "cost_per_succeeded_run_usd": 6.13,
       "tokens_unmeasured_runs": 1,
@@ -4137,7 +4137,7 @@ A range bound is an RFC 3339 timestamp in any offset (fractions allowed), a date
       "share": 0.5,
       "duration_seconds": {"p50": 1200, "p95": 1800, "mean": 1200, "samples": 3},
       "mean_turns": 4,
-      "tokens": {"input": 3500000, "output": 700000, "total": 4200000, "cache_read": 50000, "cache_write": 10000, "uncached": 4150000},
+      "tokens": {"input": 3500000, "output": 700000, "total": 4200000, "cache_read": 50000, "cache_write": 10000, "uncached": 4150000, "fresh_input": 3440000},
       "cost_usd": 17.87,
       "cost_per_succeeded_run_usd": 5.956666667,
       "tokens_unmeasured_runs": 0,
@@ -4177,10 +4177,10 @@ The example omits the members of the breakdowns other than `by_status`, `by_chai
 | `generated_at`   | string            | The instant of the request, as an RFC 3339 timestamp in UTC. Relative bounds count back from it. |
 | `workflow_path`, `db_path` | string  | The host paths of the `WORKFLOW.md` and the database the report reads, as the command prints them. |
 | `since`, `until` | string or `null`  | The resolved bounds in UTC, `null` when open. |
-| `schema_tier`    | string            | `full`, or `base` for a database that lacks columns the full report needs. On `base`, `by_rule`, `by_template`, `by_model`, `by_chain`, `chain_funnels`, `by_trigger`, `by_origin`, and `by_provenance` are `[]`, `spend`, `skill_calls`, and `self_review` are `null`, and the figures that need the missing columns are `null`. |
+| `schema_tier`    | string            | `full`, or `base` for a database that lacks columns the full report needs. On `base`, `by_rule`, `by_template`, `by_model`, `by_chain`, `chain_funnels`, `by_trigger`, `by_origin`, and `by_provenance` are `[]`, `skill_calls` and `self_review` are `null`, and the figures that need the missing columns are `null`. |
 | `warnings`       | array of strings  | Always present, `[]` when there is nothing to report. For an older database it holds one entry that names every part of the report the database leaves out and how to get it. A database whose runs carry no recorded cost, because no service start has applied the schema change that records it, names cost among what it leaves out. |
 | `summary`        | object            | The report-wide figures, below. |
-| `spend`          | object or `null`  | The recorded cost per UTC day or month, below. `null` on the `base` tier and on a database whose runs carry no recorded cost. |
+| `spend`          | object            | The tokens and recorded cost per UTC day or month, below. |
 | `by_status`      | array of groups   | One group per run status. |
 | `by_adapter`     | array of groups   | One group per agent kind. `<none>` names the runs that carry no agent kind, a recorded CI result included. |
 | `by_rule`        | array of groups   | One group per dispatch rule name, as in the `rule_name` of a run row. `<none>` names the runs that ran on the workflow-wide fallback. |
@@ -4209,7 +4209,7 @@ Every breakdown is sorted by descending `runs`, then ascending `name`, and is `[
 | `success_rate`               | number           | `succeeded` divided by `runs`, from `0` to `1`, `0` when no run is in range. |
 | `duration_seconds`           | object           | `p50`, `p95`, `mean`, and `samples` over the succeeded runs. Each of them is `null` when `samples` is `0`. |
 | `mean_turns_succeeded`       | number or `null` | The mean turns of the succeeded runs. `null` on the `base` tier and when no run succeeded. |
-| `tokens`                     | object or `null` | The sums of `input`, `output`, `total`, `cache_read`, and `cache_write` over the runs that reported usage, and `uncached`, which is `total` less `cache_read`, floored at zero, so `uncached` plus `cache_read` equals `total` and cache writes stay in it. `null` on the `base` tier and when no run reported usage. |
+| `tokens`                     | object or `null` | The sums of `input`, `output`, `total`, `cache_read`, and `cache_write` over the runs that reported usage, and the derived `uncached` and `fresh_input`. `uncached` is `total` less `cache_read`, floored at zero, so `uncached` plus `cache_read` equals `total` and cache writes stay in it. `input` counts both cache counters. `fresh_input` is `input` less `cache_read` and `cache_write`, floored at zero, so the disjoint kinds are `fresh_input`, `output`, `cache_write`, and `cache_read`, and `fresh_input` plus `output` plus `cache_write` equals `uncached` while `cache_read` plus `cache_write` does not exceed `input`. Both derive from the object's own sums, so an object whose cache counters exceed its `input` serves `fresh_input` `0`. `null` on the `base` tier and when no run reported usage. |
 | `cost_usd`                   | number or `null` | The estimated cost of the priced runs, not rounded to cents, so a total under one cent never reads as zero. `null` on the `base` tier, when no run that spent tokens is priced, and when the runs carry no recorded cost. |
 | `cost_per_succeeded_run_usd` | number or `null` | `cost_usd` divided by the succeeded runs that reported usage, rounded as `cost_usd` is and not to cents, so a figure under one cent never reads as zero. `null` when `cost_usd` is, and when no succeeded run reported usage. |
 | `zero_duration_runs`         | integer          | The runs that completed at the instant they started; each counts as a zero-second sample. |
@@ -4242,17 +4242,18 @@ The outcome counts `succeeded`, `failed`, `stopped`, and `cancelled` add up to `
 | `cost_partial_runs`          | integer          | The group's runs recorded `partial`, counted as in `summary`. `0` on the `base` tier. |
 | `tokens_lower_bound_runs`, `tokens_lower_bound`, `cost_lower_bound`, `agent_priced_usd`, `unmeasured_cause`, `unmeasured_units` | as in `summary` | Set as in `summary`, over the group's runs. |
 
-**`spend` fields.** `spend` holds `period` and `buckets`. `period` is `day` when the range has a `since` and `since` lies no more than 2160 hours before the end of the range, which is `until` or else `generated_at`, and `month` otherwise: the last 24 hours and the last 7, 30, and 90 days get days, and an open `since` gets months. `buckets` ascend by `start` and list every UTC day or month from the one holding `since` (the one holding the earliest run when `since` is open) through the later of the one holding the end of the range and the one holding the latest run, so a period without runs appears with `runs` `0` and `cost_usd` `null`. `buckets` is `[]`, never `null`, when no run falls in a period.
+**`spend` fields.** `spend` holds `period` and `buckets`. `period` is `day` when the range has a `since` and `since` lies no more than 2160 hours before the end of the range, which is `until` or else `generated_at`, and `month` otherwise: the last 24 hours and the last 7, 30, and 90 days get days, and an open `since` gets months. `buckets` ascend by `start` and list every UTC day or month from the one holding `since` (the one holding the earliest run when `since` is open) through the later of the one holding the end of the range and the one holding the latest run, so a period without runs appears with `runs` `0` and `tokens` and `cost_usd` `null`. `buckets` is `[]`, never `null`, when no run falls in a period.
 
 | Field                    | Type             | Description |
 | ------------------------ | ---------------- | ----------- |
 | `start`                  | string           | The first instant of the period, as an RFC 3339 timestamp in UTC. |
 | `runs`                   | integer          | The runs of the report that completed in the period. |
+| `tokens`                 | object or `null` | As in `summary`, over the period's runs. `null` when none of them reported usage, and on the `base` tier. |
 | `cost_usd`               | number or `null` | The sum of the recorded costs of the period's priced runs, not rounded to cents. `null` when no run of the period is priced. |
-| `tokens_unmeasured_runs`, `cost_unpriced_runs`, `cost_partial_runs` | integer | Counted as in `summary`, over the period's runs. |
-| `cost_lower_bound`, `agent_priced_usd` | boolean, number or `null` | Set as in `summary`, over the period's runs. |
+| `tokens_unmeasured_runs`, `cost_unpriced_runs`, `cost_partial_runs`, `tokens_lower_bound_runs` | integer | Counted as in `summary`, over the period's runs. |
+| `tokens_lower_bound`, `cost_lower_bound`, `agent_priced_usd` | boolean, boolean, number or `null` | Set as in `summary`, over the period's runs. |
 
-A run counts in the bucket whose period holds its completion time, the span the daily and monthly spend ceilings count, so a day bucket and `agent.max_daily_cost_usd` over the same UTC day count the same finished runs. The buckets partition the runs the report counts: their `runs`, `tokens_unmeasured_runs`, `cost_unpriced_runs`, and `cost_partial_runs` sum to the `summary` figures, and their `cost_usd` values sum to `summary.cost_usd` within $0.000001. The first bucket of a range whose `since` lies inside a period holds only the runs at or after `since`. A bucket reads the cost recorded with each run and prices nothing. A run whose completion time does not parse as an RFC 3339 timestamp counts in the summary and the breakdowns and in no bucket; Sortie writes none.
+A run counts in the bucket whose period holds its completion time, the span the daily and monthly spend ceilings count, so a day bucket and `agent.max_daily_cost_usd` over the same UTC day count the same finished runs. The buckets partition the runs the report counts: their `runs`, `tokens_unmeasured_runs`, `tokens_lower_bound_runs`, `cost_unpriced_runs`, and `cost_partial_runs` sum to the `summary` figures, the stored members of their `tokens` (`input`, `output`, `total`, `cache_read`, and `cache_write`) sum to the `summary` figures, and their `cost_usd` values sum to `summary.cost_usd` within $0.000001. `summary.tokens` is `null` exactly when every bucket's is. Each bucket derives `uncached` and `fresh_input` from its own sums, so the buckets' `uncached` sum to the `summary` figure unless a bucket's `cache_read` exceeds its `total`, and their `fresh_input` unless a bucket's `cache_read` plus `cache_write` exceeds its `input`. A database whose runs carry no recorded cost still serves the tokens of every period, with every cost member as `summary` serves it there. The first bucket of a range whose `since` lies inside a period holds only the runs at or after `since`. A bucket reads the cost recorded with each run and prices nothing. A run whose completion time does not parse as an RFC 3339 timestamp counts in the summary and the breakdowns and in no bucket; Sortie writes none.
 
 **`by_model` groups.** A run counts once in the group of every model it spent tokens on, with the tokens and the recorded cost of that model's share of the run and with the run's outcome, turns, and duration, so a group's success rate, mean turns, duration, and cost per succeeded run cover the runs that used the model. A run with no model share that spent tokens counts once, with its own tokens and cost, under the model its runtime reported, else its configured model, whatever its age. The groups' `runs` can add up to more than `summary.runs`, and their `share` values to more than `1`. When a run is priced per model, its groups' tokens and costs add up to the run's. A `token_rates` entry for an agent kind prices a run once on its summed tokens and each model's share on its own tokens, so the shares' recorded costs can differ in sum from the run's recorded cost; the groups carry the shares as recorded and never reconcile them. A group counts `tokens_unmeasured_runs`, `cost_unpriced_runs`, and `cost_partial_runs` per share, and its `agent_priced_usd` counts only its own model's shares. A share counts as partial when its recorded status is `partial`, or when it is `estimated` and the run recorded unaccounted turns: the spend those turns leave out belongs to no recorded model, so the run counts as partial in every group whose share carries a recorded cost. A share recorded `unpriced` counts in `cost_unpriced_runs` only. On a database whose runs carry no recorded cost, every run counts under the one model it reported, else its configured model.
 
