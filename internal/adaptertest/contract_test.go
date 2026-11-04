@@ -268,6 +268,9 @@ var contractAllowlist = map[string]map[contractRule]string{
 	"copilot": {
 		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
 	},
+	"opencode": {
+		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
+	},
 }
 
 // The outcomes checkContractCoreImports renders as

@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The `copilot-cli` agent kind is deprecated. Copilot CLI now runs through the `agent-client-protocol` kind with `copilot --acp --allow-all`. Workflows naming `copilot-cli` keep working; each run and `sortie validate` warn once, naming `agent-client-protocol`. On that route no named agent applies and the repository's instruction files always load, so a workflow relying on the `agent` or `no_custom_instructions` setting should keep `copilot-cli` for now. A later release removes the kind.
   ([#1488](https://github.com/sortie-ai/sortie/issues/1488))
+- The `opencode` agent kind is deprecated. OpenCode now runs through the `agent-client-protocol` kind with `opencode acp` and `permissions: approve-all`. Workflows naming `opencode` keep working; each run and `sortie validate` warn once, naming `agent-client-protocol`. On that route nothing sets OpenCode's reasoning level, so a workflow relying on the `effort` or `variant` setting should keep `opencode` for now. A later release removes the kind.
+  ([#1489](https://github.com/sortie-ai/sortie/issues/1489))
 
 ### Removed
 

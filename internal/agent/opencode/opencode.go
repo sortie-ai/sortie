@@ -57,6 +57,7 @@ func init() {
 		MCPDialect:            registry.MCPDialectMCPMemberJSON,
 		UsageSources:          usageSources,
 		CredentialEnv:         registry.DeclareCredentialEnv(),
+		Deprecation:           &registry.AgentDeprecation{Replacement: "agent-client-protocol"},
 		EffortForwarding:      registry.EffortForwarded,
 		UsageLimitRecognition: registry.UsageLimitRecognized,
 		VerificationContext: registry.DeclareVerificationContext(

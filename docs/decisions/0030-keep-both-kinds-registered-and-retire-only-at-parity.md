@@ -22,7 +22,7 @@ A runtime moves onto the protocol when its protocol surface carries every load-b
 
 3. **What separates the routes is transport-wide, not runtime-specific.** The differences that block removal are properties of a generic kind that knows no runtime and may not learn one. Closing one for a single runtime closes it for none.
 
-4. **Deprecation is a promise; direction is not.** A deprecation notice commits the project to a removal. Issuing one before the removal is achievable teaches operators that notices need not be acted on, which is expensive to unlearn.
+4. **Deprecation is a promise; direction is not.** A deprecation notice commits the project to a removal. Issuing one before every difference between the routes is known and stated teaches operators that notices need not be acted on, which is expensive to unlearn.
 
 5. **A migration costs the operator a mechanical edit, nothing more.** The project's transition is not the operator's to pay for: the same workflow, the same behavior, a configuration edit made mechanically. A route that withdraws a capability an operator holds fails that test whatever it gains elsewhere.
 
@@ -47,7 +47,7 @@ A workflow file naming either kind keeps working across the release that publish
 
 ### What an operator is told
 
-The protocol is the transport this project builds on. New runtimes arrive on it, and a runtime that qualifies moves onto it. That is a direction rather than a deprecation: a hand-written kind is deprecated only once its condition is met, never before.
+The protocol is the transport this project builds on. New runtimes arrive on it, and a runtime that qualifies moves onto it. That is a direction rather than a deprecation until the difference between the routes is fully known: a hand-written kind is deprecated once every difference has been graded, by measurement or, where none could be made, as unmeasured, and each one still standing is stated to the operator, with the advice to stay on the hand-written kind while it is needed. Deprecation announces the direction with the remaining cost named; it does not wait for parity, and removal does.
 
 Where two routes reach one runtime, what each costs is documented for that runtime, where `agent.kind` is chosen rather than in an adapter's working notes. It is per runtime because the difference is per runtime, and one sentence covering every pair would be wrong somewhere.
 
@@ -75,10 +75,10 @@ The list form of the command is not such a field. It names no switch and is chec
 
 ### The staged path out
 
-Deprecation begins only after the condition above is met, and proceeds in stages.
+Deprecation begins once every difference is graded and stated, as above. Removal waits for the condition above. The path proceeds in stages.
 
-1. The kind is marked deprecated and stays registered. A configuration naming it runs, and draws a deprecation warning naming a migration guide.
-2. It holds for one release at minimum and two by preference, so an operator who upgrades rarely still meets the warning.
+1. The kind is marked deprecated and stays registered. A configuration naming it runs, and draws a deprecation warning naming the replacement kind.
+2. It holds for one release at minimum and two by preference, so an operator who upgrades rarely still meets the warning, and in any case until the removal condition is met.
 3. On removal, a configuration naming the kind is converted on the fly onto the surviving route, and the operator is warned, from `sortie validate` as well as at run time, that the kind is gone, that it was converted, and that the conversion is temporary.
 
 No release turns a working workflow file into a failing one without that path having been walked first.
@@ -116,13 +116,14 @@ Two things reopen the policy rather than apply it. The first is a pair whose con
 - **The condition carries no date, and nothing forces the last difference closed.** A hand-written route can outlive its usefulness while each difference stays open on its own merits.
 - **Compensating above the transport moves cost rather than removing it.** A helper written to reach parity is code this project owns, and the obligation to retire it once the protocol carries the capability is unenforced.
 - **A mistake in a protocol runtime's command surfaces at launch, not offline.** `sortie validate` accepts a misspelled switch or an unknown model on a generic kind; the runtime reports it when it starts.
+- **A deprecation can precede the route an operator needs.** An operator who relies on a capability the protocol route still lacks meets the warning with nowhere to move yet, and is told to stay on the hand-written kind until the difference closes.
 - **A standing policy is applied by whoever moves a runtime.** Nothing checks that a move was documented or that a removal met the condition, so the policy holds only while it is read.
 
 ## Confirmation
 
 1. A workflow file naming either kind for a runtime reachable both ways runs unchanged across the release that publishes the second route.
 2. The description of `agent.kind` an operator reads states the direction and, for a runtime reachable both ways, what each route costs.
-3. No kind is deprecated while any difference in the removal condition stands, and a deprecated kind stays registered, runs, and warns naming a migration guide through at least one release before removal.
+3. No kind is deprecated while a difference between its routes is ungraded or unstated to the operator, and no kind is removed while any difference in the removal condition stands. A deprecated kind stays registered, runs, and warns naming the replacement kind through at least one release before removal.
 4. After removal, a configuration naming the removed kind is converted on the fly, and `sortie validate` and the run both warn that the kind is gone, that it was converted, and that the conversion is temporary.
 5. A runtime whose first integration is the protocol is documented and operated like every other kind, with no route-specific procedure and no capability an operator is told to do without.
 6. A move onto the protocol produces a measurement and a documentation change, not a second decision record. A record is opened only for a pair whose configuration cannot be converted, or to remove a route at a capability cost.
