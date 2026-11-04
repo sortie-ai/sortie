@@ -65,8 +65,10 @@ server:
 
      The "opencode" agent kind is deprecated in favor of
      "agent-client-protocol"; see
-     examples/WORKFLOW.agent-client-protocol.opencode.md for the migrated
-     example.
+     examples/WORKFLOW.agent-client-protocol.opencode.md for an example
+     on that route. It has no allowed_tools key: to keep the allowlist
+     below, write it as the permission member of OpenCode's own
+     configuration.
 
      The OpenCode adapter launches one `opencode run` subprocess per
      turn. Session IDs are preserved across turns, so continuation uses
