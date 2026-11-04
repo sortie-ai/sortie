@@ -31,7 +31,7 @@ The agent kind and `agent.command` come from the mounted `WORKFLOW.md`, so one i
 | `codex.Dockerfile` | OpenAI Codex CLI | `CODEX_API_KEY` | `codex` | none | `debian:bookworm-slim` |
 | `copilot.Dockerfile` | GitHub Copilot | `GITHUB_TOKEN` | `agent-client-protocol`, `copilot-cli` (deprecated) | [`copilot --acp --allow-all-tools`](../WORKFLOW.agent-client-protocol.copilot.md) | `node:24-slim` |
 | `gemini.Dockerfile` | Gemini CLI | `GEMINI_API_KEY` | `agent-client-protocol` | [`gemini --acp --skip-trust --approval-mode yolo`](../WORKFLOW.agent-client-protocol.md) | `node:24-slim` |
-| `kiro.Dockerfile` | Kiro CLI | `KIRO_API_KEY` | `agent-client-protocol` | [`kiro-cli acp -a`](../WORKFLOW.agent-client-protocol.kiro.md) | `debian:bookworm-slim` |
+| `kiro.Dockerfile` | Kiro CLI | `KIRO_API_KEY` starts sessions without Sortie's tools; a stored device login delivers them ([details](https://docs.sortie-ai.com/reference/agent-client-protocol-kiro/#which-login-delivers-sorties-tools)) | `agent-client-protocol` | [`kiro-cli acp -a`](../WORKFLOW.agent-client-protocol.kiro.md) | `debian:bookworm-slim` |
 | `opencode.Dockerfile` | OpenCode | The key of the provider your model uses, such as `ANTHROPIC_API_KEY` | `agent-client-protocol`, `opencode` (deprecated) | [`opencode acp`](../WORKFLOW.agent-client-protocol.opencode.md) | `node:24-slim` |
 
 Each Dockerfile follows the same pattern: copy the Sortie binary from the distroless image (`ghcr.io/sortie-ai/sortie`), install the agent, create a non-root user, and set the entrypoint to Sortie. See the Dockerfiles themselves for the full details.
