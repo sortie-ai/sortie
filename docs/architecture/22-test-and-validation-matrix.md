@@ -431,8 +431,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 
 ### 17.5 Coding-Agent Adapter Client
 
-- Launch command uses workspace cwd and execs the resolved binary directly with an argument vector
+- A local launch uses the workspace as its working directory and execs the resolved binary directly with an argument vector
 - A remote launch invokes the local `ssh` binary, runs the agent in the remote workspace, and delivers every carried variable on the session's standard input ahead of the agent command, with no carried value in any argument; a remote host without `dd` fails the launch with the operator-visible message instead of running the agent, a preamble that arrives incomplete fails the launch rather than starting the agent without its variables, and a local launch carries none of it
+- A remote launch enters a workspace path holding a space, a `'`, or a `$` as written, and a workspace path missing on the remote host runs no part of the agent command, one holding a top-level `||` or `;` included
+- A remote launch hands a string-form command to the remote shell unsplit and unresolved: a first word the orchestrator host cannot resolve still launches, and a setup step joined to the runtime by `&&` or `;` runs before it, with the kind's arguments reaching the runtime
+- Each argument a kind appends to a remote launch, a prompt passed as an argument included, reaches the runtime as one word the remote shell neither splits nor expands, one holding a `'`, a `$(...)`, a `;`, or a newline included
 - A remote launch turns SSH connection sharing off, and ending its ssh client stops the agent on the remote host after `agent.stop_grace_ms`, even when the operator's `ssh_config` enables `ControlMaster` with `ControlPersist`
 - If a remote launch delivers Sortie's tools, it adds the forward options and a remote forward of a loopback port the remote host allocates
 - If a remote launch delivers Sortie's tools, it reads the forward's outcome from the ssh client's standard error before any byte reaches the agent
