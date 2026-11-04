@@ -176,7 +176,7 @@ Timing is once per session open, on created, loaded, resumed, and credential-ver
 | `no_answer` | No answer arrives within `agent.read_timeout_ms` | `option`, `read_timeout_ms` |
 | `other_value` | The answer lists the option at another current value | `option`, `current` |
 
-A late answer to an abandoned request leaves the session unaffected. A lost connection or an ended start context fails the start as it fails any start request.
+Sortie stops waiting for an unanswered request but cannot withdraw it, so a runtime that answers late may still apply the level after the first prompt. A lost connection or an ended start context fails the start as it fails any start request.
 
 A continued session with no `effort` sends nothing and runs at the level its runtime holds, which an earlier session may have set. When the result that opened it lists a target option with a current value, the kind writes one `Info` record, `continued session keeps the agent's reasoning level`, with `option` and `current`.
 
