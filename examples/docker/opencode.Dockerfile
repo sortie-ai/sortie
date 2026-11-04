@@ -21,7 +21,7 @@ FROM ghcr.io/sortie-ai/sortie:latest AS sortie
 
 FROM node:24-slim
 
-# Install git for repository-backed runs.
+# Install git for repository-backed runs and wget for the health check.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget && \
     rm -rf /var/lib/apt/lists/*
@@ -42,11 +42,12 @@ COPY --from=sortie /usr/bin/sortie /usr/bin/sortie
 USER sortie
 WORKDIR /home/sortie
 
-# The HTTP observability server listens on all interfaces so the host
+# The HTTP observability server listens on all interfaces, on the port the
+# health check probes, whatever server.port the workflow sets, so the host
 # can reach it through the published port.
 EXPOSE 7678
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -qO /dev/null http://localhost:7678/readyz || exit 1
 
-ENTRYPOINT ["/usr/bin/sortie", "--host", "0.0.0.0", "--log-format", "json"]
+ENTRYPOINT ["/usr/bin/sortie", "--host", "0.0.0.0", "--port", "7678", "--log-format", "json"]
