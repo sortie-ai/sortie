@@ -594,10 +594,3 @@ export function runCacheReadsText(run: RunResponse): string | null {
 export function totalsCacheReadsText(totals: HistoryTotalsResponse): string | null {
   return cacheReadsText(totals.tokens.cache_read_tokens, totals.uncached_tokens);
 }
-
-export function statsCacheReadsText(f: StatsFigures, tier: string): string | null {
-  if (tier === BASE_TIER || f.tokens === null) {
-    return null;
-  }
-  return cacheReadsText(f.tokens.cache_read, f.tokens.uncached);
-}

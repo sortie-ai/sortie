@@ -1,9 +1,8 @@
-import { Link } from "react-router";
-
 import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { MarkSlot } from "@/components/Lane";
 import { NotedFigure } from "@/components/NotedFigure";
 import { Parts } from "@/components/Parts";
+import { Link } from "@/components/carried-links";
 import { MONO } from "@/components/ui/mono";
 import { cn } from "@/lib/cn";
 import { endingWord } from "@/lib/ended";

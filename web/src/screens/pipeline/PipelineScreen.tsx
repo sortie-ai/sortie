@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 
 import { useEndedQuery, useStateQuery } from "@/api/queries";
 import { useHold, useNow } from "@/app/live";
 import { useShortcuts } from "@/app/keys";
+import { Link, useNavigate } from "@/components/carried-links";
 import { CircleAlertFilledIcon } from "@/components/icons";
 import { WAITING_DOT } from "@/components/Lane";
 import { Parts } from "@/components/Parts";

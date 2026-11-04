@@ -1,9 +1,10 @@
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
 import { ApiError } from "@/api/client";
 import { useHistoryRunsQuery, useIssueQuery, useStateQuery } from "@/api/queries";
 import { keyTip } from "@/app/key-tips";
 import { useNow } from "@/app/live";
+import { Link } from "@/components/carried-links";
 import { ExternalLinkIcon } from "@/components/icons";
 import { IssueMargin, NextOutcomes } from "@/components/IssueMargin";
 import { IssueStory, storyRunsOf } from "@/components/IssueStory";

@@ -1,10 +1,11 @@
-import { NavLink, useLocation, useMatch } from "react-router";
+import { useLocation, useMatch } from "react-router";
 
 import { useStateQuery } from "@/api/queries";
 import { BrandLink } from "@/app/BrandLink";
 import { ProjectName } from "@/app/ProjectName";
 import { StatusCard } from "@/app/StatusCard";
 import { ExternalLink } from "@/components/ExternalLink";
+import { NavLink } from "@/components/carried-links";
 import { cn } from "@/lib/cn";
 import { fmtVersion, pluralVerb } from "@/lib/format";
 import { backOf } from "@/lib/issue-link";

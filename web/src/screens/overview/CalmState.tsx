@@ -1,5 +1,6 @@
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
+import { Link } from "@/components/carried-links";
 import { BotIcon, ChartColumnIcon, ClockIcon, HistoryIcon } from "@/components/icons";
 import { StatusMark } from "@/components/StatusMark";
 import { hasSeveralTerminalStates } from "@/lib/ended";

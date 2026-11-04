@@ -1,6 +1,7 @@
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
 import { ScreenHeader } from "@/components/ScreenHeader";
+import { Link } from "@/components/carried-links";
 import { buttonStyles } from "@/components/ui/button";
 
 export function NotFound() {

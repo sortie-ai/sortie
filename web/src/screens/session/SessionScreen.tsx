@@ -1,10 +1,11 @@
 import { useMemo } from "react";
-import { Link, useLocation, useParams } from "react-router";
+import { useLocation, useParams } from "react-router";
 
 import { useIssueQuery, useStateQuery } from "@/api/queries";
 import { useHold, useLive, useNow } from "@/app/live";
 import { useRunEvents } from "@/app/run-events";
 import { AgentStatement } from "@/components/AgentStatement";
+import { Link } from "@/components/carried-links";
 import { TriangleAlertIcon } from "@/components/icons";
 import { Panel } from "@/components/Panel";
 import { Parts } from "@/components/Parts";

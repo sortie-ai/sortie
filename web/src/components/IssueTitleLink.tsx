@@ -1,5 +1,6 @@
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
+import { Link } from "@/components/carried-links";
 import { issueLinkOf } from "@/lib/issue-link";
 
 import type { ReactNode } from "react";

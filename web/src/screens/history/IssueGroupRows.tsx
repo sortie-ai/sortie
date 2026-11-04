@@ -1,7 +1,8 @@
 import { Fragment, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useLocation } from "react-router";
 
 import { useHistoryRunsQuery } from "@/api/queries";
+import { Link, useNavigate } from "@/components/carried-links";
 import { IssueTitleLink } from "@/components/IssueTitleLink";
 import { NotedFigure } from "@/components/NotedFigure";
 import { NameText } from "@/components/NameText";
@@ -19,7 +20,6 @@ import {
   TableRow,
   TableSpanCell,
 } from "@/components/ui/table";
-import { hasRateSource } from "@/lib/budget";
 import { cn } from "@/lib/cn";
 import {
   runCostFigure,
@@ -44,6 +44,7 @@ import type {
   SkillCall,
   StateResponse,
 } from "@/api/types.gen";
+import type { Units } from "@/lib/units";
 import type { ReactNode } from "react";
 
 const READ_FAILED = "Run history could not be read.";
@@ -52,22 +53,22 @@ const SKILLS_WIDTH = "w-full min-w-40";
 
 interface Columns {
   hasRule: boolean;
-  hasCost: boolean;
+  units: Units;
   span: number;
 }
 
-function columnsOf(state: StateResponse | undefined): Columns {
+function columnsOf(state: StateResponse | undefined, units: Units): Columns {
   const hasRule = (state?.config?.dispatch.rules ?? []).length > 0;
-  const hasCost = hasRateSource(state);
-  return { hasRule, hasCost, span: 7 + (hasRule ? 1 : 0) + (hasCost ? 1 : 0) };
+  return { hasRule, units, span: 7 + (hasRule ? 1 : 0) };
 }
 
 export interface HistoryTableHeadProps {
   state: StateResponse | undefined;
+  units: Units;
 }
 
-export function HistoryTableHead({ state }: HistoryTableHeadProps) {
-  const { hasRule, hasCost } = columnsOf(state);
+export function HistoryTableHead({ state, units }: HistoryTableHeadProps) {
+  const { hasRule } = columnsOf(state, units);
   return (
     <TableHeader>
       <TableHead>Status</TableHead>
@@ -76,10 +77,13 @@ export function HistoryTableHead({ state }: HistoryTableHeadProps) {
       <TableHead className={SKILLS_WIDTH}>Skills</TableHead>
       <TableHead align="right">Duration</TableHead>
       <TableHead align="right">Turns</TableHead>
-      <TableHead align="right" title="Cache reads not included">
-        Tokens
-      </TableHead>
-      {hasCost ? <TableHead align="right">Est. cost</TableHead> : undefined}
+      {units === "tokens" ? (
+        <TableHead align="right" title="Cache reads not included">
+          Tokens
+        </TableHead>
+      ) : (
+        <TableHead align="right">Est. cost</TableHead>
+      )}
       <TableHead align="right">Finished</TableHead>
     </TableHeader>
   );
@@ -207,13 +211,10 @@ function RunRow({ run, columns }: RunRowProps) {
       <TableCell look="number">{fmtDuration(runSeconds(run))}</TableCell>
       <TableCell look="number">{fmtCount(run.turns_completed)}</TableCell>
       <TableCell look="number">
-        <NotedFigure figure={runTokensFigure(run)} />
+        <NotedFigure
+          figure={columns.units === "tokens" ? runTokensFigure(run) : runCostFigure(run)}
+        />
       </TableCell>
-      {columns.hasCost ? (
-        <TableCell look="number">
-          <NotedFigure figure={runCostFigure(run)} />
-        </TableCell>
-      ) : undefined}
       <TableCell look="number">{fmtStamp(run.completed_at)}</TableCell>
     </TableRow>
   );
@@ -223,14 +224,15 @@ export interface IssueGroupRowsProps {
   group: IssueGroupResponse;
   filter: HistoryFilter;
   state: StateResponse | undefined;
+  units: Units;
 }
 
 /** Mount it with a key that changes with the filter so an expansion resets then. */
-export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
+export function IssueGroupRows({ group, filter, state, units }: IssueGroupRowsProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const link = issueLinkOf(group.issue_identifier, location);
-  const columns = columnsOf(state);
+  const columns = columnsOf(state, units);
   const [isExpanded, setIsExpanded] = useState(false);
   const expansion = useHistoryRunsQuery(group.issue_id, filter, isExpanded);
 
@@ -245,17 +247,24 @@ export function IssueGroupRows({ group, filter, state }: IssueGroupRowsProps) {
   );
   const ending = group.status === "history" ? group.issue_outcome : null;
   const cacheReads = totalsCacheReadsText(group.totals);
+  const unitParts: [string, ReactNode][] =
+    units === "tokens"
+      ? [
+          ["tokens", tokensPart(group.totals)],
+          ["cache-reads", cacheReads === null ? undefined : `${cacheReads} cache reads`],
+        ]
+      : [
+          ["cost", costPart(group.totals)],
+          ...(group.totals.vendor_amounts ?? []).map((amount): [string, ReactNode] => [
+            `vendor-${amount.unit}`,
+            <NotedFigure key={amount.unit} figure={vendorAmountFigure(amount, "full")} />,
+          ]),
+        ];
   const parts: [string, ReactNode][] = [
     ["key", group.issue_title ? key : undefined],
     ["status", standing.word || undefined],
     ["runs", plural(group.totals.run_count, "run", "runs")],
-    ["tokens", tokensPart(group.totals)],
-    ["cache-reads", cacheReads === null ? undefined : `${cacheReads} cache reads`],
-    ["cost", columns.hasCost ? costPart(group.totals) : undefined],
-    ...(group.totals.vendor_amounts ?? []).map((amount): [string, ReactNode] => [
-      `vendor-${amount.unit}`,
-      <NotedFigure key={amount.unit} figure={vendorAmountFigure(amount, "full")} />,
-    ]),
+    ...unitParts,
   ];
   const secondLine = parts.filter(([, part]) => part !== undefined);
 

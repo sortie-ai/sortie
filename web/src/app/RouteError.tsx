@@ -1,6 +1,5 @@
-import { Link } from "react-router";
-
 import { ScreenHeader } from "@/components/ScreenHeader";
+import { Link } from "@/components/carried-links";
 import { Button, buttonStyles } from "@/components/ui/button";
 
 /** A screen chunk fails to load when an upgraded binary has replaced the assets an open tab was built against; a reload fixes that. */

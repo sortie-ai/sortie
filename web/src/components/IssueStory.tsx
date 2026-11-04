@@ -1,6 +1,6 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
 import { useHistoryRunsQuery, useStateQuery } from "@/api/queries";
 import { useNow } from "@/app/live";
@@ -11,6 +11,7 @@ import { ServedText } from "@/components/ServedText";
 import { Parts } from "@/components/Parts";
 import { StatusMark } from "@/components/StatusMark";
 import { Beat, TIME_EDGE, Timeline } from "@/components/Timeline";
+import { Link } from "@/components/carried-links";
 import { Button, buttonStyles } from "@/components/ui/button";
 import { MONO } from "@/components/ui/mono";
 import { hasRateSource } from "@/lib/budget";
