@@ -160,33 +160,42 @@ The adapter reports a refused permission request once per session, on two surfac
 
 That record comes from a refused permission request. Under a posture that never asks it never fires, and under `permissions: approve-all` it fires only for a request the kind refuses, one offering no `allow_once` option or several, so an untrusted workspace that silently drops the declared servers leaves no signal on this path.
 
-## Reasoning level
+## Session options and the reasoning level
 
-The kind forwards the `effort` key of its block. The registration declares `EffortForwarded`, and the key is read through the shared reader, so a non-string value refuses the start with the type fault that `sortie validate` reports as `agent-client-protocol.effort.wrong_type`.
+The kind sets two things through the runtime's session configuration: each entry of its `config_options` key and the level in its `effort` key. Both go through one path with one set of records. The registration declares `EffortForwarded`, and `effort` is read through the shared reader, so a non-string value refuses the start with the type fault that `sortie validate` reports as `agent-client-protocol.effort.wrong_type`.
 
-Selection is by category. The target is the first select option, in the order the runtime sent them, whose category is the protocol's reasoning-level category (`thought_level`). The runtime's option id is never consulted, because ids differ per runtime and a table of them would put runtime identity in the generic kind. A `boolean` option and a select of another category never qualify. Reading the options picks a target and changes no capability record.
+`config_options` is a mapping of session option ids to value ids, both strings. A value of another type refuses the start, and `sortie validate` reports it as `agent-client-protocol.config_options.wrong_type` with the same message. The ids are the runtime's own, written by the operator, so the kind holds no table of runtimes and names no option. An entry reaches the select option the runtime lists under that id. An option of the `model` or `thought_level` category never qualifies, because the model stays out of the session configuration and the level has the one key `effort`; a `boolean` option never qualifies either.
 
-Timing is once per session open, on created, loaded, resumed, and credential-verification sessions alike, before the session's first prompt and never per turn. The level is sent with `session/set_config_option` only when the target option offers a value equal to it. The request is declared by hand in the package, because the schema generator cannot emit it. Every outcome other than a lost connection lets the session start at the runtime's current level and writes at most one warning through the shared `agentcore` helper, with the message `reasoning level not applied by the agent` and these `reason` values:
+Entries apply in the order the runtime lists its options, not the order of the mapping. After every set, the options list in the runtime's answer replaces the list before it for every later check, because setting one option can change what another lists. `effort` goes last against the list the last set returned: a named agent can carry a model, and the model decides the levels.
+
+The `effort` target is selected by category. It is the first select option, in the order the runtime sent them, whose category is the protocol's reasoning-level category (`thought_level`). The runtime's option id is never consulted for it, because ids differ per runtime and a table of them would put runtime identity in the generic kind. Reading the options picks targets and changes no capability record.
+
+Timing is once per session open, on created, loaded, resumed, and credential-verification sessions alike, before the session's first prompt and never per turn. On a verification session an entry applies after any launch switches the verification addition sets, so the check carries what the option adds. A value is sent with `session/set_config_option` only when the option offers a value byte-equal to it. The request is declared by hand in the package, because the schema generator cannot emit it. Every outcome other than a lost connection lets the session start at the runtime's current value and writes one warning per value through the shared `agentcore` helpers. An entry draws `session option not applied by the agent` with `agent_kind`, `option`, `value`, and `reason`. The level keeps `reasoning level not applied by the agent`, which carries `option` ahead of the attributes below for every reason but `no_option`. The `reason` values and their extra attributes are the same for both records:
 
 | `reason` | Condition | Extra attributes |
 | --- | --- | --- |
-| `no_option` | The session lists no select option of the reasoning-level category | none |
-| `not_offered` | The option lists no value equal to the level | `option`, `offered` |
-| `rejected` | The runtime answers the request with an error | `option`, `agent_error` |
-| `no_answer` | No answer arrives within `agent.read_timeout_ms` | `option`, `read_timeout_ms` |
-| `other_value` | The answer lists the option at another current value | `option`, `current` |
+| `no_option` | The latest list holds no select option with the entry's id outside the `model` and `thought_level` categories; for `effort`, none of the reasoning-level category | `advertised`: the ids of the select options outside those categories, in sent order |
+| `not_offered` | The option lists no value byte-equal to the configured one | `offered` |
+| `rejected` | The runtime answers the request with an error | `agent_error` |
+| `no_answer` | No answer arrives within `agent.read_timeout_ms` | `read_timeout_ms` |
+| `other_value` | The answer lists the option at another current value | `current` |
 
-Sortie stops waiting for an unanswered request but cannot withdraw it, so a runtime that answers late may still apply the level after the first prompt. A lost connection or an ended start context fails the start as it fails any start request.
+An entry whose id matches no option draws `no_option` after the entries that did match, in byte order of the ids. Sortie stops waiting for an unanswered request but cannot withdraw it, so a runtime that answers late may still apply the value after the first prompt. A lost connection or an ended start context fails the start as it fails any start request.
 
-A continued session with no `effort` sends nothing and runs at the level its runtime holds, which an earlier session may have set. When the result that opened it lists a target option with a current value, the kind writes one `Info` record, `continued session keeps the agent's reasoning level`, with `option` and `current`.
+An option no entry names keeps the value its runtime holds, so removing an entry does not reset its option: on a continued session the value can be one an earlier session set. The kind cannot know an option's default, so the route back is an entry that sets the default value id, for example `""` where the runtime offers it. A continued session with no `effort` sends no level and runs at the level its runtime holds. When the result that opened it lists a target option with a current value, the kind writes one `Info` record, `continued session keeps the agent's reasoning level`, with `option` and `current`. On a continued session it also writes one `Info` record, `continued session keeps the agent's session option`, with `agent_kind`, `option`, and `current`, for each select option whose category begins with `_`, which no entry names, and which holds a non-empty current value. Options of other categories always hold a value, as Copilot's `mode` and `allow_all` do, and would log on every continuation.
 
 A `variant` key in the block is not read. `sortie validate` warns under `agent-client-protocol.variant.not_read` while the `opencode` kind is registered, so a block carried over from that kind does not lose its level without a word.
 
 What runtimes showed:
 
-- OpenCode lists an `effort` option under the reasoning-level category when its model has levels.
+- OpenCode lists its model under the `model` category and an `effort` option under the reasoning-level category when its model has levels. Its `mode` option, category `mode`, offers `build` and `plan` and holds `build`.
 - The Gemini CLI and Kiro CLI captures list no reasoning option, so `effort` there draws `no_option` and the runtime's own switch in `agent.command` stays the route.
-- The category of Copilot CLI's `reasoning_effort` option is not established, so its notes keep `--reasoning-effort` in `agent.command` as the route.
+- Copilot CLI lists `reasoning_effort` under the reasoning-level category with the values low, medium, high, xhigh, and max, so a block `effort` targets it; its notes keep `--reasoning-effort` in `agent.command` as the measured route.
+- Copilot CLI lists an `agent` option under the category `_agent`. Its values are the agent profiles the workspace and the user define plus `""`, the default Copilot agent, and it holds `""` on a new session. Without any profile Copilot does not list the option. Setting it to a profile answers with that value and applies the profile's instructions to the turn. A `session/load` of that session in a fresh process lists `agent` at the value set earlier.
+- Copilot CLI accepts `--agent <name>` under `--acp` and selects no agent, so the option is the route for a named agent.
+- Copilot CLI lists `mode` with the values agent, plan, and autopilot as URLs, and `allow_all` under the category `permissions`, which reads `off` even with `--allow-all-tools`.
+
+The gated case for entries runs under `SORTIE_CLIENTPROTOCOL_CONFIG_OPTION`, which names a JSON document: `testdata/config_option/copilot_agent.json` sets Copilot's `agent` option to a workspace profile and defines the profile file and the marker word its instructions add to the reply. It runs in the nightly Copilot scripted row and in the release job.
 
 The completeness test requires the shared effort assertion in this package now that the kind declares `forwarded`. Its probe reads each turn's level off the last `session/set_config_option` request the kind sent in that session before the turn's prompt, and `""` when none. The gated case in `TestIntegration_ScriptedModel` runs under `SORTIE_CLIENTPROTOCOL_EFFORT`.
 
