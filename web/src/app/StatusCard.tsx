@@ -1,6 +1,5 @@
-import { Link } from "react-router";
-
 import { useStateQuery } from "@/api/queries";
+import { Link } from "@/components/carried-links";
 import { cn } from "@/lib/cn";
 import {
   ACKNOWLEDGED_WORD,

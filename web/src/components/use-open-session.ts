@@ -1,8 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate } from "react-router";
+import { useLocation } from "react-router";
 
 import { getIssue } from "@/api/client";
 import { queryKeys, useStateQuery } from "@/api/queries";
+import { useNavigate } from "@/components/carried-links";
 import { latestSessionOf, sessionLinkOf } from "@/lib/issue-link";
 
 /** Does nothing when the issue has none or its read fails; an issue not yet cached is fetched once. */

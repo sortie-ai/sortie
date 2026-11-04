@@ -1,22 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NotedFigure } from "@/components/NotedFigure";
+import { SplitBar, kindsOfStats } from "@/components/TokenKinds";
 import { Button } from "@/components/ui/button";
 import {
   SortableHead,
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { useTableSort } from "@/components/use-table-sort";
-import { statsCostFigure, statsCostPerSucceededFigure, statsTokensFigure } from "@/lib/figures";
-import { fmtCount, fmtDuration, fmtMean, fmtPercent } from "@/lib/format";
+import {
+  TOKENS_LOWER_BOUND,
+  statsCostFigure,
+  statsCostPerSucceededFigure,
+  statsTokensFigure,
+} from "@/lib/figures";
+import { fmtCount, fmtDuration, fmtMean, fmtPercent, fmtTokens, fmtTokensCut } from "@/lib/format";
 import { Panel } from "@/components/Panel";
 
 import type { Duration, Group } from "@/api/types.gen";
 import type { SortColumn } from "@/components/use-table-sort";
+import type { Figure } from "@/lib/figures";
+import type { Units } from "@/lib/units";
 import type { ReactNode } from "react";
 
 const PAGE_ROWS = 20;
@@ -111,8 +120,8 @@ export interface GroupTableProps<Row extends Group> {
   nameColumns: readonly NameColumn<Row>[];
   rows: readonly Row[];
   tier: string;
-  /** Whether a rate source is available, which adds the cost column. */
-  hasRates: boolean;
+  /** Which figure columns the table shows after the turns. */
+  units: Units;
   /** `share` swaps the success column for the share of runs, as a breakdown by run status needs. */
   measure?: "success" | "share";
 }
@@ -121,8 +130,24 @@ function sortColumns<Row extends Group>(
   nameColumns: readonly NameColumn<Row>[],
   tier: string,
   measure: "success" | "share",
+  units: Units,
 ): SortColumn<Row>[] {
   const isRecorded = tier !== "base";
+  const unitColumns: SortColumn<Row>[] =
+    units === "tokens"
+      ? [
+          {
+            id: "tokens",
+            value: (row: Row) => (isRecorded && row.tokens !== null ? row.tokens.uncached : null),
+          },
+        ]
+      : [
+          { id: "cost", value: (row: Row) => (isRecorded ? row.cost_usd : null) },
+          {
+            id: "cost-per-succeeded",
+            value: (row: Row) => (isRecorded ? row.cost_per_succeeded_run_usd : null),
+          },
+        ];
   return [
     ...nameColumns.map((column, index) => ({
       id: `name${index}`,
@@ -138,16 +163,33 @@ function sortColumns<Row extends Group>(
       value: (row: Row) => (row.duration_seconds.samples === 0 ? null : row.duration_seconds.p50),
     },
     { id: "turns", value: (row: Row) => row.mean_turns },
-    {
-      id: "tokens",
-      value: (row: Row) => (isRecorded && row.tokens !== null ? row.tokens.uncached : null),
-    },
-    { id: "cost", value: (row: Row) => (isRecorded ? row.cost_usd : null) },
-    {
-      id: "cost-per-succeeded",
-      value: (row: Row) => (isRecorded ? row.cost_per_succeeded_run_usd : null),
-    },
+    ...unitColumns,
   ];
+}
+
+function splitFigureOf(isLowerBound: boolean): (n: number) => Figure {
+  return (n) =>
+    isLowerBound ? { text: fmtTokensCut(n), note: TOKENS_LOWER_BOUND } : { text: fmtTokens(n) };
+}
+
+interface SplitCellProps {
+  row: Group;
+  tier: string;
+}
+
+function SplitCell({ row, tier }: SplitCellProps) {
+  if (tier === "base" || row.tokens === null || row.tokens.uncached === 0) {
+    return <TableCell />;
+  }
+  return (
+    <TableCell>
+      <SplitBar
+        kinds={kindsOfStats(row.tokens)}
+        figureOf={splitFigureOf(row.tokens_lower_bound)}
+        footnote={row.tokens_lower_bound ? TOKENS_LOWER_BOUND : undefined}
+      />
+    </TableCell>
+  );
 }
 
 /** The shown count lives in state, so mount the table with a key that changes with the range. */
@@ -157,12 +199,12 @@ export function GroupTable<Row extends Group>({
   nameColumns,
   rows,
   tier,
-  hasRates,
+  units,
   measure = "success",
 }: GroupTableProps<Row>) {
   const { rows: ordered, sort } = useTableSort(
     rows,
-    sortColumns(nameColumns, tier, measure),
+    sortColumns(nameColumns, tier, measure, units),
     sortParam,
   );
   const { visible, hasMore, attachBody, handleShowMore } = usePaging(ordered);
@@ -170,7 +212,7 @@ export function GroupTable<Row extends Group>({
   return (
     <Panel title={title}>
       <Table
-        className={hasRates ? "table-fixed min-w-276" : "table-fixed min-w-212"}
+        className={units === "tokens" ? "table-fixed min-w-242" : "table-fixed min-w-244"}
         frozenColumns={1}
       >
         <TableHeader>
@@ -206,31 +248,40 @@ export function GroupTable<Row extends Group>({
           <SortableHead columnId="turns" sort={sort} align="right" className={COLUMN_WIDTH.turns}>
             Mean turns
           </SortableHead>
-          <SortableHead
-            columnId="tokens"
-            sort={sort}
-            align="right"
-            title="Cache reads not included"
-            className={COLUMN_WIDTH.figure}
-          >
-            Tokens
-          </SortableHead>
-          {hasRates ? (
-            <SortableHead columnId="cost" sort={sort} align="right" className={COLUMN_WIDTH.figure}>
-              Est. cost
-            </SortableHead>
-          ) : undefined}
-          {hasRates ? (
-            <SortableHead
-              columnId="cost-per-succeeded"
-              sort={sort}
-              align="right"
-              title="Estimated cost per succeeded run."
-              className={COLUMN_WIDTH.figure}
-            >
-              Per run
-            </SortableHead>
-          ) : undefined}
+          {units === "tokens" ? (
+            <>
+              <SortableHead
+                columnId="tokens"
+                sort={sort}
+                align="right"
+                title="Cache reads not included"
+                className={COLUMN_WIDTH.figure}
+              >
+                Tokens
+              </SortableHead>
+              <TableHead className={COLUMN_WIDTH.turns}>Split</TableHead>
+            </>
+          ) : (
+            <>
+              <SortableHead
+                columnId="cost"
+                sort={sort}
+                align="right"
+                className={COLUMN_WIDTH.figure}
+              >
+                Est. cost
+              </SortableHead>
+              <SortableHead
+                columnId="cost-per-succeeded"
+                sort={sort}
+                align="right"
+                title="Estimated cost per succeeded run."
+                className={COLUMN_WIDTH.figure}
+              >
+                Per run
+              </SortableHead>
+            </>
+          )}
         </TableHeader>
         <TableBody ref={attachBody}>
           {visible.map((row, index) => (
@@ -253,19 +304,23 @@ export function GroupTable<Row extends Group>({
               <TableCell look="number">
                 {row.mean_turns === null ? "not recorded" : fmtMean(row.mean_turns)}
               </TableCell>
-              <TableCell look="number">
-                <NotedFigure figure={statsTokensFigure(row, tier)} />
-              </TableCell>
-              {hasRates ? (
-                <TableCell look="number">
-                  <NotedFigure figure={statsCostFigure(row, tier)} />
-                </TableCell>
-              ) : undefined}
-              {hasRates ? (
-                <TableCell look="number">
-                  <NotedFigure figure={statsCostPerSucceededFigure(row, tier)} />
-                </TableCell>
-              ) : undefined}
+              {units === "tokens" ? (
+                <>
+                  <TableCell look="number">
+                    <NotedFigure figure={statsTokensFigure(row, tier)} />
+                  </TableCell>
+                  <SplitCell row={row} tier={tier} />
+                </>
+              ) : (
+                <>
+                  <TableCell look="number">
+                    <NotedFigure figure={statsCostFigure(row, tier)} />
+                  </TableCell>
+                  <TableCell look="number">
+                    <NotedFigure figure={statsCostPerSucceededFigure(row, tier)} />
+                  </TableCell>
+                </>
+              )}
             </TableRow>
           ))}
         </TableBody>

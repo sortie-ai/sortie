@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Outlet,
-  ScrollRestoration,
-  useLocation,
-  useMatch,
-  useNavigate,
-  useSearchParams,
-} from "react-router";
+import { Outlet, ScrollRestoration, useLocation, useMatch, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, postRefresh } from "@/api/client";
@@ -23,6 +16,7 @@ import { RETURN, useScreenTop } from "@/app/screen-top";
 import { PageBreadcrumb, TopBar } from "@/app/TopBar";
 import { activeViewPath } from "@/components/ActiveHead";
 import { IssuePeek } from "@/components/IssuePeek";
+import { useNavigate } from "@/components/carried-links";
 import { toast, Toaster } from "@/components/toaster";
 import { usePeek } from "@/components/use-peek";
 import { cn } from "@/lib/cn";

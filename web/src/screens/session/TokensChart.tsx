@@ -1,6 +1,6 @@
 import { useRef } from "react";
 
-import { ChartFrame } from "@/components/ChartFrame";
+import { ChartFrame, useChart } from "@/components/ChartFrame";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
@@ -44,6 +44,7 @@ interface BarSlotProps {
 }
 
 function BarSlot({ bar, top, hasLabel }: BarSlotProps) {
+  const chart = useChart();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -63,7 +64,7 @@ function BarSlot({ bar, top, hasLabel }: BarSlotProps) {
           </span>
         ) : undefined}
       </TooltipTrigger>
-      <TooltipPopup>
+      <TooltipPopup besideChart={chart}>
         <div className="min-w-35">
           <div className="mb-xxs font-bold">{headingOf(bar)}</div>
           <div className="flex items-center gap-xs">

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { useLocation } from "react-router";
 
 import { useIssueLookupQuery, useStateQuery } from "@/api/queries";
 import { Kbd } from "@/app/Kbd";
 import { useLive } from "@/app/live";
 import { Parts } from "@/components/Parts";
+import { useNavigate } from "@/components/carried-links";
 import {
   Autocomplete,
   AutocompleteCollection,

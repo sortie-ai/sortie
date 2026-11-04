@@ -1,12 +1,15 @@
+import { useState } from "react";
+
 import { ApiError } from "@/api/client";
 import { useStateQuery, useStatsQuery } from "@/api/queries";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
 import { NameText } from "@/components/NameText";
-import { hasRateSource } from "@/lib/budget";
+import { UnitsSwitch } from "@/components/UnitsSwitch";
 import { agentLabel, isNamedRuleGroup, modelLabel, ruleLabel, startLabel } from "@/lib/labels";
 import { runStatus } from "@/lib/run-status";
+import { useUnits } from "@/lib/units";
 import { Panel } from "@/components/Panel";
 
 import { ChainFunnel } from "./ChainFunnel";
@@ -14,12 +17,13 @@ import { GroupTable } from "./GroupTable";
 import { OutcomeBar } from "./OutcomeBar";
 import { RangePicker } from "./RangePicker";
 import { SkillTable } from "./SkillTable";
-import { SpendChart } from "./SpendChart";
 import { SummaryTiles } from "./SummaryTiles";
+import { UsageChart } from "./UsageChart";
 import { RANGE_OPTIONS, useAnalyticsRange } from "./analytics-range";
 
 import type { AnalyticsRange } from "@/api/queries";
 import type { Group, Report } from "@/api/types.gen";
+import type { Units } from "@/lib/units";
 import type { NameColumn } from "./GroupTable";
 
 const MESSAGE = "text-body-md text-ink-body";
@@ -69,12 +73,12 @@ const ORIGIN_COLUMN: NameColumn<Group> = {
 interface BreakdownsProps {
   report: Report;
   hasRules: boolean;
-  hasRates: boolean;
+  units: Units;
 }
 
-function Breakdowns({ report, hasRules, hasRates }: BreakdownsProps) {
+function Breakdowns({ report, hasRules, units }: BreakdownsProps) {
   const tier = report.schema_tier;
-  const common = { tier, hasRates };
+  const common = { tier, units };
   const byRule = report.by_rule ?? [];
   const byModel = report.by_model ?? [];
   const byAdapter = report.by_adapter ?? [];
@@ -160,10 +164,27 @@ export function AnalyticsScreen() {
   const [range] = useAnalyticsRange();
   const stats = useStatsQuery(range);
   const report = stats.data;
+  const [hasLoadedBefore, setHasLoadedBefore] = useState(false);
+  if (report !== undefined && !hasLoadedBefore) {
+    setHasLoadedBefore(true);
+  }
+  const hasReport =
+    (hasLoadedBefore || report !== undefined) && !(stats.isError && report === undefined);
+  const unitsView = useUnits(state, hasReport);
+  const units = unitsView.shown;
 
   return (
     <div className="flex flex-col">
-      <ScreenHeader title="Analytics" standfirst={standfirstOf(range)} actions={<RangePicker />} />
+      <ScreenHeader
+        title="Analytics"
+        standfirst={standfirstOf(range)}
+        actions={
+          <div className="flex flex-wrap items-center gap-xs">
+            <UnitsSwitch view={unitsView} />
+            <RangePicker />
+          </div>
+        }
+      />
       {report === undefined ? (
         stats.isError ? (
           <p className={MESSAGE}>
@@ -191,14 +212,13 @@ export function AnalyticsScreen() {
           ) : (
             <div key={range} className="flex flex-col gap-xl">
               <Panel title="Summary">
-                <SummaryTiles report={report} hasCost={hasRateSource(state)} />
+                <SummaryTiles report={report} units={units} />
               </Panel>
               <OutcomeBar summary={report.summary} />
-              {hasRateSource(state) &&
-              range !== "24h" &&
-              report.spend !== null &&
+              {range !== "24h" &&
+              report.schema_tier === "full" &&
               (report.spend.buckets ?? []).length > 0 ? (
-                <SpendChart spend={report.spend} since={report.since} />
+                <UsageChart spend={report.spend} since={report.since} units={units} />
               ) : undefined}
               {(report.chain_funnels ?? []).map((funnel) => (
                 <ChainFunnel key={funnel.stages?.[0]?.rule} funnel={funnel} config={config} />
@@ -206,7 +226,7 @@ export function AnalyticsScreen() {
               <Breakdowns
                 report={report}
                 hasRules={(config?.dispatch.rules ?? []).length > 0}
-                hasRates={hasRateSource(state)}
+                units={units}
               />
             </div>
           )}

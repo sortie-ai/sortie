@@ -1,11 +1,12 @@
 import { useIsFetching } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 
 import { ApiError } from "@/api/client";
 import { useEndedQuery, useFirstRunQuery, useStateQuery, useTallyQuery } from "@/api/queries";
 import { useHold, useLive, useNow } from "@/app/live";
 import { useShortcuts } from "@/app/keys";
+import { useNavigate } from "@/components/carried-links";
 import { useAttentionActions } from "@/components/use-attention-actions";
 import { useOpenLatestSession } from "@/components/use-open-session";
 import { usePeek } from "@/components/use-peek";

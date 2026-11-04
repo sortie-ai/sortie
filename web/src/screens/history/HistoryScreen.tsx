@@ -7,6 +7,8 @@ import { ScreenHeader } from "@/components/ScreenHeader";
 import { Button } from "@/components/ui/button";
 import { Table } from "@/components/ui/table";
 import { Panel } from "@/components/Panel";
+import { UnitsSwitch } from "@/components/UnitsSwitch";
+import { useUnits } from "@/lib/units";
 
 import { filterFromParams, HistoryFilters } from "./HistoryFilters";
 import { HistoryTableHead, IssueGroupRows } from "./IssueGroupRows";
@@ -30,6 +32,7 @@ export function HistoryScreen() {
   const [params, setParams] = useSearchParams();
   const filter = useMemo(() => filterFromParams(params), [params]);
   const history = useHistoryQuery(filter);
+  const units = useUnits(state);
 
   const groups = history.data?.pages.flatMap((page) => page.groups ?? []);
   const filterKey = JSON.stringify(filter);
@@ -49,7 +52,11 @@ export function HistoryScreen() {
 
   return (
     <div className="flex flex-col">
-      <ScreenHeader title="History" standfirst="Finished runs by issue, newest first." />
+      <ScreenHeader
+        title="History"
+        standfirst="Finished runs by issue, newest first."
+        actions={<UnitsSwitch view={units} />}
+      />
       <Panel title="Runs" right={<HistoryFilters config={config} />}>
         {groups === undefined ? (
           history.isError ? (
@@ -73,13 +80,14 @@ export function HistoryScreen() {
         ) : (
           <>
             <Table isWide frozenColumns={1}>
-              <HistoryTableHead state={state} />
+              <HistoryTableHead state={state} units={units.shown} />
               {groups.map((group) => (
                 <IssueGroupRows
                   key={`${filterKey}|${group.issue_id}`}
                   group={group}
                   filter={filter}
                   state={state}
+                  units={units.shown}
                 />
               ))}
             </Table>

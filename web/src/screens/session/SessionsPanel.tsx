@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
 import { useHistoryRunsQuery, useIssueQuery } from "@/api/queries";
 import { useNow } from "@/app/live";
 import { storyRunsOf } from "@/components/IssueStory";
 import { Panel } from "@/components/Panel";
 import { StatusMark } from "@/components/StatusMark";
+import { Link } from "@/components/carried-links";
 import { Button } from "@/components/ui/button";
 import { fmtDuration, lowerFirst, parseInstant } from "@/lib/format";
 import { sessionLinkOf } from "@/lib/issue-link";

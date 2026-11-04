@@ -1,10 +1,9 @@
-import { Link } from "react-router";
-
 import { useStateQuery } from "@/api/queries";
 import { Pair, Pairs, Panel } from "@/components/Panel";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark, markWord } from "@/components/StatusMark";
+import { Link } from "@/components/carried-links";
 import {
   Table,
   TableBody,

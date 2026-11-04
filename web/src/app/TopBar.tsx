@@ -1,4 +1,4 @@
-import { Link, useLocation, useMatch } from "react-router";
+import { useLocation, useMatch } from "react-router";
 
 import { useStateQuery } from "@/api/queries";
 import { Kbd } from "@/app/Kbd";
@@ -6,6 +6,7 @@ import { keyTip } from "@/app/key-tips";
 import { modifierLabel } from "@/app/keys";
 import { LiveIndicator } from "@/app/LiveIndicator";
 import { RETURN } from "@/app/screen-top";
+import { Link } from "@/components/carried-links";
 import { CircleHelpIcon, SearchIcon } from "@/components/icons";
 import { ThemeMenu } from "@/components/ThemeMenu";
 import { useIssueSummary } from "@/components/use-issue-summary";

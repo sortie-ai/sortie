@@ -1,9 +1,8 @@
-import { Link } from "react-router";
-
 import { useStateQuery } from "@/api/queries";
 import { BrandLink } from "@/app/BrandLink";
 import { keyTip } from "@/app/key-tips";
 import { modifierLabel } from "@/app/keys";
+import { Link } from "@/components/carried-links";
 import { SearchIcon } from "@/components/icons";
 import { StatusMark } from "@/components/StatusMark";
 import { Button } from "@/components/ui/button";

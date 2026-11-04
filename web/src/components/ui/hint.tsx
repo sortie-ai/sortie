@@ -1,6 +1,6 @@
 import { Popover as BasePopover } from "@base-ui/react/popover";
 
-import { TOOLTIP_POPUP } from "@/components/ui/tooltip";
+import { TOOLTIP_COLLISION_PADDING, TOOLTIP_POPUP } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 
 import type { MouseEvent, ReactNode } from "react";
@@ -34,7 +34,12 @@ export function Hint({ hint, children }: HintProps) {
 function HintPopup({ hint }: { hint: ReactNode }) {
   return (
     <BasePopover.Portal>
-      <BasePopover.Positioner side="top" sideOffset={4} className="z-(--z-tooltip)">
+      <BasePopover.Positioner
+        side="top"
+        sideOffset={4}
+        collisionPadding={TOOLTIP_COLLISION_PADDING}
+        className="z-(--z-tooltip)"
+      >
         <BasePopover.Popup className={cn(TOOLTIP_POPUP, "outline-hidden")}>
           {hint}
         </BasePopover.Popup>

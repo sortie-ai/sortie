@@ -4,7 +4,6 @@ import { cn } from "@/lib/cn";
 import {
   COST_PER_RUN_TILE_CAPTION,
   TOKENS_TILE_CAPTION,
-  statsCacheReadsText,
   statsCostFigure,
   statsCostPerSucceededFigure,
   statsTokensFigure,
@@ -13,6 +12,7 @@ import { fmtCount, fmtDuration, fmtMean, fmtPercent, plural } from "@/lib/format
 
 import type { Report, Summary } from "@/api/types.gen";
 import type { Figure } from "@/lib/figures";
+import type { Units } from "@/lib/units";
 import type { ReactNode } from "react";
 
 interface TileProps {
@@ -69,11 +69,11 @@ function Rate({ summary }: RateProps) {
 
 export interface SummaryTilesProps {
   report: Report;
-  /** Whether a rate source is available, which adds the cost tile. */
-  hasCost: boolean;
+  /** Which figures the tiles after the run counts show. */
+  units: Units;
 }
 
-export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
+export function SummaryTiles({ report, units }: SummaryTilesProps) {
   const { summary, schema_tier: tier } = report;
   const hasSucceeded = summary.succeeded > 0;
   const tiles: ReactNode[] = [
@@ -105,27 +105,20 @@ export function SummaryTiles({ report, hasCost }: SummaryTilesProps) {
       />,
     );
   }
-  const isEveryRunMeasured =
-    tier === "full" &&
-    summary.tokens_unmeasured_runs === 0 &&
-    summary.tokens_lower_bound_runs === 0;
-  tiles.push(
-    <Tile
-      key="tokens"
-      label="Tokens"
-      value={statsTokensFigure(summary, tier)}
-      hint={isEveryRunMeasured ? TOKENS_TILE_CAPTION : null}
-    />,
-  );
-  const cacheReads = statsCacheReadsText(summary, tier);
-  tiles.push(
-    cacheReads === null ? (
-      <div key="cache-reads" className="row-span-2" />
-    ) : (
-      <Tile key="cache-reads" label="Cache reads" value={{ text: cacheReads }} />
-    ),
-  );
-  if (hasCost) {
+  if (units === "tokens") {
+    const isEveryRunMeasured =
+      tier === "full" &&
+      summary.tokens_unmeasured_runs === 0 &&
+      summary.tokens_lower_bound_runs === 0;
+    tiles.push(
+      <Tile
+        key="tokens"
+        label="Tokens"
+        value={statsTokensFigure(summary, tier)}
+        hint={isEveryRunMeasured ? TOKENS_TILE_CAPTION : null}
+      />,
+    );
+  } else {
     tiles.push(<Tile key="cost" label="Estimated cost" value={statsCostFigure(summary, tier)} />);
     if (hasSucceeded) {
       tiles.push(

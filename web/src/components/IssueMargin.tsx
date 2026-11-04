@@ -20,7 +20,7 @@ import { useIssueActions } from "@/components/use-issue-actions";
 import { rowMark } from "@/lib/active-rows";
 import { budgetOf, moneyBudgetFigure } from "@/lib/budget";
 import { cn } from "@/lib/cn";
-import { issueCostFigure, liveCostFigure, liveTokensFigure } from "@/lib/figures";
+import { NOT_MEASURED, issueCostFigure, liveCostFigure, liveTokensFigure } from "@/lib/figures";
 import {
   fmtAgo,
   fmtClock,
@@ -377,10 +377,39 @@ function tokensText(tokens: BudgetLine & { complete: boolean }): ReactNode {
   );
 }
 
-interface CostShare {
+interface ShareName {
   name: string;
   /** The rule name when the share is one rule's runs, which reads in monospace. */
   rule?: string;
+}
+
+function shareNameOf(run: RunResponse, chained: boolean, stageRuns: number): ShareName {
+  if (run.reaction_kind) {
+    return { name: "PR fixes" };
+  }
+  if (chained) {
+    return { name: plural(stageRuns, "stage run", "stage runs") };
+  }
+  return run.rule_name ? { name: ruleLabel(run.rule_name), rule: run.rule_name } : { name: "Work" };
+}
+
+/** Folds the runs into the shares the budget splits an issue's figures by, in first-seen order. */
+function foldShares<T extends ShareName>(
+  runs: readonly RunResponse[],
+  chained: boolean,
+  start: (share: ShareName) => T,
+  add: (share: T, run: RunResponse) => T,
+): T[] {
+  const shares = new Map<string, T>();
+  const stageRuns = runs.filter((run) => !run.reaction_kind).length;
+  for (const run of runs) {
+    const share = shareNameOf(run, chained, stageRuns);
+    shares.set(share.name, add(shares.get(share.name) ?? start(share), run));
+  }
+  return [...shares.values()];
+}
+
+interface CostShare extends ShareName {
   usd: number;
   hasPriced: boolean;
   hasUnpriced: boolean;
@@ -397,40 +426,92 @@ function shareStatus(share: CostShare): string {
 }
 
 function costShares(runs: readonly RunResponse[], chained: boolean): CostShare[] {
-  const shares = new Map<string, CostShare>();
-  const stageRuns = runs.filter((run) => !run.reaction_kind).length;
-  for (const run of runs) {
-    const name = run.reaction_kind
-      ? "PR fixes"
-      : chained
-        ? plural(stageRuns, "stage run", "stage runs")
-        : run.rule_name
-          ? ruleLabel(run.rule_name)
-          : "Work";
-    const rule = !run.reaction_kind && !chained && run.rule_name ? run.rule_name : undefined;
-    const before = shares.get(name) ?? {
-      name,
-      rule,
+  return foldShares<CostShare>(
+    runs,
+    chained,
+    (share) => ({
+      ...share,
       usd: 0,
       hasPriced: false,
       hasUnpriced: false,
       isIncomplete: false,
-    };
-    const usd = run.estimated_cost_usd;
-    shares.set(name, {
-      name,
-      rule,
-      usd: before.usd + (usd ?? 0),
-      hasPriced: before.hasPriced || usd !== null,
-      hasUnpriced: before.hasUnpriced || run.cost_status === "unpriced",
-      isIncomplete:
-        before.isIncomplete ||
-        run.cost_status === "partial" ||
-        run.cost_status === "unmeasured" ||
-        run.usage_completeness === "lower_bound",
-    });
+    }),
+    (share, run) => {
+      const usd = run.estimated_cost_usd;
+      return {
+        ...share,
+        usd: share.usd + (usd ?? 0),
+        hasPriced: share.hasPriced || usd !== null,
+        hasUnpriced: share.hasUnpriced || run.cost_status === "unpriced",
+        isIncomplete:
+          share.isIncomplete ||
+          run.cost_status === "partial" ||
+          run.cost_status === "unmeasured" ||
+          run.usage_completeness === "lower_bound",
+      };
+    },
+  );
+}
+
+interface TokenShare extends ShareName {
+  tokens: number;
+  hasMeasured: boolean;
+  /** True when a run of the share was not fully counted. */
+  isIncomplete: boolean;
+}
+
+function tokenShares(runs: readonly RunResponse[], chained: boolean): TokenShare[] {
+  return foldShares<TokenShare>(
+    runs,
+    chained,
+    (share) => ({
+      ...share,
+      tokens: 0,
+      hasMeasured: false,
+      isIncomplete: false,
+    }),
+    (share, run) => ({
+      ...share,
+      tokens: share.tokens + (run.uncached_tokens ?? 0),
+      hasMeasured: share.hasMeasured || run.uncached_tokens !== null,
+      isIncomplete: share.isIncomplete || run.usage_completeness !== "complete",
+    }),
+  );
+}
+
+function shareTokensText(share: TokenShare): ReactNode {
+  return share.hasMeasured ? (
+    <NotedFigure figure={liveTokensFigure(share.tokens, !share.isIncomplete)} />
+  ) : (
+    NOT_MEASURED
+  );
+}
+
+interface ShareLineProps<T extends ShareName> {
+  shares: readonly T[];
+  figureOf: (share: T) => ReactNode;
+}
+
+/** Splits a figure by its shares; a single share is the figure itself, so only a split of two or more shows. */
+function ShareLine<T extends ShareName>({ shares, figureOf }: ShareLineProps<T>) {
+  if (shares.length < 2) {
+    return undefined;
   }
-  return [...shares.values()];
+  return (
+    <Parts
+      className="text-body-sm text-ink-muted"
+      parts={shares.map((share) => (
+        <span key={share.name}>
+          {share.rule === undefined ? (
+            share.name
+          ) : (
+            <NameText name={share.rule} label={share.name} />
+          )}{" "}
+          <span className="text-ink-body">{figureOf(share)}</span>
+        </span>
+      ))}
+    />
+  );
 }
 
 interface BudgetPanelProps {
@@ -450,7 +531,7 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
         <NotedFigure figure={moneyFigure} /> of {fmtMoney(money.limit)}
       </>
     );
-  const shares = cost === null ? [] : costShares(detail.history?.runs ?? [], chained);
+  const runs = detail.history?.runs ?? [];
 
   return (
     <Panel isRuled title={cost === null ? "Budget" : "Budget and cost"}>
@@ -461,23 +542,26 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
         ) : (
           <BudgetMeter name="Sessions" line={sessions} format={fmtCount} />
         )}
-        {tokensLine === undefined ? (
-          <BudgetMeter
-            name="Tokens"
-            line={tokens}
-            format={fmtTokens}
-            text={
-              tokens.used === null || tokens.limit === null || tokens.complete ? undefined : (
-                <>
-                  <NotedFigure figure={liveTokensFigure(tokens.used, false)} /> of{" "}
-                  {fmtTokens(tokens.limit)}
-                </>
-              )
-            }
-          />
-        ) : (
-          <FigureLine name="Tokens">{tokensLine}</FigureLine>
-        )}
+        <div className="flex flex-col gap-xxs">
+          {tokensLine === undefined ? (
+            <BudgetMeter
+              name="Tokens"
+              line={tokens}
+              format={fmtTokens}
+              text={
+                tokens.used === null || tokens.limit === null || tokens.complete ? undefined : (
+                  <>
+                    <NotedFigure figure={liveTokensFigure(tokens.used, false)} /> of{" "}
+                    {fmtTokens(tokens.limit)}
+                  </>
+                )
+              }
+            />
+          ) : (
+            <FigureLine name="Tokens">{tokensLine}</FigureLine>
+          )}
+          <ShareLine shares={tokenShares(runs, chained)} figureOf={shareTokensText} />
+        </div>
         {cost === null ? undefined : (
           <div className="flex flex-col gap-xxs">
             {moneyText === undefined ? (
@@ -487,30 +571,18 @@ function BudgetPanel({ detail, state, chained }: BudgetPanelProps) {
             ) : (
               <BudgetMeter name="Cost" line={money} format={fmtMoney} text={moneyText} />
             )}
-            {/* A single share is the cost itself, so only a split of two or more shows. */}
-            {shares.length < 2 ? undefined : (
-              <Parts
-                className="text-body-sm text-ink-muted"
-                parts={shares.map((share) => (
-                  <span key={share.name}>
-                    {share.rule === undefined ? (
-                      share.name
-                    ) : (
-                      <NameText name={share.rule} label={share.name} />
-                    )}{" "}
-                    <span className="text-ink-body">
-                      <NotedFigure
-                        figure={liveCostFigure(
-                          shareStatus(share),
-                          share.hasPriced ? share.usd : null,
-                          "runs",
-                        )}
-                      />
-                    </span>
-                  </span>
-                ))}
-              />
-            )}
+            <ShareLine
+              shares={costShares(runs, chained)}
+              figureOf={(share) => (
+                <NotedFigure
+                  figure={liveCostFigure(
+                    shareStatus(share),
+                    share.hasPriced ? share.usd : null,
+                    "runs",
+                  )}
+                />
+              )}
+            />
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
-import { Link, useMatch } from "react-router";
+import { useMatch } from "react-router";
 
 import { useStateQuery } from "@/api/queries";
+import { Link } from "@/components/carried-links";
 import { TriangleAlertIcon } from "@/components/icons";
 import { fmtClock } from "@/lib/format";
 
