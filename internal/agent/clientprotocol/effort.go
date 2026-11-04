@@ -95,18 +95,18 @@ func offeredValues(option reasoningOption) []string {
 	return values
 }
 
-// applyReasoningLevel sets state.effort on the session's reasoning option once,
+// applyReasoningLevel sets effort on the session's reasoning option once,
 // before the session's first prompt. Every outcome that leaves the level
 // unapplied is a warning and returns nil; only a lost connection or the end of
 // the start's own context returns an error.
-func applyReasoningLevel(ctx context.Context, state *sessionState, sessionID sessionId, opened json.RawMessage, continued bool) *domain.AgentError {
-	if state.effort == "" && !continued {
+func applyReasoningLevel(ctx context.Context, state *sessionState, effort string, sessionID sessionId, opened json.RawMessage, continued bool) *domain.AgentError {
+	if effort == "" && !continued {
 		return nil
 	}
 
 	logger := logging.WithSession(state.logger, string(sessionID))
 	option, found := selectReasoningOption(configOptionsOf(opened))
-	if state.effort == "" {
+	if effort == "" {
 		if found && option.CurrentValue != "" {
 			logger.Info("continued session keeps the agent's reasoning level",
 				slog.String("agent_kind", kindName),
@@ -118,13 +118,13 @@ func applyReasoningLevel(ctx context.Context, state *sessionState, sessionID ses
 	}
 
 	if !found {
-		agentcore.WarnEffortNotApplied(logger, kindName, state.effort, agentcore.EffortNoOption)
+		agentcore.WarnEffortNotApplied(logger, kindName, effort, agentcore.EffortNoOption)
 		return nil
 	}
 
 	offered := offeredValues(option)
-	if !slices.Contains(offered, state.effort) {
-		agentcore.WarnEffortNotApplied(logger, kindName, state.effort, agentcore.EffortNotOffered,
+	if !slices.Contains(offered, effort) {
+		agentcore.WarnEffortNotApplied(logger, kindName, effort, agentcore.EffortNotOffered,
 			slog.String("option", string(option.ID)),
 			slog.String("offered", strings.Join(offered, ", ")),
 		)
@@ -135,11 +135,11 @@ func applyReasoningLevel(ctx context.Context, state *sessionState, sessionID ses
 	callCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 
-	req := setConfigOptionRequest{SessionID: sessionID, ConfigID: option.ID, Value: sessionConfigValueId(state.effort)}
+	req := setConfigOptionRequest{SessionID: sessionID, ConfigID: option.ID, Value: sessionConfigValueId(effort)}
 	resp, err := state.conn.Call(callCtx, methodSessionSetConfigOption, req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && callCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-			agentcore.WarnEffortNotApplied(logger, kindName, state.effort, agentcore.EffortNoAnswer,
+			agentcore.WarnEffortNotApplied(logger, kindName, effort, agentcore.EffortNoAnswer,
 				slog.String("option", string(option.ID)),
 				slog.Int64("read_timeout_ms", bound.Milliseconds()),
 			)
@@ -148,7 +148,7 @@ func applyReasoningLevel(ctx context.Context, state *sessionState, sessionID ses
 		return translateCallError(state, err, callCtx, ctx)
 	}
 	if resp.Error != nil {
-		agentcore.WarnEffortNotApplied(logger, kindName, state.effort, agentcore.EffortRejected,
+		agentcore.WarnEffortNotApplied(logger, kindName, effort, agentcore.EffortRejected,
 			slog.String("option", string(option.ID)),
 			slog.String("agent_error", fmt.Sprintf("%d: %s", resp.Error.Code, quoteJSONRPCError(resp.Error))),
 		)
@@ -156,8 +156,8 @@ func applyReasoningLevel(ctx context.Context, state *sessionState, sessionID ses
 	}
 
 	for _, updated := range selectOptions(configOptionsOf(resp.Result)) {
-		if updated.ID == option.ID && updated.CurrentValue != "" && string(updated.CurrentValue) != state.effort {
-			agentcore.WarnEffortNotApplied(logger, kindName, state.effort, agentcore.EffortOtherValue,
+		if updated.ID == option.ID && string(updated.CurrentValue) != effort {
+			agentcore.WarnEffortNotApplied(logger, kindName, effort, agentcore.EffortOtherValue,
 				slog.String("option", string(option.ID)),
 				slog.String("current", string(updated.CurrentValue)),
 			)
