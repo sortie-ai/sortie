@@ -88,11 +88,6 @@ type sessionState struct {
 
 	permissions agentcore.PermissionDeclaration
 
-	// effort is the reasoning level of the settings block, empty when unset.
-	// startSession writes it and applyReasoningLevel reads it, both before the
-	// pump learns the handshake.
-	effort string
-
 	launchEnv []string
 
 	// launchAddition is what the launch carried for the selected declaration's
@@ -256,8 +251,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		return domain.Session{}, agentcore.SettingsError(permissionsFault.Error(), permissionsFault)
 	}
 
-	effort, effortFault := registry.EffortSetting(params.Settings)
-	if effortFault != nil {
+	if _, effortFault := registry.EffortSetting(params.Settings); effortFault != nil {
 		return domain.Session{}, agentcore.SettingsError(effortFault.Error(), effortFault)
 	}
 
@@ -320,7 +314,6 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		initializeMeta:         launchChoice.InitializeMeta,
 		configuredModel:        configuredModel,
 		permissions:            permissions,
-		effort:                 effort,
 	}
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -493,7 +486,8 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 			state.closeSessionID = sessionID
 			state.closeMethod = methodSessionClose
 		}
-		newErr = applyReasoningLevel(ctx, state, sessionId(sessionID), session, start.CarriedHistory())
+		effort, _ := registry.EffortSetting(params.Settings) // startSession refused a non-string level before launch
+		newErr = applyReasoningLevel(ctx, state, effort, sessionId(sessionID), session, start.CarriedHistory())
 	}
 	if startErr != nil || newErr != nil {
 		teardownWithinStopGrace(ctx, state)

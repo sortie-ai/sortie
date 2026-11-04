@@ -39,8 +39,7 @@ func (r *effortRuntime) run(t *testing.T, logger *slog.Logger, effort string, ve
 
 	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes, logger)
 	out := newOutboundReader(outPr)
-	state.effort = effort
-	params := domain.StartSessionParams{CredentialVerification: verification}
+	params := domain.StartSessionParams{CredentialVerification: verification, Settings: map[string]any{registry.EffortKey: effort}}
 	if continued {
 		params.ResumeSessionID = "held-1"
 	}
