@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"maps"
 	"math"
 	"reflect"
 	"testing"
@@ -64,9 +65,7 @@ func TestPriorityLabelsConfigRefusals(t *testing.T) {
 				kind = "gitea"
 			}
 			tracker := map[string]any{"kind": kind, "terminal_states": []any{"done"}, "priority_labels": tt.raw}
-			for key, value := range tt.states {
-				tracker[key] = value
-			}
+			maps.Copy(tracker, tt.states)
 			_, err := NewServiceConfig(map[string]any{"tracker": tracker})
 			var ce *ConfigError
 			if !errors.As(err, &ce) {

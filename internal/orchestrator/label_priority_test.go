@@ -31,10 +31,10 @@ func TestLabelTrackerPriorityDispatch(t *testing.T) {
 				fmt.Fprint(w, `[{"name":"To Do"}]`) //nolint:errcheck // test server
 			})
 			mux.HandleFunc("GET /repos/owner/repo/issues", func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprint(w, `[
+				_, _ = fmt.Fprint(w, `[
      {"number":1,"title":"Older low priority","state":"open","labels":[{"name":"To Do"},{"name":"priority/low"}],"created_at":"2026-01-01T00:00:00Z","issue_dependencies_summary":{"total_blocked_by":0}},
      {"number":2,"title":"Newer urgent","state":"open","labels":[{"name":"To Do"},{"name":"PRIORITY/High"}],"created_at":"2026-02-01T00:00:00Z","issue_dependencies_summary":{"total_blocked_by":0}}
-    ]`) //nolint:errcheck // test server
+    ]`)
 			})
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
