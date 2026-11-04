@@ -63,6 +63,11 @@ server:
 
 {{/* Sortie sample workflow, Jira + OpenCode CLI (Anthropic).
 
+     The "opencode" agent kind is deprecated in favor of
+     "agent-client-protocol"; see
+     examples/WORKFLOW.agent-client-protocol.opencode.md for the migrated
+     example.
+
      The OpenCode adapter launches one `opencode run` subprocess per
      turn. Session IDs are preserved across turns, so continuation uses
      the existing session instead of starting over.
