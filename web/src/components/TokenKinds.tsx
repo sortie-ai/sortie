@@ -135,7 +135,14 @@ export function SplitBar({ kinds, figureOf, footnote }: SplitBarProps) {
       <TooltipTrigger
         delay={0}
         render={
-          <span tabIndex={0} className="flex h-sm w-full gap-[2px] overflow-hidden rounded" />
+          <span
+            tabIndex={0}
+            role="img"
+            aria-label={KIND_ORDER.map(
+              (kind) => `${kind.label} ${figureOf(kinds[kind.key]).text}`,
+            ).join(", ")}
+            className="flex h-sm w-full gap-[2px] overflow-hidden rounded"
+          />
         }
       >
         {STACKED_KINDS.filter((kind) => kinds[kind.key] > 0).map((kind) => (
