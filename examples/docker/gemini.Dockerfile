@@ -17,6 +17,11 @@ COPY --from=sortie /usr/bin/sortie /usr/bin/sortie
 USER sortie
 WORKDIR /home/sortie
 
+# Resuming a session fails unless the settings record an auth type;
+# GEMINI_API_KEY alone records none.
+RUN mkdir .gemini && \
+    echo '{"security":{"auth":{"selectedType":"gemini-api-key"}}}' > .gemini/settings.json
+
 # Wins over workspace.root, so workspaces land on the mounted volume.
 ENV SORTIE_WORKSPACE_ROOT=/home/sortie/workspaces
 
