@@ -229,6 +229,11 @@ type RunHistory struct {
 	// ReportedAmounts is every amount the agent reported for the run. Only the
 	// append that also records run events writes it.
 	ReportedAmounts []ReportedAmount
+
+	// Turns is the run's turn records, ascending by Seq. Only the append that
+	// also records run events writes it; the run-history reads do not select
+	// it.
+	Turns []RunTurn
 }
 
 // Completeness returns the run's stored completeness, or derives it from

@@ -625,13 +625,19 @@ func (o *Orchestrator) applyIssueRead(msg issueReadMsg) {
 // it at once so the read-only tool server sees the count without waiting for
 // the throttle or the worker exit. Before that row exists the count waits
 // for the first write, which keeps a row existing exactly when the session
-// reported a measurement. A no-op for an unknown issue.
+// reported a measurement. It also republishes the session's turn records when
+// the count changes. A no-op for an unknown issue.
 func (o *Orchestrator) applyUnaccountedTurns(ctx context.Context, msg unaccountedTurnsMsg) {
 	entry, ok := o.state.Running[msg.IssueID]
 	if !ok {
 		return
 	}
+	changed := entry.UnaccountedTurns != msg.UnaccountedTurns
 	entry.UnaccountedTurns = msg.UnaccountedTurns
+	if changed && len(entry.turns) > 0 {
+		entry.turnSpend.UnaccountedTurns = msg.UnaccountedTurns
+		publishTurns(o.state, msg.IssueID, entry)
+	}
 	if entry.LastMetadataWrite.IsZero() {
 		return
 	}

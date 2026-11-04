@@ -516,6 +516,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if params.Rates != nil {
 		state.Rates = params.Rates
 	}
+	// The entry lags the worker's tally when the context ended before a
+	// turn-started message was delivered; a turn that errored still ran.
+	turnsSeen := max(entry.TurnCount, workerResult.TurnsStarted)
+	runHistory.Turns = exitTurns(entry, measured, turnsSeen, now)
 	recordRunCost(&runHistory, state.Rates)
 	if workerResult.ReviewMetadata != nil {
 		masked := maskedReviewMetadata(*workerResult.ReviewMetadata)
@@ -537,10 +541,6 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	} else {
 		runHistory.Skills = new(string(data))
 	}
-
-	// The entry lags the worker's tally when the context ended before a
-	// turn-started message was delivered; a turn that errored still ran.
-	turnsSeen := max(entry.TurnCount, workerResult.TurnsStarted)
 
 	// An unmeasured count is stored as zero so a reader cannot find a figure
 	// contradicting the qualifier beside it.
@@ -617,6 +617,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		runID = row.ID
 	}
 	state.RetainedEvents.release(entry.DispatchID)
+	state.RunningTurns.release(entry.DispatchID)
 
 	identity := sessionEvent{
 		IssueID:    workerResult.IssueID,
@@ -1738,8 +1739,9 @@ func runReportedAmounts(amounts []domain.ReportedAmount) []storage.ReportedAmoun
 }
 
 // recordRunCost prices a run under rates and stores the result on its row.
-// The row's token columns and ModelUsage must be final, because the price is
-// fixed when the row is written.
+// The row's token columns, ModelUsage, and Turns must be final, because the
+// price is fixed when the row is written. The turn records are priced for every
+// run, one with no model parts included.
 func recordRunCost(row *storage.RunHistory, rates *pricing.Rates) {
 	var parts map[string]domain.TokenUsage
 	if len(row.ModelUsage) > 0 {
@@ -1762,7 +1764,7 @@ func recordRunCost(row *storage.RunHistory, rates *pricing.Rates) {
 			LowerBound: amount.LowerBound,
 		}
 	}
-	price := pricing.PriceRun(pricing.Spend{
+	spend := pricing.Spend{
 		Kind:     row.AgentAdapter,
 		Measured: row.TokensMeasured,
 		Totals: domain.TokenUsage{
@@ -1775,10 +1777,15 @@ func recordRunCost(row *storage.RunHistory, rates *pricing.Rates) {
 		Parts:            parts,
 		UnaccountedTurns: row.UnaccountedTurns,
 		Reported:         reported,
-	}, rates)
+	}
+	price := pricing.PriceRun(spend, rates)
 
 	row.EstimatedCostUSD = price.CostUSD
 	row.CostStatus = string(price.Status)
+	prices := pricing.PriceTurns(spend, price, turnSpends(row.Turns), rates)
+	for i := range row.Turns {
+		setTurnPrice(&row.Turns[i], prices[i])
+	}
 	if len(price.Parts) == 0 {
 		return
 	}
