@@ -381,6 +381,7 @@ jobs:
           SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
           SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
           SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}
+          RUNTIME_ENV: ${{ matrix.runtime_env }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is
@@ -406,6 +407,10 @@ jobs:
             if [ -z "${VER}" ]; then VER="unknown"; fi
           fi
           echo "ADAPTER_VERSION=${VER}" >> "$GITHUB_ENV"
+
+          # Inherited rather than assigned in the command, so Sortie still
+          # merges its own settings into the runtime's variable.
+          if [ -n "${RUNTIME_ENV}" ]; then export "${RUNTIME_ENV}"; fi
 
           # A suite can skip its live cases when the credential is missing,
           # and a shard that ran nothing concludes success, which the
@@ -622,7 +627,8 @@ jobs:
             install: npm install -g --ignore-scripts=false @opencode/cli@2
             version_cmd: opencode --version
             source: "npm: @opencode/cli@2 (latest 2.x)"
-            clientprotocol_command: 'env OPENCODE_CONFIG_CONTENT={"model":"openrouter/openai/gpt-5-nano"} opencode acp'
+            clientprotocol_command: opencode acp
+            runtime_env: 'OPENCODE_CONFIG_CONTENT={"model":"openrouter/openai/gpt-5-nano"}'
             clientprotocol_profile: tools/qualify/profiles/opencode.json
 
     steps: *integration-steps
