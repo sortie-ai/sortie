@@ -84,7 +84,6 @@ export const COST_LOWER_BOUND =
 export const STATS_UNPRICED = "The configured rates leave these runs unpriced.";
 export const VENDOR_LOWER_BOUND =
   "Some turns were not fully counted, so the real amount is higher. It will not be corrected later.";
-export const CHART_ESTIMATED = "Estimated cost of the runs that finished in this period.";
 export const CHART_UNKNOWN = "Cost unknown. The runs could not be priced or measured.";
 
 const SOURCE_WORDS = new Map([
