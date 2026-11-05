@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/runstats"
 )
 
@@ -115,5 +116,37 @@ func TestStatsQueryBoundary(t *testing.T) {
 				t.Errorf("GET %s period = %q, want %q", url, call.period, tt.wantPeriod)
 			}
 		})
+	}
+}
+
+func TestStatsSpanMasksRegisteredValues(t *testing.T) {
+	t.Parallel()
+
+	const secret = "span-test-credential-4b8e2a"
+	redact.Add("test.stats span masking", secret)
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StatsSpan: func(context.Context, time.Time, *time.Time, time.Time) (runstats.SpanReport, error) {
+			return runstats.SpanReport{Sessions: []runstats.SpanSession{
+				{Identifier: "MT-1", IssueTitle: "Fix " + secret, Status: "succeeded"},
+				{Identifier: "MT-2", IssueTitle: "Run " + secret, Status: "running"},
+			}}, nil
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	status, got := getJSON[runstats.SpanReport](t, ts, "/api/v1/stats/span?since=24h")
+
+	if status != http.StatusOK || len(got.Sessions) != 2 {
+		t.Fatalf("GET /api/v1/stats/span = status %d with %d sessions, want 200 with 2", status, len(got.Sessions))
+	}
+	for _, session := range got.Sessions {
+		if strings.Contains(session.IssueTitle, secret) || !strings.Contains(session.IssueTitle, redact.Marker) {
+			t.Errorf("GET /api/v1/stats/span %s issue_title = %q, want the registered value masked", session.Identifier, session.IssueTitle)
+		}
 	}
 }

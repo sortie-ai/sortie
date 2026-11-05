@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/runstats"
 )
 
@@ -181,6 +182,9 @@ func (s *Server) handleStatsSpan(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.historyReadFailed(w, r, err)
 		return
+	}
+	for i := range report.Sessions {
+		report.Sessions[i].IssueTitle = redact.Mask(report.Sessions[i].IssueTitle)
 	}
 	writeJSON(w, s.logger, http.StatusOK, report)
 
