@@ -960,6 +960,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			dbPath:       dbPath,
 			workflowPath: br.path,
 			stages:       func() runstats.Stages { return dispatchStages(br.mgr.Config().Dispatch) },
+			running:      func() []runstats.RunningSession { return runningSessions(o.RunningTurns()) },
 		}
 		srv = server.New(server.Params{
 			SnapshotFn:       o.SnapshotFunc(),
@@ -981,6 +982,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			RunEventsFn:      o.RunEvents,
 			RunEventsAfterFn: o.RunEventsAfter,
 			Stats:            stats.report,
+			StatsSpan:        stats.span,
 
 			ModelUse:           modelUseSource(store),
 			ConfiguredModelsFn: o.ConfiguredModels,

@@ -5,8 +5,15 @@
 // read. [Aggregator.Add] folds one [storage.RunStatsRow] at a time, and
 // [Aggregator.Report] returns the finished [Report]. The package imports only
 // the domain and storage layers, so any caller above them can serve the
-// same figures.
+// same figures. [NewSpan] builds the report of one stretch of time, and
+// [SpendPeriodOf] names the period a range is charted in.
 package runstats
+
+import (
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
+)
 
 // Report is the "sortie stats --format json" envelope. Every slice
 // field, by_trigger, by_origin, by_provenance, and chain_funnels included, is
@@ -75,34 +82,122 @@ type Summary struct {
 	UnmeasuredUnits        []string `json:"unmeasured_units"`
 }
 
-// Spend is the tokens and recorded cost of the report's runs per UTC calendar
-// period.
+// Period is the size of a spend bucket. Sub-day periods start at multiples of
+// their length from 00:00 UTC; a day is a UTC day, a month a UTC calendar month.
+type Period string
+
+// The periods a spend series is bucketed by.
+const (
+	PeriodFiveMinutes Period = "five_minutes"
+	PeriodQuarterHour Period = "quarter_hour"
+	PeriodHour        Period = "hour"
+	PeriodDay         Period = "day"
+	PeriodMonth       Period = "month"
+)
+
+// MaxSpendBuckets is the most buckets a series with a requested period lists.
+const MaxSpendBuckets = 336
+
+// Range is a report's resolved range; a nil bound is open.
+type Range struct {
+	Since, Until *time.Time
+
+	// SinceIsDuration is true when Since was given as a duration counted back
+	// from the request instant, which starts the spend series at the next
+	// bucket boundary instead of inside the bucket holding Since.
+	SinceIsDuration bool
+}
+
+// Spend is the tokens and recorded cost of the report's range per UTC period,
+// each turn counted in the period it ended in. Its sums need not equal the
+// summary's figures.
 type Spend struct {
-	Period  string        `json:"period"`  // "day" or "month"
+	Period  Period        `json:"period"`
 	Buckets []SpendBucket `json:"buckets"` // never nil; ascending by Start
 }
 
-// SpendBucket covers the report's runs whose completed_at falls in one UTC
-// period. Tokens sums the bucket's measured runs and is null when it holds
-// none and on the base schema tier. TokensLowerBound marks a Tokens that leaves
-// out unmeasured runs or counts runs with unaccounted turns. CostUSD is null
-// when no run of the bucket is priced, and is the bucket's whole spend only
-// while CostUnpricedRuns, CostPartialRuns, and TokensUnmeasuredRuns are all 0.
-// CostLowerBound marks a bucket whose cost counts only part of its runs, and
-// AgentPricedUSD is the share of CostUSD priced from amounts the agent
-// reported.
+// SpendBucket covers the turns that ended within one UTC period, the running
+// sessions' ended turns included, and the runs recorded without turn records
+// that completed in it. Runs counts each run with such a contribution once.
+// Tokens sums the bucket's measured contributions; it is null on the base
+// schema tier and when the bucket has contributions and none is measured, and
+// zero when it has none. CostUSD is null when cost is not recorded or when
+// the bucket has contributions and none is priced, and zero when it has none.
+// CostByKind splits CostUSD by token class and is null whenever CostUSD is, and
+// when a run recorded without turn records contributes a priced figure, because
+// no split was stored for it. TokensLowerBound marks a Tokens that leaves out
+// unmeasured runs or counts runs with unaccounted turns, CostLowerBound marks a
+// cost that counts only part of its runs, and AgentPricedUSD is the share of
+// CostUSD priced from amounts the agent reported. InProgress is true for the
+// bucket that has not ended at the report time.
 type SpendBucket struct {
-	Start                string   `json:"start"` // first instant of the period, RFC 3339 in UTC
-	Runs                 int      `json:"runs"`
-	Tokens               *Tokens  `json:"tokens"`
-	CostUSD              *float64 `json:"cost_usd"`
-	TokensUnmeasuredRuns int      `json:"tokens_unmeasured_runs"`
-	CostUnpricedRuns     int      `json:"cost_unpriced_runs"`
-	CostPartialRuns      int      `json:"cost_partial_runs"`
-	TokensLowerBoundRuns int      `json:"tokens_lower_bound_runs"`
-	TokensLowerBound     bool     `json:"tokens_lower_bound"`
-	CostLowerBound       bool     `json:"cost_lower_bound"`
-	AgentPricedUSD       *float64 `json:"agent_priced_usd"`
+	Start                string     `json:"start"` // first instant of the period, RFC 3339 in UTC
+	Runs                 int        `json:"runs"`
+	Turns                int        `json:"turns"`
+	ToolCalls            int        `json:"tool_calls"`
+	Errors               int        `json:"errors"`
+	TurnsUnrecordedRuns  int        `json:"turns_unrecorded_runs"`
+	Tokens               *Tokens    `json:"tokens"`
+	CostUSD              *float64   `json:"cost_usd"`
+	CostByKind           *KindCosts `json:"cost_by_kind"`
+	TokensUnmeasuredRuns int        `json:"tokens_unmeasured_runs"`
+	CostUnpricedRuns     int        `json:"cost_unpriced_runs"`
+	CostPartialRuns      int        `json:"cost_partial_runs"`
+	TokensLowerBoundRuns int        `json:"tokens_lower_bound_runs"`
+	TokensLowerBound     bool       `json:"tokens_lower_bound"`
+	CostLowerBound       bool       `json:"cost_lower_bound"`
+	AgentPricedUSD       *float64   `json:"agent_priced_usd"`
+	InProgress           bool       `json:"in_progress"`
+}
+
+// KindCosts splits a cost by token kind; fresh input is the input class.
+type KindCosts struct {
+	FreshInputUSD float64 `json:"fresh_input_usd"`
+	OutputUSD     float64 `json:"output_usd"`
+	CacheWriteUSD float64 `json:"cache_write_usd"`
+	CacheReadUSD  float64 `json:"cache_read_usd"`
+}
+
+// SpanReport is the body of GET /api/v1/stats/span. Totals holds the members
+// of a spend bucket over the whole window, with Start equal to Since, and
+// Sessions lists every run with a contribution in the window exactly once.
+type SpanReport struct {
+	GeneratedAt string        `json:"generated_at"`
+	Since       string        `json:"since"`
+	Until       *string       `json:"until"`
+	Period      Period        `json:"period"` // the period the rule picks for the span
+	Totals      SpendBucket   `json:"totals"`
+	Sessions    []SpanSession `json:"sessions"` // never nil
+}
+
+// SpanSession is one run's share of a span. Turns is null for a run recorded
+// without turn records. CostShare and TokensShare are not rounded; they are
+// null when the session has no cost or tokens, or when the span's total is zero.
+// CostUnpriced is true when one of the session's measured contributions spent
+// tokens and has no cost.
+type SpanSession struct {
+	Identifier        string   `json:"identifier"`
+	DisplayIdentifier string   `json:"display_identifier,omitempty"`
+	IssueTitle        string   `json:"issue_title"`
+	DispatchID        *string  `json:"dispatch_id"`
+	RuleName          string   `json:"rule_name"`
+	AgentKind         string   `json:"agent_kind"`
+	Status            string   `json:"status"` // the run's stored status, or "running"
+	Turns             *int     `json:"turns"`
+	Tokens            *Tokens  `json:"tokens"`
+	CostUSD           *float64 `json:"cost_usd"`
+	CostUnpriced      bool     `json:"cost_unpriced"`
+	CostShare         *float64 `json:"cost_share"`
+	TokensShare       *float64 `json:"tokens_share"`
+}
+
+// RunningSession is a running session's turn records, priced as its run would
+// be priced if it ended now.
+type RunningSession struct {
+	DispatchID, IssueID, Identifier, DisplayID, IssueTitle string
+	RuleName, AgentKind, UsageCompleteness, CostStatus     string
+	CostUSD, AgentPricedUSD                                *float64
+	Turns                                                  []storage.RunTurn
 }
 
 // Duration reports p50, p95, and the arithmetic mean over a sample

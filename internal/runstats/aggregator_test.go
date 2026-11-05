@@ -1,6 +1,7 @@
 package runstats
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -771,104 +772,266 @@ func TestStatsByModel(t *testing.T) {
 	}
 }
 
+var spendNow = time.Date(2026, 10, 28, 15, 50, 0, 0, time.UTC)
+
+func mustUTC(text string) time.Time {
+	ts, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic("bad test time " + text)
+	}
+	return ts
+}
+
+func bounded(since, until string) Range {
+	r := Range{Since: new(mustUTC(since))}
+	if until != "" {
+		r.Until = new(mustUTC(until))
+	}
+	return r
+}
+
+func trailing(now time.Time, d time.Duration) Range {
+	return Range{Since: new(now.Add(-d)), SinceIsDuration: true}
+}
+
+func spendTokens(n int64) *Tokens {
+	return &Tokens{Input: 1_000 * n, Output: 100 * n, Total: 1_100 * n, CacheRead: 200 * n, CacheWrite: 300 * n, Uncached: 900 * n, FreshInput: 500 * n}
+}
+
+func spendKinds(cost float64) *KindCosts {
+	return &KindCosts{FreshInputUSD: cost / 2, OutputUSD: cost / 4, CacheWriteUSD: cost / 8, CacheReadUSD: cost / 8}
+}
+
+func spendTurn(seq int, endedAt string, cost float64) storage.RunTurn {
+	return storage.RunTurn{
+		Seq: seq, EndedAt: mustUTC(endedAt), TokensMeasured: true, ToolCalls: 2, Errors: 1,
+		Models:           map[string]storage.ModelTokens{"model-a": {InputTokens: 1_000, OutputTokens: 100, CacheReadTokens: 200, CacheWriteTokens: 300}},
+		EstimatedCostUSD: &cost,
+		InputCostUSD:     cost / 2, OutputCostUSD: cost / 4, CacheWriteCostUSD: cost / 8, CacheReadCostUSD: cost / 8,
+	}
+}
+
+func storedTurn(runID int64, dispatchID, endedAt string, cost float64) storage.RunTurnRow {
+	return storage.RunTurnRow{
+		RunID: runID, Identifier: fmt.Sprintf("PROJ-%d", runID), DispatchID: dispatchID,
+		AgentAdapter: "claude-code", Status: "succeeded", Turn: spendTurn(1, endedAt, cost),
+	}
+}
+
+func unmeasuredTurn(row storage.RunTurnRow) storage.RunTurnRow {
+	row.Turn.TokensMeasured, row.Turn.Models, row.Turn.EstimatedCostUSD = false, nil, nil
+	return row
+}
+
+func unpricedTurn(row storage.RunTurnRow) storage.RunTurnRow {
+	row.Turn.EstimatedCostUSD = nil
+	return row
+}
+
+func untrackedRun(runID int64, completedAt string, cost float64) storage.UntrackedRunRow {
+	return storage.UntrackedRunRow{
+		RunID: runID, Identifier: fmt.Sprintf("PROJ-%d", runID), AgentAdapter: "claude-code", Status: "succeeded",
+		CompletedAt: mustUTC(completedAt), TokensMeasured: true,
+		InputTokens: 1_000, OutputTokens: 100, TotalTokens: 1_100, CacheReadTokens: 200, CacheWriteTokens: 300,
+		EstimatedCostUSD: &cost, CostStatus: "estimated",
+	}
+}
+
+func runningSession(dispatchID string, cost float64, turns ...storage.RunTurn) RunningSession {
+	return RunningSession{DispatchID: dispatchID, Identifier: dispatchID, AgentKind: "claude-code", CostUSD: &cost, Turns: turns}
+}
+
+func spendBucket(start string, turns int, cost float64) SpendBucket {
+	return SpendBucket{
+		Start: start, Runs: 1, Turns: turns, ToolCalls: 2 * turns, Errors: turns,
+		Tokens: spendTokens(int64(turns)), CostUSD: &cost, CostByKind: spendKinds(cost),
+	}
+}
+
+func untrackedBucket(start string, cost float64) SpendBucket {
+	return SpendBucket{Start: start, Runs: 1, TurnsUnrecordedRuns: 1, Tokens: spendTokens(1), CostUSD: &cost}
+}
+
+func zeroBucket(start string) SpendBucket {
+	return SpendBucket{Start: start, Tokens: &Tokens{}, CostUSD: new(0.0), CostByKind: &KindCosts{}}
+}
+
+func spendBucketFor(caps storage.RunHistoryCapabilities, b SpendBucket) SpendBucket {
+	if !caps.RecordedCost() {
+		b.CostUSD, b.CostByKind, b.AgentPricedUSD = nil, nil, nil
+		b.CostUnpricedRuns, b.CostPartialRuns, b.CostLowerBound = 0, 0, false
+	}
+	if !caps.Full() {
+		b.Tokens, b.TokensLowerBound = nil, false
+		b.TokensUnmeasuredRuns, b.TokensLowerBoundRuns = 0, 0
+	}
+	return b
+}
+
 func TestStatsSpend(t *testing.T) {
 	t.Parallel()
 
-	run := func(completedAt string, usd *float64, costStatus string) storage.RunStatsRow {
-		row := withCost(modelRow("claude-code", "model-a", "succeeded", 1_000), usd, costStatus)
-		row.CompletedAt = completedAt
-		row.OutputTokens, row.TotalTokens, row.CacheReadTokens, row.CacheWriteTokens = 100, 1_100, 200, 300
-		return row
+	const (
+		lastQuarter = "2026-10-28T15:45:00Z"
+		lastHour    = "2026-10-28T15:00:00Z"
+	)
+	lateNow := mustUTC("2028-01-01T00:00:00Z")
+	atSixteen := mustUTC("2026-10-28T16:00:00Z")
+	lowerBoundRun := []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-27T10:05:00Z", 1.0), storedTurn(1, "d1", "2026-10-27T10:25:00Z", 2.0)}
+	for i := range lowerBoundRun {
+		lowerBoundRun[i].UsageCompleteness = storage.UsageLowerBound
 	}
-	tokens := func(n int64) *Tokens {
-		return &Tokens{Input: 1_000 * n, Output: 100 * n, Total: 1_100 * n, CacheRead: 200 * n, CacheWrite: 300 * n, Uncached: 900 * n, FreshInput: 500 * n}
-	}
-	unmeasured := run("2026-08-04T12:00:00Z", nil, "")
-	unmeasured.TokensMeasured = false
-	unaccounted := run("2026-08-05T10:00:00Z", nil, "unpriced")
-	unaccounted.UnaccountedTurns = 1
-	ciFailed := run("2026-08-04T13:00:00Z", nil, "")
-	ciFailed.Status = "ci_failed"
-	sevenDays := new(fixedNow.Add(-168 * time.Hour))
+	runningBucket := spendBucket(lastHour, 2, 3.0)
+	runningBucket.InProgress = true
+	lowerBoundBucket := spendBucket("2026-10-27T10:00:00Z", 2, 3.0)
+	lowerBoundBucket.TokensLowerBoundRuns, lowerBoundBucket.TokensLowerBound = 1, true
+	partial := storedTurn(1, "d1", "2026-10-27T10:05:00Z", 1.0)
+	partial.CostStatus = "partial"
+	prorated := storedTurn(1, "d1", "2026-10-27T10:05:00Z", 2.0)
+	prorated.RunCostUSD, prorated.RunAgentPricedUSD = new(4.0), new(1.0)
+	capped := storedTurn(3, "d3", "2026-10-27T10:25:00Z", 1.0)
+	capped.RunCostUSD, capped.RunAgentPricedUSD = new(1.0), new(2.0)
+	agentUntracked := untrackedRun(4, "2026-10-27T10:35:00Z", 1.0)
+	agentUntracked.AgentPricedUSD = new(0.25)
+	unaccounted := untrackedRun(1, "2026-10-27T10:35:00Z", 0)
+	unaccounted.EstimatedCostUSD, unaccounted.CostStatus, unaccounted.UnaccountedTurns = nil, "unpriced", 1
 
 	tests := []struct {
-		name        string
-		since       *time.Time
-		rows        []storage.RunStatsRow
-		wantPeriod  string
-		wantBuckets []SpendBucket
+		name           string
+		r              Range
+		period         Period
+		now            time.Time
+		turns          []storage.RunTurnRow
+		untracked      []storage.UntrackedRunRow
+		running        []RunningSession
+		wantPeriod     Period
+		wantCount      int
+		wantFirst      string
+		wantInProgress []string
+		wantBuckets    []SpendBucket
 	}{
+		{name: "24 hour preset lists 96 quarter hours", r: trailing(spendNow, 24*time.Hour), wantPeriod: PeriodQuarterHour, wantCount: 96, wantFirst: "2026-10-27T16:00:00Z", wantInProgress: []string{lastQuarter}},
+		{name: "24 hour preset at a boundary has none in progress", r: trailing(atSixteen, 24*time.Hour), now: atSixteen, wantPeriod: PeriodQuarterHour, wantCount: 96, wantFirst: "2026-10-27T16:00:00Z"},
 		{
-			name:  "runs on several UTC days of a 168 hour range land in their own days",
-			since: sevenDays,
-			rows: []storage.RunStatsRow{
-				run("2026-07-31T12:00:00Z", new(1.0), "estimated"),
-				run("2026-08-02T08:00:00Z", new(0.5), "estimated"),
-				run("2026-08-02T23:30:00Z", new(2.0), "estimated"),
-				unaccounted,
+			name: "instant since keeps its bucket and counts from since", r: bounded("2026-10-27T15:50:00Z", ""),
+			turns:      []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-27T15:47:00Z", 1.0), storedTurn(2, "d2", "2026-10-27T15:55:00Z", 2.0)},
+			wantPeriod: PeriodQuarterHour, wantCount: 97, wantFirst: "2026-10-27T15:45:00Z", wantInProgress: []string{lastQuarter},
+			wantBuckets: []SpendBucket{spendBucket("2026-10-27T15:45:00Z", 1, 2.0)},
+		},
+		{name: "7 day preset lists 168 hours", r: trailing(spendNow, 168*time.Hour), wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour}},
+		{name: "instant since 7 days back lists 169 hours", r: bounded("2026-10-21T15:50:00Z", ""), wantPeriod: PeriodHour, wantCount: 169, wantFirst: "2026-10-21T15:00:00Z", wantInProgress: []string{lastHour}},
+		{
+			name: "10 hour span lists 5 minutes and leaves out a turn at until", r: bounded("2026-10-28T00:00:00Z", "2026-10-28T10:00:00Z"),
+			turns:      []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-28T09:59:00Z", 1.0), storedTurn(2, "d2", "2026-10-28T10:00:00Z", 2.0)},
+			wantPeriod: PeriodFiveMinutes, wantCount: 120, wantFirst: "2026-10-28T00:00:00Z",
+			wantBuckets: []SpendBucket{spendBucket("2026-10-28T09:55:00Z", 1, 1.0)},
+		},
+		{name: "30 hour span lists quarter hours", r: bounded("2026-10-27T00:00:00Z", "2026-10-28T06:00:00Z"), wantPeriod: PeriodQuarterHour, wantCount: 120, wantFirst: "2026-10-27T00:00:00Z"},
+		{name: "120 day span lists days", r: bounded("2026-06-30T00:00:00Z", "2026-10-28T00:00:00Z"), wantPeriod: PeriodDay, wantCount: 120, wantFirst: "2026-06-30T00:00:00Z"},
+		{
+			name:       "open range lists months from the earliest through the report month",
+			turns:      []storage.RunTurnRow{storedTurn(2, "d2", "2026-08-03T10:00:00Z", 2.0)},
+			untracked:  []storage.UntrackedRunRow{untrackedRun(1, "2026-06-15T10:00:00Z", 1.0)},
+			wantPeriod: PeriodMonth, wantCount: 5, wantFirst: "2026-06-01T00:00:00Z", wantInProgress: []string{"2026-10-01T00:00:00Z"},
+			wantBuckets: []SpendBucket{untrackedBucket("2026-06-01T00:00:00Z", 1.0), spendBucket("2026-08-01T00:00:00Z", 1, 2.0)},
+		},
+		{name: "open range without contributions lists nothing", wantPeriod: PeriodMonth},
+		{
+			name: "bounded range without contributions lists zero buckets", r: bounded("2026-10-28T00:00:00Z", "2026-10-28T02:00:00Z"),
+			wantPeriod: PeriodFiveMinutes, wantCount: 24, wantFirst: "2026-10-28T00:00:00Z",
+			wantBuckets: []SpendBucket{zeroBucket("2026-10-28T00:00:00Z")},
+		},
+		{name: "requested period replaces the rule", r: trailing(spendNow, 336*time.Hour), period: PeriodHour, wantPeriod: PeriodHour, wantCount: 336, wantFirst: "2026-10-14T16:00:00Z", wantInProgress: []string{lastHour}},
+		{name: "14 hours take 5 minutes", r: bounded("2026-10-28T00:00:00Z", "2026-10-28T14:00:00Z"), now: lateNow, wantPeriod: PeriodFiveMinutes, wantCount: 168, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "14 hours and a second take quarter hours", r: bounded("2026-10-28T00:00:00Z", "2026-10-28T14:00:01Z"), now: lateNow, wantPeriod: PeriodQuarterHour, wantCount: 57, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "42 hours take quarter hours", r: bounded("2026-10-28T00:00:00Z", "2026-10-29T18:00:00Z"), now: lateNow, wantPeriod: PeriodQuarterHour, wantCount: 168, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "42 hours and a second take hours", r: bounded("2026-10-28T00:00:00Z", "2026-10-29T18:00:01Z"), now: lateNow, wantPeriod: PeriodHour, wantCount: 43, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "168 hours take hours", r: bounded("2026-10-28T00:00:00Z", "2026-11-04T00:00:00Z"), now: lateNow, wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "168 hours and a second take days", r: bounded("2026-10-28T00:00:00Z", "2026-11-04T00:00:01Z"), now: lateNow, wantPeriod: PeriodDay, wantCount: 8, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "4032 hours take days", r: bounded("2026-10-28T00:00:00Z", "2027-04-14T00:00:00Z"), now: lateNow, wantPeriod: PeriodDay, wantCount: 168, wantFirst: "2026-10-28T00:00:00Z"},
+		{name: "4032 hours and a second take months", r: bounded("2026-10-28T00:00:00Z", "2027-04-14T00:00:01Z"), now: lateNow, wantPeriod: PeriodMonth, wantCount: 7, wantFirst: "2026-10-01T00:00:00Z"},
+		{
+			name: "each turn of a run counts in its own hour", r: trailing(spendNow, 168*time.Hour),
+			turns: []storage.RunTurnRow{
+				storedTurn(1, "d1", "2026-10-28T09:10:00Z", 1.0), storedTurn(1, "d1", "2026-10-28T10:20:00Z", 2.0), storedTurn(1, "d1", "2026-10-28T11:30:00Z", 0.5),
 			},
-			wantPeriod: "day",
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
 			wantBuckets: []SpendBucket{
-				{Start: "2026-07-31T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(1.0)},
-				{Start: "2026-08-01T00:00:00Z"},
-				{Start: "2026-08-02T00:00:00Z", Runs: 2, Tokens: tokens(2), CostUSD: new(2.5)},
-				{Start: "2026-08-03T00:00:00Z"},
-				{Start: "2026-08-04T00:00:00Z"},
-				{Start: "2026-08-05T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUnpricedRuns: 1, TokensLowerBoundRuns: 1, TokensLowerBound: true},
-				{Start: "2026-08-06T00:00:00Z"},
-				{Start: "2026-08-07T00:00:00Z"},
+				spendBucket("2026-10-28T09:00:00Z", 1, 1.0), spendBucket("2026-10-28T10:00:00Z", 1, 2.0), spendBucket("2026-10-28T11:00:00Z", 1, 0.5),
 			},
 		},
 		{
-			name: "an open range lists months and folds each run as the summary does",
-			rows: []storage.RunStatsRow{
-				run("2026-06-15T10:00:00Z", new(4.0), "estimated"),
-				run("2026-07-20T10:00:00Z", new(3.0), "partial"),
-				run("2026-08-03T10:00:00Z", nil, "unpriced"),
-				unmeasured,
-				ciFailed,
-			},
-			wantPeriod: "month",
-			wantBuckets: []SpendBucket{
-				{Start: "2026-06-01T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(4.0)},
-				{Start: "2026-07-01T00:00:00Z", Runs: 1, Tokens: tokens(1), CostUSD: new(3.0), CostPartialRuns: 1, CostLowerBound: true},
-				{Start: "2026-08-01T00:00:00Z", Runs: 3, Tokens: tokens(2), CostUnpricedRuns: 1, TokensUnmeasuredRuns: 1, TokensLowerBound: true},
-			},
+			name: "running session counts its ended turns in the bucket in progress", r: trailing(spendNow, 168*time.Hour),
+			running: []RunningSession{runningSession("r1", 7.0,
+				spendTurn(1, "2026-10-28T15:05:00Z", 1.0), spendTurn(2, "2026-10-28T15:40:00Z", 2.0), spendTurn(3, "2026-10-28T15:50:00Z", 4.0))},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{runningBucket},
 		},
 		{
-			name: "an unmeasured run flags a priced month and its days sum their agent-priced parts",
-			rows: []storage.RunStatsRow{
-				withParts(run("2026-08-02T10:00:00Z", new(2.0), "estimated"), pricedPart("model-a", "agent", 1_000, 1.0)),
-				withParts(run("2026-08-03T10:00:00Z", new(1.0), "estimated"), pricedPart("model-a", "agent", 1_000, 0.5)),
-				unmeasured,
-			},
-			wantPeriod: "month",
-			wantBuckets: []SpendBucket{
-				{Start: "2026-08-01T00:00:00Z", Runs: 3, CostUSD: new(3.0), TokensUnmeasuredRuns: 1, CostLowerBound: true, AgentPricedUSD: new(1.5)},
-			},
+			name: "running session that stored rows name is dropped whole", r: trailing(spendNow, 168*time.Hour),
+			turns: []storage.RunTurnRow{storedTurn(1, "r1", "2026-10-28T15:05:00Z", 1.0), storedTurn(1, "r1", "2026-10-28T15:40:00Z", 2.0)},
+			running: []RunningSession{runningSession("r1", 3.0,
+				spendTurn(1, "2026-10-28T15:05:00Z", 1.0), spendTurn(2, "2026-10-28T15:40:00Z", 2.0))},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{runningBucket},
 		},
 		{
-			name: "an unpriced run flags a priced month",
-			rows: []storage.RunStatsRow{
-				run("2026-08-02T10:00:00Z", new(1.0), "estimated"),
-				run("2026-08-03T10:00:00Z", nil, "unpriced"),
-			},
-			wantPeriod: "month",
-			wantBuckets: []SpendBucket{
-				{Start: "2026-08-01T00:00:00Z", Runs: 2, CostUSD: new(1.0), CostUnpricedRuns: 1, CostLowerBound: true},
-			},
+			name: "run without turn records counts whole at its completion", r: trailing(spendNow, 168*time.Hour),
+			untracked:  []storage.UntrackedRunRow{untrackedRun(1, "2026-10-25T12:34:00Z", 1.5)},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{untrackedBucket("2026-10-25T12:00:00Z", 1.5)},
 		},
 		{
-			name:       "a 2160 hour span gives days",
-			since:      new(fixedNow.Add(-2160 * time.Hour)),
-			rows:       []storage.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
-			wantPeriod: "day",
+			name: "run without turn records beside a turn leaves cost by kind null", r: trailing(spendNow, 168*time.Hour),
+			turns:      []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-25T12:10:00Z", 1.0)},
+			untracked:  []storage.UntrackedRunRow{untrackedRun(2, "2026-10-25T12:34:00Z", 1.5)},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{{
+				Start: "2026-10-25T12:00:00Z", Runs: 2, Turns: 1, ToolCalls: 2, Errors: 1, TurnsUnrecordedRuns: 1,
+				Tokens: spendTokens(2), CostUSD: new(2.5),
+			}},
 		},
 		{
-			name:       "a span above 2160 hours gives months",
-			since:      new(fixedNow.Add(-2160*time.Hour - time.Second)),
-			rows:       []storage.RunStatsRow{run("2026-08-06T10:00:00Z", new(1.0), "estimated")},
-			wantPeriod: "month",
+			name: "agent priced part is prorated by run and capped at the run cost", r: trailing(spendNow, 168*time.Hour),
+			turns:      []storage.RunTurnRow{prorated, storedTurn(2, "d2", "2026-10-27T10:15:00Z", 1.0), capped},
+			untracked:  []storage.UntrackedRunRow{agentUntracked},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{{
+				Start: "2026-10-27T10:00:00Z", Runs: 4, Turns: 3, ToolCalls: 6, Errors: 3, TurnsUnrecordedRuns: 1,
+				Tokens: spendTokens(4), CostUSD: new(5.0), AgentPricedUSD: new(1.75),
+			}},
+		},
+		{
+			name: "partial, unpriced, and unmeasured runs flag their bucket", r: trailing(spendNow, 168*time.Hour),
+			turns: []storage.RunTurnRow{
+				partial, unpricedTurn(storedTurn(2, "d2", "2026-10-27T10:15:00Z", 1.0)), unmeasuredTurn(storedTurn(3, "d3", "2026-10-27T10:25:00Z", 1.0)),
+			},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{{
+				Start: "2026-10-27T10:00:00Z", Runs: 3, Turns: 3, ToolCalls: 6, Errors: 3, Tokens: spendTokens(2), CostUSD: new(1.0), CostByKind: spendKinds(1.0),
+				TokensUnmeasuredRuns: 1, CostUnpricedRuns: 1, CostPartialRuns: 1, TokensLowerBound: true, CostLowerBound: true,
+			}},
+		},
+		{
+			name: "bucket of unmeasured turns carries no tokens and no cost", r: trailing(spendNow, 168*time.Hour),
+			turns:      []storage.RunTurnRow{unmeasuredTurn(storedTurn(1, "d1", "2026-10-27T10:05:00Z", 1.0))},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{{Start: "2026-10-27T10:00:00Z", Runs: 1, Turns: 1, ToolCalls: 2, Errors: 1, TokensUnmeasuredRuns: 1}},
+		},
+		{
+			name: "lower bound run counts once however many turns", r: trailing(spendNow, 168*time.Hour),
+			turns:      lowerBoundRun,
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{lowerBoundBucket},
+		},
+		{
+			name: "run without turn records and unaccounted turns is a lower bound", r: trailing(spendNow, 168*time.Hour),
+			untracked:  []storage.UntrackedRunRow{unaccounted},
+			wantPeriod: PeriodHour, wantCount: 168, wantFirst: "2026-10-21T16:00:00Z", wantInProgress: []string{lastHour},
+			wantBuckets: []SpendBucket{{
+				Start: "2026-10-27T10:00:00Z", Runs: 1, TurnsUnrecordedRuns: 1, Tokens: spendTokens(1),
+				CostUnpricedRuns: 1, TokensLowerBoundRuns: 1, TokensLowerBound: true,
+			}},
 		},
 	}
 
@@ -879,63 +1042,241 @@ func TestStatsSpend(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/recorded=%t/full=%t", tt.name, caps.RecordedCost(), caps.Full()), func(t *testing.T) {
 			t.Parallel()
 
+			now := cmp.Or(tt.now, spendNow)
 			agg := New(caps)
-			addRows(t, agg, tt.rows...)
+			agg.SetSpend(tt.r, tt.period, now, tt.running)
+			for _, row := range tt.turns {
+				if err := agg.AddTurn(row); err != nil {
+					t.Fatalf("AddTurn(%+v) = %v, want nil", row, err)
+				}
+			}
+			for _, row := range tt.untracked {
+				if err := agg.AddUntrackedRun(row); err != nil {
+					t.Fatalf("AddUntrackedRun(%+v) = %v, want nil", row, err)
+				}
+			}
 
-			report := agg.Report(fixedNow, "/wf", "/db", tt.since, nil)
+			spend := agg.Report(now, "/wf", "/db", tt.r.Since, tt.r.Until).Spend
 
-			spend := report.Spend
 			if spend.Period != tt.wantPeriod {
-				t.Errorf("Report(since=%v).Spend.Period = %q, want %q", tt.since, spend.Period, tt.wantPeriod)
+				t.Errorf("Report(%+v).Spend.Period = %q, want %q", tt.r, spend.Period, tt.wantPeriod)
 			}
-			gotBuckets, wantBuckets := slices.Clone(spend.Buckets), slices.Clone(tt.wantBuckets)
-			for i := range min(len(gotBuckets), len(wantBuckets)) {
-				if wantBuckets[i].Tokens == nil && wantBuckets[i].Runs > 0 {
-					gotBuckets[i].Tokens, gotBuckets[i].TokensLowerBound, gotBuckets[i].TokensLowerBoundRuns = nil, false, 0
-				}
-				if !caps.RecordedCost() {
-					wantBuckets[i].CostUSD, wantBuckets[i].CostUnpricedRuns, wantBuckets[i].CostPartialRuns, wantBuckets[i].CostLowerBound, wantBuckets[i].AgentPricedUSD = nil, 0, 0, false, nil
-				}
-				if !caps.Full() {
-					wantBuckets[i] = SpendBucket{Start: wantBuckets[i].Start, Runs: wantBuckets[i].Runs}
-				}
+			if len(spend.Buckets) != tt.wantCount {
+				t.Fatalf("Report(%+v).Spend lists %d buckets, want %d", tt.r, len(spend.Buckets), tt.wantCount)
 			}
-			if tt.wantBuckets != nil && !reflect.DeepEqual(gotBuckets, wantBuckets) {
-				t.Errorf("Report(since=%v).Spend.Buckets = %+v, want %+v", tt.since, gotBuckets, wantBuckets)
+			if tt.wantCount > 0 && spend.Buckets[0].Start != tt.wantFirst {
+				t.Errorf("Report(%+v).Spend.Buckets[0].Start = %q, want %q", tt.r, spend.Buckets[0].Start, tt.wantFirst)
 			}
-			var sum SpendBucket
-			var tok Tokens
-			var measured bool
-			var cost float64
+			var inProgress []string
+			byStart := make(map[string]SpendBucket)
 			for _, b := range spend.Buckets {
-				sum.Runs += b.Runs
-				sum.CostUnpricedRuns += b.CostUnpricedRuns
-				sum.CostPartialRuns += b.CostPartialRuns
-				sum.TokensUnmeasuredRuns += b.TokensUnmeasuredRuns
-				sum.TokensLowerBoundRuns += b.TokensLowerBoundRuns
-				if b.Tokens != nil {
-					measured = true
-					tok = Tokens{tok.Input + b.Tokens.Input, tok.Output + b.Tokens.Output, tok.Total + b.Tokens.Total, tok.CacheRead + b.Tokens.CacheRead, tok.CacheWrite + b.Tokens.CacheWrite, tok.Uncached + b.Tokens.Uncached, tok.FreshInput + b.Tokens.FreshInput}
+				byStart[b.Start] = b
+				if b.InProgress {
+					inProgress = append(inProgress, b.Start)
 				}
-				if b.CostUSD != nil {
-					cost += *b.CostUSD
+				if b.CostUSD != nil && b.CostByKind != nil {
+					kinds := b.CostByKind.FreshInputUSD + b.CostByKind.OutputUSD + b.CostByKind.CacheWriteUSD + b.CostByKind.CacheReadUSD
+					if math.Abs(kinds-*b.CostUSD) > 1e-6 {
+						t.Errorf("bucket %s cost_by_kind sums to %v, want cost_usd %v", b.Start, kinds, *b.CostUSD)
+					}
 				}
 			}
-			s := report.Summary
-			if sum.Runs != s.Runs || sum.CostUnpricedRuns != s.CostUnpricedRuns || sum.CostPartialRuns != s.CostPartialRuns || sum.TokensUnmeasuredRuns != s.TokensUnmeasuredRuns {
-				t.Errorf("Spend bucket runs, unpriced, partial, unmeasured sums = %d, %d, %d, %d, want the summary's %d, %d, %d, %d",
-					sum.Runs, sum.CostUnpricedRuns, sum.CostPartialRuns, sum.TokensUnmeasuredRuns,
-					s.Runs, s.CostUnpricedRuns, s.CostPartialRuns, s.TokensUnmeasuredRuns)
+			if !slices.Equal(inProgress, tt.wantInProgress) {
+				t.Errorf("Report(%+v).Spend in-progress buckets = %v, want %v", tt.r, inProgress, tt.wantInProgress)
 			}
-			if measured != (s.Tokens != nil) || measured && tok != *s.Tokens || sum.TokensLowerBoundRuns != s.TokensLowerBoundRuns {
-				t.Errorf("Spend bucket tokens (measured %t), lower bound runs sum to %+v, %d, want the summary's %+v, %d", measured, tok, sum.TokensLowerBoundRuns, s.Tokens, s.TokensLowerBoundRuns)
+			for _, want := range tt.wantBuckets {
+				want = spendBucketFor(caps, want)
+				if got := byStart[want.Start]; !reflect.DeepEqual(got, want) {
+					t.Errorf("Report(%+v).Spend bucket %s = %+v, want %+v", tt.r, want.Start, got, want)
+				}
 			}
-			var want float64
-			if s.CostUSD != nil {
-				want = *s.CostUSD
+		})
+	}
+}
+
+type spanView struct {
+	Dispatch               string
+	Turns                  int
+	HasTokens, HasCost     bool
+	Unpriced               bool
+	CostShare, TokensShare float64
+}
+
+func viewOf(s SpanSession) spanView {
+	v := spanView{Turns: -1, CostShare: -1, TokensShare: -1, HasTokens: s.Tokens != nil, HasCost: s.CostUSD != nil, Unpriced: s.CostUnpriced}
+	if s.DispatchID != nil {
+		v.Dispatch = *s.DispatchID
+	}
+	if s.Turns != nil {
+		v.Turns = *s.Turns
+	}
+	if s.CostShare != nil {
+		v.CostShare = *s.CostShare
+	}
+	if s.TokensShare != nil {
+		v.TokensShare = *s.TokensShare
+	}
+	return v
+}
+
+func sameView(a, b spanView) bool {
+	a.CostShare, b.CostShare = math.Round(a.CostShare*1e9), math.Round(b.CostShare*1e9)
+	a.TokensShare, b.TokensShare = math.Round(a.TokensShare*1e9), math.Round(b.TokensShare*1e9)
+	return a == b
+}
+
+func sumBuckets(buckets []SpendBucket) (sum SpendBucket) {
+	var tokens Tokens
+	var cost float64
+	for _, b := range buckets {
+		sum.Turns += b.Turns
+		sum.ToolCalls += b.ToolCalls
+		sum.Errors += b.Errors
+		sum.TurnsUnrecordedRuns += b.TurnsUnrecordedRuns
+		if b.Tokens != nil {
+			tokens.Input += b.Tokens.Input
+			tokens.Output += b.Tokens.Output
+			tokens.CacheRead += b.Tokens.CacheRead
+			tokens.CacheWrite += b.Tokens.CacheWrite
+		}
+		if b.CostUSD != nil {
+			cost += *b.CostUSD
+		}
+	}
+	sum.Tokens, sum.CostUSD = &tokens, &cost
+	return sum
+}
+
+func TestStatsSpan(t *testing.T) {
+	t.Parallel()
+
+	const since, until = "2026-10-28T15:00:00Z", "2026-10-28T15:45:00Z"
+	unmeasured := func(runID int64, dispatchID string, endedAt ...string) []storage.RunTurnRow {
+		var rows []storage.RunTurnRow
+		for _, at := range endedAt {
+			rows = append(rows, unmeasuredTurn(storedTurn(runID, dispatchID, at, 1.0)))
+		}
+		return rows
+	}
+	tests := []struct {
+		name           string
+		until          string
+		turns          []storage.RunTurnRow
+		untracked      []storage.UntrackedRunRow
+		running        []RunningSession
+		wantInProgress bool
+		wantSessions   []spanView
+	}{
+		{
+			name: "each session lists once with its turns inside the window and its shares", until: until,
+			turns: []storage.RunTurnRow{
+				storedTurn(1, "d1", "2026-10-28T14:30:00Z", 4.0), storedTurn(1, "d1", "2026-10-28T15:05:00Z", 1.0),
+				storedTurn(1, "d1", "2026-10-28T15:20:00Z", 2.0), storedTurn(1, "d1", until, 8.0),
+			},
+			running: []RunningSession{runningSession("r1", 1.0, spendTurn(1, "2026-10-28T15:30:00Z", 1.0))},
+			wantSessions: []spanView{
+				{Dispatch: "d1", Turns: 2, HasTokens: true, HasCost: true, CostShare: 0.75, TokensShare: 2.0 / 3},
+				{Dispatch: "r1", Turns: 1, HasTokens: true, HasCost: true, CostShare: 0.25, TokensShare: 1.0 / 3},
+			},
+		},
+		{
+			name:  "an open span is in progress",
+			turns: []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-28T15:05:00Z", 1.0)}, wantInProgress: true,
+			wantSessions: []spanView{{Dispatch: "d1", Turns: 1, HasTokens: true, HasCost: true, CostShare: 1, TokensShare: 1}},
+		},
+		{
+			name: "run without turn records has null turns and ranks after a run with them", until: until,
+			turns:     []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-28T15:05:00Z", 1.0)},
+			untracked: []storage.UntrackedRunRow{untrackedRun(9, "2026-10-28T15:10:00Z", 1.0)},
+			wantSessions: []spanView{
+				{Dispatch: "d1", Turns: 1, HasTokens: true, HasCost: true, CostShare: 0.5, TokensShare: 0.5},
+				{Turns: -1, HasTokens: true, HasCost: true, CostShare: 0.5, TokensShare: 0.5},
+			},
+		},
+		{
+			name: "unmeasured sessions carry no tokens, no cost, and no share, and rank by turns", until: until,
+			turns: append(append(unmeasured(5, "a", "2026-10-28T15:05:00Z"), unmeasured(6, "z", "2026-10-28T15:06:00Z", "2026-10-28T15:07:00Z")...),
+				storedTurn(1, "p", "2026-10-28T15:08:00Z", 1.0)),
+			wantSessions: []spanView{
+				{Dispatch: "p", Turns: 1, HasTokens: true, HasCost: true, CostShare: 1, TokensShare: 1},
+				{Dispatch: "z", Turns: 2, CostShare: -1, TokensShare: -1},
+				{Dispatch: "a", Turns: 1, CostShare: -1, TokensShare: -1},
+			},
+		},
+		{
+			name: "unpriced session reports cost_unpriced and takes no cost share", until: until,
+			turns: []storage.RunTurnRow{storedTurn(1, "d1", "2026-10-28T15:05:00Z", 1.0), unpricedTurn(storedTurn(2, "d2", "2026-10-28T15:06:00Z", 1.0))},
+			wantSessions: []spanView{
+				{Dispatch: "d1", Turns: 1, HasTokens: true, HasCost: true, CostShare: 1, TokensShare: 0.5},
+				{Dispatch: "d2", Turns: 1, HasTokens: true, Unpriced: true, CostShare: -1, TokensShare: 0.5},
+			},
+		},
+		{
+			name: "zero cost sum leaves cost shares null and ties break by dispatch ID", until: until,
+			turns: []storage.RunTurnRow{storedTurn(2, "d2", "2026-10-28T15:06:00Z", 0), storedTurn(1, "d1", "2026-10-28T15:05:00Z", 0)},
+			wantSessions: []spanView{
+				{Dispatch: "d1", Turns: 1, HasTokens: true, HasCost: true, CostShare: -1, TokensShare: 0.5},
+				{Dispatch: "d2", Turns: 1, HasTokens: true, HasCost: true, CostShare: -1, TokensShare: 0.5},
+			},
+		},
+		{name: "span without contributions lists no session", until: until},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var until *time.Time
+			if tt.until != "" {
+				until = new(mustUTC(tt.until))
 			}
-			if math.Abs(cost-want) > 1e-6 {
-				t.Errorf("Spend bucket cost_usd sums to %v, want summary.cost_usd %v", cost, want)
+			from := mustUTC(since)
+			span := NewSpan(recordedCaps, from, until, spendNow, tt.running)
+			agg := New(recordedCaps)
+			agg.SetSpend(Range{Since: &from, Until: until}, PeriodQuarterHour, spendNow, tt.running)
+			for _, row := range tt.turns {
+				if err := cmp.Or(span.AddTurn(row), agg.AddTurn(row)); err != nil {
+					t.Fatalf("AddTurn(%+v) = %v, want nil", row, err)
+				}
+			}
+			for _, row := range tt.untracked {
+				if err := cmp.Or(span.AddUntrackedRun(row), agg.AddUntrackedRun(row)); err != nil {
+					t.Fatalf("AddUntrackedRun(%+v) = %v, want nil", row, err)
+				}
+			}
+
+			report := span.Report()
+
+			if report.Sessions == nil {
+				t.Fatalf("Span.Report().Sessions = nil, want a non-nil slice")
+			}
+			var got []spanView
+			var costShares float64
+			for _, s := range report.Sessions {
+				got = append(got, viewOf(s))
+				if s.CostShare != nil {
+					costShares += *s.CostShare
+				}
+			}
+			if !slices.EqualFunc(got, tt.wantSessions, sameView) {
+				t.Errorf("Span.Report().Sessions = %+v, want %+v", got, tt.wantSessions)
+			}
+			if costShares != 0 && math.Abs(costShares-1) > 1e-9 {
+				t.Errorf("Span.Report() cost shares sum to %v, want 1", costShares)
+			}
+			if report.Totals.InProgress != tt.wantInProgress {
+				t.Errorf("Span.Report().Totals.InProgress = %t, want %t", report.Totals.InProgress, tt.wantInProgress)
+			}
+			if report.Period != PeriodFiveMinutes {
+				t.Errorf("Span.Report().Period = %q, want %q", report.Period, PeriodFiveMinutes)
+			}
+			buckets := agg.Report(spendNow, "/wf", "/db", &from, until).Spend.Buckets
+			want, got2 := sumBuckets(buckets), report.Totals
+			if got2.Turns != want.Turns || got2.ToolCalls != want.ToolCalls || got2.Errors != want.Errors || got2.TurnsUnrecordedRuns != want.TurnsUnrecordedRuns ||
+				got2.Tokens == nil || got2.Tokens.Input != want.Tokens.Input || got2.Tokens.Output != want.Tokens.Output ||
+				got2.Tokens.CacheRead != want.Tokens.CacheRead || got2.Tokens.CacheWrite != want.Tokens.CacheWrite ||
+				got2.CostUSD == nil || math.Abs(*got2.CostUSD-*want.CostUSD) > 1e-6 {
+				t.Errorf("Span.Report().Totals = %+v, want the sums of the adjacent buckets %+v", got2, want)
 			}
 		})
 	}

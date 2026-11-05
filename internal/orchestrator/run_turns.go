@@ -33,6 +33,13 @@ type SessionTurns struct {
 	// CostStatus is a [pricing.CostStatus] value.
 	CostStatus string
 
+	// CostUSD is the run's cost if it ended now; nil means no cost figure.
+	CostUSD *float64
+
+	// AgentPricedUSD is the part of CostUSD priced from agent-reported
+	// amounts; nil when no part is.
+	AgentPricedUSD *float64
+
 	// Turns is ascending by Seq.
 	Turns []storage.RunTurn
 }
@@ -60,6 +67,8 @@ func (l *TurnLog) Sessions() []SessionTurns {
 	sessions := make([]SessionTurns, 0, len(l.sessions))
 	for _, session := range l.sessions {
 		session.Turns = cloneTurns(session.Turns)
+		session.CostUSD = cloneCost(session.CostUSD)
+		session.AgentPricedUSD = cloneCost(session.AgentPricedUSD)
 		sessions = append(sessions, session)
 	}
 	slices.SortFunc(sessions, func(a, b SessionTurns) int {
@@ -93,6 +102,35 @@ func (l *TurnLog) release(dispatchID string) {
 // one. It performs no I/O and is safe to call from any goroutine.
 func (o *Orchestrator) RunningTurns() []SessionTurns {
 	return o.state.RunningTurns.Sessions()
+}
+
+func cloneCost(cost *float64) *float64 {
+	if cost == nil {
+		return nil
+	}
+	return new(*cost)
+}
+
+// agentPricedOf sums the parts of price priced from an agent-reported amount;
+// nil when no part is. Parts add in model order so the sum does not depend on
+// map iteration.
+func agentPricedOf(price pricing.Price) *float64 {
+	var usd float64
+	found := false
+	for _, model := range slices.Sorted(maps.Keys(price.Parts)) {
+		part := price.Parts[model]
+		if part.Source != pricing.SourceAgent {
+			continue
+		}
+		found = true
+		if part.CostUSD != nil {
+			usd += *part.CostUSD
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &usd
 }
 
 func cloneTurns(turns []storage.RunTurn) []storage.RunTurn {
@@ -229,6 +267,8 @@ func publishTurns(state *State, issueID string, entry *RunningEntry) {
 		AgentKind:         entry.AgentKind,
 		UsageCompleteness: storage.UsageCompletenessOf(spend.Measured, spend.UnaccountedTurns),
 		CostStatus:        string(price.Status),
+		CostUSD:           cloneCost(price.CostUSD),
+		AgentPricedUSD:    agentPricedOf(price),
 		Turns:             turns,
 	})
 }

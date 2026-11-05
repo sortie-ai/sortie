@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { LABEL_CACHE_HIT_RATE } from "@/lib/figures";
 import { fmtPercent } from "@/lib/format";
 
-import type { TokenInfo, Tokens } from "@/api/types.gen";
+import type { KindCosts, TokenInfo, Tokens } from "@/api/types.gen";
 import type { Figure } from "@/lib/figures";
 import type { ReactNode } from "react";
 
@@ -38,6 +38,16 @@ export function kindsOfStats(tokens: Tokens): KindValues {
     output: tokens.output,
     cache_write: tokens.cache_write,
     cache_read: tokens.cache_read,
+  };
+}
+
+/** Reads the kinds of a served cost split; the served fresh input cost is the input kind. */
+export function kindsOfCosts(costs: KindCosts): KindValues {
+  return {
+    input: costs.fresh_input_usd,
+    output: costs.output_usd,
+    cache_write: costs.cache_write_usd,
+    cache_read: costs.cache_read_usd,
   };
 }
 
@@ -122,11 +132,13 @@ export function KindLegend({ children }: KindLegendProps) {
 export interface KindRowsProps {
   kinds: KindValues;
   figureOf: (n: number) => Figure;
+  /** Appends the cache hit rate row while it has a value; true when absent. Costs pass false, because a ratio of costs is no hit rate. */
+  showsHitRate?: boolean;
 }
 
 /** Lists each kind with its figure, one row apiece, then the cache hit rate while it has a value, for the body of a note. */
-export function KindRows({ kinds, figureOf }: KindRowsProps) {
-  const rate = hitRateOfKinds(kinds);
+export function KindRows({ kinds, figureOf, showsHitRate = true }: KindRowsProps) {
+  const rate = showsHitRate ? hitRateOfKinds(kinds) : null;
   const rows = KIND_ORDER.map((kind) => (
     <div key={kind.key} className="flex items-center gap-xs">
       <KindSwatch kind={kind} />

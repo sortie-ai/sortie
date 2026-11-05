@@ -8,18 +8,13 @@ import {
   KindRows,
   KindStack,
   STACKED_KINDS,
+  kindsOfCosts,
   kindsOfStats,
 } from "@/components/TokenKinds";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
-import {
-  CHART_ESTIMATED,
-  CHART_UNKNOWN,
-  COST_LOWER_BOUND,
-  NOT_MEASURED,
-  TOKENS_LOWER_BOUND,
-} from "@/lib/figures";
+import { CHART_UNKNOWN, COST_LOWER_BOUND, NOT_MEASURED, TOKENS_LOWER_BOUND } from "@/lib/figures";
 import {
   fmtMoney,
   fmtTokens,
@@ -35,7 +30,29 @@ import type { Spend, SpendBucket } from "@/api/types.gen";
 import type { Units } from "@/lib/units";
 import type { CSSProperties, ReactNode } from "react";
 
-type Period = "day" | "month";
+type Period = Spend["period"];
+type SubDayPeriod = Exclude<Period, "day" | "month">;
+
+const SUB_DAY_MS: Record<SubDayPeriod, number> = {
+  five_minutes: 5 * 60_000,
+  quarter_hour: 15 * 60_000,
+  hour: 60 * 60_000,
+};
+
+const THREE_HOURS_MS = 3 * 60 * 60_000;
+
+// The axis caption doubles as the chart's aria label and the Cache read plot's label.
+const PERIOD_NAMES: Record<Period, { per: string; axis: string }> = {
+  five_minutes: { per: "5 minutes", axis: "UTC, 5 minutes" },
+  quarter_hour: { per: "15 minutes", axis: "UTC, 15 minutes" },
+  hour: { per: "hour", axis: "UTC hour" },
+  day: { per: "day", axis: "UTC day" },
+  month: { per: "month", axis: "UTC month" },
+};
+
+function isSubDay(period: Period): period is SubDayPeriod {
+  return period !== "day" && period !== "month";
+}
 
 // Both stripe tones stay in the primary hue and stay filled, so a bar that is only
 // a lower bound never reads as empty.
@@ -47,7 +64,7 @@ const LOWER_BOUND_FILL: CSSProperties = {
 const LABEL_CHAR_PX = 7;
 const LABEL_GAP_PX = 8;
 const SCALE_HEADROOM = 1.2;
-const NO_RUNS = "No runs finished in this period.";
+const NO_RUNS = "No agent turns in this period.";
 
 // Whole class strings, so the stylesheet scanner finds each one; the gutter narrows as the bars crowd.
 function barWidthOf(count: number): string {
@@ -99,17 +116,49 @@ function costBarOf(bucket: SpendBucket, top: number): CostBar | undefined {
   };
 }
 
-const NOTE_BY_KIND: Record<CostBarKind, string> = {
-  estimated: CHART_ESTIMATED,
-  "lower-bound": COST_LOWER_BOUND,
-  unknown: CHART_UNKNOWN,
-};
+interface NoteRowProps {
+  label: string;
+  figure: string;
+  className?: string;
+}
 
-function costNoteOf(bucket: SpendBucket, bar: CostBar | undefined): string {
+function NoteRow({ label, figure, className }: NoteRowProps) {
+  return (
+    <div className={cn("flex items-center gap-xs", className)}>
+      {label}
+      <b className="ml-auto text-body-sm font-medium tabular-nums">{figure}</b>
+    </div>
+  );
+}
+
+function costNoteOf(bucket: SpendBucket, bar: CostBar | undefined): ReactNode {
   if (bucket.runs === 0) {
     return NO_RUNS;
   }
-  return bar === undefined ? "The runs of this period spent nothing." : NOTE_BY_KIND[bar.kind];
+  if (bar === undefined) {
+    return "The runs of this period spent nothing.";
+  }
+  if (bar.kind === "unknown" || bucket.cost_usd === null) {
+    return CHART_UNKNOWN;
+  }
+  const { cost_by_kind: costByKind } = bucket;
+  return (
+    <>
+      {costByKind === null ? undefined : (
+        <KindRows
+          kinds={kindsOfCosts(costByKind)}
+          figureOf={(n) => ({ text: fmtMoney(n) })}
+          showsHitRate={false}
+        />
+      )}
+      <NoteRow
+        label="Estimated cost"
+        figure={fmtMoney(bucket.cost_usd)}
+        className={costByKind === null ? undefined : "mt-xxs"}
+      />
+      {bar.kind === "lower-bound" ? <div className="mt-xxs">{COST_LOWER_BOUND}</div> : undefined}
+    </>
+  );
 }
 
 function CostBarView({ bar, width }: { bar: CostBar; width: string }) {
@@ -150,12 +199,7 @@ function bucketTokensNote(bucket: SpendBucket): ReactNode {
     return NO_RUNS;
   }
   if (bucket.tokens === null) {
-    return (
-      <div className="flex items-center gap-xs">
-        Tokens
-        <b className="ml-auto text-body-sm font-medium tabular-nums">{NOT_MEASURED}</b>
-      </div>
-    );
+    return <NoteRow label="Tokens" figure={NOT_MEASURED} />;
   }
   return (
     <>
@@ -165,15 +209,61 @@ function bucketTokensNote(bucket: SpendBucket): ReactNode {
   );
 }
 
-// Every Nth slot carries a label once the slots are narrower than the widest
-// label, so the labels never overlap.
-function labelStrideOf(labels: readonly string[], plotWidth: number): number {
+// Sub-day ticks sit on clock boundaries instead of every Nth slot, so a 5-minute
+// chart labels quarter hours only while it spans three hours or less.
+function tickOf(start: string, period: Period, count: number): string {
+  const instant = parseInstant(start);
+  if (instant === null) {
+    return "";
+  }
+  const date = new Date(instant);
+  switch (period) {
+    case "five_minutes": {
+      const minutes = count * SUB_DAY_MS.five_minutes <= THREE_HOURS_MS ? 15 : 60;
+      return date.getUTCMinutes() % minutes === 0 ? fmtUtcClock(start) : "";
+    }
+    case "quarter_hour":
+      return date.getUTCMinutes() === 0 ? fmtUtcClock(start) : "";
+    case "hour":
+      return date.getUTCHours() === 0 ? fmtUtcPeriodTick(start, "day") : "";
+    default:
+      return fmtUtcPeriodTick(start, period);
+  }
+}
+
+// A sub-day heading names the day and the clock span; a day or month names itself.
+function headingOf(start: string, period: Period): string {
+  if (!isSubDay(period)) {
+    return fmtUtcPeriod(start, period);
+  }
+  const instant = parseInstant(start);
+  if (instant === null) {
+    return fmtUtcPeriod(start, "day");
+  }
+  const end = new Date(instant + SUB_DAY_MS[period]).toISOString();
+  return `${fmtUtcPeriod(start, "day")}, ${fmtUtcClock(start)} to ${fmtUtcClock(end)} UTC`;
+}
+
+// Every Nth label is kept once the labels are narrower than the widest one, so
+// they never overlap. The stride counts labels, not slots: counting slots drops
+// every label whose slot index misses the stride.
+function shownTicksOf(ticks: readonly string[], plotWidth: number): (string | undefined)[] {
+  const labels = ticks.filter((tick) => tick !== "");
   if (plotWidth <= 0 || labels.length === 0) {
-    return 1;
+    return ticks.map((tick) => (tick === "" ? undefined : tick));
   }
   const widest = Math.max(...labels.map((label) => label.length));
   const labelWidth = widest * LABEL_CHAR_PX + LABEL_GAP_PX;
-  return Math.max(1, Math.ceil(labelWidth / (plotWidth / labels.length)));
+  const stride = Math.max(1, Math.ceil(labelWidth / (plotWidth / labels.length)));
+  let rank = 0;
+  return ticks.map((tick) => {
+    if (tick === "") {
+      return undefined;
+    }
+    const shown = rank % stride === 0;
+    rank += 1;
+    return shown ? tick : undefined;
+  });
 }
 
 function fromOf(
@@ -187,7 +277,7 @@ function fromOf(
   if (index !== 0 || since === null || sinceAt === null || startAt === null || sinceAt <= startAt) {
     return undefined;
   }
-  return period === "day" ? `from ${fmtUtcClock(since)} UTC` : `from ${fmtUtcStamp(since)}`;
+  return period === "month" ? `from ${fmtUtcStamp(since)}` : `from ${fmtUtcClock(since)} UTC`;
 }
 
 const SLOT =
@@ -228,13 +318,15 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotWidth = useWidth(plotRef);
   const isTokens = units === "tokens";
-  const period: Period = spend.period === "day" ? "day" : "month";
+  const { period } = spend;
   const buckets = spend.buckets ?? [];
   const top = topOf(SCALE_HEADROOM * Math.max(0, ...buckets.map((b) => valueOf(b, units))));
   const width = barWidthOf(buckets.length);
-  const ticks = buckets.map((bucket) => fmtUtcPeriodTick(bucket.start, period));
-  const stride = labelStrideOf(ticks, plotWidth);
-  const axisName = `UTC ${period}`;
+  const ticks = shownTicksOf(
+    buckets.map((bucket) => tickOf(bucket.start, period, buckets.length)),
+    plotWidth,
+  );
+  const { per: perName, axis: axisName } = PERIOD_NAMES[period];
   const valueName = isTokens ? "Tokens" : "Estimated cost";
 
   const costBars = buckets.map((bucket) => costBarOf(bucket, top));
@@ -242,7 +334,7 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
     const from = fromOf(bucket, index, since, period);
     return (
       <div key={bucket.start} className="min-w-35">
-        <div className="mb-xxs font-bold">{fmtUtcPeriod(bucket.start, period)}</div>
+        <div className="mb-xxs font-bold">{headingOf(bucket.start, period)}</div>
         {from === undefined ? undefined : <div>{from}</div>}
         <div>{isTokens ? bucketTokensNote(bucket) : costNoteOf(bucket, costBars[index])}</div>
       </div>
@@ -270,7 +362,7 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
 
   return (
     <Panel
-      title={isTokens ? `Tokens per ${period}` : "Spend"}
+      title={isTokens ? `Tokens per ${perName}` : "Spend"}
       note={isTokens ? <KindLegend /> : undefined}
     >
       <ChartFrame
@@ -296,7 +388,7 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
                 )
               }
               note={notes[index]}
-              tick={index % stride === 0 ? ticks[index] : undefined}
+              tick={ticks[index]}
             />
           );
         })}

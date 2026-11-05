@@ -431,6 +431,10 @@ type Params struct {
 	// GET /api/v1/stats; nil answers 503.
 	Stats StatsFunc
 
+	// StatsSpan computes the report of one stretch of time. Called on each
+	// GET /api/v1/stats/span; nil answers 503.
+	StatsSpan SpanFunc
+
 	// ModelUse lists the agent kind and model pairs with a recorded run.
 	// Called on each GET /api/v1/prices; nil answers 503.
 	ModelUse ModelUseFunc
@@ -484,6 +488,7 @@ type Server struct {
 	runEventsFn      RunEventsFunc
 	runEventsAfterFn RunEventsAfterFunc
 	stats            StatsFunc
+	statsSpan        SpanFunc
 
 	modelUse           ModelUseFunc
 	configuredModelsFn func() []orchestrator.ConfiguredModel
@@ -537,6 +542,7 @@ func New(params Params) *Server {
 		runEventsFn:      params.RunEventsFn,
 		runEventsAfterFn: params.RunEventsAfterFn,
 		stats:            params.Stats,
+		statsSpan:        params.StatsSpan,
 
 		modelUse:           params.ModelUse,
 		configuredModelsFn: params.ConfiguredModelsFn,
@@ -571,6 +577,7 @@ func New(params Params) *Server {
 	mux.HandleFunc("/api/v1/runs/issues", s.routeIssueGroups)
 	mux.HandleFunc("/api/v1/runs/{dispatch_id}/events", s.routeRunEvents)
 	mux.HandleFunc("/api/v1/stats", s.routeStats)
+	mux.HandleFunc("/api/v1/stats/span", s.routeStatsSpan)
 	mux.HandleFunc("/api/v1/prices", s.routePrices)
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/retries/{identifier}/run", s.routeRetryNow)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/runstats"
 	"github.com/sortie-ai/sortie/internal/server"
@@ -39,35 +40,116 @@ type statsSource struct {
 	// stages supplies the stage chains chain_funnels reads; nil serves an
 	// empty chain_funnels.
 	stages func() runstats.Stages
+
+	// running snapshots the running sessions' turn records; nil serves none,
+	// which is what the command reads, because it has no live process.
+	running func() []runstats.RunningSession
 }
 
-// report opens dbPath read-only and aggregates the runs completed in
-// [since, until). Each call opens its own connection, so concurrent calls
-// share nothing and a long scan never holds the orchestrator's store.
-func (src statsSource) report(ctx context.Context, since, until *time.Time, generatedAt time.Time) (runstats.Report, error) {
+// report opens dbPath read-only and aggregates the runs completed within r,
+// with the spend series in period p. Each call opens its own connection, so
+// concurrent calls share nothing and a long scan never holds the
+// orchestrator's store.
+func (src statsSource) report(ctx context.Context, r runstats.Range, p runstats.Period, generatedAt time.Time) (runstats.Report, error) {
 	store, err := openStoreReadOnly(ctx, src.dbPath)
 	if err != nil {
 		return runstats.Report{}, fmt.Errorf("open database %s: %w", src.dbPath, err)
 	}
 	defer store.Close() //nolint:errcheck,gosec // read-only handle; close error is non-actionable
 
-	return src.aggregate(ctx, store, since, until, generatedAt)
+	return src.aggregate(ctx, store, r, p, generatedAt)
 }
 
-// statsStore is what a stats report reads: the run history and the live
-// passes the stage funnels count.
+// span opens dbPath read-only and reports the sessions with turns that ended
+// in [since, until), a nil until being open.
+func (src statsSource) span(ctx context.Context, since time.Time, until *time.Time, generatedAt time.Time) (runstats.SpanReport, error) {
+	store, err := openStoreReadOnly(ctx, src.dbPath)
+	if err != nil {
+		return runstats.SpanReport{}, fmt.Errorf("open database %s: %w", src.dbPath, err)
+	}
+	defer store.Close() //nolint:errcheck,gosec // read-only handle; close error is non-actionable
+
+	caps, err := store.RunHistoryCapabilities(ctx)
+	if err != nil {
+		return runstats.SpanReport{}, err
+	}
+	span := runstats.NewSpan(caps, since, until, generatedAt, src.snapshot())
+	windowSince, windowUntil := span.Window()
+	if err := scanSpend(ctx, store, caps, windowSince, windowUntil, span.AddTurn, span.AddUntrackedRun); err != nil {
+		return runstats.SpanReport{}, err
+	}
+	return span.Report(), nil
+}
+
+// snapshot takes the running sessions' records. It MUST precede every scan of
+// stored turns: a session writes its run row on exit before it releases its
+// records, so with the scan first a session exiting between the two reads
+// would be in neither.
+func (src statsSource) snapshot() []runstats.RunningSession {
+	if src.running == nil {
+		return nil
+	}
+	return src.running()
+}
+
+// scanSpend reads the stored turns and the runs recorded without turn records
+// within [since, until).
+func scanSpend(
+	ctx context.Context,
+	store storage.RunTurnStore,
+	caps storage.RunHistoryCapabilities,
+	since, until *time.Time,
+	addTurn func(storage.RunTurnRow) error,
+	addUntracked func(storage.UntrackedRunRow) error,
+) error {
+	if caps.HasRunTurns {
+		if err := store.ScanRunTurnsRange(ctx, since, until, addTurn); err != nil {
+			return err
+		}
+	}
+	return store.ScanUntrackedRunsRange(ctx, caps, since, until, addUntracked)
+}
+
+// runningSessions maps the orchestrator's turn records to the spend series'
+// input, which keeps runstats free of an orchestrator import.
+func runningSessions(sessions []orchestrator.SessionTurns) []runstats.RunningSession {
+	running := make([]runstats.RunningSession, len(sessions))
+	for i, session := range sessions {
+		running[i] = runstats.RunningSession{
+			DispatchID:        session.DispatchID,
+			IssueID:           session.IssueID,
+			Identifier:        session.Identifier,
+			DisplayID:         session.DisplayID,
+			IssueTitle:        session.IssueTitle,
+			RuleName:          session.RuleName,
+			AgentKind:         session.AgentKind,
+			UsageCompleteness: session.UsageCompleteness,
+			CostStatus:        session.CostStatus,
+			CostUSD:           session.CostUSD,
+			AgentPricedUSD:    session.AgentPricedUSD,
+			Turns:             session.Turns,
+		}
+	}
+	return running
+}
+
+// statsStore is what a stats report reads: the run history, the turn records,
+// and the live passes the stage funnels count.
 type statsStore interface {
 	storage.RunHistoryStore
+	storage.RunTurnStore
 	storage.LivePassStore
 }
 
-func (src statsSource) aggregate(ctx context.Context, store statsStore, since, until *time.Time, generatedAt time.Time) (runstats.Report, error) {
+func (src statsSource) aggregate(ctx context.Context, store statsStore, r runstats.Range, p runstats.Period, generatedAt time.Time) (runstats.Report, error) {
 	caps, err := store.RunHistoryCapabilities(ctx)
 	if err != nil {
 		return runstats.Report{}, err
 	}
 
+	running := src.snapshot()
 	agg := runstats.New(caps)
+	agg.SetSpend(r, p, generatedAt, running)
 	if src.stages != nil {
 		stages := src.stages()
 		if len(stages.Chains) > 0 && caps.FunnelBreakdown() {
@@ -79,10 +161,14 @@ func (src statsSource) aggregate(ctx context.Context, store statsStore, since, u
 		}
 		agg.SetStages(stages)
 	}
-	if err := store.ScanRunHistoryRange(ctx, caps, since, until, agg.Add); err != nil {
+	if err := store.ScanRunHistoryRange(ctx, caps, r.Since, r.Until, agg.Add); err != nil {
 		return runstats.Report{}, err
 	}
-	return agg.Report(generatedAt, src.workflowPath, src.dbPath, since, until), nil
+	spendSince, spendUntil := agg.SpendWindow()
+	if err := scanSpend(ctx, store, caps, spendSince, spendUntil, agg.AddTurn, agg.AddUntrackedRun); err != nil {
+		return runstats.Report{}, err
+	}
+	return agg.Report(generatedAt, src.workflowPath, src.dbPath, r.Since, r.Until), nil
 }
 
 // dispatchStages joins the dispatch section to the stages chain_funnels
@@ -608,7 +694,8 @@ func runStats(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		workflowPath: path,
 		stages:       func() runstats.Stages { return dispatchStages(dispatch) },
 	}
-	report, err := src.report(ctx, since, until, now)
+	rng := runstats.Range{Since: since, Until: until, SinceIsDuration: runstats.IsDurationBound(*sinceRaw)}
+	report, err := src.report(ctx, rng, "", now)
 	if err != nil {
 		fmt.Fprintf(stderr, "sortie stats: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 		return 1

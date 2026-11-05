@@ -62,6 +62,8 @@ type jsonField struct {
 var contractEnums = map[reflect.Type]map[string][]string{
 	reflect.TypeFor[holdResponse]():        {"reason": holdReasonValues()},
 	reflect.TypeFor[usageWindowResponse](): {"status": usageWindowStatusValues()},
+	reflect.TypeFor[runstats.Spend]():      {"period": spendPeriodValues()},
+	reflect.TypeFor[runstats.SpanReport](): {"period": spendPeriodValues()},
 }
 
 var contractNeverNull = map[reflect.Type][]string{
@@ -89,6 +91,16 @@ func holdReasonValues() []string {
 		values[i] = string(r)
 	}
 	return values
+}
+
+func spendPeriodValues() []string {
+	return []string{
+		string(runstats.PeriodFiveMinutes),
+		string(runstats.PeriodQuarterHour),
+		string(runstats.PeriodHour),
+		string(runstats.PeriodDay),
+		string(runstats.PeriodMonth),
+	}
 }
 
 func usageWindowStatusValues() []string {
@@ -384,7 +396,7 @@ func TestAPIContract(t *testing.T) {
 
 	c, err := newContract(
 		reflect.TypeFor[stateResponse](), reflect.TypeFor[issueDetailResponse](), reflect.TypeFor[runsResponse](), reflect.TypeFor[issueGroupsResponse](),
-		reflect.TypeFor[runstats.Report](), reflect.TypeFor[refreshResponse](), reflect.TypeFor[retryNowResponse](), reflect.TypeFor[checkNowResponse](),
+		reflect.TypeFor[runstats.Report](), reflect.TypeFor[runstats.SpanReport](), reflect.TypeFor[refreshResponse](), reflect.TypeFor[retryNowResponse](), reflect.TypeFor[checkNowResponse](),
 		reflect.TypeFor[acknowledgeResponse](), reflect.TypeFor[errorResponse](),
 		reflect.TypeFor[healthResponse](), reflect.TypeFor[readyResponse](), reflect.TypeFor[runEventsResponse](),
 		agentEventType, reflect.TypeFor[runEndedFrame](), reflect.TypeFor[runResetFrame](),
