@@ -312,7 +312,7 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
   const top = topOf(SCALE_HEADROOM * Math.max(0, ...buckets.map((b) => valueOf(b, units))));
   const width = barWidthOf(buckets.length);
   const ticks = buckets.map((bucket) => tickOf(bucket.start, period, buckets.length));
-  const stride = isSubDay(period) ? 1 : labelStrideOf(ticks, plotWidth);
+  const stride = labelStrideOf(ticks, plotWidth);
   const { per: perName, axis: axisName } = PERIOD_NAMES[period];
   const valueName = isTokens ? "Tokens" : "Estimated cost";
 
