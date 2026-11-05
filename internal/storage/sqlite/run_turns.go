@@ -251,10 +251,12 @@ func (s *Store) ScanUntrackedRunsRange(
 		args = append(args, until.UTC().Format(time.RFC3339Nano))
 	}
 	if caps.HasRunTurns {
+		// applied_at drops the fraction of its second, so a run that finished
+		// in that second, before the migration ran, still counts as untracked.
 		conds = append(conds,
 			"NOT EXISTS (SELECT 1 FROM run_turns WHERE run_turns.run_id = run_history.id)",
 			"unixepoch(run_history.completed_at, 'subsec') < unixepoch(?, 'subsec')")
-		args = append(args, trackedSince.Format(time.RFC3339))
+		args = append(args, trackedSince.Add(time.Second).Format(time.RFC3339))
 	}
 	query += " WHERE " + strings.Join(conds, " AND ") + //nolint:gosec // conds hold only constant predicates; values remain bound parameters
 		" ORDER BY unixepoch(run_history.completed_at, 'subsec'), run_history.id"

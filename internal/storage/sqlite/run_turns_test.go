@@ -201,6 +201,27 @@ func TestScanUntrackedRunsRange(t *testing.T) {
 		}
 	})
 
+	t.Run("counts a run finished in the second the migration ran", func(t *testing.T) {
+		t.Parallel()
+
+		upgraded := openTestStore(t)
+		migrateOrFatal(t, upgraded)
+		appliedAt, err := upgraded.runTurnsTrackedSince(ctx)
+		if err != nil {
+			t.Fatalf("runTurnsTrackedSince: %v", err)
+		}
+		run := fixtureRun("same-second", "succeeded", appliedAt.Add(500*time.Millisecond).Format(time.RFC3339Nano))
+		if _, err := upgraded.AppendRunHistoryWithEvents(ctx, run, nil, unboundedRunEvents); err != nil {
+			t.Fatalf("AppendRunHistoryWithEvents: %v", err)
+		}
+
+		rows, err := scannedUntracked(ctx, upgraded, caps, nil, nil)
+
+		if got := identifiersOf(rows); err != nil || !slices.Equal(got, []string{"same-second"}) {
+			t.Errorf("ScanUntrackedRunsRange(nil, nil) = %v, %v, want [same-second], nil", got, err)
+		}
+	})
+
 	t.Run("fails on a creation time that does not parse", func(t *testing.T) {
 		t.Parallel()
 
