@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { ApiError } from "@/api/client";
-import { useStateQuery, useStatsQuery } from "@/api/queries";
+import { useStateQuery, useStatsPreviousQuery, useStatsQuery } from "@/api/queries";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
@@ -19,12 +19,14 @@ import { RangePicker } from "./RangePicker";
 import { SkillTable } from "./SkillTable";
 import { SummaryTiles } from "./SummaryTiles";
 import { UsageChart } from "./UsageChart";
-import { RANGE_OPTIONS, useAnalyticsRange } from "./analytics-range";
+import { RANGE_OPTIONS, previousPeriodOf, useAnalyticsRange } from "./analytics-range";
 
 import type { AnalyticsRange } from "@/api/queries";
 import type { Group, Report } from "@/api/types.gen";
 import type { Units } from "@/lib/units";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { NameColumn } from "./GroupTable";
+import type { Comparison } from "./SummaryTiles";
 
 const MESSAGE = "text-body-md text-ink-body";
 
@@ -158,12 +160,30 @@ function standfirstOf(range: AnalyticsRange): string {
   return range === "all" ? "Every run on record." : `Runs finished in the ${label.toLowerCase()}.`;
 }
 
+function comparisonOf(
+  range: AnalyticsRange,
+  previous: UseQueryResult<Report>,
+): Comparison | "pending" | null {
+  const period = previousPeriodOf(range);
+  if (period === null) {
+    return null;
+  }
+  if (previous.data === undefined) {
+    return previous.isPending ? "pending" : null;
+  }
+  return previous.data.summary.runs === 0 ? null : { period, previous: previous.data.summary };
+}
+
 export function AnalyticsScreen() {
   const { data: state } = useStateQuery();
   const config = state?.config;
   const [range] = useAnalyticsRange();
   const stats = useStatsQuery(range);
   const report = stats.data;
+  const previous = useStatsPreviousQuery(
+    range,
+    report !== undefined && report.summary.runs > 0 ? report.since : null,
+  );
   const [hasLoadedBefore, setHasLoadedBefore] = useState(false);
   if (report !== undefined && !hasLoadedBefore) {
     setHasLoadedBefore(true);
@@ -212,7 +232,11 @@ export function AnalyticsScreen() {
           ) : (
             <div key={range} className="flex flex-col gap-xl">
               <Panel title="Summary">
-                <SummaryTiles report={report} units={units} />
+                <SummaryTiles
+                  report={report}
+                  units={units}
+                  comparison={comparisonOf(range, previous)}
+                />
               </Panel>
               <OutcomeBar summary={report.summary} />
               {range !== "24h" &&

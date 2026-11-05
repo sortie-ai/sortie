@@ -18,6 +18,19 @@ export function rangeOf(value: string | null): AnalyticsRange {
   return RANGE_OPTIONS.find((option) => option.value === value)?.value ?? DEFAULT_RANGE;
 }
 
+const PREVIOUS_PERIOD: Record<AnalyticsRange, string | null> = {
+  "24h": "previous 24 hours",
+  "7d": "previous 7 days",
+  "30d": "previous 30 days",
+  "90d": "previous 90 days",
+  all: null,
+};
+
+/** Names the range of equal length before a range, lowercase for use inside a sentence; all time has none. */
+export function previousPeriodOf(range: AnalyticsRange): string | null {
+  return PREVIOUS_PERIOD[range];
+}
+
 export function useAnalyticsRange(): [AnalyticsRange, (range: AnalyticsRange) => void] {
   const [params, setParams] = useSearchParams();
 

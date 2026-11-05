@@ -187,6 +187,28 @@ export function fmtPercent(ratio: number): string {
   return `${isPartial ? Math.min(99, Math.max(1, percent)) : percent}%`;
 }
 
+/** Words how far a figure moved against the same figure of an earlier range: a signed whole percent below double and a multiple from double up. Zero is unsigned, and an earlier figure of zero or less states no change. */
+export function fmtChange(now: number | null, before: number | null): string | null {
+  if (now === null || before === null || before <= 0) {
+    return null;
+  }
+  const ratio = now / before;
+  if (ratio >= 2) {
+    return `${ratio.toFixed(1)}x`;
+  }
+  const percent = Math.round((ratio - 1) * 100);
+  return `${percent > 0 ? "+" : ""}${percent}%`;
+}
+
+/** Words how far a rate moved in whole percentage points of the unrounded rates, so two rates that both read "99%" can still differ by a point. Zero is unsigned. */
+export function fmtPoints(now: number | null, before: number | null): string | null {
+  if (now === null || before === null) {
+    return null;
+  }
+  const points = Math.round((now - before) * 100);
+  return `${points > 0 ? "+" : ""}${points} pts`;
+}
+
 /** Writes a quantity with en-US digit grouping and at most two fraction digits, trailing zeros dropped. */
 export function fmtAmount(n: number): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
