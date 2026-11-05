@@ -244,15 +244,26 @@ function headingOf(start: string, period: Period): string {
   return `${fmtUtcPeriod(start, "day")}, ${fmtUtcClock(start)} to ${fmtUtcClock(end)} UTC`;
 }
 
-// Every Nth slot carries a label once the slots are narrower than the widest
-// label, so the labels never overlap.
-function labelStrideOf(labels: readonly string[], plotWidth: number): number {
+// Every Nth label is kept once the labels are narrower than the widest one, so
+// they never overlap. The stride counts labels, not slots: counting slots drops
+// every label whose slot index misses the stride.
+function shownTicksOf(ticks: readonly string[], plotWidth: number): (string | undefined)[] {
+  const labels = ticks.filter((tick) => tick !== "");
   if (plotWidth <= 0 || labels.length === 0) {
-    return 1;
+    return ticks.map((tick) => (tick === "" ? undefined : tick));
   }
   const widest = Math.max(...labels.map((label) => label.length));
   const labelWidth = widest * LABEL_CHAR_PX + LABEL_GAP_PX;
-  return Math.max(1, Math.ceil(labelWidth / (plotWidth / labels.length)));
+  const stride = Math.max(1, Math.ceil(labelWidth / (plotWidth / labels.length)));
+  let rank = 0;
+  return ticks.map((tick) => {
+    if (tick === "") {
+      return undefined;
+    }
+    const shown = rank % stride === 0;
+    rank += 1;
+    return shown ? tick : undefined;
+  });
 }
 
 function fromOf(
@@ -311,8 +322,10 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
   const buckets = spend.buckets ?? [];
   const top = topOf(SCALE_HEADROOM * Math.max(0, ...buckets.map((b) => valueOf(b, units))));
   const width = barWidthOf(buckets.length);
-  const ticks = buckets.map((bucket) => tickOf(bucket.start, period, buckets.length));
-  const stride = labelStrideOf(ticks, plotWidth);
+  const ticks = shownTicksOf(
+    buckets.map((bucket) => tickOf(bucket.start, period, buckets.length)),
+    plotWidth,
+  );
   const { per: perName, axis: axisName } = PERIOD_NAMES[period];
   const valueName = isTokens ? "Tokens" : "Estimated cost";
 
@@ -375,7 +388,7 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
                 )
               }
               note={notes[index]}
-              tick={index % stride === 0 && ticks[index] !== "" ? ticks[index] : undefined}
+              tick={ticks[index]}
             />
           );
         })}
