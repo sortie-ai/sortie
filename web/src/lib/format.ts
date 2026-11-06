@@ -187,6 +187,12 @@ export function fmtPercent(ratio: number): string {
   return `${isPartial ? Math.min(99, Math.max(1, percent)) : percent}%`;
 }
 
+/** Rounds a half away from zero after dropping float noise, so 0.94 - 0.935 counts as the half it is and a decline keeps its sign. */
+function roundHalfAway(x: number): number {
+  const clean = Number(x.toPrecision(12));
+  return Math.sign(clean) * Math.round(Math.abs(clean));
+}
+
 /** Words how far a figure moved against the same figure of an earlier range: a signed whole percent below double and a multiple from double up. Zero is unsigned, and an earlier figure of zero or less states no change. */
 export function fmtChange(now: number | null, before: number | null): string | null {
   if (now === null || before === null || before <= 0) {
@@ -196,7 +202,7 @@ export function fmtChange(now: number | null, before: number | null): string | n
   if (ratio >= 2) {
     return `${ratio.toFixed(1)}x`;
   }
-  const percent = Math.round(((now - before) / before) * 100);
+  const percent = roundHalfAway(((now - before) / before) * 100);
   return `${percent > 0 ? "+" : ""}${percent}%`;
 }
 
@@ -205,7 +211,7 @@ export function fmtPoints(now: number | null, before: number | null): string | n
   if (now === null || before === null) {
     return null;
   }
-  const points = Math.round((now - before) * 100);
+  const points = roundHalfAway((now - before) * 100);
   return `${points > 0 ? "+" : ""}${points} pts`;
 }
 
