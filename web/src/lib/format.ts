@@ -196,7 +196,7 @@ export function fmtChange(now: number | null, before: number | null): string | n
   if (ratio >= 2) {
     return `${ratio.toFixed(1)}x`;
   }
-  const percent = Math.round((ratio - 1) * 100);
+  const percent = Math.round(((now - before) / before) * 100);
   return `${percent > 0 ? "+" : ""}${percent}%`;
 }
 
