@@ -1,9 +1,11 @@
-import { useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChartFrame, useChart } from "@/components/ChartFrame";
 import { Panel } from "@/components/Panel";
 import {
   CacheReadColumn,
+  IN_PROGRESS,
+  KIND_ORDER,
   KindLegend,
   KindRows,
   KindStack,
@@ -11,6 +13,7 @@ import {
   kindsOfCosts,
   kindsOfStats,
 } from "@/components/TokenKinds";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
@@ -19,18 +22,34 @@ import {
   fmtMoney,
   fmtTokens,
   fmtUtcClock,
-  fmtUtcPeriod,
   fmtUtcPeriodTick,
-  fmtUtcStamp,
   parseInstant,
   plural,
 } from "@/lib/format";
 
-import type { Spend, SpendBucket } from "@/api/types.gen";
-import type { Units } from "@/lib/units";
-import type { CSSProperties, ReactNode } from "react";
+import {
+  averageAndPeak,
+  canZoomInto,
+  isEmptyBucket,
+  selectedWindowOf,
+  spanIndexesOf,
+  valueOf,
+} from "./activity";
+import { PERIOD_NAMES, bucketNameOf, inProgressTextOf, peakAtOf } from "./bucket-names";
+import { SelectionBlock } from "./SelectionBlock";
 
-type Period = Spend["period"];
+import type { Spend, SpendBucket } from "@/api/types.gen";
+import type { TooltipProps } from "@/components/ui/tooltip";
+import type { Units } from "@/lib/units";
+import type { Period } from "./activity";
+import type { AnalyticsView, AnalyticsViewActions } from "./analytics-range";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
+
 type SubDayPeriod = Exclude<Period, "day" | "month">;
 
 const SUB_DAY_MS: Record<SubDayPeriod, number> = {
@@ -40,19 +59,6 @@ const SUB_DAY_MS: Record<SubDayPeriod, number> = {
 };
 
 const THREE_HOURS_MS = 3 * 60 * 60_000;
-
-// The axis caption doubles as the chart's aria label and the Cache read plot's label.
-const PERIOD_NAMES: Record<Period, { per: string; axis: string }> = {
-  five_minutes: { per: "5 minutes", axis: "UTC, 5 minutes" },
-  quarter_hour: { per: "15 minutes", axis: "UTC, 15 minutes" },
-  hour: { per: "hour", axis: "UTC hour" },
-  day: { per: "day", axis: "UTC day" },
-  month: { per: "month", axis: "UTC month" },
-};
-
-function isSubDay(period: Period): period is SubDayPeriod {
-  return period !== "day" && period !== "month";
-}
 
 // Both stripe tones stay in the primary hue and stay filled, so a bar that is only
 // a lower bound never reads as empty.
@@ -88,34 +94,6 @@ function topOf(max: number): number {
   return step * magnitude;
 }
 
-function valueOf(bucket: SpendBucket, units: Units): number {
-  return units === "tokens" ? (bucket.tokens?.uncached ?? 0) : (bucket.cost_usd ?? 0);
-}
-
-type CostBarKind = "estimated" | "lower-bound" | "unknown";
-
-interface CostBar {
-  kind: CostBarKind;
-  height: string;
-}
-
-// A bucket whose cost is unknown still draws a thin lower-bound bar when runs
-// spent tokens it could not price or measure, so it never reads as a day
-// without spend.
-function costBarOf(bucket: SpendBucket, top: number): CostBar | undefined {
-  if (bucket.runs === 0) {
-    return undefined;
-  }
-  if (bucket.cost_usd === null) {
-    const isUnknown = bucket.cost_unpriced_runs > 0 || bucket.tokens_unmeasured_runs > 0;
-    return isUnknown ? { kind: "unknown", height: "2px" } : undefined;
-  }
-  return {
-    kind: bucket.cost_lower_bound ? "lower-bound" : "estimated",
-    height: `${(bucket.cost_usd / top) * 100}%`,
-  };
-}
-
 interface NoteRowProps {
   label: string;
   figure: string;
@@ -131,14 +109,64 @@ function NoteRow({ label, figure, className }: NoteRowProps) {
   );
 }
 
-function costNoteOf(bucket: SpendBucket, bar: CostBar | undefined): ReactNode {
-  if (bucket.runs === 0) {
+interface CostBarViewProps {
+  isLowerBound: boolean;
+  isInProgress: boolean;
+  height: string;
+  width: string;
+}
+
+function CostBarView({ isLowerBound, isInProgress, height, width }: CostBarViewProps) {
+  return (
+    <div
+      className={cn(width, "rounded-t", !isLowerBound && "bg-primary", isInProgress && IN_PROGRESS)}
+      style={{ height, ...(isLowerBound ? LOWER_BOUND_FILL : undefined) }}
+    />
+  );
+}
+
+// A bucket whose cost is unknown still draws a thin lower-bound bar when runs
+// spent tokens it could not price or measure, so it never reads as a day
+// without spend. A bucket holding a run recorded before per-turn records has no
+// cost split, so it draws one fill instead of the kinds.
+function costBarOf(bucket: SpendBucket, top: number, width: string): ReactNode {
+  if (isEmptyBucket(bucket)) {
+    return undefined;
+  }
+  if (bucket.cost_usd === null) {
+    const isUnknown = bucket.cost_unpriced_runs > 0 || bucket.tokens_unmeasured_runs > 0;
+    return isUnknown ? (
+      <CostBarView isLowerBound isInProgress={false} height="2px" width={width} />
+    ) : undefined;
+  }
+  const height = (100 * bucket.cost_usd) / top;
+  if (bucket.cost_by_kind === null) {
+    return (
+      <CostBarView
+        isLowerBound={bucket.cost_lower_bound}
+        isInProgress={bucket.in_progress}
+        height={`${height}%`}
+        width={width}
+      />
+    );
+  }
+  return (
+    <KindStack
+      kinds={KIND_ORDER}
+      values={kindsOfCosts(bucket.cost_by_kind)}
+      heightPercent={height}
+      width={width}
+      isLowerBound={bucket.cost_lower_bound}
+      isInProgress={bucket.in_progress}
+    />
+  );
+}
+
+function costNoteOf(bucket: SpendBucket): ReactNode {
+  if (isEmptyBucket(bucket)) {
     return NO_RUNS;
   }
-  if (bar === undefined) {
-    return "The runs of this period spent nothing.";
-  }
-  if (bar.kind === "unknown" || bucket.cost_usd === null) {
+  if (bucket.cost_usd === null) {
     return CHART_UNKNOWN;
   }
   const { cost_by_kind: costByKind } = bucket;
@@ -156,25 +184,13 @@ function costNoteOf(bucket: SpendBucket, bar: CostBar | undefined): ReactNode {
         figure={fmtMoney(bucket.cost_usd)}
         className={costByKind === null ? undefined : "mt-xxs"}
       />
-      {bar.kind === "lower-bound" ? <div className="mt-xxs">{COST_LOWER_BOUND}</div> : undefined}
+      {bucket.cost_lower_bound ? <div className="mt-xxs">{COST_LOWER_BOUND}</div> : undefined}
     </>
   );
 }
 
-function CostBarView({ bar, width }: { bar: CostBar; width: string }) {
-  return (
-    <div
-      className={cn(width, "rounded-t", bar.kind === "estimated" && "bg-primary")}
-      style={{
-        height: bar.height,
-        ...(bar.kind === "estimated" ? undefined : LOWER_BOUND_FILL),
-      }}
-    />
-  );
-}
-
 function tokensBarOf(bucket: SpendBucket, top: number, width: string): ReactNode {
-  if (bucket.runs === 0) {
+  if (isEmptyBucket(bucket)) {
     return undefined;
   }
   if (bucket.tokens === null) {
@@ -190,12 +206,13 @@ function tokensBarOf(bucket: SpendBucket, top: number, width: string): ReactNode
       heightPercent={(100 * bucket.tokens.uncached) / top}
       width={width}
       isLowerBound={bucket.tokens_lower_bound}
+      isInProgress={bucket.in_progress}
     />
   );
 }
 
 function bucketTokensNote(bucket: SpendBucket): ReactNode {
-  if (bucket.runs === 0) {
+  if (isEmptyBucket(bucket)) {
     return NO_RUNS;
   }
   if (bucket.tokens === null) {
@@ -231,19 +248,6 @@ function tickOf(start: string, period: Period, count: number): string {
   }
 }
 
-// A sub-day heading names the day and the clock span; a day or month names itself.
-function headingOf(start: string, period: Period): string {
-  if (!isSubDay(period)) {
-    return fmtUtcPeriod(start, period);
-  }
-  const instant = parseInstant(start);
-  if (instant === null) {
-    return fmtUtcPeriod(start, "day");
-  }
-  const end = new Date(instant + SUB_DAY_MS[period]).toISOString();
-  return `${fmtUtcPeriod(start, "day")}, ${fmtUtcClock(start)} to ${fmtUtcClock(end)} UTC`;
-}
-
 // Every Nth label is kept once the labels are narrower than the widest one, so
 // they never overlap. The stride counts labels, not slots: counting slots drops
 // every label whose slot index misses the stride.
@@ -266,35 +270,80 @@ function shownTicksOf(ticks: readonly string[], plotWidth: number): (string | un
   });
 }
 
-function fromOf(
-  bucket: SpendBucket,
-  index: number,
-  since: string | null,
-  period: Period,
-): string | undefined {
+function fromOf(bucket: SpendBucket, index: number, since: string | null): string | undefined {
   const sinceAt = parseInstant(since);
   const startAt = parseInstant(bucket.start);
   if (index !== 0 || since === null || sinceAt === null || startAt === null || sinceAt <= startAt) {
     return undefined;
   }
-  return period === "month" ? `from ${fmtUtcStamp(since)}` : `from ${fmtUtcClock(since)} UTC`;
+  return `from ${fmtUtcClock(since)} UTC`;
 }
 
 const SLOT =
-  "relative flex h-full items-end justify-center rounded-t outline-none hover:bg-state-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
+  "relative flex h-full cursor-pointer items-end justify-center rounded-t outline-none select-none touch-none hover:bg-state-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring data-dim:opacity-60";
 
 interface UsageSlotProps {
   bar: ReactNode;
+  peak: ReactNode;
   note: ReactNode;
   tick: string | undefined;
+  index: number;
+  label: string;
+  isPressed: boolean;
+  isDim: boolean;
+  isQuiet: boolean;
+  onPress: (event: ReactPointerEvent<HTMLElement>, index: number) => void;
+  onKey: (event: ReactKeyboardEvent<HTMLElement>, index: number) => void;
 }
 
-function UsageSlot({ bar, note, tick }: UsageSlotProps) {
+function UsageSlot({
+  bar,
+  peak,
+  note,
+  tick,
+  index,
+  label,
+  isPressed,
+  isDim,
+  isQuiet,
+  onPress,
+  onKey,
+}: UsageSlotProps) {
   const chart = useChart();
+  const [isOpen, setIsOpen] = useState(false);
+  const isPressFocused = useRef(false);
+  // A note opened before the press is dropped, so it stays shut after the release.
+  if (isQuiet && isOpen) {
+    setIsOpen(false);
+  }
+  const handleOpenChange: NonNullable<TooltipProps["onOpenChange"]> = (next, details) => {
+    const isFocusOfPress = details.reason === "trigger-focus" && isPressFocused.current;
+    setIsOpen(next && !isQuiet && !isFocusOfPress);
+  };
+  const handlePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button === 0) {
+      isPressFocused.current = true;
+      onPress(event, index);
+    }
+  };
   return (
-    <Tooltip>
-      <TooltipTrigger delay={0} render={<div tabIndex={0} className={SLOT} />}>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange}>
+      <TooltipTrigger
+        delay={0}
+        render={<div tabIndex={0} className={SLOT} />}
+        role="button"
+        aria-pressed={isPressed}
+        aria-label={label}
+        data-dim={isDim ? "" : undefined}
+        data-slot-index={index}
+        onPointerDown={handlePointerDown}
+        onKeyDown={(event) => onKey(event, index)}
+        onBlur={() => {
+          isPressFocused.current = false;
+        }}
+      >
         {bar}
+        {peak}
         {tick === undefined ? undefined : (
           <span className="absolute top-full left-1/2 mt-0.5 -translate-x-1/2 text-body-sm whitespace-nowrap text-ink-muted">
             {tick}
@@ -306,22 +355,119 @@ function UsageSlot({ bar, note, tick }: UsageSlotProps) {
   );
 }
 
+// The edge slots anchor their figure to the plot's edge so it never spills past the card.
+function peakAnchorOf(index: number, count: number): string {
+  if (index < 3) {
+    return "left-0";
+  }
+  return index > count - 4 ? "right-0" : "left-1/2 -translate-x-1/2";
+}
+
+interface PeakFigureProps {
+  text: string;
+  heightPercent: number;
+  anchor: string;
+}
+
+function PeakFigure({ text, heightPercent, anchor }: PeakFigureProps) {
+  return (
+    <span
+      className={cn(
+        "pointer-events-none absolute text-body-sm font-medium whitespace-nowrap text-ink tabular-nums",
+        anchor,
+      )}
+      style={{ bottom: `calc(${heightPercent}% + 2px)` }}
+    >
+      {text}
+    </span>
+  );
+}
+
+function AverageLine({ heightPercent }: { heightPercent: number }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-dashed border-ink-muted"
+      style={{ bottom: `${heightPercent}%` }}
+    >
+      <span className="absolute bottom-full left-0 mb-xxs text-body-sm text-ink-muted">Avg</span>
+    </div>
+  );
+}
+
+interface FigureRowProps {
+  averageText: string;
+  per: string;
+  peak: { text: string; at: string } | undefined;
+}
+
+function FigureRow({ averageText, per, peak }: FigureRowProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-lg gap-y-xxs text-body-sm text-ink-muted">
+      <span className="inline-flex items-center gap-xs">
+        <span aria-hidden="true" className="w-md border-t-2 border-dashed border-ink-muted" />
+        Average <b className="text-body-sm font-medium text-ink tabular-nums">
+          {averageText}
+        </b> per{" "}
+        {per}
+      </span>
+      {peak === undefined ? undefined : (
+        <span>
+          Peak <b className="text-body-sm font-medium text-ink tabular-nums">{peak.text}</b> at{" "}
+          {peak.at}
+        </span>
+      )}
+    </div>
+  );
+}
+
+interface Drag {
+  anchor: number;
+  end: number;
+  moved: boolean;
+}
+
+function clampIndex(index: number, count: number): number {
+  return Math.max(0, Math.min(count - 1, index));
+}
+
+function slotIndexAt(clientX: number, plot: DOMRect, count: number): number {
+  return clampIndex(Math.floor(((clientX - plot.left) / plot.width) * count), count);
+}
+
+function focusSlot(plot: HTMLElement | null, index: number, options?: FocusOptions) {
+  plot?.querySelector<HTMLElement>(`[data-slot-index="${index}"]`)?.focus(options);
+}
+
+// The command palette and the shortcuts dialog keep focus inside themselves, so an Escape
+// coming from within a dialog is theirs to close. Matching the target instead of any open
+// dialog leaves out a hint, which is a popover with the same role, and a menu, which clears.
+function isEscapeOfDialog(event: KeyboardEvent): boolean {
+  return event.target instanceof Element && event.target.closest('[role="dialog"]') !== null;
+}
+
 export interface UsageChartProps {
   spend: Spend;
   /** The report's lower bound, which cuts the first bucket short while it lies inside it. */
   since: string | null;
   units: Units;
+  view: AnalyticsView;
+  actions: AnalyticsViewActions;
 }
 
 /** Every date and time it writes is in UTC. */
-export function UsageChart({ spend, since, units }: UsageChartProps) {
+export function UsageChart({ spend, since, units, view, actions }: UsageChartProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotWidth = useWidth(plotRef);
   const isTokens = units === "tokens";
   const { period } = spend;
   const buckets = spend.buckets ?? [];
+  const starts = buckets.map((bucket) => Date.parse(bucket.start));
   const top = topOf(SCALE_HEADROOM * Math.max(0, ...buckets.map((b) => valueOf(b, units))));
   const width = barWidthOf(buckets.length);
+  const formatValue = isTokens ? fmtTokens : fmtMoney;
+  const { average, peakIndex } = averageAndPeak(buckets, units);
+  const peakBucket = peakIndex === null ? undefined : buckets[peakIndex];
   const ticks = shownTicksOf(
     buckets.map((bucket) => tickOf(bucket.start, period, buckets.length)),
     plotWidth,
@@ -329,14 +475,146 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
   const { per: perName, axis: axisName } = PERIOD_NAMES[period];
   const valueName = isTokens ? "Tokens" : "Estimated cost";
 
-  const costBars = buckets.map((bucket) => costBarOf(bucket, top));
+  const [drag, setDrag] = useState<Drag>();
+  const dragRef = useRef<Drag>(undefined);
+  const isDragging = drag !== undefined;
+  // The document listeners outlive a render, so they read what the latest one saw.
+  const latest = useRef({ starts, selection: view.selection, actions });
+  useEffect(() => {
+    latest.current = { starts, selection: view.selection, actions };
+  });
+
+  const setDragState = useCallback((next: Drag | undefined) => {
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
+
+  const selectBetween = useCallback((from: number, to: number, focusIndex: number) => {
+    const { starts: current, actions: latestActions } = latest.current;
+    const first = current[Math.min(from, to)];
+    const last = current[Math.max(from, to)];
+    if (first === undefined || last === undefined) {
+      return;
+    }
+    latestActions.select({ first, last });
+    focusSlot(plotRef.current, focusIndex, { preventScroll: true });
+  }, []);
+
+  const toggle = useCallback((index: number) => {
+    const { starts: current, selection, actions: latestActions } = latest.current;
+    const start = current[index];
+    if (start === undefined) {
+      return;
+    }
+    const isOnlySelected = selection?.first === start && selection.last === start;
+    latestActions.select(isOnlySelected ? null : { first: start, last: start });
+  }, []);
+
+  const resize = useCallback(
+    (index: number, end: number) => {
+      const { starts: current, selection } = latest.current;
+      const [first, last] = spanIndexesOf(current, selection) ?? [index, index];
+      const anchor = index === last ? first : index === first ? last : index;
+      selectBetween(anchor, end, end);
+    },
+    [selectBetween],
+  );
+
+  useEffect(() => {
+    if (!isDragging) {
+      return;
+    }
+    const handleMove = (event: PointerEvent) => {
+      const current = dragRef.current;
+      const plot = plotRef.current;
+      if (current === undefined || plot === null) {
+        return;
+      }
+      const end = slotIndexAt(
+        event.clientX,
+        plot.getBoundingClientRect(),
+        latest.current.starts.length,
+      );
+      if (end !== current.end) {
+        setDragState({ ...current, end, moved: true });
+      }
+    };
+    const handleRelease = () => {
+      const current = dragRef.current;
+      setDragState(undefined);
+      if (current === undefined) {
+        return;
+      }
+      if (current.moved) {
+        selectBetween(current.anchor, current.end, current.end);
+      } else {
+        toggle(current.anchor);
+      }
+    };
+    document.addEventListener("pointermove", handleMove);
+    document.addEventListener("pointerup", handleRelease);
+    document.addEventListener("pointercancel", handleRelease);
+    return () => {
+      document.removeEventListener("pointermove", handleMove);
+      document.removeEventListener("pointerup", handleRelease);
+      document.removeEventListener("pointercancel", handleRelease);
+    };
+  }, [isDragging, selectBetween, setDragState, toggle]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || isEscapeOfDialog(event)) {
+        return;
+      }
+      const { selection, actions: latestActions } = latest.current;
+      if (selection !== null) {
+        latestActions.select(null);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const handlePress = (event: ReactPointerEvent<HTMLElement>, index: number) => {
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    setDragState({ anchor: index, end: index, moved: false });
+  };
+
+  const handleKey = (event: ReactKeyboardEvent<HTMLElement>, index: number) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle(index);
+      return;
+    }
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (step === undefined) {
+      return;
+    }
+    event.preventDefault();
+    const target = clampIndex(index + step, buckets.length);
+    if (event.shiftKey) {
+      resize(index, target);
+    } else {
+      focusSlot(plotRef.current, target);
+    }
+  };
+
+  const committed = spanIndexesOf(starts, view.selection);
+  const draft: [number, number] | null =
+    drag === undefined
+      ? committed
+      : [Math.min(drag.anchor, drag.end), Math.max(drag.anchor, drag.end)];
+  const isInDraft = (index: number) => draft !== null && index >= draft[0] && index <= draft[1];
+
   const notes = buckets.map((bucket, index) => {
-    const from = fromOf(bucket, index, since, period);
+    const from = fromOf(bucket, index, since);
     return (
       <div key={bucket.start} className="min-w-35">
-        <div className="mb-xxs font-bold">{headingOf(bucket.start, period)}</div>
+        <div className="mb-xxs font-bold">{bucketNameOf(bucket.start, period)}</div>
         {from === undefined ? undefined : <div>{from}</div>}
-        <div>{isTokens ? bucketTokensNote(bucket) : costNoteOf(bucket, costBars[index])}</div>
+        {bucket.in_progress ? <div>{inProgressTextOf(bucket.start, period)}</div> : undefined}
+        <div>{isTokens ? bucketTokensNote(bucket) : costNoteOf(bucket)}</div>
       </div>
     );
   });
@@ -355,43 +633,108 @@ export function UsageChart({ spend, since, units }: UsageChartProps) {
               cacheRead={cacheReads[index] ?? 0}
               top={cacheReadTop}
               note={notes[index]}
+              isQuiet={isDragging}
             />
           )),
         }
       : undefined;
 
+  const selectedWindow =
+    view.selection === null ? undefined : selectedWindowOf(view.selection, period);
+  const foot =
+    committed === null || selectedWindow === undefined ? undefined : (
+      <SelectionBlock
+        buckets={buckets.slice(committed[0], committed[1] + 1)}
+        period={period}
+        units={units}
+        canZoom={canZoomInto(
+          selectedWindow,
+          period,
+          committed[1] - committed[0] + 1,
+          buckets.length,
+        )}
+        onZoomIn={() => actions.zoomIn(selectedWindow)}
+        onClear={() => actions.select(null)}
+      />
+    );
+
   return (
     <Panel
       title={isTokens ? `Tokens per ${perName}` : "Spend"}
-      note={isTokens ? <KindLegend /> : undefined}
+      note={<KindLegend />}
+      right={
+        view.zoom === null ? undefined : (
+          <>
+            <Button variant="secondary" onClick={actions.zoomOut}>
+              Zoom out
+            </Button>
+            <Button variant="ghost" onClick={actions.resetZoom}>
+              Reset zoom
+            </Button>
+          </>
+        )
+      }
     >
       <ChartFrame
         label={`${valueName} per ${axisName}, ${plural(buckets.length, "bucket", "buckets")}`}
         valueName={valueName}
         categoryName={axisName}
-        ticks={[1, 0.5, 0].map((fraction) =>
-          isTokens ? fmtTokens(top * fraction) : fmtMoney(top * fraction),
-        )}
+        ticks={[1, 0.5, 0].map((fraction) => formatValue(top * fraction))}
         plotRef={plotRef}
         subplot={subplot}
-      >
-        {buckets.map((bucket, index) => {
-          const costBar = costBars[index];
-          return (
-            <UsageSlot
-              key={bucket.start}
-              bar={
-                isTokens ? (
-                  tokensBarOf(bucket, top, width)
-                ) : costBar === undefined ? undefined : (
-                  <CostBarView bar={costBar} width={width} />
-                )
-              }
-              note={notes[index]}
-              tick={ticks[index]}
+        head={
+          <FigureRow
+            averageText={formatValue(average)}
+            per={perName}
+            peak={
+              peakBucket === undefined
+                ? undefined
+                : {
+                    text: formatValue(valueOf(peakBucket, units)),
+                    at: peakAtOf(peakBucket.start, period),
+                  }
+            }
+          />
+        }
+        behind={
+          draft === null ? undefined : (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 rounded bg-item-selected"
+              style={{
+                left: `${(100 * draft[0]) / buckets.length}%`,
+                width: `${(100 * (draft[1] - draft[0] + 1)) / buckets.length}%`,
+              }}
             />
-          );
-        })}
+          )
+        }
+        front={average > 0 ? <AverageLine heightPercent={(100 * average) / top} /> : undefined}
+        foot={foot}
+      >
+        {buckets.map((bucket, index) => (
+          <UsageSlot
+            key={bucket.start}
+            bar={isTokens ? tokensBarOf(bucket, top, width) : costBarOf(bucket, top, width)}
+            peak={
+              index === peakIndex ? (
+                <PeakFigure
+                  text={formatValue(valueOf(bucket, units))}
+                  heightPercent={(100 * valueOf(bucket, units)) / top}
+                  anchor={peakAnchorOf(index, buckets.length)}
+                />
+              ) : undefined
+            }
+            note={notes[index]}
+            tick={ticks[index]}
+            index={index}
+            label={bucketNameOf(bucket.start, period)}
+            isPressed={isInDraft(index)}
+            isDim={draft !== null && !isInDraft(index)}
+            isQuiet={isDragging}
+            onPress={handlePress}
+            onKey={handleKey}
+          />
+        ))}
       </ChartFrame>
     </Panel>
   );

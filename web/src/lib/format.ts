@@ -291,6 +291,7 @@ export function fmtStamp(at: string): string {
 const UTC_WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
 const UTC_MONTH = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" });
 const UTC_MONTH_SHORT = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+const UTC_WEEKDAY_SHORT = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" });
 
 function utcClock(date: Date): string {
   return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
@@ -304,6 +305,16 @@ export function fmtUtcStamp(at: string): string {
   }
   const date = new Date(instant);
   return `${UTC_WEEKDAY.format(date)} ${date.getUTCDate()} ${UTC_MONTH.format(date)}, ${utcClock(date)} UTC`;
+}
+
+/** Writes the UTC date of an instant as "Wed 28 Oct", the form `fmtStamp` gives a day other than today; an unparsable instant reads as `fmtStamp` reads it. */
+export function fmtUtcDay(at: string): string {
+  const instant = parseInstant(at);
+  if (instant === null) {
+    return UNKNOWN;
+  }
+  const date = new Date(instant);
+  return `${UTC_WEEKDAY_SHORT.format(date)} ${date.getUTCDate()} ${UTC_MONTH_SHORT.format(date)}`;
 }
 
 /** Writes the 24-hour `HH:MM` of an instant in UTC; an unparsable instant reads as `fmtStamp` reads it. */

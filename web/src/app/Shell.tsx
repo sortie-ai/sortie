@@ -12,6 +12,7 @@ import { useLive } from "@/app/live";
 import { NarrowBar } from "@/app/NarrowBar";
 import { Rail } from "@/app/Rail";
 import { ShortcutsDialog } from "@/app/ShortcutsDialog";
+import { ScreenCommandsProvider } from "@/app/screen-commands";
 import { RETURN, useScreenTop } from "@/app/screen-top";
 import { PageBreadcrumb, TopBar } from "@/app/TopBar";
 import { activeViewPath } from "@/components/ActiveHead";
@@ -231,7 +232,9 @@ export interface ShellProps {
 export function Shell({ screens }: ShellProps) {
   return (
     <>
-      <ShellFrame screens={screens} />
+      <ScreenCommandsProvider>
+        <ShellFrame screens={screens} />
+      </ScreenCommandsProvider>
       <Toaster />
     </>
   );

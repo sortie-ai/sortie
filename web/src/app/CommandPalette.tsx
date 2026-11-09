@@ -4,6 +4,7 @@ import { useLocation } from "react-router";
 import { useIssueLookupQuery, useStateQuery } from "@/api/queries";
 import { Kbd } from "@/app/Kbd";
 import { useLive } from "@/app/live";
+import { useProvidedScreenCommands } from "@/app/screen-commands";
 import { Parts } from "@/components/Parts";
 import { useNavigate } from "@/components/carried-links";
 import {
@@ -185,6 +186,7 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const issueQuery = query.trim();
   const state = useStateQuery().data;
+  const screenCommands = useProvidedScreenCommands();
   const lookup = useIssueLookupQuery(useDebounced(open ? issueQuery : "", LOOKUP_DEBOUNCE_MS));
 
   const commands: Command[] = [
@@ -208,6 +210,7 @@ export function CommandPalette({
       keys: ["T"],
       run: () => setTheme(choice),
     })),
+    ...screenCommands.map(({ value, label, run }) => ({ value, label, keys: [], run })),
     { value: "shortcuts", label: "Keyboard shortcuts", keys: ["?"], run: onOpenShortcuts },
   ];
 
