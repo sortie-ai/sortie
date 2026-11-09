@@ -31,7 +31,6 @@
    - Malformed payloads
 
 5. `Observability Failures`
-   - Snapshot timeout
    - Dashboard request errors
    - Log sink configuration failure
    - Delivery of an orchestrator event to a backend destination

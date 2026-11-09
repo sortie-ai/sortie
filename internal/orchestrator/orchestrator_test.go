@@ -1960,7 +1960,7 @@ func TestOrchestrator_RunNotifiesObserversAfterAgentLaneMessage(t *testing.T) {
 			t.Cleanup(running.Wait)
 
 			<-notified
-			_, _ = o.SnapshotFunc()()
+			o.runOnLoop(t.Context(), func(context.Context) {})
 			for len(notified) > 0 {
 				<-notified
 			}
@@ -1971,17 +1971,44 @@ func TestOrchestrator_RunNotifiesObserversAfterAgentLaneMessage(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_ObserverReadSeesTheAgentLaneChange(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISSUE-LANE-READ"
+	state := NewState(60000, 4, 0, nil, AgentTotals{})
+	state.Running[id] = queuedOrderingIssueEntry(id)
+	o := budgetOrchestrator(state, budgetTickConfig(0), &stubStore{}, &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}})
+	o.drainTimeout = 100 * time.Millisecond
+	seen := make(chan int, 16)
+	o.AddObserver(observerFunc(func() {
+		if running := o.SnapshotFunc()().Running; len(running) == 1 {
+			seen <- running[0].TurnCount
+		}
+	}))
+	var running sync.WaitGroup
+	running.Go(func() { o.Run(t.Context()) })
+	t.Cleanup(running.Wait)
+
+	waittest.Receive(t, seen, "first observer call")
+	o.runOnLoop(t.Context(), func(context.Context) {})
+	for len(seen) > 0 {
+		<-seen
+	}
+	o.turnStartedCh <- turnStartedMsg{IssueID: id, TurnsStarted: 2}
+
+	if got := waittest.Receive(t, seen, "observer call after the turn start"); got != 2 {
+		t.Errorf("TurnCount read inside OnStateChange = %d, want 2", got)
+	}
+}
+
 // waitForTurnCount polls snapshots until issueID reports want, failing on
 // a larger value. Run applies turn-started messages asynchronously to
 // snapshot requests, so a single read can race ahead.
-func waitForTurnCount(t *testing.T, snapshot func() (RuntimeSnapshotResult, error), issueID string, want int) {
+func waitForTurnCount(t *testing.T, snapshot func() RuntimeSnapshotResult, issueID string, want int) {
 	t.Helper()
 
 	waittest.Until(t, func() error {
-		snap, err := snapshot()
-		if err != nil {
-			t.Fatalf("snapshot(): %v", err)
-		}
+		snap := snapshot()
 		idx := slices.IndexFunc(snap.Running, func(e SnapshotRunningEntry) bool { return e.IssueID == issueID })
 		if idx < 0 {
 			t.Fatalf("snapshot has no running entry for %q", issueID)
@@ -5369,27 +5396,57 @@ func TestGracefulShutdown(t *testing.T) {
 	})
 }
 
-func TestSnapshotFunc(t *testing.T) {
+func TestSnapshotFunc_AnswersWhileLoopBlocked(t *testing.T) {
 	t.Parallel()
 
-	t.Run("round-trip through event loop", func(t *testing.T) {
-		t.Parallel()
-
-		state := NewState(60000, 1, 0, nil, AgentTotals{InputTokens: 42})
-		obs, started := stateChangeSignal()
-
-		o := NewOrchestrator(OrchestratorParams{
-			State:           state,
+	newOrchestrator := func(reload func() error) *Orchestrator {
+		return NewOrchestrator(OrchestratorParams{
+			State:           NewState(60000, 1, 0, nil, AgentTotals{InputTokens: 42}),
 			Logger:          discardLogger(),
 			TrackerAdapter:  &mockTrackerAdapter{},
 			AgentAdapter:    &mockAgentAdapter{},
 			WorkflowManager: &stubWorkflowManager{},
 			Store:           &stubStore{},
-			Observers:       []Observer{obs},
 			PreflightParams: PreflightParams{
-				ReloadWorkflow: func() error { return errPreflightFailed },
+				ReloadWorkflow: reload,
 				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
 			},
+		})
+	}
+
+	readAsync := func(o *Orchestrator) <-chan RuntimeSnapshotResult {
+		ch := make(chan RuntimeSnapshotResult, 1)
+		go func() { ch <- o.SnapshotFunc()() }()
+		return ch
+	}
+
+	assertTotals := func(t *testing.T, got RuntimeSnapshotResult) {
+		t.Helper()
+		if got.AgentTotals.InputTokens != 42 {
+			t.Errorf("SnapshotFunc()().AgentTotals.InputTokens = %d, want 42", got.AgentTotals.InputTokens)
+		}
+	}
+
+	t.Run("before Run", func(t *testing.T) {
+		t.Parallel()
+
+		o := newOrchestrator(func() error { return errPreflightFailed })
+
+		assertTotals(t, waittest.Receive(t, readAsync(o), "snapshot read before Run"))
+	})
+
+	t.Run("while the tick is blocked", func(t *testing.T) {
+		t.Parallel()
+
+		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		o := newOrchestrator(func() error {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			return errPreflightFailed
 		})
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -5398,24 +5455,15 @@ func TestSnapshotFunc(t *testing.T) {
 			o.Run(ctx)
 			close(done)
 		}()
+		t.Cleanup(func() {
+			close(release)
+			cancel()
+			waittest.Receive(t, done, "Run return")
+		})
 
-		waittest.Receive(t, started, "first state change")
+		waittest.Receive(t, entered, "tick entering the workflow reload")
 
-		snapFn := o.SnapshotFunc()
-		snap, err := snapFn()
-		if err != nil {
-			t.Fatalf("SnapshotFunc() error = %v", err)
-		}
-
-		if snap.GeneratedAt.IsZero() {
-			t.Error("GeneratedAt is zero")
-		}
-		if snap.AgentTotals.InputTokens != 42 {
-			t.Errorf("AgentTotals.InputTokens = %d, want 42", snap.AgentTotals.InputTokens)
-		}
-
-		cancel()
-		waittest.Receive(t, done, "Run return")
+		assertTotals(t, waittest.Receive(t, readAsync(o), "snapshot read during the blocked tick"))
 	})
 }
 
@@ -5562,24 +5610,20 @@ func TestSnapshotDuringDrain(t *testing.T) {
 	}()
 
 	waittest.Receive(t, stateChanged, "first state change")
-	select {
-	case <-stateChanged:
-	default:
-	}
-
 	cancel()
 	waittest.Receive(t, stateChanged, "state change as shutdown starts")
-
-	snap, err := o.SnapshotFunc()()
-	if err != nil {
-		t.Fatalf("SnapshotFunc() during drain: %v", err)
-	}
-
-	if snap.GeneratedAt.IsZero() {
-		t.Error("GeneratedAt is zero")
+	if got := len(o.SnapshotFunc()().Running); got != 1 {
+		t.Fatalf("SnapshotFunc()().Running has %d entries before the worker exit, want 1", got)
 	}
 
 	waittest.Send(t, o.workerExitCh, WorkerResult{IssueID: "id-1"}, "worker exit")
+
+	waittest.Until(t, func() error {
+		if got := len(o.SnapshotFunc()().Running); got != 0 {
+			return fmt.Errorf("SnapshotFunc()().Running has %d entries after the worker exit, want 0", got)
+		}
+		return nil
+	})
 	waittest.Receive(t, done, "Run return")
 }
 
@@ -7401,9 +7445,7 @@ func TestDrainRunningWorkers_SelfReviewProgressUpdatesRunningEntry(t *testing.T)
 	o.selfReviewCh <- selfReviewProgressMsg{IssueID: "id-1", Message: "self_review_iteration", Iteration: 2, MaxIterations: 3}
 
 	waittest.Until(t, func() error {
-		reply := make(chan RuntimeSnapshotResult, 1)
-		o.snapshotCh <- snapshotRequest{ReplyCh: reply}
-		snap := <-reply
+		snap := o.SnapshotFunc()()
 		if len(snap.Running) != 1 || !snap.Running[0].SelfReviewActive || snap.Running[0].SelfReviewIteration != 2 {
 			return fmt.Errorf("RuntimeSnapshot().Running = %+v, want one entry with SelfReviewActive true and SelfReviewIteration 2", snap.Running)
 		}
@@ -8445,9 +8487,7 @@ func TestOrchestratorScenarios(t *testing.T) {
 		})
 
 		waittest.Until(t, func() error {
-			reply := make(chan RuntimeSnapshotResult, 1)
-			waittest.Send(t, o.snapshotCh, snapshotRequest{ReplyCh: reply}, "snapshot request")
-			snap := waittest.Receive(t, reply, "snapshot reply")
+			snap := o.SnapshotFunc()()
 			if len(snap.Running) != 0 || len(snap.Retrying) != 0 {
 				return fmt.Errorf("snapshot running = %d, retrying = %d, want the orchestrator to hold the issue nowhere", len(snap.Running), len(snap.Retrying))
 			}
@@ -11544,10 +11584,7 @@ func TestRun_UsageLimitRefusalHoldsItsKindOnly(t *testing.T) {
 	snapshot := h.o.SnapshotFunc()
 	var refused SnapshotRetryEntry
 	waittest.Until(t, func() error {
-		snap, err := snapshot()
-		if err != nil {
-			return err
-		}
+		snap := snapshot()
 		for _, retry := range snap.Retrying {
 			if retry.Identifier == "A-1" {
 				refused = retry
@@ -11564,11 +11601,7 @@ func TestRun_UsageLimitRefusalHoldsItsKindOnly(t *testing.T) {
 	h.o.RefreshFunc()()
 	var snap RuntimeSnapshotResult
 	waittest.Until(t, func() error {
-		var err error
-		snap, err = snapshot()
-		if err != nil {
-			return err
-		}
+		snap = snapshot()
 		held := slices.IndexFunc(snap.Held, func(e SnapshotHeldEntry) bool {
 			return e.Identifier == "A-2" && e.Hold.Reason == SkipUsageLimit
 		})

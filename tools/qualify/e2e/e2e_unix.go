@@ -670,10 +670,7 @@ func ObserveTerminalCondition(t *testing.T, harness *Harness) TerminalCondition 
 	}
 	condition.HandoffReached = states[issueID] == handoffState
 
-	snapshot, err := harness.orchestrator.SnapshotFunc()()
-	if err != nil {
-		t.Fatalf("runtime snapshot: %v", err)
-	}
+	snapshot := harness.orchestrator.SnapshotFunc()()
 	condition.NoRunningEntry = len(snapshot.Running) == 0
 	condition.NoRetryEntry = len(snapshot.Retrying) == 0
 
@@ -741,10 +738,7 @@ func readCeilingSample(harness *Harness) (ceilingSample, error) {
 	if err != nil {
 		return ceilingSample{}, fmt.Errorf("query run history: %w", err)
 	}
-	snapshot, err := harness.orchestrator.SnapshotFunc()()
-	if err != nil {
-		return ceilingSample{}, fmt.Errorf("runtime snapshot: %w", err)
-	}
+	snapshot := harness.orchestrator.SnapshotFunc()()
 	held := false
 	for _, entry := range snapshot.BudgetExhausted {
 		if entry.IssueID == issueID && entry.Reason == "token_budget" {

@@ -111,6 +111,10 @@ type RunningEntry struct {
 	// the lifetime of the entry.
 	DispatchID string
 
+	// relayed is the newest agent event time the worker relayed toward the
+	// loop, applied or not. Set by [DispatchIssue] and never reassigned.
+	relayed *relayedInstant
+
 	ThreadID string
 
 	TurnID string
@@ -2009,7 +2013,8 @@ type SnapshotUsageWindows struct {
 }
 
 // RuntimeSnapshotResult is a point-in-time capture of the orchestrator's
-// runtime state, produced by [RuntimeSnapshot].
+// runtime state, produced by [RuntimeSnapshot] and by every
+// [Orchestrator.SnapshotFunc] read.
 type RuntimeSnapshotResult struct {
 	GeneratedAt          time.Time                       `json:"generated_at"`
 	Running              []SnapshotRunningEntry          `json:"running"`
@@ -2126,12 +2131,58 @@ func SnapshotIssueUsageOf(usage *storage.IssueTokenUsage) *SnapshotIssueUsage {
 	}
 }
 
+// relayedInstant is the newest Timestamp among the agent events the worker of
+// one dispatch relayed toward the event loop, as Unix nanoseconds, 0 before the
+// first. It never moves backwards and is safe for concurrent use.
+//
+// Events queue behind a busy loop or are dropped when the queue is full, so
+// the applied LastAgentTimestamp alone would make a session that is still
+// emitting look quiet.
+type relayedInstant struct{ unixNano atomic.Int64 }
+
+// observe records t when it is later than the held instant. A nil receiver and
+// a zero t change nothing.
+func (r *relayedInstant) observe(t time.Time) {
+	if r == nil || t.IsZero() {
+		return
+	}
+	n := t.UnixNano()
+	for {
+		held := r.unixNano.Load()
+		if n <= held || r.unixNano.CompareAndSwap(held, n) {
+			return
+		}
+	}
+}
+
+// load returns the held instant, or the zero time for a nil receiver or before
+// the first observe.
+func (r *relayedInstant) load() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	n := r.unixNano.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n).UTC()
+}
+
+// laterInstant returns the later of a and b.
+func laterInstant(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
 // stallReference returns the instant the stall timeout of entry is measured
-// from: its last agent event, else the start of the run. The stall check and
-// the snapshot's stall instants share it so they cannot disagree.
+// from: the last agent event, applied or relayed, else the start of the run.
+// The stall check and the snapshot's stall instants share it so they cannot
+// disagree.
 func stallReference(entry *RunningEntry) time.Time {
-	if !entry.LastAgentTimestamp.IsZero() {
-		return entry.LastAgentTimestamp
+	if last := laterInstant(entry.LastAgentTimestamp, entry.relayed.load()); !last.IsZero() {
+		return last
 	}
 	return entry.StartedAt
 }
@@ -2174,14 +2225,53 @@ func spendOfRunningEntry(entry *RunningEntry) pricing.Spend {
 // Must be called from the event loop goroutine; [State] is not safe for
 // concurrent access.
 func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
-	now = now.UTC()
-	snap := RuntimeSnapshotResult{
-		GeneratedAt: now,
-		Running:     make([]SnapshotRunningEntry, 0, len(state.Running)),
-		Retrying:    make([]SnapshotRetryEntry, 0, len(state.RetryAttempts)),
-	}
+	return captureSnapshot(state).at(now)
+}
 
-	var activeElapsedTotal float64
+// snapshotCapture is a runtime snapshot as the event loop took it, without
+// the fields that depend on the moment of the read. It is never modified
+// after it is built, so any goroutine may read it.
+type snapshotCapture struct {
+	result RuntimeSnapshotResult
+
+	// endedSeconds is State.AgentTotals.SecondsRunning, the time of ended
+	// sessions.
+	endedSeconds float64
+
+	// runningStarts holds the non-zero StartedAt of each running entry.
+	runningStarts []time.Time
+
+	usageWindows map[string]capturedUsageWindows
+
+	// relayed[i] belongs to the entry result.Running[i] shows.
+	relayed []*relayedInstant
+
+	stallTimeoutMS int
+}
+
+// capturedUsageWindows is one agent kind's held usage windows, current or not.
+type capturedUsageWindows struct {
+	// reportedAt is the newest ReportedAt among held.
+	reportedAt time.Time
+
+	// held is a clone of State.UsageWindows for the kind.
+	held []domain.UsageWindow
+}
+
+// captureSnapshot builds the capture of state. Must be called from the event
+// loop goroutine, or before it starts; [State] is not safe for concurrent
+// access.
+func captureSnapshot(state *State) *snapshotCapture {
+	c := &snapshotCapture{
+		endedSeconds:   state.AgentTotals.SecondsRunning,
+		runningStarts:  make([]time.Time, 0, len(state.Running)),
+		relayed:        make([]*relayedInstant, 0, len(state.Running)),
+		stallTimeoutMS: state.StallTimeoutMS,
+	}
+	snap := &c.result
+	snap.Running = make([]SnapshotRunningEntry, 0, len(state.Running))
+	snap.Retrying = make([]SnapshotRetryEntry, 0, len(state.RetryAttempts))
+
 	var runningUnreported, runningNonReporting int
 	for _, entry := range state.Running {
 		requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
@@ -2209,7 +2299,8 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			maps.Copy(modelRequests, entry.RequestsByModel)
 		}
 		identity := maskedIdentity(issueIdentityOf(entry.Issue))
-		quietAt, stallAt := stallInstants(stallReference(entry), state.StallTimeoutMS)
+		stallRef := stallReference(entry)
+		quietAt, stallAt := stallInstants(stallRef, state.StallTimeoutMS)
 		liveCost, liveStatus := pricing.PriceSession(spendOfRunningEntry(entry), state.Rates)
 		snap.Running = append(snap.Running, SnapshotRunningEntry{
 			IssueID:             entry.Issue.ID,
@@ -2265,15 +2356,12 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			DispatchID:       entry.DispatchID,
 			QuietAt:          quietAt,
 			StallAt:          stallAt,
-			StallReference:   stallReference(entry),
+			StallReference:   stallRef,
 		})
+		c.relayed = append(c.relayed, entry.relayed)
 
 		if !entry.StartedAt.IsZero() {
-			elapsed := now.Sub(entry.StartedAt).Seconds()
-			if elapsed < 0 {
-				elapsed = 0
-			}
-			activeElapsedTotal += elapsed
+			c.runningStarts = append(c.runningStarts, entry.StartedAt)
 		}
 	}
 
@@ -2310,7 +2398,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		TotalTokens:         state.AgentTotals.TotalTokens,
 		CacheReadTokens:     state.AgentTotals.CacheReadTokens,
 		CacheWriteTokens:    state.AgentTotals.CacheWriteTokens,
-		SecondsRunning:      state.AgentTotals.SecondsRunning + activeElapsedTotal,
+		SecondsRunning:      c.endedSeconds,
 		UnmeasuredSessions:  state.AgentTotals.UnmeasuredSessions,
 		RunningUnreported:   runningUnreported,
 		RunningNonReporting: runningNonReporting,
@@ -2396,14 +2484,55 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	snap.Held = snapshotHeld(state)
 	snap.ActiveOrder = activeOrderOf(state)
 
-	snap.UsageWindows = snapshotUsageWindows(state, now)
+	c.usageWindows = capturedUsageWindowsOf(state)
 
-	return snap
+	return c
 }
 
-// snapshotUsageWindows returns the per-kind windows current at now; never nil.
-func snapshotUsageWindows(state *State, now time.Time) map[string]SnapshotUsageWindows {
-	windows := make(map[string]SnapshotUsageWindows, len(state.UsageWindows))
+// at returns the snapshot as read at now, with the fields that depend on the
+// moment of the read computed from it: GeneratedAt, SecondsRunning, the usage
+// windows current at now, and each running entry's last agent event time and
+// stall instants, which also follow the event time its worker relayed. now is
+// normalized to UTC.
+//
+// Safe from any goroutine and never blocks. The result shares its slices and
+// maps with the capture and with every other read, so it MUST NOT be modified.
+func (c *snapshotCapture) at(now time.Time) RuntimeSnapshotResult {
+	now = now.UTC()
+	r := c.result
+	r.GeneratedAt = now
+
+	var activeSeconds float64
+	for _, start := range c.runningStarts {
+		activeSeconds += max(0, now.Sub(start).Seconds())
+	}
+	r.AgentTotals.SecondsRunning = c.endedSeconds + activeSeconds
+
+	r.UsageWindows = make(map[string]SnapshotUsageWindows, len(c.usageWindows))
+	for kind, held := range c.usageWindows {
+		r.UsageWindows[kind] = SnapshotUsageWindows{
+			ReportedAt: held.reportedAt,
+			Windows:    usage.CurrentWindows(held.held, now),
+		}
+	}
+
+	r.Running = slices.Clone(c.result.Running)
+	for i := range r.Running {
+		row := &r.Running[i]
+		row.LastAgentTimestamp = laterInstant(row.LastAgentTimestamp, c.relayed[i].load())
+		row.StallReference = row.LastAgentTimestamp
+		if row.StallReference.IsZero() {
+			row.StallReference = row.StartedAt
+		}
+		row.QuietAt, row.StallAt = stallInstants(row.StallReference, c.stallTimeoutMS)
+	}
+	return r
+}
+
+// capturedUsageWindowsOf returns a clone of each agent kind's held windows
+// with the newest report time among them.
+func capturedUsageWindowsOf(state *State) map[string]capturedUsageWindows {
+	windows := make(map[string]capturedUsageWindows, len(state.UsageWindows))
 	for kind, held := range state.UsageWindows {
 		var reportedAt time.Time
 		for _, w := range held {
@@ -2411,10 +2540,7 @@ func snapshotUsageWindows(state *State, now time.Time) map[string]SnapshotUsageW
 				reportedAt = w.ReportedAt
 			}
 		}
-		windows[kind] = SnapshotUsageWindows{
-			ReportedAt: reportedAt,
-			Windows:    usage.CurrentWindows(held, now),
-		}
+		windows[kind] = capturedUsageWindows{reportedAt: reportedAt, held: slices.Clone(held)}
 	}
 	return windows
 }

@@ -60,6 +60,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - On SSH workers, an `agent-client-protocol` workflow whose `agent.command` is a list now launches the same way as one given as a string. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 - `agent-client-protocol`: a turn still running when Sortie stops the session is reported as failed even when the agent answers it as finished, as Copilot CLI does. ([#1653](https://github.com/sortie-ai/sortie/issues/1653))
 - `agent-client-protocol`: a turn cancelled before the model answered is no longer counted as spend of an unknown amount when the agent announces the cancellation in text, as Copilot CLI does. ([#1653](https://github.com/sortie-ai/sortie/issues/1653))
+- The JSON API and the dashboard no longer fail with `503 snapshot_unavailable` while a poll tick waits on a slow tracker or source-control host; they answer at once with the state as of the latest change. ([#1655](https://github.com/sortie-ai/sortie/issues/1655))
+- A session that keeps emitting agent events while the orchestrator is busy with a long workspace hook is no longer stopped as stalled. ([#1655](https://github.com/sortie-ai/sortie/issues/1655))
 
 ## [1.31.0] - 2026-10-31
 
