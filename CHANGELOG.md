@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.32.0] - 2026-11-09
+
 ### Added
 
 - Agents now get the issue comments they have not seen yet before every turn, including comments written during a run, from people with write access to the project only. It is on by default and changes agent prompts after upgrade; set `comment_feed.enabled: false` to turn it off, or place the comments yourself with the new `comment_feed` template variable. ([#1585](https://github.com/sortie-ai/sortie/issues/1585), [#1586](https://github.com/sortie-ai/sortie/issues/1586))
@@ -1532,7 +1534,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.31.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.32.0...HEAD
+[1.32.0]: https://github.com/sortie-ai/sortie/compare/v1.31.0...v1.32.0
 [1.31.0]: https://github.com/sortie-ai/sortie/compare/v1.30.0...v1.31.0
 [1.30.0]: https://github.com/sortie-ai/sortie/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/sortie-ai/sortie/compare/v1.28.1...v1.29.0
