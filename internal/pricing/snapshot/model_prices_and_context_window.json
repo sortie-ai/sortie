@@ -822,6 +822,13 @@
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
     },
+    "anthropic.claude-fable-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
+    },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
         "litellm_provider": "bedrock_converse",
         "input_cost_per_token": 0.000001,
@@ -854,6 +861,13 @@
         "output_cost_per_token": 0.00005,
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
+    },
+    "anthropic.claude-mythos-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
     },
     "anthropic.claude-mythos-preview": {
         "litellm_provider": "bedrock",
@@ -3322,6 +3336,20 @@
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
     },
+    "azure_ai/claude-fable-5-2": {
+        "litellm_provider": "azure_ai",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
+    },
+    "azure_ai/claude-fable-5-2-fast": {
+        "litellm_provider": "azure_ai",
+        "input_cost_per_token": 0.000016,
+        "output_cost_per_token": 0.00008,
+        "cache_read_input_token_cost": 4e-7,
+        "cache_creation_input_token_cost": 0.00002
+    },
     "azure_ai/claude-fable-latest": {},
     "azure_ai/claude-haiku-4-5": {
         "litellm_provider": "azure_ai",
@@ -4223,6 +4251,13 @@
         "output_cost_per_token": 0.00005,
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
+    },
+    "bedrock/claude_platform/claude-fable-5-2": {
+        "litellm_provider": "bedrock",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
     },
     "bedrock/claude_platform/claude-haiku-4-5": {
         "litellm_provider": "bedrock",
@@ -5687,6 +5722,13 @@
         "output_cost_per_token": 0.00005,
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
+    },
+    "claude-fable-5-2": {
+        "litellm_provider": "anthropic",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
     },
     "claude-fable-latest": {},
     "claude-haiku-4-5": {
@@ -7949,7 +7991,7 @@
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B": {
         "litellm_provider": "deepinfra",
-        "input_cost_per_token": 8.5e-8,
+        "input_cost_per_token": 7.5e-8,
         "output_cost_per_token": 4e-7
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": {
@@ -8879,6 +8921,13 @@
         "cache_read_input_token_cost": 2.75e-7,
         "cache_creation_input_token_cost": 0.00001375
     },
+    "eu.anthropic.claude-fable-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000088,
+        "output_cost_per_token": 0.000044,
+        "cache_read_input_token_cost": 2.2e-7,
+        "cache_creation_input_token_cost": 0.000011
+    },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "litellm_provider": "bedrock_converse",
         "input_cost_per_token": 0.0000011,
@@ -8892,6 +8941,13 @@
         "output_cost_per_token": 5.5e-7,
         "cache_read_input_token_cost": 1.1e-8,
         "cache_creation_input_token_cost": 1.375e-7
+    },
+    "eu.anthropic.claude-mythos-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000088,
+        "output_cost_per_token": 0.000044,
+        "cache_read_input_token_cost": 2.2e-7,
+        "cache_creation_input_token_cost": 0.000011
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
         "litellm_provider": "bedrock_converse",
@@ -11524,18 +11580,6 @@
         "input_cost_per_token": 1.6e-8,
         "output_cost_per_token": 0
     },
-    "friendliai/MiniMaxAI/MiniMax-M2.5": {
-        "litellm_provider": "friendliai",
-        "input_cost_per_token": 3e-7,
-        "output_cost_per_token": 0.0000012,
-        "cache_read_input_token_cost": 6e-8
-    },
-    "friendliai/deepseek-ai/DeepSeek-V3.2": {
-        "litellm_provider": "friendliai",
-        "input_cost_per_token": 5e-7,
-        "output_cost_per_token": 0.0000015,
-        "cache_read_input_token_cost": 2.5e-7
-    },
     "friendliai/google/gemma-4-31B-it": {
         "litellm_provider": "friendliai",
         "input_cost_per_token": 1.4e-7,
@@ -12607,6 +12651,13 @@
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
     },
+    "global.anthropic.claude-fable-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
+    },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "litellm_provider": "bedrock_converse",
         "input_cost_per_token": 0.000001,
@@ -12627,6 +12678,13 @@
         "output_cost_per_token": 0.00005,
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
+    },
+    "global.anthropic.claude-mythos-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "litellm_provider": "bedrock_converse",
@@ -15879,6 +15937,12 @@
         "input_cost_per_token": 3e-7,
         "output_cost_per_token": 0.0000012,
         "cache_read_input_token_cost": 6e-8
+    },
+    "minimax/MiniMax-M3.1-Flash": {
+        "litellm_provider": "minimax",
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 6e-7,
+        "cache_read_input_token_cost": 1.5e-8
     },
     "minimax/minimax-latest": {},
     "minimax/speech-02-hd": {
@@ -21558,12 +21622,26 @@
         "cache_read_input_token_cost": 3e-7,
         "cache_creation_input_token_cost": 0.000015
     },
+    "us-gov.anthropic.claude-fable-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000096,
+        "output_cost_per_token": 0.000048,
+        "cache_read_input_token_cost": 2.4e-7,
+        "cache_creation_input_token_cost": 0.000012
+    },
     "us-gov.anthropic.claude-haiku-5-5": {
         "litellm_provider": "bedrock_converse",
         "input_cost_per_token": 1.2e-7,
         "output_cost_per_token": 6e-7,
         "cache_read_input_token_cost": 1.2e-8,
         "cache_creation_input_token_cost": 1.5e-7
+    },
+    "us-gov.anthropic.claude-mythos-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000096,
+        "output_cost_per_token": 0.000048,
+        "cache_read_input_token_cost": 2.4e-7,
+        "cache_creation_input_token_cost": 0.000012
     },
     "us-gov.anthropic.claude-opus-4-8": {
         "litellm_provider": "bedrock_converse",
@@ -21731,6 +21809,13 @@
         "cache_read_input_token_cost": 2.75e-7,
         "cache_creation_input_token_cost": 0.00001375
     },
+    "us.anthropic.claude-fable-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000088,
+        "output_cost_per_token": 0.000044,
+        "cache_read_input_token_cost": 2.2e-7,
+        "cache_creation_input_token_cost": 0.000011
+    },
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "litellm_provider": "bedrock_converse",
         "input_cost_per_token": 0.0000011,
@@ -21758,6 +21843,13 @@
         "output_cost_per_token": 0.000055,
         "cache_read_input_token_cost": 2.75e-7,
         "cache_creation_input_token_cost": 0.00001375
+    },
+    "us.anthropic.claude-mythos-5-2": {
+        "litellm_provider": "bedrock_converse",
+        "input_cost_per_token": 0.0000088,
+        "output_cost_per_token": 0.000044,
+        "cache_read_input_token_cost": 2.2e-7,
+        "cache_creation_input_token_cost": 0.000011
     },
     "us.anthropic.claude-mythos-preview": {
         "litellm_provider": "bedrock_converse",
@@ -22727,6 +22819,20 @@
         "output_cost_per_token": 0.00005,
         "cache_read_input_token_cost": 2.5e-7,
         "cache_creation_input_token_cost": 0.0000125
+    },
+    "vertex_ai/claude-fable-5-2": {
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
+    },
+    "vertex_ai/claude-fable-5-2@default": {
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 0.00001
     },
     "vertex_ai/claude-fable-5@default": {
         "litellm_provider": "vertex_ai-anthropic_models",
