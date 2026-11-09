@@ -122,8 +122,11 @@ export function getIssueGroups(
   return getJson<IssueGroupsResponse>(withQuery("runs/issues", { ...q }), signal);
 }
 
-/** Fetches the run statistics report; without `since` it covers every run. */
-export function getStats(q: { since?: string }, signal?: AbortSignal): Promise<Report> {
+/** Fetches the run statistics report; an absent `since` or `until` leaves that bound open. */
+export function getStats(
+  q: { since?: string; until?: string },
+  signal?: AbortSignal,
+): Promise<Report> {
   return getJson<Report>(withQuery("stats", q), signal);
 }
 

@@ -45,6 +45,8 @@ export const queryKeys = {
     ["history-runs", issueId, filter] as const,
   issueLookup: (query: string) => ["issue-lookup", query] as const,
   stats: (range: AnalyticsRange) => ["stats", range] as const,
+  statsPrevious: (range: AnalyticsRange, until: string) =>
+    ["stats-previous", range, until] as const,
   prices: () => ["prices"] as const,
 };
 
@@ -55,13 +57,15 @@ export const HISTORY_RUNS_PAGE_SIZE = 50;
 export const HISTORY_REFETCH_FLOOR_MS = 5_000;
 export const STATS_REFETCH_FLOOR_MS = 30_000;
 
-const SINCE_BY_RANGE: Record<AnalyticsRange, string | undefined> = {
-  "24h": "24h",
-  "7d": "168h",
-  "30d": "720h",
-  "90d": "2160h",
+const HOURS_BY_RANGE: Record<AnalyticsRange, number | undefined> = {
+  "24h": 24,
+  "7d": 168,
+  "30d": 720,
+  "90d": 2160,
   all: undefined,
 };
+
+const MS_PER_HOUR = 3_600_000;
 
 const ENDED_PAGE_SIZE = 200;
 
@@ -192,10 +196,36 @@ export function useIssueLookupQuery(query: string): UseQueryResult<IssueGroupRes
 
 /** No previous data stands in while another range loads, so a range never shows the figures of the one before it. */
 export function useStatsQuery(range: AnalyticsRange): UseQueryResult<Report> {
+  const hours = HOURS_BY_RANGE[range];
   return useQuery({
     queryKey: queryKeys.stats(range),
-    queryFn: ({ signal }) => getStats({ since: SINCE_BY_RANGE[range] }, signal),
+    queryFn: ({ signal }) =>
+      getStats({ since: hours === undefined ? undefined : `${hours}h` }, signal),
     meta: { refetchFloorMs: STATS_REFETCH_FLOOR_MS },
+  });
+}
+
+function previousBounds(until: string, hours: number): { since: string; until: string } {
+  return { since: new Date(Date.parse(until) - hours * MS_PER_HOUR).toISOString(), until };
+}
+
+/**
+ * Reads the report of the range of equal length that ends where the current report's range starts, so `until` is that report's served `since`.
+ * The query is static, so a change signal or a window focus never rescans an old previous range; a refetch of the current report moves `until` to a new key instead.
+ * The last report of the same range stands in while the new key loads, and none stands in across ranges.
+ */
+export function useStatsPreviousQuery(
+  range: AnalyticsRange,
+  until: string | null,
+): UseQueryResult<Report> {
+  const hours = HOURS_BY_RANGE[range];
+  return useQuery({
+    queryKey: queryKeys.statsPrevious(range, until ?? ""),
+    queryFn: ({ signal }) => getStats(previousBounds(until ?? "", hours ?? 0), signal),
+    enabled: hours !== undefined && until !== null,
+    staleTime: "static",
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === range ? previousData : undefined,
   });
 }
 
