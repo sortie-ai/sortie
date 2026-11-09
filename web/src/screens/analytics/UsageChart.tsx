@@ -582,6 +582,10 @@ export function UsageChart({ spend, since, units, view, actions }: UsageChartPro
   };
 
   const handleKey = (event: ReactKeyboardEvent<HTMLElement>, index: number) => {
+    // Alt or Cmd with an arrow is the browser's Back and Forward.
+    if (event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       toggle(index);
