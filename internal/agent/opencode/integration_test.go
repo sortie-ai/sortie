@@ -15,7 +15,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 
-	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
@@ -126,19 +125,15 @@ func tokenUsage(u fakemodel.Usage) domain.TokenUsage {
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	scriptedSettings := func(skipPermissions bool) map[string]any {
-		return map[string]any{
-			"model":                        "scripted/scripted-model",
-			"dangerously_skip_permissions": skipPermissions,
-			"disable_autocompact":          true,
-		}
-	}
-
 	stepReports := domain.UsageProvenance{Source: usage.SourceOutput, Strategy: usage.StrategyLive}
 
 	binding := fakemodel.Binding{
-		Kind:                "opencode",
-		Passthrough:         scriptedSettings(true),
+		Kind: "opencode",
+		Passthrough: map[string]any{
+			"model":                        "scripted/scripted-model",
+			"dangerously_skip_permissions": true,
+			"disable_autocompact":          true,
+		},
 		CredentialEnv:       []string{"GOOGLE_GENERATIVE_AI_API_KEY"},
 		Read:                fakemodel.ReadFile,
 		ReportedModelPrefix: "scripted/",
@@ -152,11 +147,6 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			Package:       "@opencode/cli",
 			HostCommand:   integrationCommand(),
 			RemoteCommand: func(fakemodel.Environment) string { return "opencode" },
-		},
-		PermissionRefusal: &fakemodel.PermissionRefusal{
-			Passthrough: scriptedSettings(false),
-			Guarded:     fakemodel.ReadFile,
-			Notice:      agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).Notice,
 		},
 		// 2.x offers MCP tools to the model only inside its Code Mode
 		// runtime, which the execute tool scripts.
