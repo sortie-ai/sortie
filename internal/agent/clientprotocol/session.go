@@ -160,6 +160,9 @@ type pumpControl struct {
 	// answerOpen, when non-nil, tells the pump to answer every request still
 	// open; the pump closes it once handleAnswerOpen returns.
 	answerOpen chan struct{}
+
+	// stopping tells the pump that teardown has begun, ahead of answerOpen.
+	stopping bool
 }
 
 // usageObserved is one turn's settled spend. recovered is nil when the ledger
@@ -1030,14 +1033,15 @@ func runTeardown(state *sessionState, steps []teardownStep) {
 	}
 }
 
-// signalAnswerOpen puts the answerOpen control message and returns the channel
-// the pump closes once every open request is answered, or nil without an inbox.
-// [awaitAnswerOpen] does the waiting.
+// signalAnswerOpen puts the stopping and answerOpen control messages and returns
+// the channel the pump closes once every open request is answered, or nil
+// without an inbox. [awaitAnswerOpen] does the waiting.
 func signalAnswerOpen(state *sessionState) chan struct{} {
 	if state.inbox == nil {
 		return nil
 	}
 	done := make(chan struct{})
+	state.inbox.Put(pumpItem{control: &pumpControl{stopping: true}})
 	state.inbox.Put(pumpItem{control: &pumpControl{answerOpen: done}})
 	return done
 }

@@ -34,6 +34,7 @@ const (
 	elicitationDetail                = "an answer to a question"
 	turnAlreadyInFlightMessage       = "a turn is already in flight for this session"
 	sessionEndedBeforeTurnMessage    = "the agent connection ended before this turn could start"
+	sessionStoppedMessage            = "the session was stopped before the turn ended"
 	toolDeliveryUncallableNotice     = "this session delivered tool servers and the agent runtime asked for consent before running a tool; an unattended run grants no consent, so any delivered tool the runtime gates the same way cannot be called unless that runtime's own configuration allows it"
 	toolDeliveryUncallableLog        = "a tool call was gated by consent in a session that delivered tool servers"
 )
@@ -46,6 +47,7 @@ const (
 	turnEndNone turnEndKind = iota
 	turnEndCancelled
 	turnEndHumanInput
+	turnEndStopped
 )
 
 // activeTurn is the pump's bookkeeping for the one turn that may be in flight at
@@ -198,6 +200,12 @@ func (t *activeTurn) disposition(ev agentcore.TurnEvidence) agentcore.TurnEviden
 		return agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
 	case turnEndHumanInput:
 		return agentcore.HumanInputEvidence(t.pendingDetail)
+	case turnEndStopped:
+		return agentcore.TurnEvidence{
+			Terminal:          agentcore.TerminalFailure,
+			TerminalErrorKind: domain.ErrPortExit,
+			TerminalMessage:   sessionStoppedMessage,
+		}
 	}
 	return ev
 }
@@ -444,6 +452,18 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 	case ctrl.answerOpen != nil:
 		p.handleAnswerOpen()
 		close(ctrl.answerOpen)
+
+	case ctrl.stopping:
+		p.markTurnStopped()
+	}
+}
+
+// markTurnStopped ends the active turn as stopped whatever its prompt response
+// reports, since a runtime may answer the prompt session/close interrupts with
+// a stop reason claiming the turn completed.
+func (p *pumpState) markTurnStopped() {
+	if turn := p.activeTurn; turn != nil && turn.pendingEnd == turnEndNone {
+		turn.pendingEnd = turnEndStopped
 	}
 }
 
@@ -1199,22 +1219,33 @@ func (p *pumpState) flushAgentMessage() {
 
 // observeModelReached records that the active turn reached the model. A thought
 // chunk counts, since reasoning tokens are billed; a replayed user chunk does
-// not, being this session's own prompt echoed back. Under a declaration that
-// sends a usage_update before each model request, an agent message chunk ahead
-// of the turn's first one is the runtime's own text and does not count.
+// not, being this session's own prompt echoed back, and neither does agent
+// message text the runtime writes of its own.
 func (p *pumpState) observeModelReached(kind sessionUpdateKind) {
 	if p.activeTurn == nil {
 		return
 	}
 	switch kind {
 	case updateAgentMessageChunk:
-		if p.declaration.UsageUpdateBeforeRequest && !p.activeTurn.usageUpdateSeen {
+		if p.isRuntimeText() {
 			return
 		}
 		p.activeTurn.spend.MarkModelReached()
 	case updateAgentThoughtChunk, updateToolCall:
 		p.activeTurn.spend.MarkModelReached()
 	}
+}
+
+// isRuntimeText reports whether agent message text arriving now is the runtime's
+// own: text after the client began ending the turn, which a runtime may write to
+// announce the cancellation, and under a declaration that sends a usage_update
+// before each model request, text ahead of the turn's first one.
+func (p *pumpState) isRuntimeText() bool {
+	turn := p.activeTurn
+	if turn.pendingEnd != turnEndNone {
+		return true
+	}
+	return p.declaration.UsageUpdateBeforeRequest && !turn.usageUpdateSeen
 }
 
 // emitOrQueue completes any agent message still being accumulated before
