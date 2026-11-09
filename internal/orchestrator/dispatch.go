@@ -744,6 +744,23 @@ func dispatchIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// relayedInstantCtxKey is the context key for the cell [withRelayedInstant]
+// attaches.
+type relayedInstantCtxKey struct{}
+
+// withRelayedInstant returns a child context carrying the cell the worker of
+// a dispatch records its relayed event times in.
+func withRelayedInstant(ctx context.Context, r *relayedInstant) context.Context {
+	return context.WithValue(ctx, relayedInstantCtxKey{}, r)
+}
+
+// relayedInstantFrom extracts the cell injected by [withRelayedInstant].
+// Returns nil when ctx carries none.
+func relayedInstantFrom(ctx context.Context) *relayedInstant {
+	r, _ := ctx.Value(relayedInstantCtxKey{}).(*relayedInstant)
+	return r
+}
+
 // dispatchRunContextCtxKey is the context key for the run context [withRunContext] attaches.
 type dispatchRunContextCtxKey struct{}
 
@@ -817,6 +834,8 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 	dispatchID := rand.Text()
 	workerCtx = withRunContext(workerCtx, runCtx)
 	workerCtx = withDispatchID(workerCtx, dispatchID)
+	relayed := &relayedInstant{}
+	workerCtx = withRelayedInstant(workerCtx, relayed)
 
 	state.Claimed[issue.ID] = struct{}{}
 
@@ -825,6 +844,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 		Issue:             issue,
 		DispatchLabels:    slices.Clone(issue.Labels),
 		DispatchID:        dispatchID,
+		relayed:           relayed,
 		RetryAttempt:      attemptCopy,
 		StartedAt:         time.Now().UTC(),
 		CancelFunc:        func() { cancelRunCause(nil) },

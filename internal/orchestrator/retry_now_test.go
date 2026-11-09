@@ -15,13 +15,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
 
-func snapshotRetryRow(t *testing.T, snapshot func() (RuntimeSnapshotResult, error), issueID string) SnapshotRetryEntry {
+func snapshotRetryRow(t *testing.T, snapshot func() RuntimeSnapshotResult, issueID string) SnapshotRetryEntry {
 	t.Helper()
 
-	snap, err := snapshot()
-	if err != nil {
-		t.Fatalf("snapshot(): %v", err)
-	}
+	snap := snapshot()
 	i := slices.IndexFunc(snap.Retrying, func(r SnapshotRetryEntry) bool { return r.IssueID == issueID })
 	if i < 0 {
 		return SnapshotRetryEntry{}
@@ -151,14 +148,21 @@ func TestRetryNow(t *testing.T) {
 			if tt.otherRunning {
 				waittest.Until(t, sessionStarted("OTHER-1"))
 				waittest.Until(t, func() error {
-					snap, _ := snapshot()
+					snap := snapshot()
 					if len(snap.Running) != 1 {
 						return fmt.Errorf("running = %d, want 1", len(snap.Running))
 					}
 					return nil
 				})
 			}
-			before := snapshotRetryRow(t, snapshot, retryID)
+			var before SnapshotRetryEntry
+			waittest.Until(t, func() error {
+				before = snapshotRetryRow(t, snapshot, retryID)
+				if before.IssueID == "" {
+					return fmt.Errorf("no retry row for %q published yet", retryID)
+				}
+				return nil
+			})
 
 			result := o.RetryNowFunc()(ctx, tt.identifier)
 

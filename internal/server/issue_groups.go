@@ -114,18 +114,7 @@ func (s *Server) handleIssueGroups(w http.ResponseWriter, r *http.Request) {
 
 	// The snapshot comes before any history read, so a run that ends between
 	// the reads appears in both and never in neither.
-	snap, err := s.snapshotFn()
-	if err != nil {
-		s.logger.Warn("snapshot request failed",
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Any("error", err),
-		)
-		writeErrorJSON(w, s.logger, http.StatusServiceUnavailable,
-			"snapshot_unavailable",
-			"orchestrator state snapshot unavailable")
-		return
-	}
+	snap := s.snapshotFn()
 	words := s.sentenceContext(snap)
 
 	ctx := r.Context()

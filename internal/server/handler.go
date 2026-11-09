@@ -1365,18 +1365,7 @@ func (s *Server) sentenceContext(snap orchestrator.RuntimeSnapshotResult) senten
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	snap, err := s.snapshotFn()
-	if err != nil {
-		s.logger.Warn("snapshot request failed",
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Any("error", err),
-		)
-		writeErrorJSON(w, s.logger, http.StatusServiceUnavailable,
-			"snapshot_unavailable",
-			"orchestrator state snapshot unavailable")
-		return
-	}
+	snap := s.snapshotFn()
 
 	var health *orchestrator.SnapshotHealth
 	if s.healthFn != nil {
@@ -1415,18 +1404,7 @@ func (s *Server) handleIssueDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap, err := s.snapshotFn()
-	if err != nil {
-		s.logger.Warn("snapshot request failed",
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Any("error", err),
-		)
-		writeErrorJSON(w, s.logger, http.StatusServiceUnavailable,
-			"snapshot_unavailable",
-			"orchestrator state snapshot unavailable")
-		return
-	}
+	snap := s.snapshotFn()
 
 	words := s.sentenceContext(snap)
 	detail := buildIssueDetail(identifier, "", snap, words)
@@ -1444,10 +1422,12 @@ func (s *Server) handleIssueDetail(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issue identifier %q not found in %s", identifier, notFoundIn))
 		return
 	}
-	if detail.RecentEvents, err = s.recentEvents(r.Context(), detail); err != nil {
+	recentEvents, err := s.recentEvents(r.Context(), detail)
+	if err != nil {
 		s.historyReadFailed(w, r, err)
 		return
 	}
+	detail.RecentEvents = recentEvents
 
 	for _, outcome := range sentence.NextOutcomes(detail.situation, words) {
 		detail.NextOutcomes = append(detail.NextOutcomes, nextOutcomeResponse(outcome))

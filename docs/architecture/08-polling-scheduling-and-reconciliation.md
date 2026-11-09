@@ -244,7 +244,7 @@ An operator request (Section 13.7.2) makes a pending reaction's next check due a
 Part A: Stall detection
 
 - For each running issue, compute `elapsed_ms` since:
-  - `last_agent_timestamp` if any event has been seen, else
+  - the later of `last_agent_timestamp` and the time of the newest agent event the worker relayed toward the event loop (an event still queued or dropped counts), if any event has been seen, else
   - `started_at`
 - If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker unconditionally, then queue a retry when the retry slot is free or defer to the incumbent already occupying it, re-emitting the cancellation warning on every stalled tick either way (Section 7.5).
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.

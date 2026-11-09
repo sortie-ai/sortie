@@ -3879,7 +3879,6 @@ Sortie reads the state before run history, as the per-issue route does, so a run
 | --------- | ------ | ------------ |
 | An unknown parameter, a parameter given more than once, a `limit` that is not an integer from 1 to 50, or a `cursor` that is not an integer of 1 or more | 400 | `invalid_parameter`; the message names the parameter and the rule, for example `parameter "limit" must be an integer from 1 to 50`. Nothing is read. |
 | Run history or the outcomes of the served issues cannot be read, or the server has none | 503 | `history_unavailable` |
-| The runtime snapshot cannot be read | 503 | `snapshot_unavailable` |
 | A method other than `GET` | 405 | `method_not_allowed` |
 
 A client that disconnects gets no response, and the reads stop.

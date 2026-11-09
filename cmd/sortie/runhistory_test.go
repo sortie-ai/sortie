@@ -37,7 +37,7 @@ func newRunsHarness(t *testing.T, snap orchestrator.RuntimeSnapshotResult) *runs
 		t.Fatalf("Migrate: %v", err)
 	}
 	srv := server.New(server.Params{
-		SnapshotFn: func() (orchestrator.RuntimeSnapshotResult, error) { return snap, nil },
+		SnapshotFn: func() orchestrator.RuntimeSnapshotResult { return snap },
 		RefreshFn:  func() bool { return true },
 		RunHistory: runHistoryReader{store: store},
 	})

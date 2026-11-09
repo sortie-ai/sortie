@@ -157,10 +157,7 @@ If the implementation exposes a synchronous runtime snapshot (for dashboards or 
 - `attention` (list of what needs a person; always present, empty when nothing does). The orchestrator derives the list on each request from the snapshot above and the `health` checks and stores it nowhere, so an item exists exactly while its cause holds. A person can acknowledge an item, and Sortie stores that acknowledgement, so it survives a restart and lasts while its item does. Its causes are a parked issue, an issue held by a per-issue budget ceiling, a pending reaction whose escalation stands, a workflow file that failed to load, and a dispatch preflight that fails for a reason other than that load. Each item carries the issue it concerns (none for a cause that concerns the process), when its cause began, when a person acknowledged it (none while unacknowledged), a severity, the one action a client should offer, the facts behind it, and wording for why it needs a person and what clears it, taken from the status sentence table. The attention count leaves acknowledged items out. Section 13.7.2 gives the keys and how to read them
 - `version` and `started_at` (the Sortie version, and the time the process started, taken before the startup work so it is the instant the readiness probe counts its uptime from). Section 13.7.2 gives the keys
 
-Recommended snapshot error modes:
-
-- `timeout`
-- `unavailable`
+The orchestrator publishes the snapshot after each state change, and a read returns the latest one. A read computes `generated_at`, `agent_totals.seconds_running`, and the current `rate_limits` windows at the moment of the read. A read never waits on the event loop, so the snapshot has no timeout or unavailable mode. While a poll tick waits on a tracker, source-control, or store call, reads return the state as of the change before it, except each running row's `last_event_at`, which follows the latest event its worker relayed, and the stall instants and sentence measured from it.
 
 ### 13.4 Optional Human-Readable Status Surface
 
@@ -1001,7 +998,7 @@ Minimum endpoints:
     - `next_cursor` is non-null exactly when the issue has an older matching run. It continues on `GET /api/v1/runs` with `issue_id` set to the group's `issue_id` and the request's `rule`, `status`, and `stage`.
     - `totals` is the `history.totals` of the per-issue route, over every run of the issue, whatever the filters select.
   - The orchestrator state is read before run history, as the per-issue route reads it, so a run that ends between the reads appears as live and in history, never in neither.
-  - A parameter this route does not define, a parameter given more than once, a `limit` that is not an integer from 1 to 50, and a `cursor` that is not an integer of 1 or more answer `400` with the error code `invalid_parameter`, whose message names the parameter and the rule, for example `parameter "limit" must be an integer from 1 to 50`. The route reads nothing in that case. A server without run history, and a run-history read that fails, the read of outcomes included, answer `503` with `history_unavailable`. A snapshot that fails answers `503` with `snapshot_unavailable`. Any method other than `GET` answers `405`. A client that disconnects gets no response, and the reads stop.
+  - A parameter this route does not define, a parameter given more than once, a `limit` that is not an integer from 1 to 50, and a `cursor` that is not an integer of 1 or more answer `400` with the error code `invalid_parameter`, whose message names the parameter and the rule, for example `parameter "limit" must be an integer from 1 to 50`. The route reads nothing in that case. A server without run history, and a run-history read that fails, the read of outcomes included, answer `503` with `history_unavailable`. Any method other than `GET` answers `405`. A client that disconnects gets no response, and the reads stop.
   - Suggested response shape, abridged to one group with one run:
 
     ```json

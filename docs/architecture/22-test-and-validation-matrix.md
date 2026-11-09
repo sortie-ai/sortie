@@ -269,7 +269,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - No read follows a dispatch-time transition that is skipped, fails, is not configured, or is suppressed because the dispatch drives no issue state; a failed read is logged and the run continues
 - A stage hop removes no stage label that only a recorded read showed and the dispatch read lacked
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and usage windows per agent kind
-- If a snapshot API is implemented, timeout/unavailable cases are surfaced
+- If a snapshot API is implemented, a read answers while the event loop is inside a poll tick, with `generated_at` and the time-derived fields as of the read
 - CI status reconciliation is skipped when `reactions.ci_failure.provider` is not configured
 - CI status passing clears CI fix attempts for the issue
 - CI status pending re-enqueues the pending check for the next tick

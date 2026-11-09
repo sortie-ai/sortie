@@ -2834,3 +2834,109 @@ func TestBuildAutoMergeReactionConfig_OmittedEscalationResolvesToLabel(t *testin
 		t.Errorf("BuildAutoMergeReactionConfig(omitted escalation).Escalation = %q, want %q", got.Escalation, "label")
 	}
 }
+
+func TestSnapshotCapture_TimeDerivedFieldsFollowTheRead(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t1.Add(2 * time.Minute)
+	reported := t0.Add(30 * time.Second)
+
+	state := NewState(5000, 10, 0, nil, AgentTotals{SecondsRunning: 100})
+	state.Running["started"] = &RunningEntry{Issue: domain.Issue{ID: "started"}, StartedAt: t0}
+	state.Running["unstarted"] = &RunningEntry{Issue: domain.Issue{ID: "unstarted"}}
+	state.UsageWindows = map[string][]domain.UsageWindow{"kind-a": {
+		{Key: "resets", ResetsAt: t1.Add(time.Minute), ReportedAt: reported},
+		{Key: "open", ReportedAt: reported.Add(-time.Second)},
+	}}
+	c := captureSnapshot(state)
+
+	at1 := c.at(t1.In(time.FixedZone("UTC+3", 3*3600)))
+	at2 := c.at(t2)
+
+	tests := []struct {
+		name     string
+		got      RuntimeSnapshotResult
+		now      time.Time
+		wantKeys []string
+	}{
+		{"first read", at1, t1, []string{"resets", "open"}},
+		{"second read", at2, t2, []string{"open"}},
+	}
+	for _, tt := range tests {
+		if tt.got.GeneratedAt.Location() != time.UTC || !tt.got.GeneratedAt.Equal(tt.now) {
+			t.Errorf("%s: GeneratedAt = %v, want %v in UTC", tt.name, tt.got.GeneratedAt, tt.now)
+		}
+		if want := 100 + tt.now.Sub(t0).Seconds(); tt.got.AgentTotals.SecondsRunning != want {
+			t.Errorf("%s: SecondsRunning = %v, want %v", tt.name, tt.got.AgentTotals.SecondsRunning, want)
+		}
+		w := tt.got.UsageWindows["kind-a"]
+		var keys []string
+		for _, uw := range w.Windows {
+			keys = append(keys, uw.Key)
+		}
+		if !slices.Equal(keys, tt.wantKeys) || !w.ReportedAt.Equal(reported) {
+			t.Errorf("%s: window keys = %v, ReportedAt = %v, want %v, %v", tt.name, keys, w.ReportedAt, tt.wantKeys, reported)
+		}
+	}
+}
+
+func TestSnapshotCapture_RelayedInstant(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	const timeoutMS = 60000
+	timeout := timeoutMS * time.Millisecond
+
+	tests := []struct {
+		name     string
+		cell     *relayedInstant
+		observed time.Time
+		want     time.Time
+	}{
+		{"nil cell", nil, time.Time{}, t0},
+		{"cell at the applied instant", &relayedInstant{}, t0, t0},
+		{"cell after the applied instant", &relayedInstant{}, t1, t1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 10, 0, nil, AgentTotals{})
+			state.StallTimeoutMS = timeoutMS
+			entry := &RunningEntry{Issue: domain.Issue{ID: "a"}, LastAgentTimestamp: t0, relayed: tt.cell}
+			state.Running["a"] = entry
+			c := captureSnapshot(state)
+			tt.cell.observe(tt.observed)
+
+			row := c.at(t1.Add(time.Hour)).Running[0]
+
+			got := []time.Time{row.LastAgentTimestamp, row.StallReference, row.QuietAt, row.StallAt, stallReference(entry)}
+			want := []time.Time{tt.want, tt.want, tt.want.Add(timeout / 2), tt.want.Add(timeout), tt.want}
+			for i := range got {
+				if !got[i].Equal(want[i]) {
+					t.Errorf("read instant %d = %v, want %v", i, got[i], want[i])
+				}
+			}
+			if captured := c.result.Running[0]; !captured.LastAgentTimestamp.Equal(t0) || !captured.StallReference.Equal(t0) {
+				t.Errorf("capture holds %v and %v, want %v for both", captured.LastAgentTimestamp, captured.StallReference, t0)
+			}
+		})
+	}
+
+	t.Run("observe ignores an earlier or zero instant", func(t *testing.T) {
+		t.Parallel()
+
+		cell := &relayedInstant{}
+		cell.observe(t1)
+
+		cell.observe(t0)
+		cell.observe(time.Time{})
+
+		if got := cell.load(); !got.Equal(t1) {
+			t.Errorf("load() = %v, want %v", got, t1)
+		}
+	})
+}
