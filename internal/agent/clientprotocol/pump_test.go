@@ -1019,17 +1019,19 @@ func TestEndUnrepliedSettlesARemoteTurnThroughItsRecordsRead(t *testing.T) {
 	}
 }
 
-func TestPumpAgentTextBeforeTheFirstUsageUpdateIsNotServedOutput(t *testing.T) {
+func TestPumpRuntimeTextIsNotServedOutput(t *testing.T) {
 	t.Parallel()
 
 	const usageUpdateLine = `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"usage_update","used":12000,"size":200000}}}`
 	tests := []struct {
 		name            string
 		lines           []string
+		afterCancel     []string
 		wantUnaccounted bool
 	}{
 		{name: "text before the usage_update", lines: []string{pulledUsageChunkLine, usageUpdateLine}},
 		{name: "text after the usage_update", lines: []string{usageUpdateLine, pulledUsageChunkLine}, wantUnaccounted: true},
+		{name: "text after the cancel", lines: []string{usageUpdateLine}, afterCancel: []string{pulledUsageChunkLine}},
 	}
 
 	for _, tt := range tests {
@@ -1047,6 +1049,9 @@ func TestPumpAgentTextBeforeTheFirstUsageUpdateIsNotServedOutput(t *testing.T) {
 			}
 			cancel()
 			out.awaitMethod(t, methodSessionCancel)
+			for _, line := range tt.afterCancel {
+				sendLine(t, inPw, line)
+			}
 			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
 
 			outcome := waittest.Receive(t, outcomeCh, "turn outcome")
@@ -1058,6 +1063,32 @@ func TestPumpAgentTextBeforeTheFirstUsageUpdateIsNotServedOutput(t *testing.T) {
 				t.Errorf("tokenCounts = %q, want the entry lowered = %v", state.caps.tokenCounts, tt.wantUnaccounted)
 			}
 		})
+	}
+}
+
+func TestStopSessionMidTurnIsNotACompletedTurn(t *testing.T) {
+	t.Parallel()
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
+	state.closeSessionID = "sess-test"
+	markSessionKnown(state)
+	out := newOutboundReader(outPr)
+	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+
+	stopped := make(chan struct{})
+	go func() { _ = stopSession(t.Context(), fakeSession(state)); close(stopped) }()
+	closeID := out.awaitMethod(t, methodSessionClose)
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+	respondLine(t, inPw, closeID, struct{}{})
+	outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+	_ = inPw.Close()
+	waittest.Receive(t, stopped, "stopSession to return")
+
+	var agentErr *domain.AgentError
+	if outcome.result.ExitReason != domain.EventTurnFailed || !errors.As(outcome.err, &agentErr) {
+		t.Errorf("RunTurn() answered end_turn after session/close = (ExitReason %q, err %v), want %q and a *domain.AgentError",
+			outcome.result.ExitReason, outcome.err, domain.EventTurnFailed)
 	}
 }
 

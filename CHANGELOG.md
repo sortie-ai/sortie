@@ -58,6 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - With `opencode.dangerously_skip_permissions: false`, the `opencode` agent now refuses every tool call that `opencode.allowed_tools` does not allow, as documented. ([#1593](https://github.com/sortie-ai/sortie/issues/1593))
 - OpenCode on `agent-client-protocol` no longer spends an extra, uncounted model request on a session title when its configuration defines a title agent. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
 - On SSH workers, an `agent-client-protocol` workflow whose `agent.command` is a list now launches the same way as one given as a string. ([#1595](https://github.com/sortie-ai/sortie/issues/1595))
+- `agent-client-protocol`: a turn still running when Sortie stops the session is reported as failed even when the agent answers it as finished, as Copilot CLI does. ([#1653](https://github.com/sortie-ai/sortie/issues/1653))
+- `agent-client-protocol`: a turn cancelled before the model answered is no longer counted as spend of an unknown amount when the agent announces the cancellation in text, as Copilot CLI does. ([#1653](https://github.com/sortie-ai/sortie/issues/1653))
 
 ## [1.31.0] - 2026-10-31
 
