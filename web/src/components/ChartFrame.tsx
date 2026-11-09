@@ -35,6 +35,14 @@ export interface ChartFrameProps {
   plotRef?: Ref<HTMLDivElement>;
   /** A second plot under the category axis, in the same columns, so both share the value labels' width. */
   subplot?: ChartSubplot;
+  /** Above the plot, inside the card's padding. */
+  head?: ReactNode;
+  /** In the main plot, drawn under the slots. */
+  behind?: ReactNode;
+  /** In the main plot, drawn over the slots. */
+  front?: ReactNode;
+  /** Inside the card, after the padded plot. */
+  foot?: ReactNode;
   /** One slot per category, side by side, each labeling itself under the floor. */
   children: ReactNode;
 }
@@ -42,11 +50,13 @@ export interface ChartFrameProps {
 interface PlotProps {
   ticks: readonly string[];
   plotRef?: Ref<HTMLDivElement>;
+  behind?: ReactNode;
+  front?: ReactNode;
   children: ReactNode;
 }
 
 /** The value labels in their column and the plot beside them: the rules, the floor, and the slots. */
-function Plot({ ticks, plotRef, children }: PlotProps) {
+function Plot({ ticks, plotRef, behind, front, children }: PlotProps) {
   const rules = ticks.slice(0, -1).map((_, index) => index / (ticks.length - 1));
 
   return (
@@ -66,7 +76,9 @@ function Plot({ ticks, plotRef, children }: PlotProps) {
           />
         ))}
         <div className="absolute inset-x-0 bottom-0 border-t border-line-strong" />
+        {behind}
         <div className="absolute inset-0 grid auto-cols-fr grid-flow-col">{children}</div>
+        {front}
       </div>
     </>
   );
@@ -80,12 +92,17 @@ export function ChartFrame({
   ticks,
   plotRef,
   subplot,
+  head,
+  behind,
+  front,
+  foot,
   children,
 }: ChartFrameProps) {
   const [chart, setChart] = useState<HTMLDivElement | null>(null);
   return (
     <Card>
-      <div className="px-md py-sm">
+      <div className={cn(head !== undefined && "flex flex-col gap-xs", "px-md py-sm")}>
+        {head}
         {/* The value labels take a column as wide as the widest of them, so the plot starts after it. */}
         <div
           ref={setChart}
@@ -103,7 +120,7 @@ export function ChartFrame({
         >
           <ChartContext value={chart}>
             <span className="col-span-2">{valueName}</span>
-            <Plot ticks={ticks} plotRef={plotRef}>
+            <Plot ticks={ticks} plotRef={plotRef} behind={behind} front={front}>
               {children}
             </Plot>
             <span className="col-start-2 self-end text-center">{categoryName}</span>
@@ -116,6 +133,7 @@ export function ChartFrame({
           </ChartContext>
         </div>
       </div>
+      {foot}
     </Card>
   );
 }

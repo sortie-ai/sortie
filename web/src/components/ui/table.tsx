@@ -11,6 +11,8 @@ export interface TableProps extends ComponentProps<"table"> {
   isCompact?: boolean;
   /** How many leading columns name the row and stay in view while the table scrolls sideways. */
   frozenColumns?: 1 | 2;
+  /** Draws the table without its card, for a frame that already carries one. */
+  isBare?: boolean;
 }
 
 /** Records where a second frozen column starts and how far a focused cell must stay from the leading edge to clear them all. */
@@ -40,29 +42,29 @@ export function Table({
   isWide = false,
   isCompact = false,
   frozenColumns,
+  isBare = false,
   className,
   ...props
 }: TableProps) {
-  return (
-    <Card>
-      <div
-        className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
-        data-frozen={frozenColumns}
-        onScroll={frozenColumns === undefined ? undefined : onFrozenScroll}
-        onFocus={frozenColumns === undefined ? undefined : onFrozenFocus}
-      >
-        <table
-          className={cn(
-            "w-full text-left text-body-md text-ink-body",
-            isWide && "min-w-4xl",
-            isCompact && "[&_td]:px-xs [&_th]:px-xs",
-            className,
-          )}
-          {...props}
-        />
-      </div>
-    </Card>
+  const scroller = (
+    <div
+      className={frozenColumns === undefined ? "overflow-x-auto" : "frozen-table"}
+      data-frozen={frozenColumns}
+      onScroll={frozenColumns === undefined ? undefined : onFrozenScroll}
+      onFocus={frozenColumns === undefined ? undefined : onFrozenFocus}
+    >
+      <table
+        className={cn(
+          "w-full text-left text-body-md text-ink-body",
+          isWide && "min-w-4xl",
+          isCompact && "[&_td]:px-xs [&_th]:px-xs",
+          className,
+        )}
+        {...props}
+      />
+    </div>
   );
+  return isBare ? scroller : <Card>{scroller}</Card>;
 }
 
 export interface TableHeaderProps {

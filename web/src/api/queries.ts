@@ -8,6 +8,7 @@ import {
   getRuns,
   getState,
   getStats,
+  getStatsSpan,
 } from "@/api/client";
 import { setServerOffset } from "@/lib/server-clock";
 
@@ -19,11 +20,18 @@ import type {
   PricesResponse,
   Report,
   RunsResponse,
+  SpanReport,
   StateResponse,
 } from "@/api/types.gen";
 import type { InfiniteData, UseInfiniteQueryResult, UseQueryResult } from "@tanstack/react-query";
 
 export type AnalyticsRange = "24h" | "7d" | "30d" | "90d" | "all";
+
+/** A half-open UTC window [since, until), epoch milliseconds. */
+export interface StatsWindow {
+  since: number;
+  until: number;
+}
 
 /** The one cache of server data in a tab; a change signal, not a timer, decides when data is stale. */
 export const queryClient = new QueryClient({
@@ -44,9 +52,17 @@ export const queryKeys = {
   historyRuns: (issueId: string, filter: HistoryFilter) =>
     ["history-runs", issueId, filter] as const,
   issueLookup: (query: string) => ["issue-lookup", query] as const,
-  stats: (range: AnalyticsRange) => ["stats", range] as const,
-  statsPrevious: (range: AnalyticsRange, until: string) =>
-    ["stats-previous", range, until] as const,
+  stats: (range: AnalyticsRange, zoom?: StatsWindow | null) =>
+    zoom == null
+      ? (["stats", range] as const)
+      : (["stats", "zoom", zoom.since, zoom.until] as const),
+  statsPrevious: (range: AnalyticsRange, until: string, zoom?: StatsWindow | null) =>
+    zoom == null
+      ? (["stats-previous", range, until] as const)
+      : (["stats-previous", "zoom", zoom.since, zoom.until] as const),
+  statsSpan: (window: StatsWindow) => ["stats-span", window.since, window.until] as const,
+  statsSpanBefore: (window: StatsWindow) =>
+    ["stats-span-before", window.since, window.until] as const,
   prices: () => ["prices"] as const,
 };
 
@@ -194,13 +210,24 @@ export function useIssueLookupQuery(query: string): UseQueryResult<IssueGroupRes
   });
 }
 
-/** No previous data stands in while another range loads, so a range never shows the figures of the one before it. */
-export function useStatsQuery(range: AnalyticsRange): UseQueryResult<Report> {
+/** No previous data stands in while another range or zoom loads, so a view never shows the figures of the one before it. */
+export function useStatsQuery(
+  range: AnalyticsRange,
+  zoom: StatsWindow | null = null,
+): UseQueryResult<Report> {
   const hours = HOURS_BY_RANGE[range];
   return useQuery({
-    queryKey: queryKeys.stats(range),
+    queryKey: queryKeys.stats(range, zoom),
     queryFn: ({ signal }) =>
-      getStats({ since: hours === undefined ? undefined : `${hours}h` }, signal),
+      zoom === null
+        ? getStats({ since: hours === undefined ? undefined : `${hours}h` }, signal)
+        : getStats(
+            {
+              since: new Date(zoom.since).toISOString(),
+              until: new Date(zoom.until).toISOString(),
+            },
+            signal,
+          ),
     meta: { refetchFloorMs: STATS_REFETCH_FLOOR_MS },
   });
 }
@@ -209,23 +236,63 @@ function previousBounds(until: string, hours: number): { since: string; until: s
   return { since: new Date(Date.parse(until) - hours * MS_PER_HOUR).toISOString(), until };
 }
 
+function previousZoomBounds(until: string, zoom: StatsWindow): { since: string; until: string } {
+  return { since: new Date(Date.parse(until) - (zoom.until - zoom.since)).toISOString(), until };
+}
+
 /**
- * Reads the report of the range of equal length that ends where the current report's range starts, so `until` is that report's served `since`.
- * The query is static, so a change signal or a window focus never rescans an old previous range; a refetch of the current report moves `until` to a new key instead.
- * The last report of the same range stands in while the new key loads, and none stands in across ranges.
+ * Reads the report of the window of equal length that ends where the current report's window starts, so `until` is that report's served `since`.
+ * The query is static, so a change signal or a window focus never rescans an old previous window; a refetch of the current report moves `until` to a new key instead.
+ * The last report of the same range stands in while the new key loads, and none stands in across ranges or into or out of a zoom.
  */
 export function useStatsPreviousQuery(
   range: AnalyticsRange,
+  zoom: StatsWindow | null,
   until: string | null,
 ): UseQueryResult<Report> {
   const hours = HOURS_BY_RANGE[range];
   return useQuery({
-    queryKey: queryKeys.statsPrevious(range, until ?? ""),
-    queryFn: ({ signal }) => getStats(previousBounds(until ?? "", hours ?? 0), signal),
-    enabled: hours !== undefined && until !== null,
+    queryKey: queryKeys.statsPrevious(range, until ?? "", zoom),
+    queryFn: ({ signal }) =>
+      getStats(
+        zoom === null
+          ? previousBounds(until ?? "", hours ?? 0)
+          : previousZoomBounds(until ?? "", zoom),
+        signal,
+      ),
+    enabled: until !== null && (zoom !== null || hours !== undefined),
     staleTime: "static",
     placeholderData: (previousData, previousQuery) =>
-      previousQuery?.queryKey[1] === range ? previousData : undefined,
+      zoom === null && previousQuery?.queryKey[1] === range ? previousData : undefined,
+  });
+}
+
+const NO_WINDOW: StatsWindow = { since: 0, until: 0 };
+
+function fetchSpan(window: StatsWindow, signal: AbortSignal): Promise<SpanReport> {
+  return getStatsSpan(
+    { since: new Date(window.since).toISOString(), until: new Date(window.until).toISOString() },
+    signal,
+  );
+}
+
+/** Reads the report of a window that can hold the bucket in progress, so it refetches on the change signal; no other window's report stands in. */
+export function useStatsSpanQuery(window: StatsWindow | null): UseQueryResult<SpanReport> {
+  return useQuery({
+    queryKey: queryKeys.statsSpan(window ?? NO_WINDOW),
+    queryFn: ({ signal }) => fetchSpan(window ?? NO_WINDOW, signal),
+    enabled: window !== null,
+    meta: { refetchFloorMs: STATS_REFETCH_FLOOR_MS },
+  });
+}
+
+/** Reads the report of a window that ends before the selection starts, so no turn ends inside it later and it is read once. */
+export function useStatsSpanBeforeQuery(window: StatsWindow | null): UseQueryResult<SpanReport> {
+  return useQuery({
+    queryKey: queryKeys.statsSpanBefore(window ?? NO_WINDOW),
+    queryFn: ({ signal }) => fetchSpan(window ?? NO_WINDOW, signal),
+    enabled: window !== null,
+    staleTime: "static",
   });
 }
 

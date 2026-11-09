@@ -1,1 +1,0 @@
-import{r as e}from"./react-AyOTluXZ.js";import{t}from"./hint-CskskxQB.js";var n=e();function r({figure:e}){return e.note===void 0?e.text:(0,n.jsx)(t,{hint:e.note,children:e.text})}export{r as t};

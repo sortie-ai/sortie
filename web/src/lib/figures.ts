@@ -46,7 +46,7 @@ export const UNPRICED_TEXT = "unpriced";
 export const NOT_AVAILABLE = "N/A";
 export const NOT_RECORDED = "not recorded";
 export const NO_COST = "none";
-const UNKNOWN_FIGURE = "unknown";
+export const UNKNOWN_FIGURE = "unknown";
 const BASE_TIER = "base";
 const UNKNOWN_MODEL = "";
 

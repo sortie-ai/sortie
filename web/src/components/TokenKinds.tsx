@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { useChart } from "@/components/ChartFrame";
 import { NotedFigure } from "@/components/NotedFigure";
 import { Hint } from "@/components/ui/hint";
@@ -94,6 +96,9 @@ const SEGMENT_MIN_PX = 6;
 const LOWER_BOUND_FILL =
   "after:absolute after:inset-0 after:bg-[repeating-linear-gradient(135deg,transparent_0_3px,color-mix(in_srgb,var(--color-canvas)_45%,transparent)_3px_6px)]";
 
+/** Draws a bar whose figure still grows hollow and dotted, its segments dimmed. */
+export const IN_PROGRESS = "border-2 border-dotted border-ink-body [&>div]:opacity-40";
+
 function KindSwatch({ kind }: { kind: TokenKind }) {
   return <span aria-hidden="true" className={cn("size-sm shrink-0 rounded", kind.fill)} />;
 }
@@ -180,10 +185,19 @@ export interface KindStackProps {
   /** The width classes of the bar. */
   width: string;
   isLowerBound: boolean;
+  /** Draws the bar as the bucket still under way. */
+  isInProgress?: boolean;
 }
 
 /** Draws the kinds as one bar from the baseline up, each segment in proportion to its amount. */
-export function KindStack({ kinds, values, heightPercent, width, isLowerBound }: KindStackProps) {
+export function KindStack({
+  kinds,
+  values,
+  heightPercent,
+  width,
+  isLowerBound,
+  isInProgress = false,
+}: KindStackProps) {
   const parts = kinds.filter((kind) => values[kind.key] > 0);
   const whole = parts.reduce((sum, kind) => sum + values[kind.key], 0);
   const smallest = Math.min(
@@ -198,6 +212,7 @@ export function KindStack({ kinds, values, heightPercent, width, isLowerBound }:
         width,
         isParted && "gap-px",
         isLowerBound && LOWER_BOUND_FILL,
+        isInProgress && IN_PROGRESS,
       )}
       style={{ height: `${heightPercent}%` }}
     >
@@ -278,13 +293,20 @@ export interface CacheReadColumnProps {
   cacheRead: number;
   top: number;
   note: ReactNode;
+  /** Holds the note closed, for the length of a press on the chart. */
+  isQuiet?: boolean;
 }
 
 /** Draws one period's cache reads as a column of the plot under the kinds' stacks, opening the same note as its slot. The slot above is the keyboard stop, so a column takes no focus of its own. */
-export function CacheReadColumn({ cacheRead, top, note }: CacheReadColumnProps) {
+export function CacheReadColumn({ cacheRead, top, note, isQuiet = false }: CacheReadColumnProps) {
   const chart = useChart();
+  const [isOpen, setIsOpen] = useState(false);
+  // A note opened before the press is dropped, so it stays shut after the release.
+  if (isQuiet && isOpen) {
+    setIsOpen(false);
+  }
   return (
-    <Tooltip>
+    <Tooltip open={isOpen} onOpenChange={(next) => setIsOpen(next && !isQuiet)}>
       <TooltipTrigger delay={0} render={<div className="flex h-full items-end justify-center" />}>
         {cacheRead > 0 ? (
           <div
