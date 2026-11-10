@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The status instructions Sortie adds to the first prompt of a run now open with their own `## Report your status` heading, so they no longer read as part of the last Sortie tool listed or of the workflow template's last section. ([#1647](https://github.com/sortie-ai/sortie/issues/1647))
+
 ## [1.32.0] - 2026-11-09
 
 ### Added
