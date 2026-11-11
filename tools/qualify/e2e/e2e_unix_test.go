@@ -520,6 +520,18 @@ func TestDispatchWatchAdd(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps waiting on a running session read before the hold", func(t *testing.T) {
+		t.Parallel()
+
+		w := &dispatchWatch{}
+		if w.add(ceilingSample{runs: 1, running: true}) {
+			t.Fatal("add(running=true before the hold) = true, want false: a snapshot published before the exit still lists the stopped run")
+		}
+		if w.add(ceilingSample{runs: 1, held: true}) || w.running {
+			t.Fatalf("after the hold sample: watch state = %+v, want held, still waiting and nothing running", w)
+		}
+	})
+
 	t.Run("ends on the first sample showing a running session, inside the quiet window", func(t *testing.T) {
 		t.Parallel()
 

@@ -718,9 +718,19 @@ type dispatchWatch struct {
 // should end: true on the first sign of a dispatch, or once quietPolls
 // post-hold samples arrived with no such sign.
 func (w *dispatchWatch) add(sample ceilingSample) bool {
-	w.runs, w.running = sample.runs, sample.running
-	if sample.runs > 1 || sample.running {
+	w.runs = sample.runs
+	if sample.runs > 1 {
 		return true
+	}
+	// The runtime snapshot is published after the exit is handled, so a read
+	// before the hold can still list the stopped run as running. The hold is
+	// set only after the run left the running set, so from then on a running
+	// session is a new dispatch.
+	if sample.held || w.held {
+		w.running = sample.running
+		if sample.running {
+			return true
+		}
 	}
 	if w.held {
 		w.quietPolls++
