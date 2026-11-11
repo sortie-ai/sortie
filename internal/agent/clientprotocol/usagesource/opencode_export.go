@@ -1,11 +1,4 @@
-// Package sessionexport builds the OpenCode session export invocation and
-// decodes the export document into per-request spend records. The opencode
-// kind and the OpenCode declaration on the agent-client-protocol kind share
-// it, so one parser and one size limit serve both routes. Start with [Args]
-// and [Parse].
-//
-// The package registers no kind and holds no adapter.
-package sessionexport
+package usagesource
 
 import (
 	"bytes"
@@ -13,17 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// Records declares the session export as a records source for every OpenCode
+// OpenCodeRecords declares the session export as a records source for every OpenCode
 // route: one message per finished request, cache outside input, reasoning
 // outside output, written when its request completes. Each message also
 // carries its request's cost in US dollars.
-var Records = usage.Source{
+var OpenCodeRecords = usage.Source{
 	Category: usage.SourceJournal,
 	Strategy: usage.StrategyRecords,
 	Spend: usage.SpendDeclaration{
@@ -33,11 +25,11 @@ var Records = usage.Source{
 	},
 }
 
-// ErrOtherSession marks an export whose info.id is not the session asked for.
-var ErrOtherSession = errors.New("session export of another session")
+// ErrOpenCodeOtherSession marks an export whose info.id is not the session asked for.
+var ErrOpenCodeOtherSession = errors.New("session export of another session")
 
-// SessionError is the error one export message records.
-type SessionError struct {
+// OpenCodeSessionError is the error one export message records.
+type OpenCodeSessionError struct {
 	// Type is error.type, the runtime's own error name.
 	Type string
 
@@ -49,18 +41,18 @@ type SessionError struct {
 	FailedAtMS int64
 }
 
-// Args returns the argument vector of the sanitized export of one session.
+// OpenCodeArgs returns the argument vector of the sanitized export of one session.
 // Sanitizing keeps tool output out of the document while it keeps counts,
 // model, and timestamps.
-func Args(sessionID string) []string {
+func OpenCodeArgs(sessionID string) []string {
 	return []string{"session", "export", "--standalone", "--sanitize", sessionID}
 }
 
-// Tokens maps an OpenCode tokens object, as the run stream's step reports and
+// OpenCodeTokens maps an OpenCode tokens object, as the run stream's step reports and
 // the export's messages carry it, to a reading. A count is nil for an absent,
 // null, fractional, or non-numeric member, and every count is nil when raw is
 // not an object. The reading names no identity and no model.
-func Tokens(raw json.RawMessage) usage.SpendReading {
+func OpenCodeTokens(raw json.RawMessage) usage.SpendReading {
 	tokens, _ := decodeObject[exportTokens](raw)
 	cache, _ := decodeObject[exportCache](tokens.Cache)
 	return usage.SpendReading{
@@ -70,16 +62,6 @@ func Tokens(raw json.RawMessage) usage.SpendReading {
 		CacheRead:  count(cache.Read),
 		CacheWrite: count(cache.Write),
 	}
-}
-
-// count returns the integer a JSON member holds, nil for an absent, null,
-// fractional, or non-numeric member.
-func count(raw json.RawMessage) *int64 {
-	n, err := strconv.ParseInt(string(raw), 10, 64)
-	if err != nil {
-		return nil
-	}
-	return &n
 }
 
 // cost returns the non-negative JSON number a message's cost holds, nil for
@@ -92,16 +74,16 @@ func cost(raw json.RawMessage) *float64 {
 	return &amount
 }
 
-// Parse returns one reading per finished assistant message of an export, in
+// OpenCodeParse returns one reading per finished assistant message of an export, in
 // document order. A message counts when it has a non-empty finish. One without
 // a tokens object, an aborted request whose spend is recorded nowhere, keeps
 // its identity with every count unknown, so a caller can still place it in
 // the session's history. A message's cost is its request's amount, nil when
 // absent or not a non-negative number. The session aggregate in info is never
-// read: it also holds requests no message records. Parse refuses data above
+// read: it also holds requests no message records. OpenCodeParse refuses data above
 // [usage.MaxRecordsBytes], a document that does not decode, and a document of
-// another session ([ErrOtherSession]).
-func Parse(data []byte, sessionID string) ([]usage.SpendReading, error) {
+// another session ([ErrOpenCodeOtherSession]).
+func OpenCodeParse(data []byte, sessionID string) ([]usage.SpendReading, error) {
 	doc, err := decodeExport(data, sessionID)
 	if err != nil {
 		return nil, err
@@ -112,7 +94,7 @@ func Parse(data []byte, sessionID string) ([]usage.SpendReading, error) {
 		if m.Type != "assistant" || m.Finish == "" {
 			continue
 		}
-		reading := Tokens(m.Tokens)
+		reading := OpenCodeTokens(m.Tokens)
 		reading.Identity = m.ID
 		reading.Amounts = []usage.AmountReading{{Amount: cost(m.Cost)}}
 		model, _ := decodeObject[exportModel](m.Model)
@@ -153,20 +135,20 @@ func decodeExport(data []byte, sessionID string) (exportDocument, error) {
 		return exportDocument{}, fmt.Errorf("decode session export: %w", err)
 	}
 	if doc.Info.ID != sessionID {
-		return exportDocument{}, ErrOtherSession
+		return exportDocument{}, ErrOpenCodeOtherSession
 	}
 	return doc, nil
 }
 
-// LastError returns the error the export records for the session's current
+// OpenCodeLastError returns the error the export records for the session's current
 // turn: the last message after the last user message whose error is an object
 // with a string type. The bool is false when the turn records none, so an
-// earlier turn's refusal is never read as this turn's. LastError applies the
-// guards of [Parse] and returns their errors.
-func LastError(data []byte, sessionID string) (SessionError, bool, error) {
+// earlier turn's refusal is never read as this turn's. OpenCodeLastError applies the
+// guards of [OpenCodeParse] and returns their errors.
+func OpenCodeLastError(data []byte, sessionID string) (OpenCodeSessionError, bool, error) {
 	doc, err := decodeExport(data, sessionID)
 	if err != nil {
-		return SessionError{}, false, err
+		return OpenCodeSessionError{}, false, err
 	}
 	turn := doc.Messages
 	for i, message := range slices.Backward(turn) {
@@ -181,13 +163,13 @@ func LastError(data []byte, sessionID string) (SessionError, bool, error) {
 			continue
 		}
 		times, _ := decodeObject[exportTime](message.Time)
-		return SessionError{
+		return OpenCodeSessionError{
 			Type:         *failure.Type,
 			RetryAfterMS: count(failure.RetryAfterMS),
 			FailedAtMS:   failedAtMS(times),
 		}, true, nil
 	}
-	return SessionError{}, false, nil
+	return OpenCodeSessionError{}, false, nil
 }
 
 func failedAtMS(t exportTime) int64 {

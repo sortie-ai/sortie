@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	openCodeExportDir = "../../../opencode/sessionexport/testdata/"
 	openCodeLaunchVar = "SORTIE_TEST_OPENCODE_VAR"
 	openCodeSessionID = "ses_e7ac6691effe73waoQYzNihPM6"
 	openCodeModel     = "opencode/deepseek-v4.1-flash-free"
@@ -142,9 +141,9 @@ func TestOpenCodeSettlesEachTurnToItsMessages(t *testing.T) {
 			if tt.history == "" {
 				ledger.SessionCreated()
 			} else {
-				ledger.Boundary(usage.RecordsRead{Readings: readOpenCodeRecords(t, openCodeRuntime{session: tt.session, export: []byte(readFixture(t, openCodeExportDir+tt.history))}), OK: true})
+				ledger.Boundary(usage.RecordsRead{Readings: readOpenCodeRecords(t, openCodeRuntime{session: tt.session, export: []byte(readFixture(t, tt.history))}), OK: true})
 			}
-			records := readOpenCodeRecords(t, openCodeRuntime{session: tt.session, export: []byte(readFixture(t, openCodeExportDir+tt.export))})
+			records := readOpenCodeRecords(t, openCodeRuntime{session: tt.session, export: []byte(readFixture(t, tt.export))})
 
 			for _, turn := range tt.turns {
 				live := declaration.PromptSpend([]byte(readFixture(t, turn.result)))
@@ -203,7 +202,7 @@ func TestOpenCodeReadRecordsRunsTheConfiguredRuntimeInTheWorkspace(t *testing.T)
 
 	workspace := t.TempDir()
 	wantArgs := []string{"-y", "@opencode/cli@2", "session", "export", "--standalone", "--sanitize", openCodeSessionID}
-	recorder := exportRecorder{wantArgs, workspace, "from-launch", readFixture(t, openCodeExportDir+"two-turns-export.json")}
+	recorder := exportRecorder{wantArgs, workspace, "from-launch", readFixture(t, "two-turns-export.json")}
 	exe := agenttest.FakeRuntime(t, t.TempDir(), "npx", "exportRecorder", recorder)
 	args := []string{"-y", "@opencode/cli@2", "acp"}
 	rt := openCodeRuntime{session: openCodeSessionID, target: agentcore.LaunchTarget{Command: exe, Args: args, WorkspacePath: workspace}, env: []string{openCodeLaunchVar + "=from-launch"}}

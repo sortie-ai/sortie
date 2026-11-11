@@ -31,7 +31,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -151,7 +151,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			// A custom provider gets no usage checkpoint, so the journal settles each turn.
 			Live:              domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
 			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
-			RecordsAtTurnEnd:  sessionstate.Records.WrittenAtTurnEnd,
+			RecordsAtTurnEnd:  usagesource.CopilotRecords.WrittenAtTurnEnd,
 			CancelEndsProcess: true,
 		},
 		SSH: &fakemodel.SSHVariant{

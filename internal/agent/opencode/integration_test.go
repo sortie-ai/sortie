@@ -18,8 +18,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/opencode"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -140,7 +140,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		Spend: &fakemodel.SpendSources{
 			Live:              stepReports,
 			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
-			RecordsAtTurnEnd:  sessionexport.Records.WrittenAtTurnEnd,
+			RecordsAtTurnEnd:  usagesource.OpenCodeRecords.WrittenAtTurnEnd,
 			CancelEndsProcess: true,
 		},
 		SSH: &fakemodel.SSHVariant{

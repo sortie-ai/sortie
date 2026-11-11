@@ -10,8 +10,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -54,11 +52,11 @@ func init() {
 				ReasoningInOutput: false,
 			},
 		},
-		Pull:           usagelimits.Source,
+		Pull:           OpenCodeSource,
 		PullWindows:    opencodePullWindows,
 		PromptSpend:    sparsePromptSpend,
 		ChildSession:   opencodeChildSession,
-		Records:        sessionexport.Records,
+		Records:        OpenCodeRecords,
 		ReadRecords:    opencodeReadRecords,
 		LaunchAddition: LaunchAddition{Name: opencodeConfigVariable, Merge: opencodeDisableTitle},
 		Launches: func(target agentcore.LaunchTarget) bool {
@@ -77,11 +75,11 @@ func opencodePromptError(e jsonrpc.Error) PromptVerdict {
 	if !ok {
 		return PromptVerdict{}
 	}
-	limit, ok := usagelimits.Refusal(name)
+	limit, ok := OpenCodeRefusal(name)
 	if !ok {
 		return PromptVerdict{}
 	}
-	return PromptVerdict{Refusal: &Refusal{Name: name, Limit: limit, WindowReset: usagelimits.ConsoleMetered(name)}}
+	return PromptVerdict{Refusal: &Refusal{Name: name, Limit: limit, WindowReset: OpenCodeConsoleMetered(name)}}
 }
 
 // opencodeReadRecords returns the records of the session's export, in message
@@ -97,7 +95,7 @@ func opencodeReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
 	if err != nil {
 		return Records{}, fmt.Errorf("run session export: %w", err)
 	}
-	readings, err := sessionexport.Parse(out, id)
+	readings, err := OpenCodeParse(out, id)
 	if err != nil {
 		return Records{}, err
 	}
@@ -105,19 +103,19 @@ func opencodeReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
 }
 
 func opencodeRecordedRefusal(export []byte, id string) RecordedRefusal {
-	failure, ok, err := sessionexport.LastError(export, id)
+	failure, ok, err := OpenCodeLastError(export, id)
 	if err != nil || !ok {
 		return RecordedRefusal{}
 	}
-	if _, refusal := usagelimits.Refusal(failure.Type); !refusal {
+	if _, refusal := OpenCodeRefusal(failure.Type); !refusal {
 		return RecordedRefusal{}
 	}
-	return RecordedRefusal{Name: failure.Type, ResetsAt: usagelimits.RetryAt(failure.FailedAtMS, failure.RetryAfterMS)}
+	return RecordedRefusal{Name: failure.Type, ResetsAt: OpenCodeRetryAt(failure.FailedAtMS, failure.RetryAfterMS)}
 }
 
 // exportCommand is the session export, run as the session's own runtime.
 func exportCommand(words []string, id string) agentcore.HostCommand {
-	cmd := runtimeCommand(words, sessionexport.Args(id), opencodeExecutableName, opencodePackageNames...)
+	cmd := runtimeCommand(words, OpenCodeArgs(id), opencodeExecutableName, opencodePackageNames...)
 	cmd.Limit = usage.MaxRecordsBytes
 	return cmd
 }
@@ -125,7 +123,7 @@ func exportCommand(words []string, id string) agentcore.HostCommand {
 // opencodePullWindows asks the runtime's own limits command, run as the
 // session's own runtime.
 func opencodePullWindows(ctx context.Context, rt PullRuntime) ([]usage.WindowReading, error) {
-	return usagelimits.Pull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
+	return OpenCodePull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
 		return rt.RunHostCommand(ctx, runtimeCommand(rt.CommandWords(), args, opencodeExecutableName, opencodePackageNames...))
 	})
 }

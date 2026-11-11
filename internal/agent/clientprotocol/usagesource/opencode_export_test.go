@@ -1,10 +1,9 @@
-package sessionexport
+package usagesource
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,22 +12,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
-func loadFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile("testdata/" + name)
-	if err != nil {
-		t.Fatalf("reading fixture %s: %v", name, err)
-	}
-	return data
-}
-
 func exportDoc(messages ...string) []byte {
 	return []byte(`{"info":{"id":"ses_t"},"messages":[` + strings.Join(messages, ",") + `]}`)
 }
 
 func mustParse(t *testing.T, data []byte, sessionID string) []usage.SpendReading {
 	t.Helper()
-	records, err := Parse(data, sessionID)
+	records, err := OpenCodeParse(data, sessionID)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -174,9 +164,9 @@ func TestParseLeavesTheSessionAggregateOut(t *testing.T) {
 func TestParseRefusesAnotherSession(t *testing.T) {
 	t.Parallel()
 
-	records, err := Parse(loadFixture(t, "two-turns-export.json"), "ses_other")
+	records, err := OpenCodeParse(loadFixture(t, "two-turns-export.json"), "ses_other")
 
-	if !errors.Is(err, ErrOtherSession) || len(records) != 0 {
+	if !errors.Is(err, ErrOpenCodeOtherSession) || len(records) != 0 {
 		t.Errorf("Parse(two-turns, other session) = %d records, %v, want none and ErrOtherSession", len(records), err)
 	}
 }
@@ -228,7 +218,7 @@ func TestTokens(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := Tokens(json.RawMessage(tt.raw))
+			got := OpenCodeTokens(json.RawMessage(tt.raw))
 
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Tokens(%s) = %+v, want %+v", tt.raw, got, tt.want)
@@ -252,9 +242,9 @@ func TestParseRefusesUnreadableData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := Parse(tt.data, "ses_t")
+			_, err := OpenCodeParse(tt.data, "ses_t")
 
-			if err == nil || errors.Is(err, ErrOtherSession) {
+			if err == nil || errors.Is(err, ErrOpenCodeOtherSession) {
 				t.Errorf("Parse(%s) error = %v, want a refusal that is not ErrOtherSession", tt.name, err)
 			}
 		})
@@ -270,7 +260,7 @@ func TestLastError(t *testing.T) {
 	t.Parallel()
 
 	const (
-		captures     = "../../../clientprotocol/testdata/usage_limit/"
+		captures     = "../../testdata/usage_limit/"
 		freeSession  = "ses_e77a9b75fffeBqgRXMBQsUYvPv"
 		quotaSession = "ses_e77a0ddb7ffe1dlxp5Oso7Eq8N"
 	)
@@ -280,21 +270,21 @@ func TestLastError(t *testing.T) {
 		name      string
 		data      []byte
 		sessionID string
-		want      SessionError
+		want      OpenCodeSessionError
 		wantFound bool
 		wantErr   error
 	}{
-		{"the idle message after the assistant message wins", free, freeSession, SessionError{Type: "provider.free-limit", RetryAfterMS: new(int64(3600000)), FailedAtMS: 1793288718816}, true, nil},
-		{"a refusal without a delay", loadFixture(t, captures+"opencode_quota_export.json"), quotaSession, SessionError{Type: "provider.quota", FailedAtMS: 1793289298588}, true, nil},
-		{"a refusal before the last user message is ignored", withMessages(free, newTurn...), freeSession, SessionError{}, false, nil},
-		{"a refusal after the last user message replaces the earlier one", withMessages(free, append(newTurn, `{"type":"assistant","error":{"type":"provider.quota"},"time":{"created":9}}`)...), freeSession, SessionError{Type: "provider.quota", FailedAtMS: 9}, true, nil},
-		{"another session", free, "ses_other", SessionError{}, false, ErrOtherSession},
+		{"the idle message after the assistant message wins", free, freeSession, OpenCodeSessionError{Type: "provider.free-limit", RetryAfterMS: new(int64(3600000)), FailedAtMS: 1793288718816}, true, nil},
+		{"a refusal without a delay", loadFixture(t, captures+"opencode_quota_export.json"), quotaSession, OpenCodeSessionError{Type: "provider.quota", FailedAtMS: 1793289298588}, true, nil},
+		{"a refusal before the last user message is ignored", withMessages(free, newTurn...), freeSession, OpenCodeSessionError{}, false, nil},
+		{"a refusal after the last user message replaces the earlier one", withMessages(free, append(newTurn, `{"type":"assistant","error":{"type":"provider.quota"},"time":{"created":9}}`)...), freeSession, OpenCodeSessionError{Type: "provider.quota", FailedAtMS: 9}, true, nil},
+		{"another session", free, "ses_other", OpenCodeSessionError{}, false, ErrOpenCodeOtherSession},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, found, err := LastError(tt.data, tt.sessionID)
+			got, found, err := OpenCodeLastError(tt.data, tt.sessionID)
 
 			if !errors.Is(err, tt.wantErr) || found != tt.wantFound || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("LastError(%s) = %+v, %v, %v, want %+v, %v, %v", tt.name, got, found, err, tt.want, tt.wantFound, tt.wantErr)
@@ -306,7 +296,7 @@ func TestLastError(t *testing.T) {
 func TestArgs(t *testing.T) {
 	t.Parallel()
 
-	got := Args("ses_1")
+	got := OpenCodeArgs("ses_1")
 
 	if want := []string{"session", "export", "--standalone", "--sanitize", "ses_1"}; !slices.Equal(got, want) {
 		t.Errorf("Args(%q) = %v, want %v", "ses_1", got, want)

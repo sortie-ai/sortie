@@ -697,11 +697,12 @@ type CeilingCondition struct {
 
 // ceilingSample is one poll tick's reading of the fixture issue's dispatch
 // state: its run_history row count, whether a token-budget hold covers it,
-// and whether a session is in flight.
+// and whether a session is in flight and when it started.
 type ceilingSample struct {
-	runs    int
-	held    bool
-	running bool
+	runs      int
+	held      bool
+	running   bool
+	startedAt time.Time
 }
 
 // dispatchWatch folds a sequence of post-stop ceilingSample readings into
@@ -712,15 +713,24 @@ type dispatchWatch struct {
 	runs       int
 	running    bool
 	quietPolls int
+	settled    bool
+	staleStart time.Time
 }
 
 // add folds one sample into the watch and reports whether the observation
 // should end: true on the first sign of a dispatch, or once quietPolls
 // post-hold samples arrived with no such sign.
 func (w *dispatchWatch) add(sample ceilingSample) bool {
-	w.runs, w.running = sample.runs, sample.running
-	if sample.runs > 1 || sample.running {
+	w.runs = sample.runs
+	if sample.runs > 1 {
 		return true
+	}
+	if sample.running && !w.isStale(sample) {
+		w.running = true
+		return true
+	}
+	if !sample.running {
+		w.settled = true
 	}
 	if w.held {
 		w.quietPolls++
@@ -731,6 +741,20 @@ func (w *dispatchWatch) add(sample ceilingSample) bool {
 	return w.quietPolls >= ceilingQuietPolls
 }
 
+// isStale reports whether a running sample can still be the stopped run. The
+// runtime snapshot is published after the exit is handled, so the first reads
+// can list the stopped run; once a read shows the issue held or idle, or a
+// session with a different start, the stopped run has left the snapshot.
+func (w *dispatchWatch) isStale(sample ceilingSample) bool {
+	if w.held || sample.held || w.settled {
+		return false
+	}
+	if w.staleStart.IsZero() {
+		w.staleStart = sample.startedAt
+	}
+	return sample.startedAt.Equal(w.staleStart)
+}
+
 // readCeilingSample reads one ceilingSample for the fixture issue from the
 // harness's store and runtime snapshot.
 func readCeilingSample(harness *Harness) (ceilingSample, error) {
@@ -739,18 +763,20 @@ func readCeilingSample(harness *Harness) (ceilingSample, error) {
 		return ceilingSample{}, fmt.Errorf("query run history: %w", err)
 	}
 	snapshot := harness.orchestrator.SnapshotFunc()()
-	held := false
+	sample := ceilingSample{runs: len(rows)}
 	for _, entry := range snapshot.BudgetExhausted {
 		if entry.IssueID == issueID && entry.Reason == "token_budget" {
-			held = true
+			sample.held = true
 			break
 		}
 	}
-	return ceilingSample{
-		runs:    len(rows),
-		held:    held,
-		running: len(snapshot.Running) > 0,
-	}, nil
+	for _, entry := range snapshot.Running {
+		if entry.IssueID == issueID {
+			sample.running, sample.startedAt = true, entry.StartedAt
+			break
+		}
+	}
+	return sample, nil
 }
 
 // ObserveCeilingStop waits for the fixture issue's first run_history row,

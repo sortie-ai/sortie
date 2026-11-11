@@ -1,9 +1,4 @@
-// Package usagelimits reads the console usage limits of an OpenCode
-// subscription from the runtime's usage command and names the session errors
-// that are a provider usage-limit refusal. It registers no kind and holds no
-// adapter, so every route to the runtime shares one declaration, one parser,
-// and one refusal vocabulary. Start from [Pull], [Refusal], and [RetryAt].
-package usagelimits
+package usagesource
 
 import (
 	"bytes"
@@ -25,48 +20,48 @@ const (
 
 // The runtime's own names for a session error that is a usage-limit refusal.
 const (
-	FreeLimitError        = "provider.free-limit"
-	QuotaError            = "provider.quota"
-	BudgetLimitError      = "provider.budget-limit"
-	ModelBudgetLimitError = "provider.model-budget-limit"
+	OpenCodeFreeLimitError        = "provider.free-limit"
+	OpenCodeQuotaError            = "provider.quota"
+	OpenCodeBudgetLimitError      = "provider.budget-limit"
+	OpenCodeModelBudgetLimitError = "provider.model-budget-limit"
 )
 
-// Refusal reports whether name, matched exactly, is a usage-limit refusal and
+// OpenCodeRefusal reports whether name, matched exactly, is a usage-limit refusal and
 // returns the limit it ends a turn with. Every refusal is model-only: one
 // configuration reaches models of several providers, and the refusal comes
 // from the provider serving the run's model. A throttle such as
 // provider.rate-limit is not a refusal.
-func Refusal(name string) (domain.UsageLimit, bool) {
+func OpenCodeRefusal(name string) (domain.UsageLimit, bool) {
 	switch name {
-	case FreeLimitError, QuotaError, BudgetLimitError, ModelBudgetLimitError:
+	case OpenCodeFreeLimitError, OpenCodeQuotaError, OpenCodeBudgetLimitError, OpenCodeModelBudgetLimitError:
 		return domain.UsageLimit{ModelOnly: true}, true
 	}
 	return domain.UsageLimit{}, false
 }
 
-// ConsoleMetered reports whether the OpenCode console meters the refusal name,
-// so an exhausted console window is evidence for it. QuotaError is not
+// OpenCodeConsoleMetered reports whether the OpenCode console meters the refusal name,
+// so an exhausted console window is evidence for it. OpenCodeQuotaError is not
 // metered: any provider can send it.
-func ConsoleMetered(name string) bool {
+func OpenCodeConsoleMetered(name string) bool {
 	switch name {
-	case FreeLimitError, BudgetLimitError, ModelBudgetLimitError:
+	case OpenCodeFreeLimitError, OpenCodeBudgetLimitError, OpenCodeModelBudgetLimitError:
 		return true
 	}
 	return false
 }
 
-// RetryAt returns the instant retryAfterMS after failedAtMS (Unix
+// OpenCodeRetryAt returns the instant retryAfterMS after failedAtMS (Unix
 // milliseconds), in UTC. It returns the zero time unless the failure time is
 // positive and the delay is present and positive.
-func RetryAt(failedAtMS int64, retryAfterMS *int64) time.Time {
+func OpenCodeRetryAt(failedAtMS int64, retryAfterMS *int64) time.Time {
 	if failedAtMS <= 0 || retryAfterMS == nil || *retryAfterMS <= 0 {
 		return time.Time{}
 	}
 	return time.UnixMilli(failedAtMS + *retryAfterMS).UTC()
 }
 
-// Source declares the console limits the usage command reports.
-var Source = usage.Source{
+// OpenCodeSource declares the console limits the usage command reports.
+var OpenCodeSource = usage.Source{
 	Strategy: usage.StrategyPull,
 	Windows: usage.WindowDeclaration{
 		Share:    usage.SharePercent,
@@ -102,7 +97,7 @@ type rawLimitsAnswer struct {
 	Data *rawLimitsBody `json:"data"`
 }
 
-// Pull runs the usage-limits command through run, which returns the
+// OpenCodePull runs the usage-limits command through run, which returns the
 // command's standard output, and reads the answer. The command asks for a
 // private server because the default one starts a background service that
 // outlives the call and escapes the caller's process group. A run error wrapping
@@ -111,7 +106,7 @@ type rawLimitsAnswer struct {
 // answer wraps [usage.ErrPullUnsupported]: a build without the command, a
 // missing sign-in, or a command outliving ctx does not start answering
 // within the session.
-func Pull(ctx context.Context, run func(ctx context.Context, args []string) ([]byte, error)) ([]usage.WindowReading, error) {
+func OpenCodePull(ctx context.Context, run func(ctx context.Context, args []string) ([]byte, error)) ([]usage.WindowReading, error) {
 	out, err := run(ctx, []string{"api", "--standalone", "experimental.usage.limits"})
 	if err != nil {
 		if errors.Is(err, sshutil.ErrConnectionFailed) {

@@ -8,9 +8,6 @@ import (
 	"io/fs"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
-	copilotlimits "github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -36,10 +33,10 @@ func init() {
 				ReasoningInOutput: true,
 			},
 		},
-		Pull:        quota.Source,
+		Pull:        CopilotSource,
 		PullWindows: copilotPullWindows,
 		PromptSpend: standardPromptSpend,
-		Records:     sessionstate.Records,
+		Records:     CopilotRecords,
 		ReadRecords: copilotReadRecords,
 		Launches: func(target agentcore.LaunchTarget) bool {
 			return commandNamesRuntime(target, copilotExecutableName, copilotPackageName)
@@ -58,7 +55,7 @@ const copilotSessionEventMethod = "github.com/copilot/sessionEvent"
 // runtime sends only to a client that asks for it in the handshake.
 func copilotInitializeMeta() json.RawMessage {
 	meta, _ := json.Marshal(map[string]map[string][]string{ // a map of strings always encodes
-		"github.com/copilot": {"events": {copilotlimits.SessionErrorEvent}},
+		"github.com/copilot": {"events": {CopilotSessionErrorEvent}},
 	})
 	return meta
 }
@@ -77,14 +74,14 @@ func copilotTurnNotification(sessionID, method string, params json.RawMessage) T
 	if id, isString := jsonString(members["sessionId"]); isString && id != sessionID {
 		return TurnSignal{}
 	}
-	if eventType, _ := jsonString(members["type"]); eventType != copilotlimits.SessionErrorEvent {
+	if eventType, _ := jsonString(members["type"]); eventType != CopilotSessionErrorEvent {
 		return TurnSignal{}
 	}
-	failure, err := copilotlimits.ParseSessionError(members["data"])
+	failure, err := CopilotParseSessionError(members["data"])
 	if err != nil {
 		return TurnSignal{}
 	}
-	refusal, ok := copilotlimits.RefusalOf(failure)
+	refusal, ok := CopilotRefusalOf(failure)
 	if !ok {
 		return TurnSignal{}
 	}
@@ -94,7 +91,7 @@ func copilotTurnNotification(sessionID, method string, params json.RawMessage) T
 // copilotPullWindows asks for the quota through the shared pull. The live
 // channel carries no quota, so this is the declaration's only window source.
 func copilotPullWindows(ctx context.Context, rt PullRuntime) ([]usage.WindowReading, error) {
-	return quota.Pull(ctx, copilotQuotaRuntime{rt})
+	return CopilotPull(ctx, copilotQuotaRuntime{rt})
 }
 
 // copilotQuotaRuntime lets the quota pull reach the session's runtime.
@@ -118,7 +115,7 @@ func (r copilotQuotaRuntime) Exchange(ctx context.Context, args []string, limit 
 // file order. The runtime's host resolves the journal's home, so a local and
 // a remote launch read it the same way.
 func copilotReadRecords(ctx context.Context, rt PullRuntime) (Records, error) {
-	readings, err := sessionstate.ScanRecords(ctx, rt.SessionID(), rt.ScanHomeFile)
+	readings, err := CopilotScanRecords(ctx, rt.SessionID(), rt.ScanHomeFile)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return Records{}, nil

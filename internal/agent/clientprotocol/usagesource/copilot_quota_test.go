@@ -1,4 +1,4 @@
-package quota
+package usagesource
 
 import (
 	"bytes"
@@ -87,11 +87,11 @@ func TestPull_TokenPrecedenceAndWindows(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, auth := serveQuota(t, http.StatusOK, fixture)
 
-			readings, err := Pull(t.Context(), &fakeRuntime{env: tt.env})
+			readings, err := CopilotPull(t.Context(), &fakeRuntime{env: tt.env})
 			if err != nil {
 				t.Fatalf("Pull() error = %v, want nil", err)
 			}
-			windows := usage.Windows(Source, readings, time.Now())
+			windows := usage.Windows(CopilotSource, readings, time.Now())
 
 			if got, _ := auth.Load().(string); got != tt.want {
 				t.Errorf("Authorization = %q, want %q", got, tt.want)
@@ -133,7 +133,7 @@ func TestPull_Failures(t *testing.T) {
 			hits, _ := serveQuota(t, tt.status, []byte(tt.body))
 			rt := &fakeRuntime{env: tt.env}
 
-			_, err := Pull(t.Context(), rt)
+			_, err := CopilotPull(t.Context(), rt)
 
 			if err == nil {
 				t.Fatal("Pull() error = nil, want error")

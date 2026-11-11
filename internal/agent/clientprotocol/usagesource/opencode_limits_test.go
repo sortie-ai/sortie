@@ -1,4 +1,4 @@
-package usagelimits_test
+package usagesource_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -43,7 +43,7 @@ func TestPull(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			readings, err := usagelimits.Pull(t.Context(), func(context.Context, []string) ([]byte, error) { return []byte(tt.out), tt.runErr })
+			readings, err := usagesource.OpenCodePull(t.Context(), func(context.Context, []string) ([]byte, error) { return []byte(tt.out), tt.runErr })
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) || errors.Is(err, usage.ErrPullUnsupported) != (tt.wantErr == usage.ErrPullUnsupported) {
@@ -51,7 +51,7 @@ func TestPull(t *testing.T) {
 				}
 				return
 			}
-			got := usage.Windows(usagelimits.Source, readings, time.Time{})
+			got := usage.Windows(usagesource.OpenCodeSource, readings, time.Time{})
 			if err != nil || !reflect.DeepEqual(got, signedIn) {
 				t.Errorf("Pull() = %+v, %v, want %+v, nil", got, err, signedIn)
 			}
@@ -79,8 +79,8 @@ func TestRefusal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			limit, ok := usagelimits.Refusal(tt.name)
-			metered := usagelimits.ConsoleMetered(tt.name)
+			limit, ok := usagesource.OpenCodeRefusal(tt.name)
+			metered := usagesource.OpenCodeConsoleMetered(tt.name)
 
 			if ok != tt.wantRefusal || limit.ModelOnly != tt.wantRefusal || metered != tt.wantMetered {
 				t.Errorf("Refusal(%q) = %+v, %v, ConsoleMetered = %v, want refusal and ModelOnly %v, ConsoleMetered %v", tt.name, limit, ok, metered, tt.wantRefusal, tt.wantMetered)
@@ -107,7 +107,7 @@ func TestRetryAt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := usagelimits.RetryAt(tt.failedAtMS, tt.delayMS)
+			got := usagesource.OpenCodeRetryAt(tt.failedAtMS, tt.delayMS)
 
 			if !got.Equal(tt.want) || got.Location() != time.UTC {
 				t.Errorf("RetryAt(%s) = %v, want %v (UTC)", tt.name, got, tt.want)

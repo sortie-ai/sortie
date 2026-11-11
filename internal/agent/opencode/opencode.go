@@ -22,9 +22,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -46,7 +45,7 @@ var usageSources = usage.Sources{
 		Strategy: usage.StrategyLive,
 		Spend:    usage.SpendDeclaration{Shape: usage.SpendPerRequest},
 	},
-	Records: sessionexport.Records,
+	Records: usagesource.OpenCodeRecords,
 }
 
 func init() {
@@ -275,7 +274,7 @@ func newForkSession(state *sessionState) *agentcore.ForkPerTurnSession {
 		Tools:             state.tools,
 		ToolPlacement:     state.placeTools,
 	}
-	hooks.PullWindows = usage.NewPuller(usagelimits.Source, agentcore.AuxiliaryTimeout(state.agentConfig), state.credentialVerification, opencodePull(state)).Pull
+	hooks.PullWindows = usage.NewPuller(usagesource.OpenCodeSource, agentcore.AuxiliaryTimeout(state.agentConfig), state.credentialVerification, opencodePull(state)).Pull
 	hooks.RefusalWindowReset = state.refusalReadsWindows
 	return agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
 }
@@ -284,7 +283,7 @@ func newForkSession(state *sessionState) *agentcore.ForkPerTurnSession {
 // command through the same host-command operation as the session export.
 func opencodePull(state *sessionState) func(context.Context) ([]usage.WindowReading, error) {
 	return func(ctx context.Context) ([]usage.WindowReading, error) {
-		return usagelimits.Pull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
+		return usagesource.OpenCodePull(ctx, func(ctx context.Context, args []string) ([]byte, error) {
 			return state.target.RunHostCommand(ctx, buildRunEnv(os.Environ()), state.runtimeCommand(args, 0))
 		})
 	}
@@ -420,7 +419,7 @@ func (s *sessionState) parseLine(line []byte, emit func(domain.AgentEvent), _ st
 			return nil, nil
 		}
 		spend.MarkModelReached()
-		reading := sessionexport.Tokens(part.Tokens)
+		reading := usagesource.OpenCodeTokens(part.Tokens)
 		reading.Identity = part.ID
 		s.ledger.ObserveRequest(reading)
 		agentcore.EmitNotification(emit, "")
@@ -516,18 +515,18 @@ func (s *sessionState) refusal() (domain.UsageLimit, bool) {
 	if s.runtimeError == nil {
 		return domain.UsageLimit{}, false
 	}
-	limit, ok := usagelimits.Refusal(s.runtimeError.Type)
+	limit, ok := usagesource.OpenCodeRefusal(s.runtimeError.Type)
 	if !ok {
 		return domain.UsageLimit{}, false
 	}
-	limit.ResetsAt = usagelimits.RetryAt(s.runtimeErrorAtMS, s.runtimeError.RetryAfterMs)
+	limit.ResetsAt = usagesource.OpenCodeRetryAt(s.runtimeErrorAtMS, s.runtimeError.RetryAfterMs)
 	return limit, true
 }
 
 // refusalReadsWindows reports whether the turn's runtime error is a refusal the
 // OpenCode console meters, so an exhausted console window may supply its reset.
 func (s *sessionState) refusalReadsWindows() bool {
-	return s.runtimeError != nil && usagelimits.ConsoleMetered(s.runtimeError.Type)
+	return s.runtimeError != nil && usagesource.OpenCodeConsoleMetered(s.runtimeError.Type)
 }
 
 func (s *sessionState) logger() *slog.Logger {
