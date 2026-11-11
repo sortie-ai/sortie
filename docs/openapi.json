@@ -6470,6 +6470,14 @@
               "maxItems": 16,
               "type": "array"
             }
+          },
+          {
+            "description": "The id of the last frame received: the state revision, then a semicolon and dispatch_id:sequence for each subscribed run. A sequence given here replaces the one the run parameter gives for the same run.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7057,6 +7065,7 @@
       "get": {
         "parameters": [
           {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
             "in": "query",
             "name": "since",
             "schema": {
@@ -7064,6 +7073,7 @@
             }
           },
           {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
             "in": "query",
             "name": "until",
             "schema": {
@@ -7123,6 +7133,7 @@
       "get": {
         "parameters": [
           {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
             "in": "query",
             "name": "since",
             "required": true,
@@ -7131,6 +7142,7 @@
             }
           },
           {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
             "in": "query",
             "name": "until",
             "schema": {

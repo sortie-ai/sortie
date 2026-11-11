@@ -460,16 +460,24 @@ func operationParameters(route apiRoute, path string) ([]any, error) {
 			"name": match[1], "in": "path", "required": true, "schema": map[string]any{"type": "string"},
 		})
 	}
-	for _, name := range route.query {
-		param, ok := route.params[name]
-		if !ok {
-			return nil, fmt.Errorf("%s has query parameter %q without a params entry", route.pattern, name)
+	for _, location := range []struct {
+		in    string
+		names []string
+	}{{"query", route.query}, {"header", route.headers}} {
+		for _, name := range location.names {
+			param, ok := route.params[name]
+			if !ok {
+				return nil, fmt.Errorf("%s has %s parameter %q without a params entry", route.pattern, location.in, name)
+			}
+			parameter := map[string]any{"name": name, "in": location.in, "schema": param.schema}
+			if param.required {
+				parameter["required"] = true
+			}
+			if param.description != "" {
+				parameter["description"] = param.description
+			}
+			parameters = append(parameters, parameter)
 		}
-		parameter := map[string]any{"name": name, "in": "query", "schema": param.schema}
-		if param.required {
-			parameter["required"] = true
-		}
-		parameters = append(parameters, parameter)
 	}
 	return parameters, nil
 }

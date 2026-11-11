@@ -14,13 +14,15 @@ type apiRoute struct {
 	pattern   string              // the pattern New passes to Handle or HandleFunc, verbatim
 	method    string              // the one method the route serves
 	query     []string            // query parameter names, in order
-	params    map[string]apiParam // keyed by query parameter name
+	headers   []string            // request header names, in order
+	params    map[string]apiParam // keyed by query parameter or request header name
 	responses []apiResponse
 }
 
 type apiParam struct {
-	required bool
-	schema   map[string]any
+	required    bool
+	description string
+	schema      map[string]any
 }
 
 type apiResponse struct {
@@ -37,6 +39,10 @@ type apiEvent struct {
 var (
 	textParam    = apiParam{schema: map[string]any{"type": "string"}}
 	instantParam = apiParam{schema: map[string]any{"type": "string", "format": "date-time"}}
+	boundParam   = apiParam{
+		description: "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
+		schema:      textParam.schema,
+	}
 )
 
 func limitParam(upper int) apiParam {
@@ -68,14 +74,14 @@ var issueGroupsQuery = map[string]apiParam{
 }
 
 var statsQuery = map[string]apiParam{
-	"since":  textParam,
-	"until":  textParam,
+	"since":  boundParam,
+	"until":  boundParam,
 	"period": {schema: map[string]any{"type": "string", "enum": spendPeriodValues()}},
 }
 
 var spanQuery = map[string]apiParam{
-	"since": {required: true, schema: textParam.schema},
-	"until": textParam,
+	"since": {required: true, description: boundParam.description, schema: boundParam.schema},
+	"until": boundParam,
 }
 
 var eventsQuery = map[string]apiParam{
@@ -84,6 +90,10 @@ var eventsQuery = map[string]apiParam{
 		"items":    textParam.schema,
 		"maxItems": maxRunSubscriptions,
 	}},
+	"Last-Event-ID": {
+		description: "The id of the last frame received: the state revision, then a semicolon and dispatch_id:sequence for each subscribed run. A sequence given here replaces the one the run parameter gives for the same run.",
+		schema:      textParam.schema,
+	},
 }
 
 func jsonResponses(body reflect.Type, statuses ...int) []apiResponse {
@@ -206,6 +216,7 @@ var apiRoutes = []apiRoute{
 		pattern: "/api/v1/events",
 		method:  http.MethodGet,
 		query:   []string{"run"},
+		headers: []string{"Last-Event-ID"},
 		params:  eventsQuery,
 		responses: slices.Concat(
 			[]apiResponse{{status: http.StatusOK, events: []apiEvent{
