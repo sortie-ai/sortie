@@ -1,4 +1,4 @@
-package quota
+package usagesource
 
 import (
 	"bufio"
@@ -49,9 +49,9 @@ type headlessQuotaSnapshot struct {
 // windows over JSON-RPC on stdio, with the runtime's own sign-in. It returns
 // one reading per limited quota; an error answer from the server wraps
 // [usage.ErrPullUnsupported].
-func askHeadless(ctx context.Context, rt Runtime) ([]usage.WindowReading, error) {
+func askHeadless(ctx context.Context, rt CopilotRuntime) ([]usage.WindowReading, error) {
 	var readings []usage.WindowReading
-	err := rt.Exchange(ctx, headlessArgs, MaxAnswerBytes, func(stdin io.Writer, stdout io.Reader) error {
+	err := rt.Exchange(ctx, headlessArgs, CopilotMaxAnswerBytes, func(stdin io.Writer, stdout io.Reader) error {
 		var exchangeErr error
 		readings, exchangeErr = headlessExchange(stdin, stdout)
 		return exchangeErr
@@ -87,7 +87,7 @@ func headlessCall(stdin io.Writer, stdout *bufio.Reader, id int, method string) 
 	}
 
 	for {
-		body, err := jsonrpc.ReadContentLengthFrame(stdout, MaxAnswerBytes)
+		body, err := jsonrpc.ReadContentLengthFrame(stdout, CopilotMaxAnswerBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read %s answer: %w", method, err)
 		}

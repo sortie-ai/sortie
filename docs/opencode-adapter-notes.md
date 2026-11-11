@@ -120,7 +120,7 @@ The configuration document disables the runtime's title agent. Its request is bi
 
 A failed or empty export never lowers a figure the run has already reported. The step sum stands as a lower bound instead of a zero, and a turn without step reports reports nothing.
 
-The export's invocation and parsing live in `internal/agent/opencode/sessionexport`, shared with the OpenCode declaration on the `agent-client-protocol` kind, so both routes read an export the same way and refuse the same ones: another session's document, and one above 64 MiB. The export is sanitized so tool output never reaches a log, and it also runs over SSH, so remote launches are measured too. A failed export logs one debug record without the output.
+The export's invocation and parsing live in `internal/agent/clientprotocol/usagesource`, shared with the OpenCode declaration on the `agent-client-protocol` kind, so both routes read an export the same way and refuse the same ones: another session's document, and one above 64 MiB. The export is sanitized so tool output never reaches a log, and it also runs over SSH, so remote launches are measured too. A failed export logs one debug record without the output.
 
 ## Usage limits
 

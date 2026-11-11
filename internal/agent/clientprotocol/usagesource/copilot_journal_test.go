@@ -1,4 +1,4 @@
-package sessionstate
+package usagesource
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ func fixtureLines(t *testing.T, name string) [][]byte {
 	return bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n"))
 }
 
-var unreadAmounts = []usage.AmountReading{{Unit: UnitPremiumRequests}, {Unit: UnitAICredits}}
+var unreadAmounts = []usage.AmountReading{{Unit: CopilotUnitPremiumRequests}, {Unit: CopilotUnitAICredits}}
 
 func TestUsageRecord(t *testing.T) {
 	t.Parallel()
@@ -134,7 +134,7 @@ func TestUsageRecord(t *testing.T) {
 				tt.want.Amounts = unreadAmounts
 			}
 
-			got, ok := UsageRecord(line)
+			got, ok := CopilotUsageRecord(line)
 
 			if ok != tt.wantOK {
 				t.Fatalf("UsageRecord(%q) ok = %v, want %v", line, ok, tt.wantOK)
@@ -173,11 +173,11 @@ func TestUsageRecordAmounts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, _ := UsageRecord([]byte(recordWith(tt.members)))
+			got, _ := CopilotUsageRecord([]byte(recordWith(tt.members)))
 
 			want := []usage.AmountReading{
-				{Unit: UnitPremiumRequests, Amount: tt.wantPremium},
-				{Unit: UnitAICredits, Amount: tt.wantCredits},
+				{Unit: CopilotUnitPremiumRequests, Amount: tt.wantPremium},
+				{Unit: CopilotUnitAICredits, Amount: tt.wantCredits},
 			}
 			if !reflect.DeepEqual(got.Amounts, want) {
 				t.Errorf("UsageRecord(%q).Amounts = %+v, want %+v", tt.members, got.Amounts, want)
@@ -205,9 +205,9 @@ func TestUsageCheckpoint(t *testing.T) {
 			checkpointWith(`"b":{"totalNanoAiu":6500000000,"usage":{"inputTokens":7,"cacheWriteTokens":0}},"a":{"requests":{"cost":1.0},"usage":{"inputTokens":4,"outputTokens":3,"cacheReadTokens":2,"cacheWriteTokens":1}}`),
 			usage.SpendReading{ByModel: []usage.SpendReading{
 				{Input: new(int64(4)), Output: new(int64(3)), CacheRead: new(int64(2)), CacheWrite: new(int64(1)), Model: "a",
-					Amounts: []usage.AmountReading{{Unit: UnitPremiumRequests, Amount: new(1.0)}, {Unit: UnitAICredits}}},
+					Amounts: []usage.AmountReading{{Unit: CopilotUnitPremiumRequests, Amount: new(1.0)}, {Unit: CopilotUnitAICredits}}},
 				{Input: new(int64(7)), CacheWrite: new(int64(0)), Model: "b",
-					Amounts: []usage.AmountReading{{Unit: UnitPremiumRequests}, {Unit: UnitAICredits, Amount: new(6.5)}}},
+					Amounts: []usage.AmountReading{{Unit: CopilotUnitPremiumRequests}, {Unit: CopilotUnitAICredits, Amount: new(6.5)}}},
 			}}, true},
 		{"null and float counts are nil", checkpointWith(`"m":{"usage":{"outputTokens":null,"cacheReadTokens":1.0,"cacheWriteTokens":3}}`),
 			usage.SpendReading{ByModel: []usage.SpendReading{{CacheWrite: new(int64(3)), Model: "m", Amounts: unreadAmounts}}}, true},
@@ -217,7 +217,7 @@ func TestUsageCheckpoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, ok := UsageCheckpoint([]byte(tt.line))
+			got, ok := CopilotUsageCheckpoint([]byte(tt.line))
 
 			if ok != tt.wantOK || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("UsageCheckpoint(%q) = %+v, %v, want %+v, %v", tt.line, got, ok, tt.want, tt.wantOK)
@@ -235,11 +235,11 @@ func TestRecordPremiumRequestsSumToLastCheckpoint(t *testing.T) {
 
 			records := map[string]float64{}
 			checkpoint := map[string]float64{}
-			for _, line := range fixtureLines(t, "../../testdata/live/"+journal+".events.jsonl") {
-				if r, ok := UsageRecord(line); ok {
+			for _, line := range fixtureLines(t, journal+".events.jsonl") {
+				if r, ok := CopilotUsageRecord(line); ok {
 					records[r.Model] += *r.Amounts[0].Amount
 				}
-				if c, ok := UsageCheckpoint(line); ok {
+				if c, ok := CopilotUsageCheckpoint(line); ok {
 					clear(checkpoint)
 					for _, m := range c.ByModel {
 						checkpoint[m.Model] = *m.Amounts[0].Amount
@@ -275,10 +275,10 @@ func TestScanRecords(t *testing.T) {
 		return errScan
 	}
 
-	got, err := ScanRecords(t.Context(), "sess-1", scan)
+	got, err := CopilotScanRecords(t.Context(), "sess-1", scan)
 
-	if !reflect.DeepEqual(gotPath, JournalPath("sess-1")) || gotLimit != MaxFileBytes || gotLineLimit != usage.MaxRecordLineBytes {
-		t.Errorf("ScanRecords scanned (%+v, %d, %d), want (%+v, %d, %d)", gotPath, gotLimit, gotLineLimit, JournalPath("sess-1"), int64(MaxFileBytes), int64(usage.MaxRecordLineBytes))
+	if !reflect.DeepEqual(gotPath, CopilotJournalPath("sess-1")) || gotLimit != CopilotMaxFileBytes || gotLineLimit != usage.MaxRecordLineBytes {
+		t.Errorf("ScanRecords scanned (%+v, %d, %d), want (%+v, %d, %d)", gotPath, gotLimit, gotLineLimit, CopilotJournalPath("sess-1"), int64(CopilotMaxFileBytes), int64(usage.MaxRecordLineBytes))
 	}
 	want := []usage.SpendReading{{Input: new(int64(2)), Model: "b", Identity: "u2", Amounts: unreadAmounts}, {Input: new(int64(1)), Model: "a", Identity: "u1", Amounts: unreadAmounts}}
 	if !errors.Is(err, errScan) || !reflect.DeepEqual(got, want) {

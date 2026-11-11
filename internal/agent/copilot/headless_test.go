@@ -8,7 +8,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -35,7 +35,7 @@ func runHeadlessServerScenario(args []string, params headlessServerParams) int {
 		if !ok {
 			continue
 		}
-		if _, err := jsonrpc.ReadContentLengthFrame(br, quota.MaxAnswerBytes); err != nil {
+		if _, err := jsonrpc.ReadContentLengthFrame(br, usagesource.CopilotMaxAnswerBytes); err != nil {
 			return 1
 		}
 		if jsonrpc.WriteContentLengthFrame(os.Stdout, []byte(strings.TrimSpace(reply))) != nil {
@@ -50,7 +50,7 @@ func TestCopilotPull_ReachesHeadlessRouteThroughLaunchTarget(t *testing.T) {
 
 	dir := t.TempDir()
 	capturePath := dir + "/captured.json"
-	bin := agenttest.FakeRuntime(t, dir, "copilot", headlessServerScenario, headlessServerParams{CapturePath: capturePath, Answers: string(waittest.File(t, "quota/testdata/headless_real.txt"))})
+	bin := agenttest.FakeRuntime(t, dir, "copilot", headlessServerScenario, headlessServerParams{CapturePath: capturePath, Answers: string(waittest.File(t, "../clientprotocol/usagesource/testdata/headless_real.txt"))})
 
 	readings, err := copilotPull(agentcore.LaunchTarget{Command: bin, Args: []string{"--own-arg"}, WorkspacePath: dir})(waittest.Context(t))
 

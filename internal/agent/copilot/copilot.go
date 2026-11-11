@@ -18,9 +18,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/quota"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
@@ -72,12 +70,12 @@ var usageSources = usage.Sources{
 			ReasoningInOutput: true,
 			ServedModel:       true,
 			Amounts: []usage.AmountDeclaration{
-				{Unit: sessionstate.UnitPremiumRequests, Shape: usage.AmountSessionCumulative},
-				{Unit: sessionstate.UnitAICredits, Shape: usage.AmountSessionCumulative},
+				{Unit: usagesource.CopilotUnitPremiumRequests, Shape: usage.AmountSessionCumulative},
+				{Unit: usagesource.CopilotUnitAICredits, Shape: usage.AmountSessionCumulative},
 			},
 		},
 	},
-	Records: sessionstate.Records,
+	Records: usagesource.CopilotRecords,
 }
 
 func init() {
@@ -144,7 +142,7 @@ type sessionState struct {
 
 	// turnRefusal is the first session error of the turn that is a usage-limit
 	// refusal; nil when the turn saw none.
-	turnRefusal *usagelimits.Refusal
+	turnRefusal *usagesource.CopilotRefusal
 
 	// turnContinuations is diagnostic only; the turn disposition never reads
 	// it.
@@ -201,7 +199,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
 
-	probe := agentcore.RuntimeFileProbe(target, agentcore.ReadTimeout(params.AgentConfig), sessionstate.JournalPath)
+	probe := agentcore.RuntimeFileProbe(target, agentcore.ReadTimeout(params.AgentConfig), usagesource.CopilotJournalPath)
 	start, startErr := agentcore.ResolveSessionStart(ctx, params.ResumeSessionID, probe, baseLogger)
 	if startErr != nil {
 		return domain.Session{}, startErr
@@ -384,12 +382,12 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				"session.tools_updated":
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
-			case usagelimits.SessionErrorEvent:
+			case usagesource.CopilotSessionErrorEvent:
 				if len(event.Data) > 0 {
-					sessionErr, dataErr := usagelimits.ParseSessionError(event.Data)
+					sessionErr, dataErr := usagesource.CopilotParseSessionError(event.Data)
 					if dataErr == nil {
 						state.turnErrorMessage = sessionErr.Message
-						if refusal, ok := usagelimits.RefusalOf(sessionErr); ok && state.turnRefusal == nil {
+						if refusal, ok := usagesource.CopilotRefusalOf(sessionErr); ok && state.turnRefusal == nil {
 							state.turnRefusal = &refusal
 						}
 					}
@@ -406,7 +404,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
 			case "session.usage_checkpoint":
-				if reading, ok := sessionstate.UsageCheckpoint(line); ok {
+				if reading, ok := usagesource.CopilotUsageCheckpoint(line); ok {
 					state.turnReading = &reading
 				}
 
@@ -487,7 +485,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
 
-	hooks.PullWindows = usage.NewPuller(quota.Source, agentcore.AuxiliaryTimeout(params.AgentConfig), params.CredentialVerification, copilotPull(target)).Pull
+	hooks.PullWindows = usage.NewPuller(usagesource.CopilotSource, agentcore.AuxiliaryTimeout(params.AgentConfig), params.CredentialVerification, copilotPull(target)).Pull
 	hooks.RefusalWindowReset = func() bool { return state.turnRefusal != nil && state.turnRefusal.QuotaWindow }
 
 	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.baseLogger, state.agentConfig.StopGraceMS)
@@ -573,6 +571,6 @@ func (r hostQuotaRuntime) Exchange(ctx context.Context, args []string, limit int
 // exactly that.
 func copilotPull(target agentcore.LaunchTarget) func(context.Context) ([]usage.WindowReading, error) {
 	return func(ctx context.Context) ([]usage.WindowReading, error) {
-		return quota.Pull(ctx, hostQuotaRuntime{target: target})
+		return usagesource.CopilotPull(ctx, hostQuotaRuntime{target: target})
 	}
 }

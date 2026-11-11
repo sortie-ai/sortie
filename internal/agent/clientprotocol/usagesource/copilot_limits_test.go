@@ -1,9 +1,9 @@
-package usagelimits_test
+package usagesource_test
 
 import (
 	"testing"
 
-	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -33,11 +33,11 @@ func TestSessionErrorRefusal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := usagelimits.ParseSessionError([]byte(tt.data))
+			e, err := usagesource.CopilotParseSessionError([]byte(tt.data))
 			if (err == nil) != tt.wantParse {
 				t.Fatalf("ParseSessionError(%q) error = %v, want success %v", tt.data, err, tt.wantParse)
 			}
-			refusal, ok := usagelimits.RefusalOf(e)
+			refusal, ok := usagesource.CopilotRefusalOf(e)
 
 			if e.Message != tt.wantMessage || ok != tt.wantRefusal || refusal.QuotaWindow != tt.wantQuota {
 				t.Errorf("ParseSessionError(%q) = message %q, refusal %v, quota window %v, want %q, %v, %v",

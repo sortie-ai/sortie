@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -96,7 +95,7 @@ func TestCopilotDeclarationAutoRecords(t *testing.T) {
 	declaration := mustDeclaration(t, copilotHandshakeName)
 	var records []usage.SpendReading
 	for line := range strings.Lines(readFixture(t, "auto-records.jsonl")) {
-		reading, ok := sessionstate.UsageRecord([]byte(line))
+		reading, ok := CopilotUsageRecord([]byte(line))
 		if !ok {
 			t.Fatalf("UsageRecord(%.60q) = not a record, want a record", line)
 		}
@@ -139,7 +138,7 @@ func TestCopilotDeclarationSettlesRecordedAmounts(t *testing.T) {
 	}
 	var records []usage.SpendReading
 	for line := range strings.Lines(string(journal)) {
-		if reading, ok := sessionstate.UsageRecord([]byte(line)); ok {
+		if reading, ok := CopilotUsageRecord([]byte(line)); ok {
 			records = append(records, reading)
 		}
 	}
@@ -153,10 +152,10 @@ func TestCopilotDeclarationSettlesRecordedAmounts(t *testing.T) {
 	got := ledger.Settle(usage.TurnEnd{Replied: true, ModelReached: true}, nil, usage.RecordsRead{Readings: records, OK: true})
 
 	want := map[[2]string]float64{
-		{sessionstate.UnitPremiumRequests, "mai-code-1.1-flash"}: 1,
-		{sessionstate.UnitPremiumRequests, "gpt-5.6-luna"}:       0,
-		{sessionstate.UnitAICredits, "mai-code-1.1-flash"}:       0.207156,
-		{sessionstate.UnitAICredits, "gpt-5.6-luna"}:             0.142194,
+		{CopilotUnitPremiumRequests, "mai-code-1.1-flash"}: 1,
+		{CopilotUnitPremiumRequests, "gpt-5.6-luna"}:       0,
+		{CopilotUnitAICredits, "mai-code-1.1-flash"}:       0.207156,
+		{CopilotUnitAICredits, "gpt-5.6-luna"}:             0.142194,
 	}
 	if len(got.Amounts) != len(want) {
 		t.Fatalf("Settle().Amounts = %+v, want %d entries", got.Amounts, len(want))

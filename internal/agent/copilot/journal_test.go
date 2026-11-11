@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -30,7 +30,7 @@ func recordSums(t *testing.T, lines [][]byte) (readings []usage.SpendReading, to
 
 	byModel = map[string]domain.TokenUsage{}
 	for _, line := range lines {
-		r, ok := sessionstate.UsageRecord(line)
+		r, ok := usagesource.CopilotUsageRecord(line)
 		if !ok {
 			continue
 		}
@@ -76,7 +76,7 @@ func TestUsageCheckpointSettlesLiveCaptures(t *testing.T) {
 			} else {
 				ledger.Boundary(usage.RecordsRead{Readings: history, OK: true})
 			}
-			reading, ok := sessionstate.UsageCheckpoint(stdout[tt.settleLine-1])
+			reading, ok := usagesource.CopilotUsageCheckpoint(stdout[tt.settleLine-1])
 			if !ok {
 				t.Fatalf("UsageCheckpoint(%s line %d) = false, want a checkpoint", tt.fixture, tt.settleLine)
 			}

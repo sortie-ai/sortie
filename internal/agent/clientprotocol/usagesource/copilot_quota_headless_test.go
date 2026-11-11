@@ -1,4 +1,4 @@
-package quota
+package usagesource
 
 import (
 	"errors"
@@ -47,7 +47,7 @@ func TestPull_HeadlessRoute(t *testing.T) {
 
 			rt := &fakeRuntime{replies: tt.edit(headlessReplies(t))}
 
-			readings, err := Pull(t.Context(), rt)
+			readings, err := CopilotPull(t.Context(), rt)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -61,7 +61,7 @@ func TestPull_HeadlessRoute(t *testing.T) {
 			if connect, getQuota := strings.Index(rt.sent, "connect"), strings.Index(rt.sent, "account.getQuota"); connect < 0 || getQuota < connect {
 				t.Errorf("Pull() sent %q, want connect before account.getQuota", rt.sent)
 			}
-			windows := usage.Windows(Source, readings, time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
+			windows := usage.Windows(CopilotSource, readings, time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 			if len(windows) != 1 {
 				t.Fatalf("usage.Windows() = %d windows, want 1 (the unlimited chat entry is skipped)", len(windows))
 			}
