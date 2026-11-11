@@ -1038,30 +1038,35 @@ func TestPumpRuntimeTextIsNotServedOutput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			declaration := scriptedSpendDeclaration(nil, nil, errors.New("journal unreadable"))
-			declaration.UsageUpdateBeforeRequest = true
-			state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
-			ctx, cancel := context.WithCancel(t.Context())
-			outcomeCh := runTurnAsyncCtx(ctx, state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
-			promptID := out.awaitMethod(t, methodSessionPrompt)
-			for _, line := range tt.lines {
-				sendLine(t, inPw, line)
-			}
-			cancel()
-			out.awaitMethod(t, methodSessionCancel)
-			for _, line := range tt.afterCancel {
-				sendLine(t, inPw, line)
-			}
-			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
+			synctest.Test(t, func(t *testing.T) {
+				declaration := scriptedSpendDeclaration(nil, nil, errors.New("journal unreadable"))
+				declaration.UsageUpdateBeforeRequest = true
+				state, out, inPw := newDeclaredSession(t, declaration, mustLedger(t, declaration, usage.RecordsRead{OK: true}))
+				ctx, cancel := context.WithCancel(t.Context())
+				outcomeCh := runTurnAsyncCtx(ctx, state, domain.RunTurnParams{Prompt: "go", OnEvent: func(domain.AgentEvent) {}})
+				promptID := out.awaitMethod(t, methodSessionPrompt)
+				for _, line := range tt.lines {
+					sendLine(t, inPw, line)
+				}
+				// The pump must classify every line before the cancel reaches it;
+				// with both ready, its select would pick one at random.
+				synctest.Wait()
+				cancel()
+				out.awaitMethod(t, methodSessionCancel)
+				for _, line := range tt.afterCancel {
+					sendLine(t, inPw, line)
+				}
+				respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
 
-			outcome := waittest.Receive(t, outcomeCh, "turn outcome")
+				outcome := waittest.Receive(t, outcomeCh, "turn outcome")
 
-			if outcome.result.SpendUnaccounted != tt.wantUnaccounted {
-				t.Errorf("RunTurn() SpendUnaccounted = %v, want %v", outcome.result.SpendUnaccounted, tt.wantUnaccounted)
-			}
-			if lowered := state.caps.tokenCounts == capabilityGap; lowered != tt.wantUnaccounted {
-				t.Errorf("tokenCounts = %q, want the entry lowered = %v", state.caps.tokenCounts, tt.wantUnaccounted)
-			}
+				if outcome.result.SpendUnaccounted != tt.wantUnaccounted {
+					t.Errorf("RunTurn() SpendUnaccounted = %v, want %v", outcome.result.SpendUnaccounted, tt.wantUnaccounted)
+				}
+				if lowered := state.caps.tokenCounts == capabilityGap; lowered != tt.wantUnaccounted {
+					t.Errorf("tokenCounts = %q, want the entry lowered = %v", state.caps.tokenCounts, tt.wantUnaccounted)
+				}
+			})
 		})
 	}
 }
