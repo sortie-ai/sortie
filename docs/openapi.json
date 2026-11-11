@@ -1,0 +1,7286 @@
+{
+  "components": {
+    "schemas": {
+      "AcknowledgeResponse": {
+        "properties": {
+          "acknowledged": {
+            "type": "boolean"
+          },
+          "acknowledged_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "already_acknowledged": {
+            "type": "boolean"
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outcome_text": {
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "acknowledged",
+          "already_acknowledged",
+          "requested_at",
+          "outcome_text"
+        ],
+        "type": "object"
+      },
+      "ActiveIssueResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "pr_loop": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/PrLoopStationResponse"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction_kind": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "status",
+          "stage_position",
+          "dispatched_at",
+          "status_text",
+          "status_text_full",
+          "pr_loop"
+        ],
+        "type": "object"
+      },
+      "AgentEventFrame": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "dispatch_id": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "event": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "tool_argument": {
+            "type": "string"
+          },
+          "tool_error": {
+            "type": "boolean"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "tool_line": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "seq",
+          "at",
+          "event",
+          "message",
+          "text"
+        ],
+        "type": "object"
+      },
+      "AgentUsageWindowsResponse": {
+        "properties": {
+          "reported_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "windows": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UsageWindowResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "reported_at",
+          "windows"
+        ],
+        "type": "object"
+      },
+      "AttemptsInfo": {
+        "properties": {
+          "current_retry_attempt": {
+            "type": "integer"
+          },
+          "restart_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "restart_count",
+          "current_retry_attempt"
+        ],
+        "type": "object"
+      },
+      "AttentionActionResponse": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "AttentionEvidenceResponse": {
+        "properties": {
+          "budget_sessions": {
+            "type": "integer"
+          },
+          "budget_tokens": {
+            "type": "integer"
+          },
+          "budget_usd": {
+            "type": "number"
+          },
+          "config_key": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "escalation_trigger": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_check": {
+            "$ref": "#/components/schemas/ReactionCheckResponse"
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "pull_request": {
+            "$ref": "#/components/schemas/PullRequestResponse"
+          },
+          "reaction_kind": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resets_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "used_attempts": {
+            "type": "integer"
+          },
+          "used_sessions": {
+            "type": "integer"
+          },
+          "used_tokens": {
+            "type": "integer"
+          },
+          "used_tokens_complete": {
+            "type": "boolean"
+          },
+          "used_usd": {
+            "type": "number"
+          },
+          "used_usd_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "AttentionItemResponse": {
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "$ref": "#/components/schemas/AttentionActionResponse"
+          },
+          "clears_text": {
+            "type": "string"
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AttentionEvidenceResponse"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason_text": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "why_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "severity",
+          "since",
+          "acknowledged_at",
+          "reason_text",
+          "why_text",
+          "clears_text",
+          "action",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "BudgetExhaustedResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "budget_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "exhausted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "stage_lineage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageLineageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "stopped_in_flight": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_sessions": {
+            "type": "integer"
+          },
+          "used_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_usd_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "dispatched_at",
+          "reason",
+          "used_sessions",
+          "budget_sessions",
+          "used_tokens",
+          "budget_tokens",
+          "used_usd",
+          "used_usd_complete",
+          "budget_usd",
+          "unmeasured_sessions",
+          "stopped_in_flight",
+          "exhausted_at",
+          "stage_lineage",
+          "stage_position",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "ChainGroup": {
+        "properties": {
+          "agent_priced_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_lower_bound": {
+            "type": "boolean"
+          },
+          "cost_partial_runs": {
+            "type": "integer"
+          },
+          "cost_per_succeeded_run_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_unpriced_runs": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration_seconds": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "issue": {
+            "type": "string"
+          },
+          "last_hop": {
+            "type": "string"
+          },
+          "mean_turns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "share": {
+            "type": "number"
+          },
+          "stages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "succeeded": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_lower_bound": {
+            "type": "boolean"
+          },
+          "tokens_lower_bound_runs": {
+            "type": "integer"
+          },
+          "tokens_unmeasured_runs": {
+            "type": "integer"
+          },
+          "unmeasured_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_units": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "runs",
+          "succeeded",
+          "success_rate",
+          "share",
+          "duration_seconds",
+          "mean_turns",
+          "tokens",
+          "cost_usd",
+          "cost_per_succeeded_run_usd",
+          "tokens_unmeasured_runs",
+          "cost_unpriced_runs",
+          "cost_partial_runs",
+          "tokens_lower_bound_runs",
+          "tokens_lower_bound",
+          "cost_lower_bound",
+          "agent_priced_usd",
+          "unmeasured_cause",
+          "unmeasured_units",
+          "issue",
+          "stages",
+          "last_hop"
+        ],
+        "type": "object"
+      },
+      "CheckNowResponse": {
+        "properties": {
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outcome_text": {
+            "type": "string"
+          },
+          "pull_request": {
+            "$ref": "#/components/schemas/PullRequestResponse"
+          },
+          "queued": {
+            "type": "boolean"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "queued",
+          "requested_at",
+          "outcome_text"
+        ],
+        "type": "object"
+      },
+      "ClassRateResponse": {
+        "properties": {
+          "from_input": {
+            "type": "boolean"
+          },
+          "layer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "per_mtok",
+          "layer",
+          "from_input"
+        ],
+        "type": "object"
+      },
+      "ConfigResponse": {
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/ShapeAgent"
+          },
+          "dispatch": {
+            "$ref": "#/components/schemas/ShapeDispatch"
+          },
+          "polling": {
+            "$ref": "#/components/schemas/ShapePolling"
+          },
+          "reactions": {
+            "$ref": "#/components/schemas/ShapeReactions"
+          },
+          "token_rates": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/TokenRateResponse"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/ShapeTracker"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/ShapeWorker"
+          }
+        },
+        "required": [
+          "tracker",
+          "polling",
+          "agent",
+          "worker",
+          "dispatch",
+          "reactions",
+          "token_rates"
+        ],
+        "type": "object"
+      },
+      "Duration": {
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "samples": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "p50",
+          "p95",
+          "mean",
+          "samples"
+        ],
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "Funnel": {
+        "properties": {
+          "stages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FunnelStage"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "type": "object"
+      },
+      "FunnelArrivals": {
+        "properties": {
+          "hop": {
+            "type": "integer"
+          },
+          "label": {
+            "type": "integer"
+          },
+          "match": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hop",
+          "match",
+          "label"
+        ],
+        "type": "object"
+      },
+      "FunnelOutcomes": {
+        "properties": {
+          "advanced": {
+            "type": "integer"
+          },
+          "ceiling": {
+            "type": "integer"
+          },
+          "handed_off": {
+            "type": "integer"
+          },
+          "hop_failed": {
+            "type": "integer"
+          },
+          "in_stage": {
+            "type": "integer"
+          },
+          "no_hop": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "advanced",
+          "handed_off",
+          "ceiling",
+          "hop_failed",
+          "no_hop",
+          "in_stage"
+        ],
+        "type": "object"
+      },
+      "FunnelStage": {
+        "properties": {
+          "arrivals": {
+            "$ref": "#/components/schemas/FunnelArrivals"
+          },
+          "entered": {
+            "type": "integer"
+          },
+          "entry": {
+            "type": "boolean"
+          },
+          "last": {
+            "type": "boolean"
+          },
+          "median_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "no_hop_reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NoHopReason"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/FunnelOutcomes"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rule",
+          "entry",
+          "last",
+          "runs",
+          "entered",
+          "arrivals",
+          "outcomes",
+          "no_hop_reasons",
+          "median_seconds"
+        ],
+        "type": "object"
+      },
+      "Group": {
+        "properties": {
+          "agent_priced_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_lower_bound": {
+            "type": "boolean"
+          },
+          "cost_partial_runs": {
+            "type": "integer"
+          },
+          "cost_per_succeeded_run_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_unpriced_runs": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration_seconds": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "mean_turns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "share": {
+            "type": "number"
+          },
+          "succeeded": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_lower_bound": {
+            "type": "boolean"
+          },
+          "tokens_lower_bound_runs": {
+            "type": "integer"
+          },
+          "tokens_unmeasured_runs": {
+            "type": "integer"
+          },
+          "unmeasured_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_units": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "runs",
+          "succeeded",
+          "success_rate",
+          "share",
+          "duration_seconds",
+          "mean_turns",
+          "tokens",
+          "cost_usd",
+          "cost_per_succeeded_run_usd",
+          "tokens_unmeasured_runs",
+          "cost_unpriced_runs",
+          "cost_partial_runs",
+          "tokens_lower_bound_runs",
+          "tokens_lower_bound",
+          "cost_lower_bound",
+          "agent_priced_usd",
+          "unmeasured_cause",
+          "unmeasured_units"
+        ],
+        "type": "object"
+      },
+      "HealthCheckResponse": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "failing_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checked_at",
+          "last_success_at",
+          "consecutive_failures",
+          "failing_since"
+        ],
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "HeldIssueResponse": {
+        "properties": {
+          "display_identifier": {
+            "type": "string"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/HoldResponse"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "hold",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "HistoryTotalsResponse": {
+        "properties": {
+          "agent_priced_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agent_priced_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_status": {
+            "type": "string"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_count": {
+            "type": "integer"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenInfo"
+          },
+          "tokens_complete": {
+            "type": "boolean"
+          },
+          "uncached_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_runs": {
+            "type": "integer"
+          },
+          "unmeasured_units": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vendor_amounts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UnitAmountResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "run_count",
+          "unmeasured_runs",
+          "tokens",
+          "uncached_tokens",
+          "tokens_complete",
+          "estimated_cost_usd",
+          "cost_status",
+          "unmeasured_cause",
+          "unmeasured_units",
+          "vendor_amounts",
+          "agent_priced_usd",
+          "agent_priced_models"
+        ],
+        "type": "object"
+      },
+      "HoldBlockerResponse": {
+        "properties": {
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier"
+        ],
+        "type": "object"
+      },
+      "HoldResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "blockers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/HoldBlockerResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "held_since": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "model_only": {
+            "type": "boolean"
+          },
+          "reason": {
+            "enum": [
+              "agent_slots_full",
+              "ssh_hosts_full",
+              "blockers_not_read",
+              "blockers_unresolved",
+              "blockers_incomplete",
+              "blocked_by",
+              "daily_spend_ceiling",
+              "weekly_spend_ceiling",
+              "monthly_spend_ceiling",
+              "stage_hop_unconfirmed",
+              "usage_limit",
+              "park_comments_unread"
+            ],
+            "type": "string"
+          },
+          "reason_text": {
+            "type": "string"
+          },
+          "release_text": {
+            "type": "string"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HoldSlotResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "reason",
+          "held_since",
+          "blockers",
+          "slot",
+          "resets_at",
+          "reason_text",
+          "release_text"
+        ],
+        "type": "object"
+      },
+      "HoldSlotResponse": {
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "used": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scope",
+          "used",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "HopDecisionResponse": {
+        "properties": {
+          "chain_id": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "integer"
+          },
+          "source_rule": {
+            "type": "string"
+          },
+          "target_rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "source_rule",
+          "target_rule",
+          "result",
+          "completed_at"
+        ],
+        "type": "object"
+      },
+      "IssueDetailResponse": {
+        "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttemptsInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "between_stages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageHopResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetExhaustedResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "history": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueHistoryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueResponse"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_outcomes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NextOutcomeResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parked": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParkedEntryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_reactions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PendingReactionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pr_loop": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/PrLoopStationResponse"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recent_events": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunEventResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryEntryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunningEntryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "tracked": {
+            "anyOf": [
+              {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "issue_identifier",
+          "issue_id",
+          "status",
+          "issue",
+          "workspace",
+          "attempts",
+          "running",
+          "retry",
+          "budget_exhausted",
+          "parked",
+          "pending_reactions",
+          "between_stages",
+          "recent_events",
+          "last_error",
+          "tracked",
+          "history",
+          "pr_loop",
+          "status_text",
+          "status_text_full",
+          "next_outcomes"
+        ],
+        "type": "object"
+      },
+      "IssueGroupResponse": {
+        "properties": {
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueOutcomeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/HistoryTotalsResponse"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "status",
+          "status_text",
+          "status_text_full",
+          "issue_outcome",
+          "runs",
+          "next_cursor",
+          "totals"
+        ],
+        "type": "object"
+      },
+      "IssueGroupsResponse": {
+        "properties": {
+          "groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IssueGroupResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "groups",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "IssueHistoryResponse": {
+        "properties": {
+          "hops": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/HopDecisionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueOutcomeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_stage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastStageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/HistoryTotalsResponse"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor",
+          "totals",
+          "hops",
+          "last_stage",
+          "issue_outcome"
+        ],
+        "type": "object"
+      },
+      "IssueOutcomeResponse": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "merge_path": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "pull_request": {
+            "$ref": "#/components/schemas/PullRequestResponse"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "observed_at",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "IssueResponse": {
+        "properties": {
+          "issue_type": {
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "KindCosts": {
+        "properties": {
+          "cache_read_usd": {
+            "type": "number"
+          },
+          "cache_write_usd": {
+            "type": "number"
+          },
+          "fresh_input_usd": {
+            "type": "number"
+          },
+          "output_usd": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "fresh_input_usd",
+          "output_usd",
+          "cache_write_usd",
+          "cache_read_usd"
+        ],
+        "type": "object"
+      },
+      "LastStageResponse": {
+        "properties": {
+          "chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain",
+          "rule"
+        ],
+        "type": "object"
+      },
+      "ModelPriceResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "cache_read": {
+            "$ref": "#/components/schemas/ClassRateResponse"
+          },
+          "cache_write": {
+            "$ref": "#/components/schemas/ClassRateResponse"
+          },
+          "cost_status": {
+            "type": "string"
+          },
+          "entry_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input": {
+            "$ref": "#/components/schemas/ClassRateResponse"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "layer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "output": {
+            "$ref": "#/components/schemas/ClassRateResponse"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "table_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unrated_classes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent_kind",
+          "model",
+          "table_key",
+          "layer",
+          "entry_key",
+          "input",
+          "output",
+          "cache_read",
+          "cache_write",
+          "cost_status",
+          "unrated_classes",
+          "last_used_at",
+          "runs"
+        ],
+        "type": "object"
+      },
+      "ModelUsageResponse": {
+        "properties": {
+          "cost_status": {
+            "type": "string"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "price_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenInfo"
+          },
+          "uncached_tokens": {
+            "type": "integer"
+          },
+          "unrated_classes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model",
+          "tokens",
+          "uncached_tokens",
+          "estimated_cost_usd",
+          "cost_status",
+          "unrated_classes",
+          "price_source"
+        ],
+        "type": "object"
+      },
+      "NextOutcomeResponse": {
+        "properties": {
+          "condition": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "condition",
+          "text"
+        ],
+        "type": "object"
+      },
+      "NoHopReason": {
+        "properties": {
+          "passes": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "passes"
+        ],
+        "type": "object"
+      },
+      "ParkedEntryResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "label_applied": {
+            "type": "boolean"
+          },
+          "parked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "parked_state": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "dispatched_at",
+          "reason",
+          "label",
+          "label_applied",
+          "parked_at",
+          "stage_position",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "PendingReactionResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "config_key": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "escalated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "escalation_trigger": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReactionCheckResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_poll_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "pull_request": {
+            "$ref": "#/components/schemas/PullRequestResponse"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "used_attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wait": {
+            "type": "string"
+          },
+          "watch_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "kind",
+          "config_key",
+          "pull_request",
+          "created_at",
+          "dispatched_at",
+          "next_poll_at",
+          "used_attempts",
+          "max_attempts",
+          "escalated_at",
+          "watch_ends_at",
+          "last_check",
+          "stage_position",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "PollHealthResponse": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "failing_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_poll_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checked_at",
+          "last_success_at",
+          "consecutive_failures",
+          "failing_since",
+          "next_poll_at",
+          "summary_text"
+        ],
+        "type": "object"
+      },
+      "PrLoopStationResponse": {
+        "properties": {
+          "continuations": {
+            "type": "integer"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "continuations"
+        ],
+        "type": "object"
+      },
+      "PricesResponse": {
+        "properties": {
+          "embedded": {
+            "$ref": "#/components/schemas/TableSourceResponse"
+          },
+          "fetched": {
+            "$ref": "#/components/schemas/TableSourceResponse"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "models": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModelPriceResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableSourceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "table_in_force": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableInForceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "token_rates": {
+            "$ref": "#/components/schemas/TokenRatesSourceResponse"
+          }
+        },
+        "required": [
+          "generated_at",
+          "table_in_force",
+          "token_rates",
+          "operator",
+          "fetched",
+          "embedded",
+          "models"
+        ],
+        "type": "object"
+      },
+      "PullRequestResponse": {
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "repository"
+        ],
+        "type": "object"
+      },
+      "ReactionCheckResponse": {
+        "properties": {
+          "actionable_comments": {
+            "type": "integer"
+          },
+          "awaiting_approval": {
+            "type": "boolean"
+          },
+          "failing": {
+            "type": "integer"
+          },
+          "failing_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handled": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "mergeable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_comments": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "passing": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ReadyResponse": {
+        "properties": {
+          "checks": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "type": "number"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "uptime_seconds",
+          "checks"
+        ],
+        "type": "object"
+      },
+      "RefreshResponse": {
+        "properties": {
+          "coalesced": {
+            "type": "boolean"
+          },
+          "operations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome_text": {
+            "type": "string"
+          },
+          "queued": {
+            "type": "boolean"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "queued",
+          "coalesced",
+          "requested_at",
+          "operations",
+          "outcome_text"
+        ],
+        "type": "object"
+      },
+      "Report": {
+        "properties": {
+          "by_adapter": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChainGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_model": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_origin": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_provenance": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_rule": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_status": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_template": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by_trigger": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chain_funnels": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Funnel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "db_path": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "schema_tier": {
+            "type": "string"
+          },
+          "self_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skill_calls": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCallReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spend": {
+            "$ref": "#/components/schemas/Spend"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workflow_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at",
+          "workflow_path",
+          "db_path",
+          "since",
+          "until",
+          "schema_tier",
+          "warnings",
+          "summary",
+          "spend",
+          "by_status",
+          "by_adapter",
+          "by_rule",
+          "by_template",
+          "by_model",
+          "by_chain",
+          "chain_funnels",
+          "by_trigger",
+          "by_origin",
+          "by_provenance",
+          "skill_calls",
+          "self_review"
+        ],
+        "type": "object"
+      },
+      "RetryEntryResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "reaction_config_key": {
+            "type": "string"
+          },
+          "reaction_kind": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "stage_lineage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageLineageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "dispatched_at",
+          "attempt",
+          "due_at",
+          "error",
+          "stage_lineage",
+          "stage_position",
+          "paused",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "RetryNowResponse": {
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "outcome_text": {
+            "type": "string"
+          },
+          "queued": {
+            "type": "boolean"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "queued",
+          "requested_at",
+          "outcome_text"
+        ],
+        "type": "object"
+      },
+      "RunEndedFrame": {
+        "properties": {
+          "dispatch_id": {
+            "type": "string"
+          },
+          "last_seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "last_seq"
+        ],
+        "type": "object"
+      },
+      "RunEventResponse": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "event": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "tool_argument": {
+            "type": "string"
+          },
+          "tool_error": {
+            "type": "boolean"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "tool_line": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "event",
+          "message",
+          "text"
+        ],
+        "type": "object"
+      },
+      "RunEventsResponse": {
+        "properties": {
+          "dispatch_id": {
+            "type": "string"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunEventResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "first_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "first_seq",
+          "events"
+        ],
+        "type": "object"
+      },
+      "RunResetFrame": {
+        "properties": {
+          "dispatch_id": {
+            "type": "string"
+          },
+          "first_seq": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "RunResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "agent_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "chain_id": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": "string"
+          },
+          "configured_effort": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "cost_status": {
+            "type": "string"
+          },
+          "declared_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueOutcomeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "model_usage": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModelUsageResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin_recorded": {
+            "type": "boolean"
+          },
+          "pr_loop": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/PrLoopStationResponse"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction_config_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "integer"
+          },
+          "self_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelfReviewResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillCall"
+            },
+            "type": "array"
+          },
+          "ssh_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_previous": {
+            "type": "string"
+          },
+          "stage_previous_outcome": {
+            "type": "string"
+          },
+          "stage_result": {
+            "type": "string"
+          },
+          "stage_target": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenInfo"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turns_completed": {
+            "type": "integer"
+          },
+          "uncached_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_units": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_completeness": {
+            "type": "string"
+          },
+          "usage_provenance": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UsageSourceResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vendor_amounts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/VendorAmountResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workflow_file": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "issue_id",
+          "issue_identifier",
+          "attempt",
+          "status",
+          "error",
+          "declared_outcome",
+          "agent_text",
+          "started_at",
+          "completed_at",
+          "dispatched_at",
+          "turns_completed",
+          "tokens",
+          "uncached_tokens",
+          "estimated_cost_usd",
+          "cost_status",
+          "self_review",
+          "origin_recorded",
+          "trigger",
+          "reaction_kind",
+          "reaction_config_key",
+          "session_id",
+          "ssh_host",
+          "usage_completeness",
+          "usage_provenance",
+          "vendor_amounts",
+          "unmeasured_cause",
+          "unmeasured_units",
+          "dispatch_id",
+          "model_usage",
+          "stage_chain",
+          "issue_outcome",
+          "pr_loop"
+        ],
+        "type": "object"
+      },
+      "RunningEntryResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "api_request_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_requests_measured": {
+            "type": "boolean"
+          },
+          "api_time_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configured_effort": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "cost_status": {
+            "type": "string"
+          },
+          "dispatch_id": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_cost_status": {
+            "type": "string"
+          },
+          "issue_estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_tokens_completed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "last_event": {
+            "type": "string"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_message": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "pull_request": {
+            "$ref": "#/components/schemas/PullRequestResponse"
+          },
+          "quiet_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction_attempt": {
+            "type": "integer"
+          },
+          "reaction_config_key": {
+            "type": "string"
+          },
+          "reaction_kind": {
+            "type": "string"
+          },
+          "requests_by_model": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "self_review_active": {
+            "type": "boolean"
+          },
+          "self_review_iteration": {
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillCall"
+            },
+            "type": "array"
+          },
+          "ssh_host": {
+            "type": "string"
+          },
+          "stage_lineage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StageLineageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_off_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_text_full": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenInfo"
+          },
+          "tokens_awaited": {
+            "type": "boolean"
+          },
+          "tokens_measured": {
+            "type": "boolean"
+          },
+          "tokens_pending": {
+            "type": "boolean"
+          },
+          "tool_time_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turn_count": {
+            "type": "integer"
+          },
+          "uncached_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_arrival": {
+            "type": "string"
+          },
+          "usage_attribution": {
+            "type": "string"
+          },
+          "used_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_tokens_complete": {
+            "type": "boolean"
+          },
+          "workflow_file": {
+            "type": "string"
+          },
+          "workspace_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "issue_labels",
+          "state",
+          "session_id",
+          "turn_count",
+          "self_review_active",
+          "self_review_iteration",
+          "last_event",
+          "last_message",
+          "started_at",
+          "dispatched_at",
+          "last_event_at",
+          "workspace_path",
+          "tokens",
+          "uncached_tokens",
+          "stage_lineage",
+          "stage_position",
+          "api_request_count",
+          "tool_time_percent",
+          "api_time_percent",
+          "tokens_measured",
+          "usage_arrival",
+          "usage_attribution",
+          "tokens_pending",
+          "tokens_awaited",
+          "api_requests_measured",
+          "used_sessions",
+          "budget_sessions",
+          "issue_tokens_completed",
+          "unmeasured_sessions",
+          "used_tokens",
+          "used_tokens_complete",
+          "budget_tokens",
+          "budget_usd",
+          "estimated_cost_usd",
+          "cost_status",
+          "issue_estimated_cost_usd",
+          "issue_cost_status",
+          "status_text",
+          "status_text_full",
+          "dispatch_id",
+          "quiet_at",
+          "stall_at",
+          "stall_text",
+          "stall_text_full",
+          "stall_off_text"
+        ],
+        "type": "object"
+      },
+      "RunsResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ScmHealthResponse": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "failing_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "status",
+          "checked_at",
+          "last_success_at",
+          "consecutive_failures",
+          "failing_since"
+        ],
+        "type": "object"
+      },
+      "SelfReview": {
+        "properties": {
+          "by_final_verdict": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/VerdictCount"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cap_reached_runs": {
+            "type": "integer"
+          },
+          "mean_iterations": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs_with_metadata": {
+            "type": "integer"
+          },
+          "unparsed_runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs_with_metadata",
+          "by_final_verdict",
+          "cap_reached_runs",
+          "mean_iterations",
+          "unparsed_runs"
+        ],
+        "type": "object"
+      },
+      "SelfReviewResponse": {
+        "properties": {
+          "cap_reached": {
+            "type": "boolean"
+          },
+          "final_verdict": {
+            "type": "string"
+          },
+          "total_iterations": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "final_verdict",
+          "total_iterations",
+          "cap_reached"
+        ],
+        "type": "object"
+      },
+      "ShapeAgent": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "max_concurrent_agents": {
+            "type": "integer"
+          },
+          "max_concurrent_agents_by_state": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_retry_backoff_ms": {
+            "type": "integer"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_turns": {
+            "type": "integer"
+          },
+          "stall_timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_arrival": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "usage_arrival",
+          "max_turns",
+          "stall_timeout_ms",
+          "max_retry_backoff_ms",
+          "max_sessions",
+          "max_tokens",
+          "max_cost_usd",
+          "max_concurrent_agents",
+          "max_concurrent_agents_by_state"
+        ],
+        "type": "object"
+      },
+      "ShapeAutoMerge": {
+        "properties": {
+          "delete_branch": {
+            "type": "boolean"
+          },
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_retries": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "require_ci": {
+            "type": "boolean"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy",
+          "require_ci",
+          "delete_branch",
+          "poll_interval_ms",
+          "max_retries",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapeBotReview": {
+        "properties": {
+          "bot_usernames": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_continuation_turns": {
+            "type": "integer"
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "triage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_continuation_turns",
+          "poll_interval_ms",
+          "bot_usernames",
+          "triage",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapeCIFailure": {
+        "properties": {
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_retries": {
+            "type": "integer"
+          },
+          "triage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_retries",
+          "triage",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapeDispatch": {
+        "properties": {
+          "chains": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShapeSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hop_ceiling": {
+            "type": "integer"
+          },
+          "max_consecutive_hops": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ShapeRule"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "rules",
+          "default",
+          "chains",
+          "max_consecutive_hops",
+          "hop_ceiling"
+        ],
+        "type": "object"
+      },
+      "ShapeLabelCommands": {
+        "properties": {
+          "fix_label": {
+            "type": "string"
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "review_label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "poll_interval_ms"
+        ],
+        "type": "object"
+      },
+      "ShapeMatch": {
+        "properties": {
+          "assignee": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "identifier": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_type": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/ShapePriority"
+          },
+          "title": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "ShapeMergeCompletion": {
+        "properties": {
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_retries": {
+            "type": "integer"
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "target_state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_state",
+          "max_retries",
+          "poll_interval_ms",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapeMergeConflicts": {
+        "properties": {
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_retries": {
+            "type": "integer"
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "triage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_retries",
+          "poll_interval_ms",
+          "triage",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapePolling": {
+        "properties": {
+          "interval_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interval_ms"
+        ],
+        "type": "object"
+      },
+      "ShapePriority": {
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "value": {
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
+      "ShapeReactions": {
+        "properties": {
+          "auto_merge": {
+            "$ref": "#/components/schemas/ShapeAutoMerge"
+          },
+          "bot_review": {
+            "$ref": "#/components/schemas/ShapeBotReview"
+          },
+          "ci_failure": {
+            "$ref": "#/components/schemas/ShapeCIFailure"
+          },
+          "label_commands": {
+            "$ref": "#/components/schemas/ShapeLabelCommands"
+          },
+          "merge_completion": {
+            "$ref": "#/components/schemas/ShapeMergeCompletion"
+          },
+          "merge_conflicts": {
+            "$ref": "#/components/schemas/ShapeMergeConflicts"
+          },
+          "review_comments": {
+            "$ref": "#/components/schemas/ShapeReviewComments"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "ShapeReviewComments": {
+        "properties": {
+          "debounce_ms": {
+            "type": "integer"
+          },
+          "escalation": {
+            "type": "string"
+          },
+          "escalation_label": {
+            "type": "string"
+          },
+          "max_continuation_turns": {
+            "type": "integer"
+          },
+          "poll_interval_ms": {
+            "type": "integer"
+          },
+          "triage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "max_continuation_turns",
+          "debounce_ms",
+          "poll_interval_ms",
+          "triage",
+          "escalation"
+        ],
+        "type": "object"
+      },
+      "ShapeRule": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "match": {
+            "$ref": "#/components/schemas/ShapeMatch"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next": {
+            "type": "string"
+          },
+          "selected_by": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "usage_arrival": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "selected_by",
+          "agent_kind",
+          "usage_arrival"
+        ],
+        "type": "object"
+      },
+      "ShapeSelection": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "usage_arrival": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_kind",
+          "usage_arrival"
+        ],
+        "type": "object"
+      },
+      "ShapeTracker": {
+        "properties": {
+          "active_states": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handoff_state": {
+            "type": "string"
+          },
+          "in_progress_state": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "no_change_state": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "project_url": {
+            "type": "string"
+          },
+          "terminal_states": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "active_states",
+          "terminal_states"
+        ],
+        "type": "object"
+      },
+      "ShapeWorker": {
+        "properties": {
+          "max_concurrent_agents_per_host": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ssh_hosts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ssh_hosts",
+          "max_concurrent_agents_per_host"
+        ],
+        "type": "object"
+      },
+      "SkillCall": {
+        "properties": {
+          "skill": {
+            "type": "string"
+          },
+          "tool_error": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "skill"
+        ],
+        "type": "object"
+      },
+      "SkillCallReport": {
+        "properties": {
+          "by_skill": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SkillCount"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unrecorded_runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unrecorded_runs",
+          "by_skill"
+        ],
+        "type": "object"
+      },
+      "SkillCount": {
+        "properties": {
+          "calls": {
+            "type": "integer"
+          },
+          "failed_calls": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "skill": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill",
+          "runs",
+          "calls",
+          "failed_calls"
+        ],
+        "type": "object"
+      },
+      "SnapshotAgentTotals": {
+        "properties": {
+          "cache_read_tokens": {
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "running_non_reporting": {
+            "type": "integer"
+          },
+          "running_unreported": {
+            "type": "integer"
+          },
+          "seconds_running": {
+            "type": "number"
+          },
+          "total_tokens": {
+            "type": "integer"
+          },
+          "unmeasured_sessions": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "seconds_running",
+          "unmeasured_sessions",
+          "running_unreported",
+          "running_non_reporting"
+        ],
+        "type": "object"
+      },
+      "SpanReport": {
+        "properties": {
+          "generated_at": {
+            "type": "string"
+          },
+          "period": {
+            "enum": [
+              "five_minutes",
+              "quarter_hour",
+              "hour",
+              "day",
+              "month"
+            ],
+            "type": "string"
+          },
+          "sessions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpanSession"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "since": {
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/SpendBucket"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "generated_at",
+          "since",
+          "until",
+          "period",
+          "totals",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "SpanSession": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "cost_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_unpriced": {
+            "type": "boolean"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dispatch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "identifier": {
+            "type": "string"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "identifier",
+          "issue_title",
+          "dispatch_id",
+          "rule_name",
+          "agent_kind",
+          "status",
+          "turns",
+          "tokens",
+          "cost_usd",
+          "cost_unpriced",
+          "cost_share",
+          "tokens_share"
+        ],
+        "type": "object"
+      },
+      "Spend": {
+        "properties": {
+          "buckets": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpendBucket"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period": {
+            "enum": [
+              "five_minutes",
+              "quarter_hour",
+              "hour",
+              "day",
+              "month"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "buckets"
+        ],
+        "type": "object"
+      },
+      "SpendBucket": {
+        "properties": {
+          "agent_priced_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_by_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KindCosts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_lower_bound": {
+            "type": "boolean"
+          },
+          "cost_partial_runs": {
+            "type": "integer"
+          },
+          "cost_unpriced_runs": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "in_progress": {
+            "type": "boolean"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "start": {
+            "type": "string"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_lower_bound": {
+            "type": "boolean"
+          },
+          "tokens_lower_bound_runs": {
+            "type": "integer"
+          },
+          "tokens_unmeasured_runs": {
+            "type": "integer"
+          },
+          "tool_calls": {
+            "type": "integer"
+          },
+          "turns": {
+            "type": "integer"
+          },
+          "turns_unrecorded_runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "runs",
+          "turns",
+          "tool_calls",
+          "errors",
+          "turns_unrecorded_runs",
+          "tokens",
+          "cost_usd",
+          "cost_by_kind",
+          "tokens_unmeasured_runs",
+          "cost_unpriced_runs",
+          "cost_partial_runs",
+          "tokens_lower_bound_runs",
+          "tokens_lower_bound",
+          "cost_lower_bound",
+          "agent_priced_usd",
+          "in_progress"
+        ],
+        "type": "object"
+      },
+      "SpendCeilingResponse": {
+        "properties": {
+          "daily": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpendWindowResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monthly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpendWindowResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "weekly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpendWindowResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "type": "object"
+      },
+      "SpendWindowResponse": {
+        "properties": {
+          "budget_usd": {
+            "type": "number"
+          },
+          "holds_dispatch": {
+            "type": "boolean"
+          },
+          "resets_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "used_usd": {
+            "type": "number"
+          },
+          "used_usd_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "budget_usd",
+          "used_usd",
+          "used_usd_complete",
+          "holds_dispatch",
+          "resets_at"
+        ],
+        "type": "object"
+      },
+      "StageHopResponse": {
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "configured_model": {
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_identifier": {
+            "type": "string"
+          },
+          "hold": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HoldResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hopped_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "issue_identifier": {
+            "type": "string"
+          },
+          "issue_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issue_title": {
+            "type": "string"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "issue_url": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "source_rule": {
+            "type": "string"
+          },
+          "stage_position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StagePositionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "status_text": {
+            "type": "string"
+          },
+          "status_text_full": {
+            "type": "string"
+          },
+          "target_label": {
+            "type": "string"
+          },
+          "target_rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_id",
+          "issue_identifier",
+          "source_rule",
+          "target_rule",
+          "target_label",
+          "hopped_at",
+          "dispatched_at",
+          "stage_position",
+          "hold",
+          "status_text",
+          "status_text_full"
+        ],
+        "type": "object"
+      },
+      "StageLineageResponse": {
+        "properties": {
+          "chain_id": {
+            "type": "string"
+          },
+          "previous": {
+            "type": "string"
+          },
+          "previous_outcome": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "StagePositionResponse": {
+        "properties": {
+          "chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current": {
+            "type": "string"
+          },
+          "hop_ceiling": {
+            "type": "integer"
+          },
+          "hop_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain",
+          "current",
+          "hop_count",
+          "hop_ceiling"
+        ],
+        "type": "object"
+      },
+      "StateCounts": {
+        "properties": {
+          "attention": {
+            "type": "integer"
+          },
+          "between_stages": {
+            "type": "integer"
+          },
+          "budget_exhausted": {
+            "type": "integer"
+          },
+          "held": {
+            "type": "integer"
+          },
+          "parked": {
+            "type": "integer"
+          },
+          "pending_reactions": {
+            "type": "integer"
+          },
+          "retrying": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "running",
+          "retrying",
+          "budget_exhausted",
+          "parked",
+          "pending_reactions",
+          "between_stages",
+          "held",
+          "attention"
+        ],
+        "type": "object"
+      },
+      "StateHealthResponse": {
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/HealthCheckResponse"
+          },
+          "poll": {
+            "$ref": "#/components/schemas/PollHealthResponse"
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/HealthCheckResponse"
+          },
+          "scm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScmHealthResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowHealthResponse"
+          }
+        },
+        "required": [
+          "database",
+          "preflight",
+          "workflow",
+          "poll",
+          "scm"
+        ],
+        "type": "object"
+      },
+      "StateResponse": {
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ActiveIssueResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active_estimated_cost_usd": {
+            "type": "number"
+          },
+          "agent_totals": {
+            "$ref": "#/components/schemas/SnapshotAgentTotals"
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AttentionItemResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "between_stages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/StageHopResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BudgetExhaustedResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config": {
+            "$ref": "#/components/schemas/ConfigResponse"
+          },
+          "cost_unpriced_running": {
+            "type": "integer"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/StateCounts"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/StateHealthResponse"
+          },
+          "held": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/HeldIssueResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parked": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ParkedEntryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_reactions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PendingReactionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_limits": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgentUsageWindowsResponse"
+            },
+            "type": "object"
+          },
+          "retrying": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RetryEntryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunningEntryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spend_ceiling": {
+            "$ref": "#/components/schemas/SpendCeilingResponse"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at",
+          "version",
+          "started_at",
+          "counts",
+          "running",
+          "retrying",
+          "budget_exhausted",
+          "parked",
+          "pending_reactions",
+          "between_stages",
+          "active",
+          "held",
+          "attention",
+          "agent_totals",
+          "rate_limits"
+        ],
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "agent_priced_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "cost_lower_bound": {
+            "type": "boolean"
+          },
+          "cost_partial_runs": {
+            "type": "integer"
+          },
+          "cost_per_succeeded_run_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_unpriced_runs": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration_excluded_runs": {
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "issues": {
+            "type": "integer"
+          },
+          "mean_turns_succeeded": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "stopped": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_lower_bound": {
+            "type": "boolean"
+          },
+          "tokens_lower_bound_runs": {
+            "type": "integer"
+          },
+          "tokens_unmeasured_runs": {
+            "type": "integer"
+          },
+          "unmeasured_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unmeasured_units": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "zero_duration_runs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "issues",
+          "succeeded",
+          "failed",
+          "stopped",
+          "cancelled",
+          "success_rate",
+          "duration_seconds",
+          "mean_turns_succeeded",
+          "tokens",
+          "cost_usd",
+          "cost_per_succeeded_run_usd",
+          "zero_duration_runs",
+          "duration_excluded_runs",
+          "cost_unpriced_runs",
+          "cost_partial_runs",
+          "tokens_unmeasured_runs",
+          "tokens_lower_bound_runs",
+          "tokens_lower_bound",
+          "cost_lower_bound",
+          "agent_priced_usd",
+          "unmeasured_cause",
+          "unmeasured_units"
+        ],
+        "type": "object"
+      },
+      "TableInForceResponse": {
+        "properties": {
+          "age_days": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "layer",
+          "as_of",
+          "age_days"
+        ],
+        "type": "object"
+      },
+      "TableSourceResponse": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failures": {
+            "type": "integer"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "in_force": {
+            "type": "boolean"
+          },
+          "models": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_try_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "off_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "in_force",
+          "off_by",
+          "file",
+          "address",
+          "version",
+          "as_of",
+          "models",
+          "next_try_at",
+          "failures",
+          "failed_at",
+          "error"
+        ],
+        "type": "object"
+      },
+      "TokenInfo": {
+        "properties": {
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cache_write_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens"
+        ],
+        "type": "object"
+      },
+      "TokenRateResponse": {
+        "properties": {
+          "cache_read_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cache_write_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "input_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "per_kind": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "input_per_mtok",
+          "output_per_mtok",
+          "cache_read_per_mtok",
+          "cache_write_per_mtok",
+          "complete",
+          "per_kind"
+        ],
+        "type": "object"
+      },
+      "TokenRatesSourceResponse": {
+        "properties": {
+          "kind_entries": {
+            "type": "integer"
+          },
+          "model_entries": {
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind_entries",
+          "model_entries",
+          "version"
+        ],
+        "type": "object"
+      },
+      "Tokens": {
+        "properties": {
+          "cache_read": {
+            "type": "integer"
+          },
+          "cache_write": {
+            "type": "integer"
+          },
+          "fresh_input": {
+            "type": "integer"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "uncached": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "total",
+          "cache_read",
+          "cache_write",
+          "uncached",
+          "fresh_input"
+        ],
+        "type": "object"
+      },
+      "UnitAmountResponse": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "lower_bound": {
+            "type": "boolean"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "UsageSourceResponse": {
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "strategy"
+        ],
+        "type": "object"
+      },
+      "UsageWindowAmountResponse": {
+        "properties": {
+          "limit": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "used": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "used",
+          "limit",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "UsageWindowResponse": {
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageWindowAmountResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "allowed",
+                  "warning",
+                  "exhausted"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "used_percent",
+          "status",
+          "resets_at",
+          "reported_at",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "VendorAmountResponse": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "lower_bound": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit",
+          "model",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "VerdictCount": {
+        "properties": {
+          "runs": {
+            "type": "integer"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "runs"
+        ],
+        "type": "object"
+      },
+      "WorkflowHealthResponse": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "failing_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "file": {
+            "type": "string"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checked_at",
+          "last_success_at",
+          "consecutive_failures",
+          "failing_since"
+        ],
+        "type": "object"
+      },
+      "WorkspaceInfo": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Sortie JSON API",
+    "version": "v1"
+  },
+  "openapi": "3.2.1",
+  "paths": {
+    "/api/v1/attention/{id}/acknowledge": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcknowledgeResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcknowledgeResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "run",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          },
+          {
+            "description": "The id of the last frame received: the state revision, then a semicolon and dispatch_id:sequence for each subscribed run. A sequence given here replaces the one the run parameter gives for the same run.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "data": {
+                          "contentMediaType": "application/json",
+                          "contentSchema": {
+                            "type": "object"
+                          }
+                        },
+                        "event": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "contentMediaType": "application/json",
+                          "contentSchema": {
+                            "type": "object"
+                          }
+                        },
+                        "event": {
+                          "const": "heartbeat"
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "contentMediaType": "application/json",
+                          "contentSchema": {
+                            "$ref": "#/components/schemas/AgentEventFrame"
+                          }
+                        },
+                        "event": {
+                          "const": "agent_event"
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "contentMediaType": "application/json",
+                          "contentSchema": {
+                            "$ref": "#/components/schemas/RunEndedFrame"
+                          }
+                        },
+                        "event": {
+                          "const": "run_ended"
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "contentMediaType": "application/json",
+                          "contentSchema": {
+                            "$ref": "#/components/schemas/RunResetFrame"
+                          }
+                        },
+                        "event": {
+                          "const": "reset"
+                        }
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          }
+        }
+      }
+    },
+    "/api/v1/prices": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/reactions/{identifier}/{kind}/check": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckNowResponse"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckNowResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/refresh": {
+      "post": {
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/retries/{identifier}/run": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryNowResponse"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryNowResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "issue",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "issue_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ended_since",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ended_until",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/issues": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "issue",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueGroupsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{dispatch_id}/events": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dispatch_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEventsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/state": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "parameters": [
+          {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "schema": {
+              "enum": [
+                "five_minutes",
+                "quarter_hour",
+                "hour",
+                "day",
+                "month"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/stats/span": {
+      "get": {
+        "parameters": [
+          {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An RFC 3339 timestamp, a YYYY-MM-DD date read as midnight UTC, or a positive duration such as 24h read as that long before now.",
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/{identifier}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueDetailResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/livez": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    }
+  }
+}
