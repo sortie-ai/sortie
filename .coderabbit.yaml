@@ -33,7 +33,7 @@ reviews:
     - "!internal/agent/clientprotocol/wire_gen.go"
     - "!internal/server/ui/dist/**"
     - "!web/src/api/types.gen.ts"
-    - "!docs/api.schema.json"
+    - "!docs/openapi.json"
     - "!internal/pricing/snapshot/**"
 
 chat:

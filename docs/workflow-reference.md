@@ -3023,7 +3023,7 @@ The `hold` object of a held row and of a between-stages row has these members.
 
 | Field          | Type              | Description |
 | -------------- | ----------------- | ----------- |
-| `reason`       | string            | Why the pass held the issue, one of the values below, and the API schema enumerates them. A client MUST tolerate a `reason` its copy of the schema does not list, one a newer version serves, and show `reason_text` and `release_text`. |
+| `reason`       | string            | Why the pass held the issue, one of the values below, and the API's OpenAPI description enumerates them. A client MUST tolerate a `reason` its copy of the description does not list, one a newer version serves, and show `reason_text` and `release_text`. |
 | `held_since`   | string            | When a dispatch pass first held the issue, as an RFC 3339 timestamp in UTC. Never `null`. It does not change while later passes keep the issue held, whatever their reasons, nor across a candidate fetch that fails. It is new when a pass that runs the loop does not hold the issue and a later pass does, and after a restart. |
 | `blockers`     | array or `null`   | Non-null exactly for `blocked_by`: every blocker whose state is empty or not terminal, in the order the tracker returned them. Each has `issue_id`, `issue_identifier`, `display_identifier` (omitted when the tracker needs no qualified form), and `state` (omitted when the tracker returned none, masked). |
 | `slot`         | object or `null` | Non-null exactly for `agent_slots_full`. `scope` is `global` or `state`; `state` is the issue's tracker state as the pass read it, present exactly for `state` and masked; `used` is the sessions running against the limit; `limit` is the limit. |

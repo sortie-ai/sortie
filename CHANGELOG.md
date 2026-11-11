@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Every route of the JSON API and the health endpoints, with its parameters, status codes, and response bodies, is now described in `docs/openapi.json`, an OpenAPI 3.2 document that replaces the JSON Schema file of response bodies. ([#1493](https://github.com/sortie-ai/sortie/issues/1493))
+
 ### Fixed
 
 - The status instructions Sortie adds to the first prompt of a run now open with their own `## Report your status` heading, so they no longer read as part of the last Sortie tool listed or of the workflow template's last section. ([#1647](https://github.com/sortie-ai/sortie/issues/1647))

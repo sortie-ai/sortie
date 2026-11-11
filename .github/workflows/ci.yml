@@ -266,3 +266,31 @@ jobs:
 
       - name: Output drift
         run: make ui-build-check
+
+  openapi:
+    name: OpenAPI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A fixed release verified by digest keeps the validator from changing
+      # under an unchanged document.
+      - name: Install oasdiff
+        env:
+          OASDIFF_VERSION: 1.37.0
+          OASDIFF_SHA256: eac87307d31d08c36800c58a409c247f1c5db37fbb72e2544402f22a87cbca3c
+        run: |
+          archive="oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/${archive}"
+          echo "${OASDIFF_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check -
+          mkdir "$RUNNER_TEMP/oasdiff"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/oasdiff" oasdiff
+          echo "$RUNNER_TEMP/oasdiff" >> "$GITHUB_PATH"
+
+      - name: Validate OpenAPI description
+        run: oasdiff validate docs/openapi.json
