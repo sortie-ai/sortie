@@ -27,6 +27,61 @@ import (
 	"github.com/sortie-ai/sortie/internal/runstats"
 )
 
+const (
+	defaultAPIHost = "127.0.0.1"
+	defaultAPIPort = "7678"
+)
+
+const apiDescription = "Read and control a running Sortie orchestrator. The API serves its current state, run history, usage statistics and prices, " +
+	"accepts a few operator actions, and streams changes and agent events as they happen.\n\n" +
+	"## Errors\n\n" +
+	"A failed request returns an `error` object with a machine-readable `code` and a human-readable `message`, " +
+	"unless the route documents its own response body. Treat a code you do not know by its HTTP status.\n\n" +
+	"## Compatibility\n\n" +
+	"Within `v1`, a release only adds to the API.\n\n" +
+	"- Ignore response members, enumerated values and event names you do not know.\n" +
+	"- Anything to be removed is first marked `deprecated` and stays, unchanged, for at least 60 days.\n" +
+	"- A fix for a security or correctness defect in the contract is the only change made without that notice, and the changelog announces it.\n" +
+	"- A route marked `x-stability-level` is not yet stable and may change in any release.\n" +
+	"- Message and display text may be reworded in any release, so branch on codes and enumerated values."
+
+// The document's top-level fields are written in the order the OpenAPI
+// specification lists them, which a map cannot keep.
+type openAPIDocument struct {
+	OpenAPI      string          `json:"openapi"`
+	Info         openAPIInfo     `json:"info"`
+	Servers      []openAPIServer `json:"servers"`
+	Paths        map[string]any  `json:"paths"`
+	Components   map[string]any  `json:"components"`
+	Tags         []openAPITag    `json:"tags"`
+	ExternalDocs map[string]any  `json:"externalDocs"`
+}
+
+type openAPITag struct {
+	Name string `json:"name"`
+}
+
+type openAPIInfo struct {
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	License     map[string]any `json:"license"`
+	Version     string         `json:"version"`
+}
+
+type openAPIOperation struct {
+	Tags        []string       `json:"tags"`
+	Summary     string         `json:"summary"`
+	Description string         `json:"description"`
+	Parameters  []any          `json:"parameters,omitempty"`
+	Responses   map[string]any `json:"responses"`
+}
+
+type openAPIServer struct {
+	URL         string         `json:"url"`
+	Description string         `json:"description"`
+	Variables   map[string]any `json:"variables"`
+}
+
 var updateContract = flag.Bool("update", false, "rewrite the generated API contract files")
 
 var (
@@ -515,13 +570,12 @@ func (c *contract) openAPI(routes []apiRoute) ([]byte, error) {
 	paths := map[string]any{}
 	for _, route := range routes {
 		path := strings.TrimPrefix(route.pattern, route.method+" ")
-		operation := map[string]any{}
+		if route.summary == "" || route.description == "" || !slices.Contains(apiTags, route.tag) {
+			return nil, fmt.Errorf("%s: a route needs a summary, a description and a tag from apiTags", route.pattern)
+		}
 		parameters, err := operationParameters(route, path)
 		if err != nil {
 			return nil, err
-		}
-		if len(parameters) > 0 {
-			operation["parameters"] = parameters
 		}
 		responses := map[string]any{}
 		for _, response := range route.responses {
@@ -531,7 +585,7 @@ func (c *contract) openAPI(routes []apiRoute) ([]byte, error) {
 			}
 			responses[strconv.Itoa(response.status)] = map[string]any{"description": http.StatusText(response.status), "content": content}
 		}
-		operation["responses"] = responses
+		operation := openAPIOperation{Tags: []string{route.tag}, Summary: route.summary, Description: route.description, Parameters: parameters, Responses: responses}
 		item, ok := paths[path].(map[string]any)
 		if !ok {
 			item = map[string]any{}
@@ -539,11 +593,33 @@ func (c *contract) openAPI(routes []apiRoute) ([]byte, error) {
 		}
 		item[strings.ToLower(route.method)] = operation
 	}
-	out, err := json.MarshalIndent(map[string]any{
-		"openapi":    "3.2.1",
-		"info":       map[string]any{"title": "Sortie JSON API", "version": "v1"},
-		"paths":      paths,
-		"components": map[string]any{"schemas": c.schemas()},
+	tags := make([]openAPITag, len(apiTags))
+	for i, name := range apiTags {
+		tags[i] = openAPITag{Name: name}
+	}
+	out, err := json.MarshalIndent(openAPIDocument{
+		OpenAPI: "3.2.1",
+		Info: openAPIInfo{
+			Title:       "Sortie JSON API",
+			Description: apiDescription,
+			License:     map[string]any{"name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
+			Version:     "v1",
+		},
+		Servers: []openAPIServer{{
+			URL:         "http://{host}:{port}",
+			Description: "Your Sortie instance",
+			Variables: map[string]any{
+				"host": map[string]any{"default": defaultAPIHost, "description": "Address the instance listens on"},
+				"port": map[string]any{"default": defaultAPIPort, "description": "Port the instance listens on"},
+			},
+		}},
+		Paths:      paths,
+		Components: map[string]any{"schemas": c.schemas()},
+		Tags:       tags,
+		ExternalDocs: map[string]any{
+			"description": "HTTP API reference",
+			"url":         "https://docs.sortie-ai.com/reference/http-api/",
+		},
 	}, "", "  ")
 	return append(out, '\n'), err
 }

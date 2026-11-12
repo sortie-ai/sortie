@@ -48,3 +48,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0040](0040-keep-the-codex-and-claude-code-kinds-as-the-routes-to-their-clis.md) | Keep the Codex and Claude Code Kinds as the Routes to Their CLIs | Accepted |
 | [0041](0041-reset-a-usage-limit-refusal-at-the-latest-reset-of-its-gating-windows.md) | Reset a Usage-Limit Refusal at the Latest Reset of Its Gating Windows | Accepted |
 | [0042](0042-hand-the-agent-every-unseen-issue-comment-through-one-shared-feed.md) | Hand the Agent Every Unseen Issue Comment Through One Shared Feed | Accepted |
+| [0043](0043-keep-stable-routes-of-the-json-api-backward-compatible-within-v1.md) | Keep Stable Routes of the JSON API Backward Compatible Within `v1` | Accepted |
