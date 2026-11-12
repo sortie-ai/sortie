@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Every GitHub release now carries the OpenAPI description of the JSON API as `openapi.json`, so a client can fetch the description of the newest release from `https://github.com/sortie-ai/sortie/releases/latest/download/openapi.json` and that of any release from `https://github.com/sortie-ai/sortie/releases/download/<tag>/openapi.json`. ([#1669](https://github.com/sortie-ai/sortie/issues/1669))
+
 ### Changed
 
 - Every route of the JSON API and the health endpoints, with its parameters, status codes, and response bodies, is now described in `docs/openapi.json`, an OpenAPI 3.2 document that replaces the JSON Schema file of response bodies. ([#1493](https://github.com/sortie-ai/sortie/issues/1493))
