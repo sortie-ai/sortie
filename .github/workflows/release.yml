@@ -853,6 +853,7 @@ jobs:
           echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_amd64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_arm64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`checksums.txt\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`openapi.json\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- SBOM manifests (\`*.sbom.json\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry run summary

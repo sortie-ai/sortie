@@ -114,6 +114,9 @@ release:
   prerelease: auto
   make_latest: true
   mode: keep-existing
+  extra_files:
+    - glob: docs/openapi.json
+      name_template: openapi.json
 
 snapshot:
   version_template: "{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}"
