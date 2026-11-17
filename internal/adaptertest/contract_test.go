@@ -1685,7 +1685,7 @@ func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPacka
 // identity rule always treats as identity tokens, in addition to the kind
 // strings extracted from the tree. It is a floor, not a closed world.
 var contractAgentIdentityFloorTable = []string{
-	"claude", "codex", "copilot", "kiro", "opencode", "mock",
+	"claude", "codex", "copilot", "kiro", "opencode", "pi", "mock",
 	"gemini", "amp", "goose", "zed", "cursor", "aider", "qwen", "crush",
 }
 
@@ -1890,7 +1890,10 @@ func contractIdentityWordsFromIdent(name string) []string {
 		// An uppercase run ending in a lowercase rune starts a new word at
 		// that run's last uppercase rune, so useCLAUDEFlag yields "use",
 		// "claude" and "flag" rather than gluing the token to "flag".
-		if i > 0 && unicode.IsUpper(runes[i-1]) && unicode.IsLower(r) && len(current) > 1 {
+		// A short initialism with a plural s that ends the word stays one
+		// word: PIDs is not the identity token pi followed by ds.
+		pluralInitialism := r == 's' && len(current) <= 3 && (i+1 == len(runes) || !unicode.IsLower(runes[i+1]))
+		if i > 0 && unicode.IsUpper(runes[i-1]) && unicode.IsLower(r) && len(current) > 1 && !pluralInitialism {
 			last := current[len(current)-1]
 			current = current[:len(current)-1]
 			flush()
@@ -1900,6 +1903,32 @@ func contractIdentityWordsFromIdent(name string) []string {
 	}
 	flush()
 	return words
+}
+
+func TestContractIdentityWordsFromIdent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want []string
+	}{
+		{"useCLAUDEFlag", []string{"use", "claude", "flag"}},
+		{"PIDs", []string{"pids"}},
+		{"NewPIDs", []string{"new", "pids"}},
+		{"PIDsAreHere", []string{"pids", "are", "here"}},
+		{"PIDs_other", []string{"pids", "other"}},
+		{"CLIsession", []string{"cl", "isession"}},
+		{"GPTsomething", []string{"gp", "tsomething"}},
+		{"piSession", []string{"pi", "session"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := contractIdentityWordsFromIdent(tt.name); !slices.Equal(got, tt.want) {
+				t.Errorf("contractIdentityWordsFromIdent(%q) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
 }
 
 // contractIdentityWordsFromLiteral splits value into lowercase words on

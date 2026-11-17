@@ -328,10 +328,10 @@ func AssertConformance(t *testing.T, b Binding) {
 	requireValidBinding(t, b)
 	t.Run("scripted turn", func(t *testing.T) { runScenario(t, b, ScenarioTurn) })
 	t.Run("script exhaustion", func(t *testing.T) { runScenario(t, b, ScenarioExhaustion) })
-	t.Run("tool server", func(t *testing.T) { runToolServer(t, b) })
+	t.Run("tool server", toolServerScenario(b, func(t *testing.T) { runToolServer(t, b) }))
 	if b.SSH != nil {
-		t.Run("tool server over ssh", func(t *testing.T) { runSSHToolServer(t, b, false) })
-		t.Run("tool server over ssh with forwarding refused", func(t *testing.T) { runSSHToolServer(t, b, true) })
+		t.Run("tool server over ssh", toolServerScenario(b, func(t *testing.T) { runSSHToolServer(t, b, false) }))
+		t.Run("tool server over ssh with forwarding refused", toolServerScenario(b, func(t *testing.T) { runSSHToolServer(t, b, true) }))
 		t.Run("turn cancellation over ssh", func(t *testing.T) { runInterruption(t, b, ScenarioCancellation, &remoteLaunch{variant: b.SSH}) })
 		if b.Spend != nil {
 			t.Run("turn cancellation after output over ssh", func(t *testing.T) {
@@ -355,6 +355,18 @@ func AssertConformance(t *testing.T, b Binding) {
 	}
 	t.Run("session continuation", func(t *testing.T) { runContinuation(t, b, nil) })
 	t.Run("credential verification context", func(t *testing.T) { runVerificationContext(t, b) })
+}
+
+// toolServerScenario wraps a scenario that needs Sortie's tool server so it is
+// skipped for a kind whose MCP dialect delivers none to its runtime.
+func toolServerScenario(b Binding, scenario func(t *testing.T)) func(t *testing.T) {
+	return func(t *testing.T) {
+		t.Helper()
+		if meta, _ := registry.Agents.Meta(b.Kind); !meta.MCPDialect.DeliversTools() {
+			t.Skip("the kind delivers no tool server to its runtime")
+		}
+		scenario(t)
+	}
 }
 
 // RunCustomTurn runs one turn of b's runtime against a scripted endpoint and

@@ -15,6 +15,7 @@ These pages are for working on Sortie itself. To install, configure, and run Sor
     - [Codex](codex-adapter-notes.md) - process model and trust and approval collisions
     - [Copilot CLI](copilot-adapter-notes.md) - session and cost model and hard-to-diagnose failures
     - [OpenCode](opencode-adapter-notes.md) - launch contract, usage export, and session identity
+    - [Pi](pi-adapter-notes.md) - the JSON event stream, exit codes, and session resume
     - [Agent Client Protocol](agent-client-protocol-adapter-notes.md) - the generic ACP adapter: pinned schema artifact and runtime selection
     - [Kiro CLI](kiro-adapter-notes.md) - Kiro through the generic ACP adapter
     - [Gemini CLI](gemini-adapter-notes.md) - Gemini through the generic ACP adapter and its token accounting
