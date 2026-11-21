@@ -47,7 +47,7 @@ export function LaneRow({ lane, variant, isSelected, showSelection, onOpen }: La
         rowStyles(isLook, true, isNeeds),
       )}
     >
-      <div className="flex min-w-0 flex-wrap items-baseline gap-x-sm [grid-area:ident]">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-sm [grid-area:ident] @max-3xl:flex-col @max-3xl:items-start">
         <span className="text-body-md font-medium text-ink">
           <IssueTitleLink identifier={lane.identifier}>
             {lane.title ?? lane.displayKey}

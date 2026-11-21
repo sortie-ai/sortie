@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The status instructions Sortie adds to the first prompt of a run now open with their own `## Report your status` heading, so they no longer read as part of the last Sortie tool listed or of the workflow template's last section. ([#1647](https://github.com/sortie-ai/sortie/issues/1647))
 - Dashboard: the Terminal station of the Pipeline header and the issue lane reads `varies` on its second line when Sortie cannot name the state a merged issue ends in, instead of staying blank, and the lane of an issue that ended there names the state it reached, or merged. ([#1648](https://github.com/sortie-ai/sortie/issues/1648))
+- Dashboard: below the width at which the Pipeline panel drops its filter chips, every lane sets its key and agent line under its title, instead of the lanes with a short title keeping it beside the title. ([#1650](https://github.com/sortie-ai/sortie/issues/1650))
 
 ## [1.32.0] - 2026-11-09
 
