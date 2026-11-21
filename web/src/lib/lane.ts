@@ -40,7 +40,7 @@ export interface Station {
   detail?: string;
   /** The form a header too narrow for the label uses; absent when the label is already short. */
   short?: string;
-  /** Set on the end station of a workflow that lists two or more terminal states. */
+  /** Set on the end station when an ended issue's own ending says more than the workflow's detail. */
   detailFromEnding?: true;
 }
 
@@ -97,12 +97,13 @@ export function stationsOf(config: ConfigResponse): Station[] {
     });
   }
   if (reactions.length > 0) {
+    const detail = endDetailOf(config);
     stations.push({
       key: "end",
       kind: "end",
       label: "Terminal",
-      detail: endDetailOf(config),
-      ...(hasSeveralTerminalStates(config.tracker.terminal_states)
+      detail,
+      ...(detail === END_DETAIL_VARIES || hasSeveralTerminalStates(config.tracker.terminal_states)
         ? { detailFromEnding: true as const }
         : {}),
     });
