@@ -40,7 +40,7 @@ export interface Station {
   detail?: string;
   /** The form a header too narrow for the label uses; absent when the label is already short. */
   short?: string;
-  /** Set on the end station of a workflow that lists two or more terminal states. */
+  /** Set on the end station when an ended issue's own ending says more than the workflow's detail. */
   detailFromEnding?: true;
 }
 
@@ -102,8 +102,8 @@ export function stationsOf(config: ConfigResponse): Station[] {
       key: "end",
       kind: "end",
       label: "Terminal",
-      ...(detail === undefined ? {} : { detail }),
-      ...(hasSeveralTerminalStates(config.tracker.terminal_states)
+      detail,
+      ...(detail === END_DETAIL_VARIES || hasSeveralTerminalStates(config.tracker.terminal_states)
         ? { detailFromEnding: true as const }
         : {}),
     });
@@ -115,10 +115,13 @@ function detailOf(detail: string | undefined): Pick<Station, "detail"> {
   return detail === undefined || detail === "" ? {} : { detail };
 }
 
+const END_DETAIL_VARIES = "varies";
+
 // Sortie records a terminal ending without a merge when an issue closes under an open pull
 // request, so a terminal state's name is true of the end station only when every merge Sortie
 // records moves the issue into it, which `merge_completion` does and `auto_merge` alone does not.
-function endDetailOf(config: ConfigResponse): string | undefined {
+// The station's second line is never left empty, so the other stations' details do not read as missing.
+function endDetailOf(config: ConfigResponse): string {
   const target = config.reactions.merge_completion?.target_state;
   if (target !== undefined && target !== "") {
     return target;
@@ -126,7 +129,7 @@ function endDetailOf(config: ConfigResponse): string | undefined {
   const terminal = (config.tracker.terminal_states ?? []).filter((state) => state !== "");
   return terminal.length === 1 && config.reactions.auto_merge === undefined
     ? terminal[0]
-    : undefined;
+    : END_DETAIL_VARIES;
 }
 
 function pendingEntryOf(
