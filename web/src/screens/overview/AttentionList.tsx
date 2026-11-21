@@ -14,7 +14,6 @@ export interface AttentionListProps {
   pending: ReadonlySet<string>;
   onOpen: (item: AttentionItemResponse) => void;
   onAcknowledge: (item: AttentionItemResponse) => void;
-  onAction: (item: AttentionItemResponse) => void;
 }
 
 /** Its items in served order, never reordered by the client. */
@@ -26,7 +25,6 @@ export function AttentionList({
   pending,
   onOpen,
   onAcknowledge,
-  onAction,
 }: AttentionListProps) {
   return (
     <Panel title="Needs attention" meta="critical first, then oldest">
@@ -44,7 +42,6 @@ export function AttentionList({
               isPending={pending.has(item.id)}
               onOpen={onOpen}
               onAcknowledge={onAcknowledge}
-              onAction={onAction}
             />
           );
         })}

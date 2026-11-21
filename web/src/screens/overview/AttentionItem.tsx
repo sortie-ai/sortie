@@ -7,6 +7,7 @@ import { linkActionOf } from "@/components/use-attention-actions";
 import { cn } from "@/lib/cn";
 import { fmtAgo } from "@/lib/format";
 import { rowStyles, secondLineColor } from "@/lib/rows";
+import { attentionKey, markRead } from "@/lib/unread";
 
 import type { MouseEvent } from "react";
 
@@ -23,7 +24,6 @@ export interface AttentionItemProps {
   isPending: boolean;
   onOpen: (item: AttentionItemResponse) => void;
   onAcknowledge: (item: AttentionItemResponse) => void;
-  onAction: (item: AttentionItemResponse) => void;
 }
 
 export function AttentionItem({
@@ -35,7 +35,6 @@ export function AttentionItem({
   isPending,
   onOpen,
   onAcknowledge,
-  onAction,
 }: AttentionItemProps) {
   const link = linkActionOf(item);
   const key = item.display_identifier || item.issue_identifier;
@@ -58,7 +57,7 @@ export function AttentionItem({
       event.preventDefault();
       return;
     }
-    onAction(item);
+    markRead([attentionKey(item.id)]);
   }
 
   return (
