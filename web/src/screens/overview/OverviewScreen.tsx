@@ -316,7 +316,6 @@ function OverviewBody({ state }: OverviewBodyProps) {
               selectAndOpen(attentionNavKey(item.id), item.issue_identifier || null)
             }
             onAcknowledge={(item) => void actions.acknowledge(item)}
-            onAction={actions.runAction}
           />
         ) : view.isFirstRun === false && condition(view.state) !== "degraded" ? (
           <CalmState
