@@ -8406,6 +8406,128 @@ func TestHandleWorkerExit_LabelFixExit_ErrorStillRetries(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_ReactionExit_RearmsHeadWatches covers a reaction
+// continuation that runs while the issue reads as the handoff state, with no
+// in-progress state configured, so its exit takes neither the handoff path
+// nor keeps the claim. Its dispatch consumed the watch that fired it, so the
+// exit itself must seed the head watches again or a later conflict or CI
+// failure on the pushed head goes unnoticed.
+func TestHandleWorkerExit_ReactionExit_RearmsHeadWatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		kind       string
+		softStop   bool
+		stopReason string
+	}{
+		{name: "merge-conflict continuation exits normally", kind: ReactionKindMergeConflict},
+		{name: "merge-conflict continuation asks for human review", kind: ReactionKindMergeConflict, softStop: true, stopReason: string(workspace.StatusNeedsHumanReview)},
+		{name: "ci continuation exits normally", kind: ReactionKindCI},
+		{name: "review continuation reports no change needed", kind: ReactionKindReview, softStop: true, stopReason: string(workspace.StatusNoChangeNeeded)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			writePRSCMMetadata(t, wsPath, 7, "corp", "api", "feature/RX-1", "beef")
+
+			store := &mockExitStore{}
+			state := exitStateWithIssue(t, "RX-1", "queue-pr")
+			state.Running["RX-1"].ReactionKind = tt.kind
+
+			params := defaultExitParams(t, store)
+			params.TrackerAdapter = &mockTrackerAdapter{}
+			params.HandoffState = "queue-pr"
+			params.ActiveStates = []string{"queue"}
+			params.TerminalStates = []string{"done"}
+			params.CIProvider = &ciProviderStubExit{}
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.MergeConflictReactionConfigured = true
+			params.AutoMergeReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:        "RX-1",
+				Identifier:     "RX-1-ident",
+				ExitKind:       WorkerExitNormal,
+				SoftStop:       tt.softStop,
+				SoftStopReason: tt.stopReason,
+				AgentAdapter:   "mock",
+				WorkspacePath:  wsPath,
+			}, params)
+
+			if _, claimed := state.Claimed["RX-1"]; claimed {
+				t.Error("claim still held after a reaction exit in the handoff state; want released")
+			}
+			for _, kind := range []string{ReactionKindMergeConflict, ReactionKindCI, ReactionKindAutoMerge} {
+				pending, ok := state.PendingReactions[ReactionKey("RX-1", kind)]
+				if !ok {
+					t.Errorf("PendingReactions[RX-1:%s] absent after a %s exit; want the head watch seeded again", kind, tt.kind)
+					continue
+				}
+				if pending.HeadRecordedAt != (time.Time{}) {
+					t.Errorf("PendingReactions[RX-1:%s].HeadRecordedAt = %v, want zero (a seeded watch records its own baseline)", kind, pending.HeadRecordedAt)
+				}
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_ReactionExit_SeedsNoHeadWatch covers the exits of a
+// reaction continuation that must not re-arm the head watches: a blocked
+// stop, a terminal issue, and a read-only review.
+func TestHandleWorkerExit_ReactionExit_SeedsNoHeadWatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		kind       string
+		issueState string
+		stopReason string
+	}{
+		{name: "blocked merge-conflict continuation", kind: ReactionKindMergeConflict, issueState: "queue-pr", stopReason: string(workspace.StatusBlocked)},
+		{name: "merge-conflict continuation on a terminal issue", kind: ReactionKindMergeConflict, issueState: "done"},
+		{name: "read-only label review", kind: ReactionKindLabelReview, issueState: "queue-pr"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			writePRSCMMetadata(t, wsPath, 7, "corp", "api", "feature/RX-2", "beef")
+
+			store := &mockExitStore{}
+			state := exitStateWithIssue(t, "RX-2", tt.issueState)
+			state.Running["RX-2"].ReactionKind = tt.kind
+
+			params := defaultExitParams(t, store)
+			params.TrackerAdapter = &mockTrackerAdapter{}
+			params.HandoffState = "queue-pr"
+			params.ActiveStates = []string{"queue"}
+			params.TerminalStates = []string{"done"}
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.MergeConflictReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:        "RX-2",
+				Identifier:     "RX-2-ident",
+				ExitKind:       WorkerExitNormal,
+				SoftStop:       tt.stopReason != "",
+				SoftStopReason: tt.stopReason,
+				AgentAdapter:   "mock",
+				WorkspacePath:  wsPath,
+			}, params)
+
+			if _, ok := state.PendingReactions[ReactionKey("RX-2", ReactionKindMergeConflict)]; ok {
+				t.Errorf("PendingReactions[RX-2:merge-conflict] present after %s; want none", tt.name)
+			}
+		})
+	}
+}
+
 // TestHandleWorkerExit_MergeCompletionEnqueue covers the merge-completion
 // seeding block. The clause imposes no branch requirement, unlike the
 // checkout-bearing kinds; the fixtures carry one only as the common case.

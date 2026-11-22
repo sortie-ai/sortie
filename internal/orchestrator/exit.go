@@ -1087,11 +1087,17 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// A made hop leaves the issue active on its next stage, which owns any
 		// reaction from here on, so the run that hopped seeds none.
 		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed && !hopMade
-		// A fix session leaves the issue in the handoff state and releases
-		// its claim, but its push gives the pull request a new head, so the
-		// watches keyed on that head must start over.
-		fixExit := claimedAtExit && dispatchPostureForReactionKind(entry.ReactionKind) == PostureFix && !blockedSoftStop && !terminalSuppressed
-		headWatchesAllowed := reactionEnqueueAllowed || fixExit
+		// A reaction continuation (a CI fix, a review fix, a rebase, a label
+		// fix) runs while the issue sits in the handoff state and releases
+		// its claim at exit, so neither the handoff path nor a retained
+		// claim seeds anything. Its dispatch consumed the watch that fired
+		// it, and its push may give the pull request a new head, so the
+		// watches keyed on the head must start over. A read-only review
+		// pushes nothing and consumed no head watch.
+		_, parkedAtExit := state.Parked[workerResult.IssueID]
+		reactionExit := claimedAtExit && isKnownReactionKind(entry.ReactionKind) && dispatchPostureForReactionKind(entry.ReactionKind) != PostureReview &&
+			!blockedSoftStop && !terminalSuppressed && !hopMade && !parkedAtExit
+		headWatchesAllowed := reactionEnqueueAllowed || reactionExit
 		var seededKinds []string
 
 		// Seed a pending CI check when CI provider and SCM adapter are both

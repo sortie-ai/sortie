@@ -114,7 +114,7 @@ The `merge_conflict` key MUST be registered in `prompt.continuationKeys` and see
 
 ### 11E.7 Seeding and recovery
 
-Worker-exit seeding applies the same metadata predicate `review` and `bot-review` use: an entry is created only when `SCMMetadata` reports `pr_number > 0` and non-empty `owner`, `repo`, and `branch`. The seeding block runs in the `WorkerExitNormal` branch of `HandleWorkerExit`, after the existing auto-merge enqueue block, guarded on `params.SCMAdapter != nil && params.MergeConflictReactionConfigured`. A "create only if absent" guard preserves an in-progress pending entry across re-exits, matching the review, bot-review, and auto-merge kinds. The guard also preserves a standing escalation, because a worker exit seeds only when no entry exists.
+Worker-exit seeding applies the same metadata predicate `review` and `bot-review` use: an entry is created only when `SCMMetadata` reports `pr_number > 0` and non-empty `owner`, `repo`, and `branch`. The seeding block runs in the `WorkerExitNormal` branch of `HandleWorkerExit`, after the existing auto-merge enqueue block, guarded on `params.SCMAdapter != nil && params.MergeConflictReactionConfigured`. The rebase continuation's own exit seeds it again (Section 7.3): the dispatch consumed the entry, and the rebase may push a head that conflicts once the base moves again. A "create only if absent" guard preserves an in-progress pending entry across re-exits, matching the review, bot-review, and auto-merge kinds. The guard also preserves a standing escalation, because a worker exit seeds only when no entry exists.
 
 Startup recovery re-seeds a `merge-conflict` pending entry for recent handoff-stage issues when `SCMMetadata` passes the same predicate. The recovered count is surfaced in the startup recovery log. Recovery is gated on the configured flag, so a configured-but-providerless setup recovers no entries, matching the §11D.6 pattern for bot-review.
 
@@ -147,7 +147,7 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 
 | From | Event | To | Action |
 |------|-------|----|--------|
-| (none) | Worker exits normally and passes the reaction-enqueue gate (§7.3; a made stage hop never passes it), SCM adapter and merge-conflict configured, PR metadata present | pending | Seed the entry if absent. |
+| (none) | Worker exits normally and passes the reaction-enqueue gate or is a reaction continuation's exit that re-seeds the head watches (§7.3; a made stage hop never does either), SCM adapter and merge-conflict configured, PR metadata present | pending | Seed the entry if absent. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no API call. |
 | pending | Reconcile tick, fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue, count error. |
 | pending | Reconcile tick, `Mergeability == unknown` | pending | Re-enqueue at `now + poll_interval`; do not touch fingerprint or counter. |
