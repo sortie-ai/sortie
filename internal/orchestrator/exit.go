@@ -728,6 +728,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// released on those arms, so a deferral changes only the retry slot.
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
+	// exitFoundTerminal is true when a normal exit found the issue in a
+	// terminal state; no watch is restored for it.
+	exitFoundTerminal := false
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
@@ -787,6 +790,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				metrics.IncHandoffTransitions(handoffSkipped)
 			}
 			terminalSuppressed = true
+			exitFoundTerminal = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 			resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetTerminal, log)
@@ -823,6 +827,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ContinuationContext: entry.ContinuationContext,
 					ReactionKind:        entry.ReactionKind,
 					Continuation:        entry.Continuation,
+					ResumeWatch:         entry.resumeWatch,
 					AgentKind:           entry.AgentKind,
 					ConfiguredModel:     entry.ConfiguredModel,
 					RuleName:            entry.RuleName,
@@ -916,6 +921,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							metrics.IncHandoffTransitions(handoffSkipped)
 						}
 						terminalSuppressed = true
+						exitFoundTerminal = true
 						verifiedTerminal = true
 						verifiedTerminalState = verifiedState
 					}
@@ -1508,6 +1514,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ContinuationContext: entry.ContinuationContext,
 					ReactionKind:        entry.ReactionKind,
 					Continuation:        entry.Continuation,
+					ResumeWatch:         entry.resumeWatch,
 					AgentKind:           entry.AgentKind,
 					ConfiguredModel:     entry.ConfiguredModel,
 					RuleName:            entry.RuleName,
@@ -1565,6 +1572,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				}
 			}
 		}
+	}
+
+	// A rebase continuation that ends with no retry to follow it, and whose
+	// exit seeded no watch, leaves the pull request unwatched: its dispatch
+	// consumed the watch that fired it.
+	if !exitFoundTerminal {
+		restoreMergeConflictWatch(state, workerResult.IssueID, entry.resumeWatch, now, "rebase run ended", log)
 	}
 
 	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)

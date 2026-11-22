@@ -260,6 +260,10 @@ type RunningEntry struct {
 	// continuation; the zero value for every other dispatch. Runtime-only.
 	Continuation ContinuationTarget
 
+	// resumeWatch is the pending reaction this reaction continuation was
+	// dispatched from; nil for every other dispatch. Runtime-only.
+	resumeWatch *PendingReaction
+
 	// SelfReviewActive is true during the self-review phase. Mutated only
 	// by the event loop via selfReviewCh.
 	SelfReviewActive bool
@@ -453,6 +457,10 @@ type RetryEntry struct {
 	// continuation this retry dispatches; the zero value for every other
 	// retry. Runtime-only.
 	Continuation ContinuationTarget
+
+	// resumeWatch is the pending reaction this reaction continuation was
+	// dispatched from; nil for every other dispatch. Runtime-only.
+	resumeWatch *PendingReaction
 
 	// pausedSinceMS is the wall-clock ms at which this entry first took one
 	// of HandleRetryTimer's paused-by-issue-state arms. Zero means not

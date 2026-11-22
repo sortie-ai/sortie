@@ -623,6 +623,12 @@ type ScheduleRetryParams struct {
 	// value for a non-reaction retry.
 	Continuation ContinuationTarget
 
+	// ResumeWatch is the pending reaction a reaction continuation was
+	// dispatched from, kept so the watch it consumed can be restored when
+	// the continuation ends without a run that seeds it again. Nil for
+	// every other retry.
+	ResumeWatch *PendingReaction
+
 	// RuleName is the rule name of the dispatch. Propagated verbatim
 	// into the new [RetryEntry].
 	RuleName string
@@ -722,6 +728,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		AgentKind:           params.AgentKind,
 		ConfiguredModel:     params.ConfiguredModel,
 		Continuation:        params.Continuation,
+		resumeWatch:         params.ResumeWatch,
 		scheduledAt:         scheduledAt,
 		scheduledDelayMS:    delayMS,
 	}

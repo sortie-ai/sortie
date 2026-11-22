@@ -234,6 +234,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ContinuationContext: popped.ContinuationContext,
 			ReactionKind:        popped.ReactionKind,
 			Continuation:        popped.Continuation,
+			ResumeWatch:         popped.resumeWatch,
 			AgentKind:           popped.AgentKind,
 			ConfiguredModel:     popped.ConfiguredModel,
 			RuleName:            popped.RuleName,
@@ -584,6 +585,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 
 		log.Info("issue without a state label, releasing claim")
 		delete(state.Claimed, issueID)
+		restoreMergeConflictWatch(state, issueID, popped.resumeWatch, time.Now().UTC(), "rebase retry dropped", log)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
@@ -622,6 +624,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		dwell := now.Sub(pausedSince)
 		if dwell >= pausedRetryMaxDwell {
 			delete(state.Claimed, issueID)
+			restoreMergeConflictWatch(state, issueID, popped.resumeWatch, now.UTC(), "rebase retry dropped", log)
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 				log.Error("failed to delete retry entry after paused-dwell drop",
 					slog.Any("error", err),
@@ -646,6 +649,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" {
 		log.Info("issue missing required fields, releasing claim")
 		delete(state.Claimed, issueID)
+		restoreMergeConflictWatch(state, issueID, popped.resumeWatch, time.Now().UTC(), "rebase retry dropped", log)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
@@ -931,6 +935,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.Trigger = popped.OriginTrigger
 		entry.UsageLimitNotified = popped.UsageLimitNotified
 		entry.Continuation = popped.Continuation
+		entry.resumeWatch = popped.resumeWatch
 		entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 		entry.CarriesTokenFigure = attemptSettings.CarriesTokenFigure
 		freezeIssueTokenBaseline(ctx, state, issueID, params.Store, params.Logger)

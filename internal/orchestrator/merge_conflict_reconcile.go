@@ -390,6 +390,7 @@ func dispatchMergeConflictContinuation(
 		Logger:              log,
 
 		IssueIdentity: pending.IssueIdentity,
+		ResumeWatch:   pending,
 	}, params.OnRetryFire, now)
 
 	if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindMergeConflict); markErr != nil {
@@ -533,4 +534,47 @@ func applyMergeConflictEscalation(
 	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
 		log.Warn("merge conflict escalation comment failed", slog.Any("error", err))
 	})
+}
+
+// restoreMergeConflictWatch puts back the merge-conflict watch a rebase
+// continuation's dispatch consumed, when the continuation ends with no retry
+// to follow it and nothing else watches the pull request: a run whose exit
+// seeded none, or a retry the retry timer dropped. Without it, a later
+// conflict on the pull request would go unnoticed until a restart. A parked
+// issue, or one that still runs or waits for a retry, gets none. The restored
+// entry starts a fresh watch window with no recorded head.
+func restoreMergeConflictWatch(state *State, issueID string, watch *PendingReaction, now time.Time, reason string, log *slog.Logger) {
+	if watch == nil || watch.Kind != ReactionKindMergeConflict {
+		return
+	}
+	if _, parked := state.Parked[issueID]; parked {
+		return
+	}
+	if state.Running[issueID] != nil || state.RetryAttempts[issueID] != nil {
+		return
+	}
+	key := ReactionKey(issueID, ReactionKindMergeConflict)
+	if _, watched := state.PendingReactions[key]; watched {
+		return
+	}
+	state.PendingReactions[key] = &PendingReaction{
+		IssueID:             watch.IssueID,
+		Identifier:          watch.Identifier,
+		DisplayID:           watch.DisplayID,
+		Attempt:             watch.Attempt,
+		Kind:                ReactionKindMergeConflict,
+		LastSSHHost:         watch.LastSSHHost,
+		CreatedAt:           now,
+		KindData:            watch.KindData,
+		AgentKind:           watch.AgentKind,
+		ConfiguredModel:     watch.ConfiguredModel,
+		RuleName:            watch.RuleName,
+		StageLineage:        watch.StageLineage,
+		RuleSettingsApplied: watch.RuleSettingsApplied,
+		TemplateID:          watch.TemplateID,
+		IssueIdentity:       watch.IssueIdentity,
+	}
+	log.Info("merge conflict watch restored",
+		slog.String("reason", reason),
+	)
 }
