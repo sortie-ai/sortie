@@ -351,9 +351,14 @@ type Orchestrator struct {
 
 	// pendingReactionRecovery is the startup recovery still to succeed;
 	// nil once it has. pendingReactionRecoveryFailures counts its failed
-	// retries. Both are read and written on the event loop only.
+	// retries. All four are read and written on the event loop only.
 	pendingReactionRecovery         PendingReactionRecoveryFunc
 	pendingReactionRecoveryFailures int
+	// pendingReactionRecoveryNextAt is the earliest instant the next retry
+	// runs; pendingReactionRecoveryNow, when non-nil, replaces the clock
+	// it is compared against.
+	pendingReactionRecoveryNextAt time.Time
+	pendingReactionRecoveryNow    func() time.Time
 
 	// ciTriage is the frozen ci_failure triage configuration, captured once
 	// at construction. Unlike every other CI feedback field, it does not

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -107,9 +108,12 @@ func TestRetryPendingReactionRecovery_WarnsEveryNthFailure(t *testing.T) {
 	}
 	logs := &lockedBuf{}
 	o := recoveryRetryOrchestrator(t, recovery, logs, false)
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	o.pendingReactionRecoveryNow = func() time.Time { return now }
 
 	for range pendingReactionRecoveryWarnEvery + 1 {
 		o.retryPendingReactionRecovery(context.Background())
+		now = now.Add(pendingReactionRecoveryBackoffCap)
 	}
 
 	levels := recoveryRetryRecords(t, logs, "pending reaction recovery retry failed")
@@ -167,5 +171,66 @@ func TestRetryPendingReactionRecovery_Skipped(t *testing.T) {
 				t.Error("pending recovery cleared, want kept")
 			}
 		})
+	}
+}
+
+func TestPendingReactionRecoveryDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{failures: 1, want: 0},
+		{failures: pendingReactionRecoveryEveryTick, want: 0},
+		{failures: pendingReactionRecoveryEveryTick + 1, want: 30 * time.Second},
+		{failures: pendingReactionRecoveryEveryTick + 2, want: time.Minute},
+		{failures: pendingReactionRecoveryEveryTick + 4, want: 4 * time.Minute},
+		{failures: pendingReactionRecoveryEveryTick + 5, want: 5 * time.Minute},
+		{failures: 100, want: 5 * time.Minute},
+	}
+	for _, tt := range tests {
+		if got := pendingReactionRecoveryDelay(tt.failures); got != tt.want {
+			t.Errorf("pendingReactionRecoveryDelay(%d) = %v, want %v", tt.failures, got, tt.want)
+		}
+	}
+}
+
+// TestRetryPendingReactionRecovery_BacksOffAndBoundsEachRun covers the
+// retries past the first few failures: a tick inside the backoff runs
+// nothing, the first tick past it runs one, and every run gets a deadline.
+func TestRetryPendingReactionRecovery_BacksOffAndBoundsEachRun(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	recovery := func(ctx context.Context, _ *State) (PendingReactionRecoveryResult, error) {
+		calls++
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > pendingReactionRecoveryTimeout {
+			t.Errorf("recovery run deadline = %v, %v; want one within %v", deadline, ok, pendingReactionRecoveryTimeout)
+		}
+		return PendingReactionRecoveryResult{}, errors.New("tracker unavailable")
+	}
+	o := recoveryRetryOrchestrator(t, recovery, &lockedBuf{}, false)
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	o.pendingReactionRecoveryNow = func() time.Time { return now }
+
+	// The first failures retry on every tick.
+	for range pendingReactionRecoveryEveryTick + 1 {
+		o.retryPendingReactionRecovery(context.Background())
+	}
+	if calls != pendingReactionRecoveryEveryTick+1 {
+		t.Fatalf("recovery calls over consecutive ticks = %d, want %d", calls, pendingReactionRecoveryEveryTick+1)
+	}
+
+	// Then the next waits out its backoff.
+	now = now.Add(pendingReactionRecoveryBackoffBase - time.Second)
+	o.retryPendingReactionRecovery(context.Background())
+	if calls != pendingReactionRecoveryEveryTick+1 {
+		t.Errorf("recovery calls inside the backoff = %d, want %d", calls, pendingReactionRecoveryEveryTick+1)
+	}
+	now = now.Add(time.Second)
+	o.retryPendingReactionRecovery(context.Background())
+	if calls != pendingReactionRecoveryEveryTick+2 {
+		t.Errorf("recovery calls once the backoff passed = %d, want %d", calls, pendingReactionRecoveryEveryTick+2)
 	}
 }
