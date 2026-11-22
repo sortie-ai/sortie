@@ -240,6 +240,8 @@ A run's turn records are written once, at worker exit, in the same transaction a
 | `fingerprint` | TEXT    | The observed value this kind deduplicates on                  |
 | `dispatched`  | INTEGER | `1` when the action for this fingerprint has been performed   |
 | `updated_at`  | TEXT    | ISO-8601 timestamp                                            |
+| `attempts`    | INTEGER | The attempt counter of the kind's current episode, for a kind that persists it (`merge-conflict`). Defaults to `0` |
+| `last_exit`   | TEXT    | How the last run dispatched for `fingerprint` ended (`normal`, `gave_up`, or empty), for a kind that records it (`merge-conflict`). Cleared when the fingerprint changes. Defaults to empty |
 
 Primary key: `(issue_id, kind)`. Every reaction kind that deduplicates across restarts owns a row here under its own `kind` discriminator, so one issue may hold several rows at once without the kinds interfering. Upserts reset `dispatched` to `0` when the fingerprint value changes, which re-arms the latch for exactly one further action.
 

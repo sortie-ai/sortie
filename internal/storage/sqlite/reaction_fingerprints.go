@@ -13,7 +13,8 @@ import (
 var _ storage.ReactionFingerprintStore = (*Store)(nil)
 
 // UpsertReactionFingerprint inserts or updates a reaction fingerprint.
-// If the fingerprint value changes, dispatched is reset to 0.
+// If the fingerprint value changes, dispatched is reset to 0 and the
+// recorded run exit is cleared; the episode attempt counter is kept.
 func (s *Store) UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.ExecContext(ctx, `
@@ -29,6 +30,11 @@ func (s *Store) UpsertReactionFingerprint(ctx context.Context, issueID, kind, fi
 				WHEN excluded.fingerprint != reaction_fingerprints.fingerprint
 				THEN 0
 				ELSE reaction_fingerprints.dispatched
+			END,
+			last_exit = CASE
+				WHEN excluded.fingerprint != reaction_fingerprints.fingerprint
+				THEN ''
+				ELSE reaction_fingerprints.last_exit
 			END,
 			updated_at = excluded.updated_at`,
 		issueID, kind, fingerprint, now,
@@ -144,4 +150,76 @@ func (s *Store) DeleteReactionFingerprintsByIssue(ctx context.Context, issueID s
 		issueID,
 	)
 	return err
+}
+
+// GetReactionEpisode returns the fingerprint row of the issue and kind with
+// its episode attempt counter and recorded run exit. Found is false when no
+// row exists.
+func (s *Store) GetReactionEpisode(ctx context.Context, issueID, kind string) (storage.ReactionEpisode, error) {
+	var (
+		episode       storage.ReactionEpisode
+		dispatchedInt int
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT fingerprint, dispatched, attempts, last_exit FROM reaction_fingerprints
+		WHERE issue_id = ? AND kind = ?`,
+		issueID, kind,
+	).Scan(&episode.Fingerprint, &dispatchedInt, &episode.Attempts, &episode.LastExit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.ReactionEpisode{}, nil
+	}
+	if err != nil {
+		return storage.ReactionEpisode{}, err
+	}
+	episode.Dispatched = dispatchedInt != 0
+	episode.Found = true
+	return episode, nil
+}
+
+// SetReactionAttempts stores the episode attempt counter and clears the
+// recorded run exit. No-op if the row does not exist.
+func (s *Store) SetReactionAttempts(ctx context.Context, issueID, kind string, attempts int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reaction_fingerprints SET attempts = ?, last_exit = ''
+		WHERE issue_id = ? AND kind = ?`,
+		attempts, issueID, kind,
+	)
+	return err
+}
+
+// RecordReactionExit sets dispatched=0 and records how the run dispatched
+// for the row's fingerprint ended. No-op if the row does not exist.
+func (s *Store) RecordReactionExit(ctx context.Context, issueID, kind, lastExit string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reaction_fingerprints SET dispatched = 0, last_exit = ?, updated_at = ?
+		WHERE issue_id = ? AND kind = ?`,
+		lastExit, now, issueID, kind,
+	)
+	return err
+}
+
+// ReleaseDispatchedReactions sets dispatched=0 on every row of kind and
+// returns the number of rows changed. With keepTriaged, a row whose
+// fingerprint has a recorded triage outcome of handled or escalate is left
+// marked.
+func (s *Store) ReleaseDispatchedReactions(ctx context.Context, kind string, keepTriaged bool) (int64, error) {
+	query := `
+		UPDATE reaction_fingerprints SET dispatched = 0
+		WHERE kind = ? AND dispatched = 1`
+	if keepTriaged {
+		query += `
+		AND NOT EXISTS (
+			SELECT 1 FROM reaction_triage_outcomes t
+			WHERE t.issue_id = reaction_fingerprints.issue_id
+			AND t.kind = reaction_fingerprints.kind
+			AND t.fingerprint = reaction_fingerprints.fingerprint
+			AND t.disposition IN ('handled', 'escalate')
+		)`
+	}
+	res, err := s.db.ExecContext(ctx, query, kind)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/storage"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // mergeConflictPendingBackoffBase is the floor for the merge-conflict poll
@@ -68,6 +69,7 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		if ttl > 0 && !pending.escalationStands() && now.Sub(watchWindowStart(pending)) > ttl {
 			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
+			persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, entryLog)
 			entryLog.Warn("merge conflict watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(watchWindowStart(pending))/time.Millisecond)),
@@ -223,9 +225,48 @@ func handleMergeConflictDirty(
 	}
 
 	fingerprint := buildMergeConflictFingerprint(status.HeadSHA)
+
+	// The row as the last rebase's exit left it, read before the upsert
+	// replaces a changed fingerprint: the episode's persisted counter, and
+	// how that rebase ended against the head it was dispatched for.
+	newEpisode := false
+	episode, epErr := params.Store.GetReactionEpisode(ctx, pending.IssueID, ReactionKindMergeConflict)
+	if epErr != nil {
+		log.Warn("failed to read merge conflict episode, counting from this process alone",
+			slog.Any("error", epErr),
+		)
+	} else if episode.Found {
+		if _, held := state.ReactionAttempts[rkey]; !held && episode.Attempts > 0 {
+			state.ReactionAttempts[rkey] = episode.Attempts
+		}
+		switch {
+		case episode.LastExit == mergeConflictExitGaveUp && episode.Fingerprint == fingerprint:
+			// The rebase reported it needs a person, or that nothing was
+			// needed, and left the conflicting head in place: running it
+			// again on the same head would end the same way.
+			log.Info("rebase gave up on the conflicting head, escalating",
+				slog.Int("pr_number", data.PRNumber),
+			)
+			escalateMergeConflictFailure(state, params, pending, params.MergeConflictConfig.MaxRetries+1,
+				EscalationTriggerBudget, data, fingerprint, now, pollInterval, log, ctx, metrics)
+			return
+		case episode.LastExit == mergeConflictExitNormal && episode.Fingerprint != fingerprint:
+			// The rebase exited normally and the head moved: it resolved
+			// the conflict it was given, and this one is new.
+			newEpisode = true
+		}
+	}
+
 	if err := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict, fingerprint); err != nil {
 		log.Warn("failed to upsert merge conflict reaction fingerprint",
 			slog.Any("error", err),
+		)
+	}
+	if newEpisode {
+		delete(state.ReactionAttempts, rkey)
+		persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, log)
+		log.Info("rebased head conflicts again, starting a new episode",
+			slog.Int("pr_number", data.PRNumber),
 		)
 	}
 
@@ -295,6 +336,7 @@ func handleMergeConflictDirty(
 	// escalation reports attempts == MaxRetries + 1.
 	state.ReactionAttempts[rkey]++
 	attempts := state.ReactionAttempts[rkey]
+	persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, attempts, log)
 	if attempts > params.MergeConflictConfig.MaxRetries {
 		escalateMergeConflictFailure(state, params, pending, attempts, EscalationTriggerBudget, data, fingerprint, now, pollInterval, log, ctx, metrics)
 		return
@@ -533,38 +575,85 @@ func applyMergeConflictEscalation(
 	})
 }
 
-// releaseMergeConflictDispatchMark lifts the dispatched mark of the
-// merge-conflict fingerprint when a rebase continuation's worker exits.
-// A rebase that pushed gives the pull request a new head, which the next
-// pass fingerprints afresh anyway. One that did not (the agent gave up,
-// stopped for review, failed, or was cancelled) leaves the same
-// conflicting head, and a standing mark would make the dedup skip it for
-// good; lifted, the next pass counts another attempt against max_retries
-// and escalates at the cap. A retry the exit schedules marks the head
-// again when it starts. The store has no operation that clears the flag
-// alone, so the row is deleted and written back for the same head; a
-// failure between the two leaves no row, which the next pass reads as a
-// new head.
-func releaseMergeConflictDispatchMark(ctx context.Context, store storage.ReactionFingerprintStore, issueID string, log *slog.Logger) {
-	fingerprint, dispatched, err := store.GetReactionFingerprint(ctx, issueID, ReactionKindMergeConflict)
+// How a rebase continuation's run ended, recorded on the merge-conflict
+// fingerprint row at its exit so the next pass, in this process or the
+// next, can tell a head the rebase replaced from one it left in place.
+const (
+	// mergeConflictExitNormal is a normal exit with no soft stop.
+	mergeConflictExitNormal = "normal"
+	// mergeConflictExitGaveUp is an exit whose agent reported it needs a
+	// person or that no change was needed.
+	mergeConflictExitGaveUp = "gave_up"
+)
+
+// mergeConflictExitOf classifies a rebase continuation's worker result for
+// the fingerprint row. An error, a cancellation, or a blocked stop records
+// no exit, so the next pass counts the head as it would any other.
+func mergeConflictExitOf(result WorkerResult) string {
+	if result.ExitKind != WorkerExitNormal {
+		return ""
+	}
+	if !result.SoftStop {
+		return mergeConflictExitNormal
+	}
+	switch result.SoftStopReason {
+	case string(workspace.StatusNeedsHumanReview), string(workspace.StatusNoChangeNeeded):
+		return mergeConflictExitGaveUp
+	default:
+		return ""
+	}
+}
+
+// recordMergeConflictExit lifts the dispatched mark of the merge-conflict
+// fingerprint when a rebase continuation's worker exits, whatever the exit,
+// and records how it ended. A head left marked would be skipped by the
+// dedup for good, since a conflicted pull request gets no new commits; with
+// the mark lifted, the next pass decides what the head means: a head the
+// rebase left in place after it gave up escalates at once, one left in
+// place otherwise counts another attempt against max_retries, and a new
+// head after a normal exit starts a new episode. A retry the exit
+// schedules marks the head again when it starts.
+func recordMergeConflictExit(ctx context.Context, store storage.ReactionFingerprintStore, issueID, lastExit string, log *slog.Logger) {
+	if err := store.RecordReactionExit(ctx, issueID, ReactionKindMergeConflict, lastExit); err != nil {
+		log.Warn("failed to record the rebase exit on the merge conflict fingerprint",
+			slog.String("last_exit", lastExit),
+			slog.Any("error", err),
+		)
+	}
+}
+
+// persistMergeConflictAttempts stores the episode attempt counter on the
+// fingerprint row, so a restart resumes the episode's budget rather than
+// granting a fresh one.
+func persistMergeConflictAttempts(ctx context.Context, store storage.ReactionFingerprintStore, issueID string, attempts int, log *slog.Logger) {
+	if err := store.SetReactionAttempts(ctx, issueID, ReactionKindMergeConflict, attempts); err != nil {
+		log.Warn("failed to persist merge conflict attempts",
+			slog.Int("merge_conflict_attempt", attempts),
+			slog.Any("error", err),
+		)
+	}
+}
+
+// ReleaseStaleMergeConflictMarks lifts, at startup, the dispatched mark of
+// every merge-conflict fingerprint. A mark stands for a rebase worker in
+// flight, and none is at startup: a process that stopped without handling
+// its worker's exit (killed, or a drain that abandoned workers) left the
+// mark behind, and the dedup would skip that head for good. With triage
+// configured, a mark a triage verdict set keeps standing. Must run before
+// the event loop starts.
+func ReleaseStaleMergeConflictMarks(ctx context.Context, store storage.ReactionFingerprintStore, triageConfigured bool, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	released, err := store.ReleaseDispatchedReactions(ctx, ReactionKindMergeConflict, triageConfigured)
 	if err != nil {
-		log.Warn("failed to read merge conflict fingerprint at rebase exit",
-			slog.Any("error", err),
-		)
+		log.Warn("failed to release stale merge conflict dispatch marks", slog.Any("error", err))
 		return
 	}
-	if !dispatched {
-		return
-	}
-	if err := store.DeleteReactionFingerprint(ctx, issueID, ReactionKindMergeConflict); err != nil {
-		log.Warn("failed to clear the dispatched mark of a rebased head",
-			slog.Any("error", err),
-		)
-		return
-	}
-	if err := store.UpsertReactionFingerprint(ctx, issueID, ReactionKindMergeConflict, fingerprint); err != nil {
-		log.Warn("failed to restore the merge conflict fingerprint after clearing the dispatched mark",
-			slog.Any("error", err),
+	if released > 0 {
+		log.Info("released stale merge conflict dispatch marks",
+			slog.Int64("released", released),
+			slog.Bool("triage_kept", triageConfigured),
 		)
 	}
 }

@@ -774,6 +774,12 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
+	// No rebase worker runs yet, so a merge-conflict dispatch mark left by a
+	// process that stopped without handling its worker's exit is stale.
+	if mergeConflictConfigured {
+		orchestrator.ReleaseStaleMergeConflictMarks(ctx, store, mergeConflictConfig.Triage.Enabled(), br.logger)
+	}
+
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
 	recoveryOutcome := orchestrator.PendingReactionRecoveryResult{}
 	var recoveryErr error

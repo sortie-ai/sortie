@@ -26,6 +26,23 @@ type unsupportedReactionObservationStore struct {
 	storage.RunHistoryStore
 }
 
+// GetReactionEpisode reports no row: these doubles keep no episode state.
+func (unsupportedReactionObservationStore) GetReactionEpisode(context.Context, string, string) (storage.ReactionEpisode, error) {
+	return storage.ReactionEpisode{}, nil
+}
+
+func (unsupportedReactionObservationStore) SetReactionAttempts(context.Context, string, string, int) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) RecordReactionExit(context.Context, string, string, string) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) ReleaseDispatchedReactions(context.Context, string, bool) (int64, error) {
+	return 0, nil
+}
+
 func (unsupportedReactionObservationStore) UpsertReactionObservation(
 	context.Context,
 	string, string, string,

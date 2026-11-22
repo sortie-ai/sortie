@@ -90,6 +90,8 @@ var _ WorkerExitStore = (*mockExitStore)(nil)
 type exitFingerprint struct {
 	fingerprint string
 	dispatched  bool
+	attempts    int
+	lastExit    string
 }
 
 func (m *mockExitStore) fingerprintRows() map[string]exitFingerprint {
@@ -102,11 +104,53 @@ func (m *mockExitStore) fingerprintRows() map[string]exitFingerprint {
 func (m *mockExitStore) UpsertReactionFingerprint(_ context.Context, issueID, kind, fingerprint string) error {
 	rows := m.fingerprintRows()
 	key := ReactionKey(issueID, kind)
-	if row, ok := rows[key]; ok && row.fingerprint == fingerprint {
+	row, ok := rows[key]
+	if ok && row.fingerprint == fingerprint {
 		return nil
 	}
-	rows[key] = exitFingerprint{fingerprint: fingerprint}
+	rows[key] = exitFingerprint{fingerprint: fingerprint, attempts: row.attempts}
 	return nil
+}
+
+func (m *mockExitStore) GetReactionEpisode(_ context.Context, issueID, kind string) (storage.ReactionEpisode, error) {
+	row, ok := m.fingerprintRows()[ReactionKey(issueID, kind)]
+	if !ok {
+		return storage.ReactionEpisode{}, nil
+	}
+	return storage.ReactionEpisode{Fingerprint: row.fingerprint, Dispatched: row.dispatched, Attempts: row.attempts, LastExit: row.lastExit, Found: true}, nil
+}
+
+func (m *mockExitStore) SetReactionAttempts(_ context.Context, issueID, kind string, attempts int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.attempts, row.lastExit = attempts, ""
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) RecordReactionExit(_ context.Context, issueID, kind, lastExit string) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.dispatched, row.lastExit = false, lastExit
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) ReleaseDispatchedReactions(_ context.Context, kind string, _ bool) (int64, error) {
+	var n int64
+	rows := m.fingerprintRows()
+	for key, row := range rows {
+		if strings.HasSuffix(key, ":"+kind) && row.dispatched {
+			row.dispatched = false
+			rows[key] = row
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (m *mockExitStore) GetReactionFingerprint(_ context.Context, issueID, kind string) (string, bool, error) {
