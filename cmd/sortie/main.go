@@ -800,12 +800,25 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		},
 		Logger: br.logger,
 	}
+	runRecovery := func(ctx context.Context, state *orchestrator.State, now time.Time) (orchestrator.PendingReactionRecoveryResult, error) {
+		runs, err := store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, now.Add(-recoveryLookback), orchestrator.PendingReactionRecoveryMaxCandidates)
+		if err != nil {
+			return orchestrator.PendingReactionRecoveryResult{}, err
+		}
+		params := recoveryParams
+		params.NowFunc = func() time.Time { return now }
+		return orchestrator.RecoverPendingReactions(ctx, state, runs, params)
+	}
+	// A failed startup pass is retried on each tick until it succeeds, so
+	// one failed read does not leave the handoff pull requests unwatched
+	// for the process lifetime.
+	var pendingRecovery orchestrator.PendingReactionRecoveryFunc
 	if recoveryEnabled {
-		recoveryCutoff := recoveryNow.Add(-recoveryLookback)
-		var recoveryRuns []storage.RunHistory
-		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
-		if recoveryErr == nil {
-			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, recoveryParams)
+		recoveryOutcome, recoveryErr = runRecovery(ctx, state, recoveryNow)
+		if recoveryErr != nil && ctx.Err() == nil {
+			pendingRecovery = func(ctx context.Context, state *orchestrator.State) (orchestrator.PendingReactionRecoveryResult, error) {
+				return runRecovery(ctx, state, time.Now().UTC())
+			}
 		}
 	}
 	recoveryLogAttrs := []any{
@@ -825,7 +838,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
 	if recoveryErr != nil {
-		recoveryLogAttrs = append(recoveryLogAttrs, slog.Bool("success", false), slog.Any("error", recoveryErr))
+		recoveryLogAttrs = append(recoveryLogAttrs, slog.Bool("success", false), slog.Bool("retrying", pendingRecovery != nil), slog.Any("error", recoveryErr))
 		br.logger.Warn("pending reaction recovery failed", recoveryLogAttrs...)
 	} else {
 		recoveryLogAttrs = append(recoveryLogAttrs, slog.Bool("success", true))
@@ -951,6 +964,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		AbandonCh:                         abandonCh,
 		Rates:                             startupRates,
 		Once:                              br.once,
+		PendingReactionRecovery:           pendingRecovery,
 	})
 
 	var srv *server.Server
