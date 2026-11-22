@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -78,10 +79,13 @@ func TestHandleWorkerExit_RestoresMergeConflictWatch(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_DroppedRebaseRestoresWatch covers the retry-timer
-// arms that drop a rebase retry without dispatching it: each puts back the
-// watch the dispatch consumed.
-func TestHandleRetryTimer_DroppedRebaseRestoresWatch(t *testing.T) {
+// TestHandleRetryTimer_DroppedRebaseLeavesNoWatch covers the retry-timer
+// arms that drop a rebase retry because the issue left the handoff state
+// without going terminal: none puts the watch back, so the next pass has
+// nothing to schedule and the cycle of schedule, drop, and restore never
+// starts. Startup recovery watches the pull request again once the issue is
+// back in the handoff state.
+func TestHandleRetryTimer_DroppedRebaseLeavesNoWatch(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -95,6 +99,9 @@ func TestHandleRetryTimer_DroppedRebaseRestoresWatch(t *testing.T) {
 		{name: "paused past the maximum dwell", prepare: func(entry *RetryEntry, tracker *mockRetryTracker) {
 			entry.pausedSinceMS = time.Now().Add(-2 * pausedRetryMaxDwell).UnixMilli()
 			tracker.fetchedIssue = candidateIssue("MCW-2", "MCW-2", "Backlog")
+		}},
+		{name: "issue missing a required field", prepare: func(_ *RetryEntry, tracker *mockRetryTracker) {
+			tracker.fetchedIssue = domain.Issue{ID: "MCW-2", Identifier: "MCW-2", State: "queue-pr"}
 		}},
 	}
 
@@ -118,8 +125,11 @@ func TestHandleRetryTimer_DroppedRebaseRestoresWatch(t *testing.T) {
 				retry.TimerHandle.Stop()
 				t.Fatalf("retry still scheduled, want it dropped")
 			}
-			if _, ok := state.PendingReactions[ReactionKey(id, ReactionKindMergeConflict)]; !ok {
-				t.Error("merge-conflict watch absent after the retry was dropped, want restored")
+			if _, ok := state.PendingReactions[ReactionKey(id, ReactionKindMergeConflict)]; ok {
+				t.Error("merge-conflict watch put back after the retry was dropped, want none")
+			}
+			if _, claimed := state.Claimed[id]; claimed {
+				t.Error("claim kept after the retry was dropped, want released")
 			}
 		})
 	}

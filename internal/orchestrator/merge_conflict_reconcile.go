@@ -539,8 +539,11 @@ func applyMergeConflictEscalation(
 // restoreMergeConflictWatch puts back the merge-conflict watch a rebase
 // continuation's dispatch consumed, when the continuation ends with no retry
 // to follow it and nothing else watches the pull request: a run whose exit
-// seeded none, or a retry the retry timer dropped. Without it, a later
-// conflict on the pull request would go unnoticed until a restart. A parked
+// seeded none. Without it, a later conflict on the pull request would go
+// unnoticed until a restart. A retry the retry timer drops gets none: the
+// timer drops it because the issue left the handoff state without going
+// terminal, and a watch put back for it would schedule, drop, and put back
+// a rebase on every pass for as long as the issue stays there. A parked
 // issue, or one that still runs or waits for a retry, gets none. The restored
 // entry starts a fresh watch window with no recorded head.
 func restoreMergeConflictWatch(state *State, issueID string, watch *PendingReaction, now time.Time, reason string, log *slog.Logger) {
