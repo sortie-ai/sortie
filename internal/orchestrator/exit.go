@@ -729,7 +729,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
 	// exitFoundTerminal is true when a normal exit found the issue in a
-	// terminal state; no watch is restored for it.
+	// terminal state or its handoff write put it in one (a declared run's
+	// terminal no-change state); no watch is restored for it.
 	exitFoundTerminal := false
 
 	// A made hop hands the issue to its next stage, which owns every watch
@@ -999,6 +1000,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					recordIssueOutcome(ctx, params.Store, handoffOutcome(workerResult.IssueID, resolvedTarget, params.TerminalStates, now), log)
 					metrics.IncHandoffTransitions(handoffSuccess)
 					reactionIdentity.State = resolvedTarget
+					exitFoundTerminal = isTerminalState(resolvedTarget, params.TerminalStates)
 					log.Info("handoff transition succeeded, incumbent preserved",
 						slog.String("handoff_state", params.HandoffState),
 						slog.String("target_state", resolvedTarget),
@@ -1010,6 +1012,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				} else {
 					recordIssueOutcome(ctx, params.Store, handoffOutcome(workerResult.IssueID, resolvedTarget, params.TerminalStates, now), log)
 					reactionIdentity.State = resolvedTarget
+					exitFoundTerminal = isTerminalState(resolvedTarget, params.TerminalStates)
 					log.Info("handoff transition succeeded, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
 						slog.String("target_state", resolvedTarget),

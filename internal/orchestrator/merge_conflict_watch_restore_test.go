@@ -251,3 +251,54 @@ func TestHandleWorkerExit_RebaseContinuationRetryCarriesWatch(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleWorkerExit_RebaseNoChangeRestoresByTarget covers a rebase
+// continuation that declares no change needed: when the configured
+// no-change state is terminal, the handoff write puts the issue there and
+// no watch comes back; when it is not, the watch is restored as for any
+// other handoff that seeded none.
+func TestHandleWorkerExit_RebaseNoChangeRestoresByTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		noChangeState string
+		wantWatch     bool
+	}{
+		{name: "terminal no-change state", noChangeState: "done", wantWatch: false},
+		{name: "non-terminal no-change state", noChangeState: "queue-pr", wantWatch: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "MCW-5"
+			state := exitStateWithIssue(t, id, "queue")
+			state.Running[id].ReactionKind = ReactionKindMergeConflict
+			state.Running[id].resumeWatch = newMergeConflictPending(id, 82)
+
+			params := defaultExitParams(t, &mockExitStore{})
+			params.TrackerAdapter = &mockTrackerAdapter{}
+			params.HandoffState = "queue-pr"
+			params.NoChangeState = tt.noChangeState
+			params.ActiveStates = []string{"queue"}
+			params.TerminalStates = []string{"done"}
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.MergeConflictReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID: id, Identifier: id + "-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock",
+				SoftStop: true, SoftStopReason: string(workspace.StatusNoChangeNeeded),
+			}, params)
+			state.TrackerOpsWg.Wait()
+
+			if _, watched := state.PendingReactions[ReactionKey(id, ReactionKindMergeConflict)]; watched != tt.wantWatch {
+				t.Errorf("merge-conflict watch present = %v, want %v", watched, tt.wantWatch)
+			}
+			if retry, ok := state.RetryAttempts[id]; ok {
+				retry.TimerHandle.Stop()
+			}
+		})
+	}
+}
