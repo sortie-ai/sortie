@@ -191,17 +191,51 @@ func parkIssue(state *State, params parkIssueParams) {
 		return
 	}
 
-	issueID := params.IssueID
-	label := params.Label
-	tracker := params.TrackerAdapter
+	writeParkLabel(ctx, state, params.TrackerAdapter, params.IssueID, entry, log)
+}
+
+// parkLabelWriteTimeout bounds one detached parking-label write.
+const parkLabelWriteTimeout = 30 * time.Second
+
+// writeParkLabel starts the detached write of entry's parking label and
+// records when it started. The write's result is never trusted: the label
+// is confirmed only when a read observes it. Must run on the event loop.
+func writeParkLabel(ctx context.Context, state *State, tracker domain.TrackerAdapter, issueID string, entry *ParkedEntry, log *slog.Logger) {
+	entry.labelWriteStartedAt = time.Now()
+	label := entry.Label
 	state.TrackerOpsWg.Go(func() {
-		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), parkLabelWriteTimeout)
 		defer cancel()
 
 		if err := tracker.AddLabel(dctx, issueID, label); err != nil {
 			log.Warn("park label write failed", slog.Any("error", err))
 		}
 	})
+}
+
+// rewriteUnconfirmedParkLabel writes entry's parking label again when a read
+// of the still-parked issue shows it absent and no read has confirmed it.
+// A park releases only on a confirmed label's removal or a state change, so
+// a park whose first write failed would otherwise hold the issue out of
+// dispatch for good with no label to tell a person why or to remove. One
+// write at a time: the next starts no sooner than the write timeout after
+// the last one started. Must run on the event loop.
+func rewriteUnconfirmedParkLabel(ctx context.Context, state *State, tracker domain.TrackerAdapter, issueID string, entry *ParkedEntry, labels []string, log *slog.Logger) {
+	if tracker == nil || entry.Label == "" || entry.LabelApplied || state.Parked[issueID] != entry {
+		return
+	}
+	if slices.ContainsFunc(labels, func(label string) bool { return strings.EqualFold(label, entry.Label) }) {
+		return
+	}
+	if !entry.labelWriteStartedAt.IsZero() && time.Since(entry.labelWriteStartedAt) < parkLabelWriteTimeout {
+		return
+	}
+	entry.labelWrites++
+	log.Info("park label not observed, writing it again",
+		slog.String("label", entry.Label),
+		slog.Int("label_writes", entry.labelWrites),
+	)
+	writeParkLabel(ctx, state, tracker, issueID, entry, log)
 }
 
 // isReleaseGesture reports whether trigger is a person's release, as opposed

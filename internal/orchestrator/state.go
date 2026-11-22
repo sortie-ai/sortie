@@ -1116,6 +1116,13 @@ type ParkedEntry struct {
 	// zero while the park holds.
 	ReleasedAt     time.Time
 	ReleaseGesture string // "label_removed" or "state_changed"
+
+	// labelWriteStartedAt is when this process last started a write of
+	// Label; zero when it started none, as for a park loaded at startup.
+	// labelWrites counts the writes started again after the first.
+	// Runtime-only, read and written on the event loop.
+	labelWriteStartedAt time.Time
+	labelWrites         int
 }
 
 // IssueIdentity names an issue to a person beside its key: the tracker's
