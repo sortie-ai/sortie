@@ -728,6 +728,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// released on those arms, so a deferral changes only the retry slot.
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
+	// exitFoundTerminal is true when a normal exit found the issue in a
+	// terminal state or its handoff write put it in one (a declared run's
+	// terminal no-change state); no watch is restored for it.
+	exitFoundTerminal := false
+
+	// A made hop hands the issue to its next stage, which owns every watch
+	// from here on, so the rebase run that hopped restores none either.
+	hopMade := false
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
@@ -740,7 +748,6 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
 		terminalSuppressed := false
-		hopMade := false
 
 		// A successful handoff replaces the state the run read, and a
 		// reaction waits hours or days, so it records the state the exit
@@ -787,6 +794,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				metrics.IncHandoffTransitions(handoffSkipped)
 			}
 			terminalSuppressed = true
+			exitFoundTerminal = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 			resetStageHop(ctx, state, params.Store, workerResult.IssueID, stageResetTerminal, log)
@@ -823,6 +831,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ContinuationContext: entry.ContinuationContext,
 					ReactionKind:        entry.ReactionKind,
 					Continuation:        entry.Continuation,
+					ResumeWatch:         entry.resumeWatch,
 					AgentKind:           entry.AgentKind,
 					ConfiguredModel:     entry.ConfiguredModel,
 					RuleName:            entry.RuleName,
@@ -881,6 +890,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						StageLineage:        entry.StageLineage,
 						RuleSettingsApplied: entry.RuleSettingsApplied,
 						TemplateID:          entry.TemplateID,
+						ResumeWatch:         entry.resumeWatch,
 						Logger:              log,
 
 						IssueIdentity: issueIdentityOf(entry.Issue),
@@ -916,6 +926,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							metrics.IncHandoffTransitions(handoffSkipped)
 						}
 						terminalSuppressed = true
+						exitFoundTerminal = true
 						verifiedTerminal = true
 						verifiedTerminalState = verifiedState
 					}
@@ -972,6 +983,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							StageLineage:        entry.StageLineage,
 							RuleSettingsApplied: entry.RuleSettingsApplied,
 							TemplateID:          entry.TemplateID,
+							ResumeWatch:         entry.resumeWatch,
 							Logger:              log,
 
 							IssueIdentity: issueIdentityOf(entry.Issue),
@@ -988,6 +1000,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					recordIssueOutcome(ctx, params.Store, handoffOutcome(workerResult.IssueID, resolvedTarget, params.TerminalStates, now), log)
 					metrics.IncHandoffTransitions(handoffSuccess)
 					reactionIdentity.State = resolvedTarget
+					exitFoundTerminal = isTerminalState(resolvedTarget, params.TerminalStates)
 					log.Info("handoff transition succeeded, incumbent preserved",
 						slog.String("handoff_state", params.HandoffState),
 						slog.String("target_state", resolvedTarget),
@@ -999,6 +1012,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				} else {
 					recordIssueOutcome(ctx, params.Store, handoffOutcome(workerResult.IssueID, resolvedTarget, params.TerminalStates, now), log)
 					reactionIdentity.State = resolvedTarget
+					exitFoundTerminal = isTerminalState(resolvedTarget, params.TerminalStates)
 					log.Info("handoff transition succeeded, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
 						slog.String("target_state", resolvedTarget),
@@ -1049,6 +1063,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					StageLineage:        entry.StageLineage,
 					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
+					ResumeWatch:         entry.resumeWatch,
 					Logger:              log,
 
 					IssueIdentity: issueIdentityOf(entry.Issue),
@@ -1087,11 +1102,17 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// A made hop leaves the issue active on its next stage, which owns any
 		// reaction from here on, so the run that hopped seeds none.
 		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed && !hopMade
-		// A fix session leaves the issue in the handoff state and releases
-		// its claim, but its push gives the pull request a new head, so the
-		// watches keyed on that head must start over.
-		fixExit := claimedAtExit && dispatchPostureForReactionKind(entry.ReactionKind) == PostureFix && !blockedSoftStop && !terminalSuppressed
-		headWatchesAllowed := reactionEnqueueAllowed || fixExit
+		// A reaction continuation (a CI fix, a review fix, a rebase, a label
+		// fix) runs while the issue sits in the handoff state and releases
+		// its claim at exit, so neither the handoff path nor a retained
+		// claim seeds anything. Its dispatch consumed the watch that fired
+		// it, and its push may give the pull request a new head, so the
+		// watches keyed on the head must start over. A read-only review
+		// pushes nothing and consumed no head watch.
+		_, parkedAtExit := state.Parked[workerResult.IssueID]
+		reactionExit := claimedAtExit && isKnownReactionKind(entry.ReactionKind) && dispatchPostureForReactionKind(entry.ReactionKind) != PostureReview &&
+			!blockedSoftStop && !terminalSuppressed && !hopMade && !parkedAtExit
+		headWatchesAllowed := reactionEnqueueAllowed || reactionExit
 		var seededKinds []string
 
 		// Seed a pending CI check when CI provider and SCM adapter are both
@@ -1502,6 +1523,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ContinuationContext: entry.ContinuationContext,
 					ReactionKind:        entry.ReactionKind,
 					Continuation:        entry.Continuation,
+					ResumeWatch:         entry.resumeWatch,
 					AgentKind:           entry.AgentKind,
 					ConfiguredModel:     entry.ConfiguredModel,
 					RuleName:            entry.RuleName,
@@ -1559,6 +1581,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				}
 			}
 		}
+	}
+
+	// A rebase continuation that ends with no retry to follow it, and whose
+	// exit seeded no watch, leaves the pull request unwatched: its dispatch
+	// consumed the watch that fired it. An issue seen terminal, by the exit
+	// or by reconciliation during the run, gets none, and so does one whose
+	// exit made a stage hop.
+	if !exitFoundTerminal && entry.ObservedTerminalState == "" && !hopMade {
+		restoreMergeConflictWatch(state, workerResult.IssueID, entry.resumeWatch, now, "rebase run ended", log)
 	}
 
 	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)

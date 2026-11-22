@@ -234,6 +234,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ContinuationContext: popped.ContinuationContext,
 			ReactionKind:        popped.ReactionKind,
 			Continuation:        popped.Continuation,
+			ResumeWatch:         popped.resumeWatch,
 			AgentKind:           popped.AgentKind,
 			ConfiguredModel:     popped.ConfiguredModel,
 			RuleName:            popped.RuleName,
@@ -931,6 +932,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.Trigger = popped.OriginTrigger
 		entry.UsageLimitNotified = popped.UsageLimitNotified
 		entry.Continuation = popped.Continuation
+		entry.resumeWatch = popped.resumeWatch
 		entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 		entry.CarriesTokenFigure = attemptSettings.CarriesTokenFigure
 		freezeIssueTokenBaseline(ctx, state, issueID, params.Store, params.Logger)
