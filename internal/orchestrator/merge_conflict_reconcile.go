@@ -229,6 +229,15 @@ func handleMergeConflictDirty(
 		return
 	}
 
+	// A rebase exit whose write failed left the head marked dispatched;
+	// the dedup would skip it until a restart. Write it again first, and
+	// defer while the store still refuses it.
+	if !recordUnrecordedMergeConflictExit(ctx, state, params.Store, pending.IssueID, log) {
+		pending.PendingRetryAt = now.Add(pollInterval)
+		requeueReaction(state, key, pending, waitBackoff)
+		return
+	}
+
 	fingerprint := buildMergeConflictFingerprint(status.HeadSHA)
 
 	// The row as the last rebase's exit left it, read before the upsert
@@ -664,14 +673,36 @@ func mergeConflictExitOf(result WorkerResult) string {
 // rebase left in place after it gave up escalates at once, one left in
 // place otherwise counts another attempt against max_retries, and a new
 // head after a normal exit starts a new episode. A retry the exit
-// schedules marks the head again when it starts.
-func recordMergeConflictExit(ctx context.Context, store storage.ReactionFingerprintStore, issueID, lastExit string, log *slog.Logger) {
+// schedules marks the head again when it starts. A failed write is kept
+// in state and written again by the issue's next pass, so a transient
+// store failure does not leave the head marked until a restart.
+func recordMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID, lastExit string, log *slog.Logger) {
 	if err := store.RecordReactionExit(ctx, issueID, ReactionKindMergeConflict, lastExit); err != nil {
 		log.Warn("failed to record the rebase exit on the merge conflict fingerprint",
 			slog.String("last_exit", lastExit),
 			slog.Any("error", err),
 		)
+		if state.unrecordedMergeConflictExits == nil {
+			state.unrecordedMergeConflictExits = make(map[string]string)
+		}
+		state.unrecordedMergeConflictExits[issueID] = lastExit
+		return
 	}
+	delete(state.unrecordedMergeConflictExits, issueID)
+}
+
+// recordUnrecordedMergeConflictExit writes again an exit a failed write
+// left out, and reports whether the row now holds it (true too when there
+// was none to write). Until it does, the row's mark is stale and its last
+// exit missing, so the pass must not read it.
+func recordUnrecordedMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID string, log *slog.Logger) bool {
+	lastExit, unrecorded := state.unrecordedMergeConflictExits[issueID]
+	if !unrecorded {
+		return true
+	}
+	recordMergeConflictExit(ctx, state, store, issueID, lastExit, log)
+	_, stillUnrecorded := state.unrecordedMergeConflictExits[issueID]
+	return !stillUnrecorded
 }
 
 // spendsNoMergeConflictAttempt reports whether a rebase exit recorded as

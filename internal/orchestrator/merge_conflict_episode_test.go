@@ -24,6 +24,17 @@ type rebasePath struct {
 	tracker *mockTrackerAdapter
 	metrics *mergeConflictMetricsSpy
 	config  MergeConflictReactionConfig
+	// exitRefused and passRefused make the store refuse the write that
+	// records a rebase's exit, at the worker's exit and at a pass.
+	exitRefused, passRefused bool
+}
+
+// exitRefusingStore refuses every write that records a rebase's exit, as a
+// store failing for a moment does.
+type exitRefusingStore struct{ *sqlite.Store }
+
+func (exitRefusingStore) RecordReactionExit(context.Context, string, string, string) error {
+	return fmt.Errorf("database is locked")
 }
 
 const rebasePathHandoff = "queue-pr"
@@ -62,7 +73,11 @@ func (p *rebasePath) restart() {
 func (p *rebasePath) pass() bool {
 	p.t.Helper()
 	p.now = p.now.Add(2 * time.Minute)
-	params := mergeConflictParams(p.store, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+	var store ReconcileStore = p.store
+	if p.passRefused {
+		store = exitRefusingStore{p.store}
+	}
+	params := mergeConflictParams(store, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus(p.head, "main"), nil
 	}}, p.tracker)
 	params.MergeConflictConfig = p.config
@@ -153,6 +168,9 @@ func (p *rebasePath) exit(result WorkerResult) {
 	result.AgentAdapter = "mock"
 	params := defaultExitParams(p.t, nil)
 	params.Store = p.store
+	if p.exitRefused {
+		params.Store = exitRefusingStore{p.store}
+	}
 	params.TrackerAdapter = p.tracker
 	params.HandoffState = rebasePathHandoff
 	params.ActiveStates = []string{"queue"}
@@ -456,5 +474,46 @@ func TestMergeConflictEpisode_EndsWithoutCleanRead(t *testing.T) {
 				t.Errorf("episode after the end = %+v, %v; want no row", episode, err)
 			}
 		})
+	}
+}
+
+// TestMergeConflictEpisode_FailedExitRecordIsWrittenAgain covers a store
+// that refuses the write recording a rebase's exit: the head stays marked
+// dispatched on the row, and the dedup would skip it until a restart. The
+// next pass writes the exit again, deferring while the store still refuses,
+// and then counts the unchanged head as the next attempt.
+func TestMergeConflictEpisode_FailedExitRecordIsWrittenAgain(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("first pass scheduled no rebase")
+	}
+	p.start()
+	p.exitRefused = true
+	p.exit(WorkerResult{ExitKind: WorkerExitNormal})
+	p.exitRefused = false
+
+	if _, dispatched, err := p.store.GetReactionFingerprint(context.Background(), p.issueID, ReactionKindMergeConflict); err != nil || !dispatched {
+		t.Fatalf("row dispatched = %v (err %v) after the refused write, want still marked", dispatched, err)
+	}
+
+	p.passRefused = true
+	if p.pass() {
+		t.Fatal("pass scheduled a rebase while the store still refused the exit, want it deferred")
+	}
+	p.passRefused = false
+
+	if !p.pass() {
+		t.Fatal("pass after the store recovered scheduled no rebase, want the unchanged head counted as the next attempt")
+	}
+	if _, dispatched, err := p.store.GetReactionFingerprint(context.Background(), p.issueID, ReactionKindMergeConflict); err != nil || dispatched {
+		t.Errorf("row dispatched = %v (err %v) after the exit was written again, want lifted", dispatched, err)
+	}
+	if _, kept := p.state.unrecordedMergeConflictExits[p.issueID]; kept {
+		t.Error("unrecorded exit kept after it was written, want cleared")
+	}
+	if got := p.state.ReactionAttempts[ReactionKey(p.issueID, ReactionKindMergeConflict)]; got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
 	}
 }

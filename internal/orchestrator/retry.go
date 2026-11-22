@@ -952,8 +952,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	metrics.IncDispatches(outcomeSuccess)
 
 	// Mark the reaction fingerprint dispatched only after dispatch
-	// succeeds. Non-reaction retries have no fingerprint row.
+	// succeeds. Non-reaction retries have no fingerprint row. A rebase
+	// starting now supersedes an earlier rebase's exit a failed write left
+	// out, whose late write would lift this run's mark.
 	if isKnownReaction {
+		if popped.ReactionKind == ReactionKindMergeConflict {
+			delete(state.unrecordedMergeConflictExits, issueID)
+		}
 		if err := params.Store.MarkReactionDispatched(ctx, issueID, popped.ReactionKind); err != nil {
 			log.Warn("failed to mark reaction dispatched after retry dispatch",
 				slog.String("kind", popped.ReactionKind),

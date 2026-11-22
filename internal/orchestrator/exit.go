@@ -733,7 +733,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	var mergeConflictExit string
 	if entry.ReactionKind == ReactionKindMergeConflict {
 		mergeConflictExit = mergeConflictExitOf(workerResult)
-		recordMergeConflictExit(ctx, params.Store, workerResult.IssueID, mergeConflictExit, log)
+		recordMergeConflictExit(ctx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
 	}
 
 	switch workerResult.ExitKind {

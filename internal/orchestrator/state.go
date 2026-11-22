@@ -1485,6 +1485,13 @@ type State struct {
 	// or RetryAttempts. Runtime-only.
 	ReactionAttempts map[string]int
 
+	// unrecordedMergeConflictExits maps an issue ID to the exit of its last
+	// rebase worker when the store write that lifts the head's dispatched
+	// mark and records that exit failed. The next merge-conflict pass for
+	// the issue writes it again before reading the row. Runtime-only: a
+	// restart lifts every mark at startup.
+	unrecordedMergeConflictExits map[string]string
+
 	// ReactionHandedOffComments maps composite key (issueID:kind) to the set
 	// of [domain.ReviewComment] IDs the issue's runs were given for that
 	// kind, a cache over the reaction_handoffs rows. A present
