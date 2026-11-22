@@ -16,16 +16,18 @@ func TestHandleWorkerExit_RestoresMergeConflictWatch(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		result      WorkerResult
-		issueState  string
-		wantWatch   bool
-		wantRetried bool
+		name             string
+		result           WorkerResult
+		issueState       string
+		observedTerminal string
+		wantWatch        bool
+		wantRetried      bool
 	}{
 		{name: "cancelled with no retry", result: WorkerResult{ExitKind: WorkerExitCancelled}, issueState: "queue-pr", wantWatch: true},
 		{name: "normal exit without pull request metadata", result: WorkerResult{ExitKind: WorkerExitNormal}, issueState: "queue-pr", wantWatch: true},
 		{name: "error exit retries instead", result: WorkerResult{ExitKind: WorkerExitError, Error: errors.New("agent crashed")}, issueState: "queue-pr", wantRetried: true},
 		{name: "terminal issue", result: WorkerResult{ExitKind: WorkerExitNormal}, issueState: "done"},
+		{name: "cancelled after reconciliation saw the issue terminal", result: WorkerResult{ExitKind: WorkerExitCancelled}, issueState: "queue-pr", observedTerminal: "done"},
 		{name: "blocked stop parks", result: WorkerResult{ExitKind: WorkerExitNormal, SoftStop: true, SoftStopReason: string(workspace.StatusBlocked)}, issueState: "queue-pr"},
 	}
 
@@ -37,6 +39,7 @@ func TestHandleWorkerExit_RestoresMergeConflictWatch(t *testing.T) {
 			state := exitStateWithIssue(t, id, tt.issueState)
 			state.Running[id].ReactionKind = ReactionKindMergeConflict
 			state.Running[id].resumeWatch = newMergeConflictPending(id, 77)
+			state.Running[id].ObservedTerminalState = tt.observedTerminal
 
 			params := defaultExitParams(t, &mockExitStore{})
 			params.TrackerAdapter = &mockTrackerAdapter{}

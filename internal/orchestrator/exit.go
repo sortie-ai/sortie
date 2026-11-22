@@ -1576,8 +1576,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	// A rebase continuation that ends with no retry to follow it, and whose
 	// exit seeded no watch, leaves the pull request unwatched: its dispatch
-	// consumed the watch that fired it.
-	if !exitFoundTerminal {
+	// consumed the watch that fired it. An issue seen terminal, by the exit
+	// or by reconciliation during the run, gets none.
+	if !exitFoundTerminal && entry.ObservedTerminalState == "" {
 		restoreMergeConflictWatch(state, workerResult.IssueID, entry.resumeWatch, now, "rebase run ended", log)
 	}
 
