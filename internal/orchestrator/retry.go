@@ -277,7 +277,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// attempt it never made. The recheck is one poll interval away, or the
 	// due time an operator request replaced if that is sooner. The entry is
 	// marked so a worker exit that frees capacity makes it due at once.
-	rearmForCapacity := func(retryErr string) int64 {
+	rearmForCapacity := func(retryErr, issueState string) int64 {
 		delayMS := int64(params.PollIntervalMS)
 		if delayMS <= 0 {
 			delayMS = continuationDelayMS
@@ -286,9 +286,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			delayMS = min(delayMS, max(0, popped.dueBeforeRequestMS-time.Now().UnixMilli()))
 		}
 		reschedule(popped.Attempt, delayMS, retryErr)
-		if entry, ok := state.RetryAttempts[issueID]; ok {
-			entry.waitsForCapacity = true
-		}
+		markWaitsForCapacity(state, issueID, issueState)
 		return delayMS
 	}
 
@@ -761,13 +759,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int64("delay_ms", int64(params.PollIntervalMS)),
 			)
 			rearmHeld(time.Now().Add(time.Duration(params.PollIntervalMS) * time.Millisecond))
-			if entry, ok := state.RetryAttempts[issueID]; ok {
-				entry.waitsForCapacity = true
-			}
+			markWaitsForCapacity(state, issueID, issue.State)
 			return
 		}
 
-		delayMS := rearmForCapacity("no available orchestrator slots")
+		delayMS := rearmForCapacity("no available orchestrator slots", issue.State)
 		log.Warn("no available orchestrator slots, rescheduling retry",
 			slog.String("issue_state", issue.State),
 			slog.Int("attempt", popped.Attempt),
@@ -787,13 +783,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 					slog.Int64("delay_ms", int64(params.PollIntervalMS)),
 				)
 				rearmHeld(time.Now().Add(time.Duration(params.PollIntervalMS) * time.Millisecond))
-				if entry, ok := state.RetryAttempts[issueID]; ok {
-					entry.waitsForCapacity = true
-				}
+				markWaitsForCapacity(state, issueID, issue.State)
 				return
 			}
 
-			delayMS := rearmForCapacity("no available SSH hosts")
+			delayMS := rearmForCapacity("no available SSH hosts", issue.State)
 			log.Warn("no available SSH hosts, rescheduling retry",
 				slog.Int("attempt", popped.Attempt),
 				slog.Int64("delay_ms", delayMS),
@@ -987,6 +981,16 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		)
 	}
 	return false
+}
+
+// markWaitsForCapacity flags the retry entry of issueID, just re-armed for
+// want of a slot or host, so a worker exit that frees one can make it due,
+// and records the issue state whose slots it needs.
+func markWaitsForCapacity(state *State, issueID, issueState string) {
+	if entry, ok := state.RetryAttempts[issueID]; ok {
+		entry.waitsForCapacity = true
+		entry.capacityState = issueState
+	}
 }
 
 // isStaleRetryTimer reports whether the entry belongs to a newer

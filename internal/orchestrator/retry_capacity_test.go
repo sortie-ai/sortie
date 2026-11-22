@@ -76,19 +76,27 @@ func TestHandleRetryTimer_CapacityShortageKeepsAttempt(t *testing.T) {
 }
 
 // TestWakeCapacityWaitingRetries covers the worker-exit wake: the retries
-// that found no free slot are made due at once, earliest due first and no
-// more of them than there are free slots, and no other retry moves.
+// that found no free slot are made due at once, earliest due first, within
+// the free slots less those the exits just reserved for their own retries,
+// and within each waiter's per-state limit. No other retry moves.
 func TestWakeCapacityWaitingRetries(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		maxAgents int
-		wantWoken []string
+		name       string
+		maxAgents  int
+		reserved   int
+		stateLimit map[string]int
+		sameState  bool // both waiters wait in To Do
+		wantWoken  []string
 	}{
 		{name: "one free slot wakes the earliest waiting retry", maxAgents: 2, wantWoken: []string{"WAIT-SOON"}},
 		{name: "two free slots wake both waiting retries", maxAgents: 3, wantWoken: []string{"WAIT-SOON", "WAIT-LATE"}},
 		{name: "no free slot wakes nothing", maxAgents: 1},
+		{name: "a slot an exit's continuation reserved is not given away", maxAgents: 2, reserved: 1},
+		{name: "a full per-state limit skips its waiter", maxAgents: 3, stateLimit: map[string]int{"review": 1}, wantWoken: []string{"WAIT-LATE"}},
+		{name: "a per-state limit counts the waiters woken before", maxAgents: 4, stateLimit: map[string]int{"to do": 1}, sameState: true, wantWoken: []string{"WAIT-SOON"}},
+		{name: "per-state limits with room wake each waiter", maxAgents: 4, stateLimit: map[string]int{"review": 2, "to do": 1}, wantWoken: []string{"WAIT-SOON", "WAIT-LATE"}},
 	}
 
 	for _, tt := range tests {
@@ -98,9 +106,10 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 			cfg := defaultWorkerConfig(t.TempDir())
 			cfg.Polling = config.PollingConfig{IntervalMS: int(time.Hour / time.Millisecond)}
 			state := NewState(cfg.Polling.IntervalMS, tt.maxAgents, 0, nil, AgentTotals{})
+			state.MaxConcurrentByState = tt.stateLimit
 			state.Running["BUSY-1"] = &RunningEntry{
 				Identifier: "BUSY-1",
-				Issue:      candidateIssue("BUSY-1", "BUSY-1", "To Do"),
+				Issue:      candidateIssue("BUSY-1", "BUSY-1", "Review"),
 			}
 			o := NewOrchestrator(OrchestratorParams{
 				State:           state,
@@ -112,7 +121,7 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 				PreflightParams: passingPreflightRegistries(),
 			})
 
-			schedule := func(id string, delay time.Duration, waits bool) {
+			schedule := func(id, issueState string, delay time.Duration, waits bool) {
 				state.Claimed[id] = struct{}{}
 				ScheduleRetry(state, ScheduleRetryParams{
 					IssueID:    id,
@@ -120,11 +129,17 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 					Attempt:    2,
 					DelayMS:    delay.Milliseconds(),
 				}, o.onRetryFire)
-				state.RetryAttempts[id].waitsForCapacity = waits
+				if waits {
+					markWaitsForCapacity(state, id, issueState)
+				}
 			}
-			schedule("WAIT-LATE", 20*time.Minute, true)
-			schedule("WAIT-SOON", 10*time.Minute, true)
-			schedule("BACKOFF-1", 5*time.Minute, false)
+			schedule("WAIT-LATE", "To Do", 20*time.Minute, true)
+			soonState := "Review"
+			if tt.sameState {
+				soonState = "To Do"
+			}
+			schedule("WAIT-SOON", soonState, 10*time.Minute, true)
+			schedule("BACKOFF-1", "To Do", 5*time.Minute, false)
 			t.Cleanup(func() {
 				for _, entry := range state.RetryAttempts {
 					entry.TimerHandle.Stop()
@@ -135,7 +150,7 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 				dueBefore[id] = entry.DueAtMS
 			}
 
-			o.wakeCapacityWaitingRetries(t.Context())
+			o.wakeCapacityWaitingRetries(t.Context(), tt.reserved)
 
 			woken := map[string]bool{}
 			for range tt.wantWoken {
@@ -161,5 +176,69 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestWakeCapacityWaitingRetries_FiresDoNotOvercommit runs the fires the
+// wake makes due through the retry timer: no more of them start than there
+// are slots, and a woken retry that still finds none re-arms at the same
+// attempt.
+func TestWakeCapacityWaitingRetries_FiresDoNotOvercommit(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Polling = config.PollingConfig{IntervalMS: 30_000}
+	state := NewState(cfg.Polling.IntervalMS, 2, 0, nil, AgentTotals{})
+	state.Running["BUSY-1"] = &RunningEntry{Identifier: "BUSY-1", Issue: candidateIssue("BUSY-1", "BUSY-1", "To Do")}
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg, template: mustParseTemplate(t, "do {{ .issue.identifier }}")},
+		Store:           &stubStore{},
+		PreflightParams: passingPreflightRegistries(),
+	})
+	ids := []string{"WAIT-A", "WAIT-B", "WAIT-C"}
+	for i, id := range ids {
+		state.Claimed[id] = struct{}{}
+		ScheduleRetry(state, ScheduleRetryParams{IssueID: id, Identifier: id, Attempt: 3, DelayMS: (time.Duration(i+1) * time.Minute).Milliseconds()}, o.onRetryFire)
+		markWaitsForCapacity(state, id, "To Do")
+	}
+	t.Cleanup(func() {
+		for _, entry := range state.RetryAttempts {
+			entry.TimerHandle.Stop()
+		}
+	})
+
+	o.wakeCapacityWaitingRetries(t.Context(), 0)
+	fired := waittest.Receive(t, o.retryTimerCh, "woken retry fire")
+	if fired != "WAIT-A" {
+		t.Fatalf("woken retry = %s, want WAIT-A (earliest due)", fired)
+	}
+
+	tracker := &mockRetryTracker{}
+	params := defaultRetryParams(t, &mockRetryStore{}, tracker)
+	params.PollIntervalMS = 30_000
+	// The freed slot goes to the woken retry; a second fire, as a stale
+	// wake or an overlapping timer would bring, finds none.
+	for _, id := range []string{"WAIT-A", "WAIT-B"} {
+		tracker.fetchedIssue = candidateIssue(id, id, "To Do")
+		state.RetryAttempts[id].scheduledAt = time.Time{}
+		HandleRetryTimer(state, id, params)
+	}
+
+	if state.Running["WAIT-A"] == nil {
+		t.Error("woken retry WAIT-A not started on the freed slot")
+	}
+	if got := len(state.Running); got != 2 {
+		t.Errorf("running sessions = %d, want 2 (max_concurrent_agents)", got)
+	}
+	retry, ok := state.RetryAttempts["WAIT-B"]
+	if !ok {
+		t.Fatal("WAIT-B dropped, want re-armed for capacity")
+	}
+	if retry.Attempt != 3 || !retry.waitsForCapacity {
+		t.Errorf("WAIT-B Attempt = %d, waitsForCapacity = %v, want 3, true", retry.Attempt, retry.waitsForCapacity)
 	}
 }

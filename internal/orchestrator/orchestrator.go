@@ -718,7 +718,13 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 		})
 		o.recordOutcome(result, outcome)
 	}
-	o.wakeCapacityWaitingRetries(ctx)
+	reserved := 0
+	for _, result := range exits {
+		if retry := o.state.RetryAttempts[result.IssueID]; retry != nil && !retry.waitsForCapacity {
+			reserved++
+		}
+	}
+	o.wakeCapacityWaitingRetries(ctx, reserved)
 	o.updateGauges(time.Now())
 	o.notifyObservers()
 }
