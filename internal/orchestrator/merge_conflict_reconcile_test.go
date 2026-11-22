@@ -338,8 +338,8 @@ func TestReconcileMergeConflicts_Dispatch(t *testing.T) {
 	if metrics.escalations["label"] != 0 {
 		t.Errorf("IncMergeConflictEscalations called = %v, want none on first dirty head", metrics.escalations)
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1 (marked on dispatch tick)", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (marked only when the retry timer starts the worker)", store.markDispatchedCalls)
 	}
 }
 
@@ -456,9 +456,14 @@ func TestReconcileMergeConflicts_DedupSameHead(t *testing.T) {
 		t.Fatalf("after tick 1: ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
 	}
 
-	// The dispatch consumes the slot; the worker exit would re-seed it. The
-	// same-head re-observation must hit the dedup branch, so re-seed the slot
-	// to model the next reconcile pass over a still-pending entry.
+	// The retry timer starts the worker and only then marks the head
+	// dispatched. The dispatch consumes the slot; re-seed it to model the
+	// next reconcile pass over a still-pending entry while that worker
+	// runs, so the same-head re-observation hits the dedup branch.
+	CancelRetry(state, "MC-DEDUP")
+	if err := store.MarkReactionDispatched(context.Background(), "MC-DEDUP", ReactionKindMergeConflict); err != nil {
+		t.Fatalf("MarkReactionDispatched: %v", err)
+	}
 	state.PendingReactions[rkey] = newMergeConflictPending("MC-DEDUP", 10)
 
 	// Tick 2: same head, already dispatched -> dedup branch, no re-dispatch,
@@ -480,6 +485,166 @@ func TestReconcileMergeConflicts_DedupSameHead(t *testing.T) {
 	rec := store.fingerprints[rkey]
 	if rec.fingerprint != buildMergeConflictFingerprint("head-same") {
 		t.Errorf("stored fingerprint = %q, want digest of head-same", rec.fingerprint)
+	}
+}
+
+// TestReconcileMergeConflicts_LostContinuationRedispatches covers a rebase
+// continuation scheduled and then lost before its worker started, here by a
+// restart: the retry entry lives only in memory, so the next process holds
+// none. The head must not read as dispatched, or the dedup would skip it on
+// every later pass and the pull request would stay in conflict for good.
+func TestReconcileMergeConflicts_LostContinuationRedispatches(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MC-LOST"
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("head-lost", "main"), nil
+	}}
+	params := mergeConflictParams(store, scm, nil)
+
+	reconcileMergeConflicts(stateWithMergeConflict(t, issueID, 10), params, discardLogger(), context.Background(), metrics)
+	if metrics.checks["dispatched"] != 1 {
+		t.Fatalf(`before the restart: IncMergeConflictChecks("dispatched") = %d, want 1`, metrics.checks["dispatched"])
+	}
+	if _, dispatched, _ := store.GetReactionFingerprint(context.Background(), issueID, ReactionKindMergeConflict); dispatched {
+		t.Fatal("head marked dispatched while its continuation was only scheduled; want the mark left to the worker's start")
+	}
+
+	// The restarted process recovers the watch and no retry entry.
+	restarted := stateWithMergeConflict(t, issueID, 10)
+	reconcileMergeConflicts(restarted, params, discardLogger(), context.Background(), metrics)
+
+	retry, ok := restarted.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("no continuation scheduled after the restart; want the lost rebase scheduled again")
+	}
+	if retry.ReactionKind != ReactionKindMergeConflict {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindMergeConflict)
+	}
+	if metrics.checks["dispatched"] != 2 {
+		t.Errorf(`after the restart: IncMergeConflictChecks("dispatched") = %d, want 2`, metrics.checks["dispatched"])
+	}
+	if restarted.ReactionAttempts[rkey] != 1 {
+		t.Errorf("after the restart: ReactionAttempts[%s] = %d, want 1", rkey, restarted.ReactionAttempts[rkey])
+	}
+}
+
+// TestReconcileMergeConflicts_UnresolvedRebaseCountsAttempt covers a rebase
+// whose worker started and exited without pushing, leaving the same
+// conflicting head. The exit lifts the dispatched mark, so the next pass
+// counts another attempt against max_retries and escalates at the cap,
+// instead of skipping the head as already dispatched for good.
+func TestReconcileMergeConflicts_UnresolvedRebaseCountsAttempt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		exitReleases bool
+		wantEscalate bool
+	}{
+		{name: "exit lifts the mark", exitReleases: true, wantEscalate: true},
+		{name: "a mark left standing skips the head", exitReleases: false, wantEscalate: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueID := "MC-NOPUSH"
+			state := stateWithMergeConflict(t, issueID, 77)
+			rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+			store := newStatefulFingerprintStore()
+			metrics := newMergeConflictMetricsSpy()
+			tracker := &ciTrackerStub{}
+			scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+				return dirtyStatus("head-stuck", "main"), nil
+			}}
+			params := mergeConflictParams(store, scm, tracker)
+			ctx := context.Background()
+
+			reconcileMergeConflicts(state, params, discardLogger(), ctx, metrics)
+			if state.ReactionAttempts[rkey] != 1 {
+				t.Fatalf("after the first pass: ReactionAttempts = %d, want 1", state.ReactionAttempts[rkey])
+			}
+
+			// The retry timer starts the worker and marks the head.
+			CancelRetry(state, issueID)
+			if err := store.MarkReactionDispatched(ctx, issueID, ReactionKindMergeConflict); err != nil {
+				t.Fatalf("MarkReactionDispatched: %v", err)
+			}
+
+			// The worker exits without pushing and its exit seeds the watch.
+			if tt.exitReleases {
+				releaseMergeConflictDispatchMark(ctx, store, issueID, discardLogger())
+			}
+			state.PendingReactions[rkey] = newMergeConflictPending(issueID, 77)
+
+			reconcileMergeConflicts(state, params, discardLogger(), ctx, metrics)
+			state.TrackerOpsWg.Wait()
+
+			if metrics.checks["dispatched"] != 1 {
+				t.Errorf(`IncMergeConflictChecks("dispatched") = %d, want 1 (max_retries 1 allows one rebase)`, metrics.checks["dispatched"])
+			}
+			if !tt.wantEscalate {
+				if metrics.escalations["label"] != 0 {
+					t.Errorf(`IncMergeConflictEscalations("label") = %d, want 0`, metrics.escalations["label"])
+				}
+				return
+			}
+			assertEscalationBegan(t, state, rkey, EscalationTriggerBudget)
+			if metrics.escalations["label"] != 1 {
+				t.Errorf(`IncMergeConflictEscalations("label") = %d, want 1`, metrics.escalations["label"])
+			}
+			if tracker.addLabelCalled != 1 {
+				t.Errorf("AddLabel calls = %d, want 1", tracker.addLabelCalled)
+			}
+		})
+	}
+}
+
+func TestReleaseMergeConflictDispatchMark(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		seed           *fingerprintRecord
+		wantRow        bool
+		wantDispatched bool
+	}{
+		{name: "dispatched head keeps its fingerprint unmarked", seed: &fingerprintRecord{fingerprint: "fp-1", dispatched: true}, wantRow: true},
+		{name: "undispatched head is left alone", seed: &fingerprintRecord{fingerprint: "fp-1"}, wantRow: true},
+		{name: "no row stays absent", seed: nil, wantRow: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStatefulFingerprintStore()
+			key := ReactionKey("MC-REL", ReactionKindMergeConflict)
+			if tt.seed != nil {
+				store.fingerprints[key] = *tt.seed
+			}
+
+			releaseMergeConflictDispatchMark(context.Background(), store, "MC-REL", discardLogger())
+
+			rec, ok := store.fingerprints[key]
+			if ok != tt.wantRow {
+				t.Fatalf("fingerprint row present = %v, want %v", ok, tt.wantRow)
+			}
+			if !ok {
+				return
+			}
+			if rec.fingerprint != tt.seed.fingerprint {
+				t.Errorf("fingerprint = %q, want %q (the head is unchanged)", rec.fingerprint, tt.seed.fingerprint)
+			}
+			if rec.dispatched != tt.wantDispatched {
+				t.Errorf("dispatched = %v, want %v", rec.dispatched, tt.wantDispatched)
+			}
+		})
 	}
 }
 
@@ -1266,8 +1431,8 @@ func TestReconcileMergeConflicts_FreeSlotControlDispatches(t *testing.T) {
 	if retry.ReactionKind != ReactionKindMergeConflict {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindMergeConflict)
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (marked only when the retry timer starts the worker)", store.markDispatchedCalls)
 	}
 }
 
@@ -1460,8 +1625,8 @@ func TestReconcileMergeConflicts_Triage_NoConfig_BehavesAsPinned(t *testing.T) {
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1 (the normal dispatch path marks it)", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (marked only when the retry timer starts the worker)", store.markDispatchedCalls)
 	}
 }
 
@@ -1697,11 +1862,11 @@ func TestReconcileMergeConflicts_Triage_DispatchAgent_HeadChangeBlockRunsOnce(t 
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1 (the per-episode increment ran exactly once)", rkey, state.ReactionAttempts[rkey])
 	}
-	// dispatchMergeConflictContinuation itself calls MarkReactionDispatched
-	// as part of its pre-existing dispatch path, independent of triage; the
-	// gate's own markTriageDispatched runs only on handled or escalate.
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1 (from the normal dispatch path)", store.markDispatchedCalls)
+	// The gate's own markTriageDispatched runs only on handled or
+	// escalate, and the continuation is marked only when the retry timer
+	// starts its worker.
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no mark before the worker starts)", store.markDispatchedCalls)
 	}
 }
 

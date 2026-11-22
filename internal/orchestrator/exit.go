@@ -49,6 +49,7 @@ type WorkerExitStore interface {
 	storage.IssueOutcomeStore
 	storage.ReactionActivityStore
 	storage.UsageLimitHoldStore
+	storage.ReactionFingerprintStore
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -728,6 +729,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// released on those arms, so a deferral changes only the retry slot.
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
+
+	if entry.ReactionKind == ReactionKindMergeConflict {
+		releaseMergeConflictDispatchMark(ctx, params.Store, workerResult.IssueID, log)
+	}
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:

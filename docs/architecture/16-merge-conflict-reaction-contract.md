@@ -55,7 +55,7 @@ Before any dispatch, the dirty branch applies three precondition guards, in orde
 
 After all three guards pass, the fingerprint is computed as `sha256(headSHA)` and upserted into `reaction_fingerprints` with `kind = "merge-conflict"`. The reaction reuses the existing table; no migration is required. The fingerprint key `(issue_id, "merge-conflict")` is independent of the `"merge"` fingerprint the auto-merge reaction maintains.
 
-When the stored fingerprint matches the computed value and is marked dispatched, the entry is re-enqueued at `now + poll_interval` with no increment and no dispatch. This dedup prevents a persistent same-head observation from firing multiple continuations while the rebase is in flight.
+When the stored fingerprint matches the computed value and is marked dispatched, the entry is re-enqueued at `now + poll_interval` with no increment and no dispatch. This dedup prevents a persistent same-head observation from firing multiple continuations while the rebase is in flight. The mark is set when the retry timer starts the rebase's worker, not when the pass schedules the continuation: until the worker starts, the continuation is an in-memory retry entry that a restart, or a retry-timer arm that drops it, loses without a trace, and a mark set at scheduling would then make the dedup skip the head on every later pass. The exit of the rebase's worker, whatever its kind, lifts the mark again, keeping the row and its fingerprint. A rebase that pushed has given the pull request a new head that the next pass fingerprints afresh; one that did not leaves the same conflicting head unmarked, so the next pass counts another attempt and escalates at the cap rather than skipping the head for good. A retry the exit schedules marks the head again when it starts.
 
 The fingerprint churns on each new push: a new head SHA produces a new fingerprint with `dispatched = 0`, so a conflict that persists across a rebase re-arms a new attempt. The not-dirty branch deletes the row entirely when the PR is not dirty, so the first subsequent dirty observation always finds `dispatched = 0` and dispatches.
 
@@ -97,7 +97,7 @@ Cross-kind isolation: `escalateMergeConflictFailure` MUST scope all deletions to
 
 ### 11E.6 Continuation data
 
-The retry-slot guard in Section 11E.4 is unaffected by anything in this section: a deferral returns before `dispatchMergeConflictContinuation` is ever called, so the `MarkReactionDispatched` timing this section describes only ever runs on a tick that actually dispatches.
+The retry-slot guard in Section 11E.4 is unaffected by anything in this section: a deferral returns before `dispatchMergeConflictContinuation` is ever called, so the continuation this section describes is only ever scheduled on a tick that actually dispatches.
 
 `dispatchMergeConflictContinuation` schedules a continuation turn via `ScheduleRetry` with the prompt key `merge_conflict`, admitted into the slot the guard above already confirmed is free. The continuation map contains:
 
@@ -108,7 +108,7 @@ The retry-slot guard in Section 11E.4 is unaffected by anything in this section:
 | `head_sha` | `status.HeadSHA` at dispatch time |
 | `base` | `status.BaseBranch`, the PR's real target branch, read live from `GetMergeability` on this tick |
 
-`base` is always the PR object's actual base ref, not an assumed default branch. The orchestrator already holds the PR object and cannot diverge from the platform's view; the agent does not re-derive the base independently. `MarkReactionDispatched` is called on the same tick the continuation is scheduled; this is the marker the dirty branch's dedup guard reads in subsequent ticks.
+`base` is always the PR object's actual base ref, not an assumed default branch. The orchestrator already holds the PR object and cannot diverge from the platform's view; the agent does not re-derive the base independently. `MarkReactionDispatched` is called when the retry timer starts the continuation's worker, and the worker's exit lifts the mark (Section 11E.4); this is the marker the dirty branch's dedup guard reads in subsequent ticks.
 
 The `merge_conflict` key MUST be registered in `prompt.continuationKeys` and seeded to nil in the template data map so `Option("missingkey=error")` does not reject templates that reference the field when no conflict continuation is active.
 
@@ -156,7 +156,8 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 | pending | Reconcile tick, `Mergeability == dirty`, fingerprint dispatched for this head | pending | Re-enqueue at `now + poll_interval`; do not increment counter. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head this reaction has not dispatched for, attribution `not_orchestrator` | pending | Delete the per-episode counter before incrementing, so the reported attempt count is `1` rather than continuing to climb across successive conflicting heads; record `HeadRecordedAt`. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head this reaction has not dispatched for, attribution `unknown` | pending | Leave the per-episode counter at its prior value; record `HeadRecordedAt`. |
-| pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; mark dispatched; count dispatched. |
+| pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; count dispatched. The retry timer marks the fingerprint dispatched when it starts the worker. |
+| dispatched | The rebase continuation's worker exits, by any exit kind | (none) | Lift the fingerprint's dispatched mark, keeping the row. Whether the exit seeds the entry again follows Section 11E.7. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts > MaxRetries` | escalated | Apply escalation and record it on the entry; delete the fingerprint row; leave the per-episode counter at the rebases dispatched. The entry stays pending. MUST NOT release the claim or clear sibling slots (§11E.5). |
 | escalated | Reconcile tick, no ending fact (the same head, or `Mergeability == unknown`) | escalated | Re-enqueue at `now + poll_interval`. No dispatch, action, or triage run. |
 | escalated | Reconcile tick, `Mergeability != dirty` | pending | End the escalation; delete the fingerprint row and the per-episode counter; re-enqueue. Episode closes. |

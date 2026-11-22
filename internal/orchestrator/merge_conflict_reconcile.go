@@ -9,6 +9,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 // mergeConflictPendingBackoffBase is the floor for the merge-conflict poll
@@ -354,9 +355,12 @@ func buildMergeConflictFingerprint(headSHA string) string {
 }
 
 // dispatchMergeConflictContinuation schedules a rebase-and-resolve
-// continuation turn carrying the PR's real base branch and marks the
-// merge-conflict fingerprint dispatched on the same tick. The continuation
-// reuses the same workspace identifier (no new workspace key).
+// continuation turn carrying the PR's real base branch. The continuation
+// reuses the same workspace identifier (no new workspace key). The
+// fingerprint is marked dispatched only when the retry timer starts the
+// worker: until then the continuation is an in-memory retry entry that a
+// restart or a dropped retry loses, and a mark set here would make the
+// dedup skip the head for good.
 func dispatchMergeConflictContinuation(
 	state *State,
 	params ReconcileParams,
@@ -391,12 +395,6 @@ func dispatchMergeConflictContinuation(
 
 		IssueIdentity: pending.IssueIdentity,
 	}, params.OnRetryFire, now)
-
-	if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindMergeConflict); markErr != nil {
-		log.Warn("failed to mark merge conflict dispatched",
-			slog.Any("error", markErr),
-		)
-	}
 
 	log.Info("merge conflict detected, scheduling rebase dispatch",
 		slog.Int("pr_number", data.PRNumber),
@@ -533,4 +531,40 @@ func applyMergeConflictEscalation(
 	publishEscalation(ctx, &state.TrackerOpsWg, delivery, log, record, func(err error) {
 		log.Warn("merge conflict escalation comment failed", slog.Any("error", err))
 	})
+}
+
+// releaseMergeConflictDispatchMark lifts the dispatched mark of the
+// merge-conflict fingerprint when a rebase continuation's worker exits.
+// A rebase that pushed gives the pull request a new head, which the next
+// pass fingerprints afresh anyway. One that did not (the agent gave up,
+// stopped for review, failed, or was cancelled) leaves the same
+// conflicting head, and a standing mark would make the dedup skip it for
+// good; lifted, the next pass counts another attempt against max_retries
+// and escalates at the cap. A retry the exit schedules marks the head
+// again when it starts. The store has no operation that clears the flag
+// alone, so the row is deleted and written back for the same head; a
+// failure between the two leaves no row, which the next pass reads as a
+// new head.
+func releaseMergeConflictDispatchMark(ctx context.Context, store storage.ReactionFingerprintStore, issueID string, log *slog.Logger) {
+	fingerprint, dispatched, err := store.GetReactionFingerprint(ctx, issueID, ReactionKindMergeConflict)
+	if err != nil {
+		log.Warn("failed to read merge conflict fingerprint at rebase exit",
+			slog.Any("error", err),
+		)
+		return
+	}
+	if !dispatched {
+		return
+	}
+	if err := store.DeleteReactionFingerprint(ctx, issueID, ReactionKindMergeConflict); err != nil {
+		log.Warn("failed to clear the dispatched mark of a rebased head",
+			slog.Any("error", err),
+		)
+		return
+	}
+	if err := store.UpsertReactionFingerprint(ctx, issueID, ReactionKindMergeConflict, fingerprint); err != nil {
+		log.Warn("failed to restore the merge conflict fingerprint after clearing the dispatched mark",
+			slog.Any("error", err),
+		)
+	}
 }
