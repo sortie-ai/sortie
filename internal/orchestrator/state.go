@@ -464,6 +464,11 @@ type RetryEntry struct {
 	// shortage keeps Attempt. Runtime-only.
 	holdRearmed bool
 
+	// waitsForCapacity is true when HandleRetryTimer re-armed this entry
+	// because no orchestrator slot or SSH host was free, so a worker exit
+	// that frees one makes it due at once. Runtime-only.
+	waitsForCapacity bool
+
 	// dueBeforeRequestMS is the DueAtMS the entry had before the first request
 	// that made it due now; zero when no request did. Runtime-only.
 	dueBeforeRequestMS int64

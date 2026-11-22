@@ -1,8 +1,11 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -70,19 +73,8 @@ func (o *Orchestrator) retryNowOnLoop(ctx context.Context, identifier string) Re
 	if entry.dueBeforeRequestMS == 0 {
 		entry.dueBeforeRequestMS = replaced
 	}
-	now := time.Now()
-	if entry.TimerHandle != nil {
-		entry.TimerHandle.Stop()
-	}
-	entry.scheduledAt = now
-	entry.scheduledDelayMS = 0
-	entry.DueAtMS = now.UnixMilli()
-	entry.TimerHandle = time.AfterFunc(0, func() { o.onRetryFire(issueID) })
-
 	log := logging.WithIssue(o.logger, issueID, entry.Identifier)
-	if !isKnownReactionKind(entry.ReactionKind) {
-		persistRetryEntry(ctx, log, o.store, o.state, issueID)
-	}
+	o.makeRetryDueNow(ctx, issueID, entry, log)
 	log.Info("retry made due on request",
 		slog.Int("attempt", entry.Attempt),
 		slog.Int64("replaced_due_at_ms", replaced),
@@ -95,5 +87,55 @@ func (o *Orchestrator) retryNowOnLoop(ctx context.Context, identifier string) Re
 		Identifier: entry.Identifier,
 		DisplayID:  entry.DisplayID,
 		Attempt:    entry.Attempt,
+	}
+}
+
+// makeRetryDueNow re-arms entry in place with a zero delay. A rebuilt entry
+// would lose the runtime-only fields the fire reads, and the fire must find
+// the entry a timer firing at its due time finds, so only the schedule
+// changes. Must run on the event loop.
+func (o *Orchestrator) makeRetryDueNow(ctx context.Context, issueID string, entry *RetryEntry, log *slog.Logger) {
+	now := time.Now()
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+	entry.scheduledAt = now
+	entry.scheduledDelayMS = 0
+	entry.DueAtMS = now.UnixMilli()
+	entry.TimerHandle = time.AfterFunc(0, func() { o.onRetryFire(issueID) })
+	if !isKnownReactionKind(entry.ReactionKind) {
+		persistRetryEntry(ctx, log, o.store, o.state, issueID)
+	}
+}
+
+// wakeCapacityWaitingRetries makes due now the retries that found no free
+// slot or SSH host, earliest due first and no more of them than there are
+// free slots, so a slot a worker exit just freed is not left idle until
+// their next recheck. A woken retry that still finds no capacity is re-armed
+// for its recheck again, keeping its attempt. Must run on the event loop.
+func (o *Orchestrator) wakeCapacityWaitingRetries(ctx context.Context) {
+	free := GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running))
+	if free == 0 {
+		return
+	}
+	var waiting []*RetryEntry
+	for _, entry := range o.state.RetryAttempts {
+		if entry.waitsForCapacity {
+			waiting = append(waiting, entry)
+		}
+	}
+	slices.SortFunc(waiting, func(a, b *RetryEntry) int {
+		if c := cmp.Compare(a.DueAtMS, b.DueAtMS); c != 0 {
+			return c
+		}
+		return strings.Compare(a.IssueID, b.IssueID)
+	})
+	for _, entry := range waiting[:min(free, len(waiting))] {
+		entry.waitsForCapacity = false
+		log := logging.WithIssue(o.logger, entry.IssueID, entry.Identifier)
+		o.makeRetryDueNow(ctx, entry.IssueID, entry, log)
+		log.Debug("capacity freed, retry made due",
+			slog.Int("attempt", entry.Attempt),
+		)
 	}
 }

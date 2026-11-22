@@ -718,6 +718,7 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 		})
 		o.recordOutcome(result, outcome)
 	}
+	o.wakeCapacityWaitingRetries(ctx)
 	o.updateGauges(time.Now())
 	o.notifyObservers()
 }
