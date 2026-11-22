@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -162,6 +164,89 @@ func TestRestoreMergeConflictWatch_KeepsExistingState(t *testing.T) {
 
 			if got := state.PendingReactions[ReactionKey(id, ReactionKindMergeConflict)]; got != before {
 				t.Errorf("watch = %+v, want unchanged %+v", got, before)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_RebaseHopRestoresNoWatch covers a rebase continuation
+// whose exit makes a stage hop: the issue now belongs to the next stage, so
+// the watch its dispatch consumed, which carries the source stage's rule,
+// stays gone rather than firing a rebase under that rule later.
+func TestHandleWorkerExit_RebaseHopRestoresNoWatch(t *testing.T) {
+	t.Parallel()
+
+	f := newHopExitFixture(t)
+	entry := f.state.Running[hopExitIssueID]
+	entry.ReactionKind = ReactionKindMergeConflict
+	entry.resumeWatch = newMergeConflictPending(hopExitIssueID, 80)
+	f.params.SCMAdapter = &scmAdapterStubExit{}
+	f.params.MergeConflictReactionConfigured = true
+
+	f.exit()
+
+	if !slices.Equal(f.tracker.added, []string{hopExitTargetLabel}) {
+		t.Fatalf("AddLabel labels = %q, want [%q]: the exit must hop", f.tracker.added, hopExitTargetLabel)
+	}
+	if watch, ok := f.state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindMergeConflict)]; ok {
+		t.Errorf("merge-conflict watch restored after a made hop (rule %q), want none", watch.RuleName)
+	}
+}
+
+// TestHandleWorkerExit_RebaseContinuationRetryCarriesWatch covers the exits
+// that answer a rebase continuation with a continuation retry rather than
+// a handoff: the retry carries the watch the dispatch consumed, so the
+// retry's own exit can put it back.
+func TestHandleWorkerExit_RebaseContinuationRetryCarriesWatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(params *HandleWorkerExitParams)
+	}{
+		{name: "handoff transition failed", prepare: func(params *HandleWorkerExitParams) {
+			params.TrackerAdapter = &mockTrackerAdapter{transitionIssueFn: func(context.Context, string, string) error {
+				return errors.New("tracker unavailable")
+			}}
+			params.HandoffState = "queue-pr"
+		}},
+		{name: "handoff with no tracker adapter", prepare: func(params *HandleWorkerExitParams) {
+			params.TrackerAdapter = nil
+			params.HandoffState = "queue-pr"
+		}},
+		{name: "active issue with no handoff state", prepare: func(params *HandleWorkerExitParams) {
+			params.TrackerAdapter = &mockTrackerAdapter{}
+			params.HandoffState = ""
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "MCW-4"
+			state := exitStateWithIssue(t, id, "queue")
+			state.Running[id].ReactionKind = ReactionKindMergeConflict
+			state.Running[id].resumeWatch = newMergeConflictPending(id, 81)
+
+			params := defaultExitParams(t, &mockExitStore{})
+			params.ActiveStates = []string{"queue"}
+			params.TerminalStates = []string{"done"}
+			tt.prepare(&params)
+
+			HandleWorkerExit(state, WorkerResult{IssueID: id, Identifier: id + "-ident", ExitKind: WorkerExitNormal, AgentAdapter: "mock"}, params)
+			state.TrackerOpsWg.Wait()
+
+			retry, ok := state.RetryAttempts[id]
+			if !ok {
+				t.Fatal("no continuation retry scheduled")
+			}
+			retry.TimerHandle.Stop()
+			if retry.resumeWatch == nil {
+				t.Fatal("retry carries no watch, want the one the rebase was dispatched for")
+			}
+			if data, ok := retry.resumeWatch.KindData.(*MergeConflictReactionData); !ok || data.PRNumber != 81 {
+				t.Errorf("retry resumeWatch = %#v, want the watch the rebase was dispatched for", retry.resumeWatch)
 			}
 		})
 	}
