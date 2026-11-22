@@ -1010,3 +1010,74 @@ func TestRefreshParkedIssuesLeavesConfirmedOrUnlabeledParks(t *testing.T) {
 		})
 	}
 }
+
+func TestParkLabelRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		writes int
+		want   time.Duration
+	}{
+		{writes: 0, want: 0},
+		{writes: 1, want: 30 * time.Second},
+		{writes: 2, want: time.Minute},
+		{writes: 3, want: 2 * time.Minute},
+		{writes: 7, want: 32 * time.Minute},
+		{writes: 8, want: time.Hour},
+		{writes: 40, want: time.Hour},
+	}
+	for _, tt := range tests {
+		if got := parkLabelRetryDelay(tt.writes); got != tt.want {
+			t.Errorf("parkLabelRetryDelay(%d) = %v, want %v", tt.writes, got, tt.want)
+		}
+	}
+}
+
+// TestRewriteUnconfirmedParkLabel_Gates covers the reads that start no write
+// (an empty or terminal state, a write still inside its backoff) and the
+// single warning once the label has gone unobserved for several writes.
+func TestRewriteUnconfirmedParkLabel_Gates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		observed  string
+		writes    int
+		startedAt time.Duration // before now; zero means never
+		wantWrite bool
+		wantWarn  bool
+	}{
+		{name: "empty state", observed: "", wantWrite: false},
+		{name: "terminal state", observed: "Done", wantWrite: false},
+		{name: "inside the backoff", observed: "In Progress", writes: 3, startedAt: time.Minute, wantWrite: false},
+		{name: "past the backoff", observed: "In Progress", writes: 3, startedAt: 3 * time.Minute, wantWrite: true},
+		{name: "warns at the fifth write", observed: "In Progress", writes: parkLabelWarnAfter, startedAt: 2 * time.Hour, wantWrite: true, wantWarn: true},
+		{name: "debug after the warning", observed: "In Progress", writes: parkLabelWarnAfter + 1, startedAt: 2 * time.Hour, wantWrite: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "GATE-1"
+			state := NewState(1000, 1, 0, nil, AgentTotals{})
+			entry := &ParkedEntry{Identifier: "PROJ-GATE-1", Label: "needs-human", labelWrites: tt.writes}
+			if tt.startedAt != 0 {
+				entry.labelWriteStartedAt = time.Now().Add(-tt.startedAt)
+			}
+			state.Parked[id] = entry
+			tracker := newRecordingHandoffTracker()
+			var logs bytes.Buffer
+
+			rewriteUnconfirmedParkLabel(context.Background(), state, tracker, id, entry, tt.observed, nil, []string{"Done"}, debugLogger(t, &logs))
+			state.TrackerOpsWg.Wait()
+
+			if wrote := len(tracker.labels()) == 1; wrote != tt.wantWrite {
+				t.Errorf("label written = %v, want %v", wrote, tt.wantWrite)
+			}
+			if warned := strings.Contains(logs.String(), "park label still not observed"); warned != tt.wantWarn {
+				t.Errorf("warning logged = %v, want %v\nlogs: %s", warned, tt.wantWarn, logs.String())
+			}
+		})
+	}
+}

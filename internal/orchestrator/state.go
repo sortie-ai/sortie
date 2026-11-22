@@ -1119,7 +1119,7 @@ type ParkedEntry struct {
 
 	// labelWriteStartedAt is when this process last started a write of
 	// Label; zero when it started none, as for a park loaded at startup.
-	// labelWrites counts the writes started again after the first.
+	// labelWrites counts the writes this process started.
 	// Runtime-only, read and written on the event loop.
 	labelWriteStartedAt time.Time
 	labelWrites         int

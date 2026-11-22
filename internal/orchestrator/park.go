@@ -197,11 +197,20 @@ func parkIssue(state *State, params parkIssueParams) {
 // parkLabelWriteTimeout bounds one detached parking-label write.
 const parkLabelWriteTimeout = 30 * time.Second
 
+// parkLabelRetryCap bounds the wait between two writes of a parking label
+// that no read has confirmed.
+const parkLabelRetryCap = time.Hour
+
+// parkLabelWarnAfter is the number of writes of one park's label after
+// which a label still not observed is logged at warning, once.
+const parkLabelWarnAfter = 5
+
 // writeParkLabel starts the detached write of entry's parking label and
 // records when it started. The write's result is never trusted: the label
 // is confirmed only when a read observes it. Must run on the event loop.
 func writeParkLabel(ctx context.Context, state *State, tracker domain.TrackerAdapter, issueID string, entry *ParkedEntry, log *slog.Logger) {
 	entry.labelWriteStartedAt = time.Now()
+	entry.labelWrites++
 	label := entry.Label
 	state.TrackerOpsWg.Go(func() {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), parkLabelWriteTimeout)
@@ -213,28 +222,58 @@ func writeParkLabel(ctx context.Context, state *State, tracker domain.TrackerAda
 	})
 }
 
+// parkLabelRetryDelay is how long after the start of the writes-th write of
+// a park's label the next one may start: the write timeout after the first,
+// doubling after each later one up to [parkLabelRetryCap]. Zero writes, as
+// for a park loaded at startup, wait for nothing.
+func parkLabelRetryDelay(writes int) time.Duration {
+	if writes <= 0 {
+		return 0
+	}
+	delay := parkLabelWriteTimeout
+	for range writes - 1 {
+		delay *= 2
+		if delay >= parkLabelRetryCap {
+			return parkLabelRetryCap
+		}
+	}
+	return delay
+}
+
 // rewriteUnconfirmedParkLabel writes entry's parking label again when a read
-// of the still-parked issue shows it absent and no read has confirmed it.
-// A park releases only on a confirmed label's removal or a state change, so
-// a park whose first write failed would otherwise hold the issue out of
-// dispatch for good with no label to tell a person why or to remove. One
-// write at a time: the next starts no sooner than the write timeout after
-// the last one started. Must run on the event loop.
-func rewriteUnconfirmedParkLabel(ctx context.Context, state *State, tracker domain.TrackerAdapter, issueID string, entry *ParkedEntry, labels []string, log *slog.Logger) {
+// of the still-parked issue in observed, a state that is neither empty nor
+// terminal, shows it absent and no read has confirmed it. A park releases
+// only on a confirmed label's removal or a state change, so a park whose
+// first write failed would otherwise hold the issue out of dispatch for good
+// with no label to tell a person why or to remove. One write at a time, with
+// a backoff between writes from the write timeout up to an hour (see
+// [parkLabelRetryDelay]); a label still not observed after
+// [parkLabelWarnAfter] writes warns once. Must run on the event loop.
+func rewriteUnconfirmedParkLabel(ctx context.Context, state *State, tracker domain.TrackerAdapter, issueID string, entry *ParkedEntry, observed string, labels, terminalStates []string, log *slog.Logger) {
 	if tracker == nil || entry.Label == "" || entry.LabelApplied || state.Parked[issueID] != entry {
+		return
+	}
+	if observed == "" || isTerminalState(observed, terminalStates) {
 		return
 	}
 	if slices.ContainsFunc(labels, func(label string) bool { return strings.EqualFold(label, entry.Label) }) {
 		return
 	}
-	if !entry.labelWriteStartedAt.IsZero() && time.Since(entry.labelWriteStartedAt) < parkLabelWriteTimeout {
+	if !entry.labelWriteStartedAt.IsZero() && time.Since(entry.labelWriteStartedAt) < parkLabelRetryDelay(entry.labelWrites) {
 		return
 	}
-	entry.labelWrites++
-	log.Info("park label not observed, writing it again",
-		slog.String("label", entry.Label),
-		slog.Int("label_writes", entry.labelWrites),
-	)
+	if entry.labelWrites == parkLabelWarnAfter {
+		log.Warn("park label still not observed, writing it again with backoff",
+			slog.String("label", entry.Label),
+			slog.Int("label_writes", entry.labelWrites),
+			slog.Duration("max_delay", parkLabelRetryCap),
+		)
+	} else {
+		log.Debug("park label not observed, writing it again",
+			slog.String("label", entry.Label),
+			slog.Int("label_writes", entry.labelWrites),
+		)
+	}
 	writeParkLabel(ctx, state, tracker, issueID, entry, log)
 }
 
