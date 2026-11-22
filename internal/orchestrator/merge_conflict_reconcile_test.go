@@ -926,8 +926,9 @@ func TestReconcileMergeConflicts_DropOnAgeReleasesCounter(t *testing.T) {
 	if store.deleteRetryCalls != 0 {
 		t.Errorf("DeleteRetryEntry calls = %d, want 0", store.deleteRetryCalls)
 	}
-	if store.upsertCalls != 0 || store.getCalls != 0 || store.deleteCalls != 0 {
-		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+	// The episode ends with the watch, so its row goes with it.
+	if store.upsertCalls != 0 || store.getCalls != 0 || store.deleteCalls != 1 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want 0, 0, 1",
 			store.upsertCalls, store.getCalls, store.deleteCalls)
 	}
 }

@@ -1833,8 +1833,9 @@ func TestReconcileTrackerState_TerminalReleasePreservesFingerprints(t *testing.T
 
 	reconcileTrackerState(state, params, discardLogger(), context.Background(), time.Now(), &domain.NoopMetrics{})
 
-	if store.upsertCalls != 0 || store.getCalls != 0 || store.markCalls != 0 || store.deleteCalls != 0 {
-		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want all zero",
+	// The one delete is the merge-conflict episode row, never this kind's.
+	if store.upsertCalls != 0 || store.getCalls != 0 || store.markCalls != 0 || store.deleteCalls != 1 {
+		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want 0, 0, 0, 1",
 			store.upsertCalls, store.getCalls, store.markCalls, store.deleteCalls)
 	}
 	after, ok := store.has(issueID)

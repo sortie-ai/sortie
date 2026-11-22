@@ -730,8 +730,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
 
+	var mergeConflictExit string
 	if entry.ReactionKind == ReactionKindMergeConflict {
-		recordMergeConflictExit(ctx, params.Store, workerResult.IssueID, mergeConflictExitOf(workerResult), log)
+		mergeConflictExit = mergeConflictExitOf(workerResult)
+		recordMergeConflictExit(ctx, params.Store, workerResult.IssueID, mergeConflictExit, log)
 	}
 
 	switch workerResult.ExitKind {
@@ -1564,6 +1566,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				}
 			}
 		}
+	}
+
+	if spendsNoMergeConflictAttempt(mergeConflictExit) {
+		refundMergeConflictAttempt(ctx, state, params.Store, workerResult.IssueID, true, log)
 	}
 
 	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)

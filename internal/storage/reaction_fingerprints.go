@@ -15,13 +15,15 @@ type ReactionObservation struct {
 
 // ReactionEpisode is the persisted episode state of one reaction kind on an
 // issue: its fingerprint row with the attempt counter of the episode it
-// belongs to and how the last run dispatched for the fingerprint ended.
+// belongs to, how the last run dispatched for the fingerprint ended, and
+// the consecutive new episodes no clean read has closed.
 // Found is false when no row exists.
 type ReactionEpisode struct {
 	Fingerprint string
 	Dispatched  bool
 	Attempts    int
 	LastExit    string
+	Episodes    int
 	Found       bool
 }
 
@@ -42,6 +44,9 @@ type ReactionFingerprintStore interface {
 	// SetReactionAttempts stores the episode attempt counter and clears the
 	// recorded run exit. No-op when the row does not exist.
 	SetReactionAttempts(ctx context.Context, issueID, kind string, attempts int) error
+	// SetReactionEpisodes stores the count of consecutive new episodes no
+	// clean read has closed. No-op when the row does not exist.
+	SetReactionEpisodes(ctx context.Context, issueID, kind string, episodes int) error
 	// RecordReactionExit lifts the dispatched mark and records how the run
 	// dispatched for the row's fingerprint ended. No-op when the row does
 	// not exist.

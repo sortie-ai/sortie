@@ -92,6 +92,7 @@ type exitFingerprint struct {
 	dispatched  bool
 	attempts    int
 	lastExit    string
+	episodes    int
 }
 
 func (m *mockExitStore) fingerprintRows() map[string]exitFingerprint {
@@ -108,7 +109,7 @@ func (m *mockExitStore) UpsertReactionFingerprint(_ context.Context, issueID, ki
 	if ok && row.fingerprint == fingerprint {
 		return nil
 	}
-	rows[key] = exitFingerprint{fingerprint: fingerprint, attempts: row.attempts}
+	rows[key] = exitFingerprint{fingerprint: fingerprint, attempts: row.attempts, episodes: row.episodes}
 	return nil
 }
 
@@ -117,7 +118,7 @@ func (m *mockExitStore) GetReactionEpisode(_ context.Context, issueID, kind stri
 	if !ok {
 		return storage.ReactionEpisode{}, nil
 	}
-	return storage.ReactionEpisode{Fingerprint: row.fingerprint, Dispatched: row.dispatched, Attempts: row.attempts, LastExit: row.lastExit, Found: true}, nil
+	return storage.ReactionEpisode{Fingerprint: row.fingerprint, Dispatched: row.dispatched, Attempts: row.attempts, LastExit: row.lastExit, Episodes: row.episodes, Found: true}, nil
 }
 
 func (m *mockExitStore) SetReactionAttempts(_ context.Context, issueID, kind string, attempts int) error {
@@ -125,6 +126,16 @@ func (m *mockExitStore) SetReactionAttempts(_ context.Context, issueID, kind str
 	key := ReactionKey(issueID, kind)
 	if row, ok := rows[key]; ok {
 		row.attempts, row.lastExit = attempts, ""
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) SetReactionEpisodes(_ context.Context, issueID, kind string, episodes int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.episodes = episodes
 		rows[key] = row
 	}
 	return nil

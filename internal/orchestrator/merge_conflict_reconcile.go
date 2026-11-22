@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -69,7 +70,11 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		if ttl > 0 && !pending.escalationStands() && now.Sub(watchWindowStart(pending)) > ttl {
 			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
-			persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, entryLog)
+			// The episode ends with the watch; its persisted counters
+			// would otherwise come back with the next watch.
+			if delErr := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict); delErr != nil {
+				entryLog.Warn("failed to delete merge conflict episode", slog.Any("error", delErr))
+			}
 			entryLog.Warn("merge conflict watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(watchWindowStart(pending))/time.Millisecond)),
@@ -252,7 +257,19 @@ func handleMergeConflictDirty(
 			return
 		case episode.LastExit == mergeConflictExitNormal && episode.Fingerprint != fingerprint:
 			// The rebase exited normally and the head moved: it resolved
-			// the conflict it was given, and this one is new.
+			// the conflict it was given, and this one is new. A rebase
+			// that keeps pushing heads that still conflict looks the
+			// same, so the new episodes no clean read has closed are
+			// bounded.
+			if episode.Episodes >= mergeConflictEpisodeCap(params.MergeConflictConfig.MaxRetries) {
+				log.Warn("rebased heads keep conflicting with no clean read between, escalating",
+					slog.Int("pr_number", data.PRNumber),
+					slog.Int("episodes", episode.Episodes),
+				)
+				escalateMergeConflictFailure(state, params, pending, params.MergeConflictConfig.MaxRetries+1,
+					EscalationTriggerBudget, data, fingerprint, now, pollInterval, log, ctx, metrics)
+				return
+			}
 			newEpisode = true
 		}
 	}
@@ -265,8 +282,10 @@ func handleMergeConflictDirty(
 	if newEpisode {
 		delete(state.ReactionAttempts, rkey)
 		persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, log)
+		persistMergeConflictEpisodes(ctx, params.Store, pending.IssueID, episode.Episodes+1, log)
 		log.Info("rebased head conflicts again, starting a new episode",
 			slog.Int("pr_number", data.PRNumber),
+			slog.Int("episodes", episode.Episodes+1),
 		)
 	}
 
@@ -327,16 +346,20 @@ func handleMergeConflictDirty(
 	// conflicting heads regardless of who produced them.
 	if classifyHeadChange(state, params, pending, now, ctx) == headChangeNotOurs {
 		delete(state.ReactionAttempts, rkey)
+		persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, log)
+		persistMergeConflictEpisodes(ctx, params.Store, pending.IssueID, 0, log)
 	}
 	pending.HeadRecordedAt = now
 
 	// Per-episode increment for this new conflicting head, then the strict
 	// over-limit cap. The increment happens before the cap so the new
 	// conflicting head is what pushes the episode over budget, and the
-	// escalation reports attempts == MaxRetries + 1.
+	// escalation reports attempts == MaxRetries + 1. The increment is
+	// persisted only when the retry timer starts the rebase's worker: a
+	// rebase lost before it starts spends no attempt across a restart,
+	// and one the retry timer drops is refunded.
 	state.ReactionAttempts[rkey]++
 	attempts := state.ReactionAttempts[rkey]
-	persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, attempts, log)
 	if attempts > params.MergeConflictConfig.MaxRetries {
 		escalateMergeConflictFailure(state, params, pending, attempts, EscalationTriggerBudget, data, fingerprint, now, pollInterval, log, ctx, metrics)
 		return
@@ -437,6 +460,9 @@ func dispatchMergeConflictContinuation(
 
 		IssueIdentity: pending.IssueIdentity,
 	}, params.OnRetryFire, now)
+	if retry := state.RetryAttempts[pending.IssueID]; retry != nil {
+		retry.attemptPending = true
+	}
 
 	log.Info("merge conflict detected, scheduling rebase dispatch",
 		slog.Int("pr_number", data.PRNumber),
@@ -584,13 +610,39 @@ const (
 	// mergeConflictExitGaveUp is an exit whose agent reported it needs a
 	// person or that no change was needed.
 	mergeConflictExitGaveUp = "gave_up"
+	// mergeConflictExitCancelled is a run cut off by a shutdown; it spends
+	// no attempt.
+	mergeConflictExitCancelled = "cancelled"
+	// mergeConflictExitUsageLimited is a run a provider usage limit
+	// refused; it spends no attempt.
+	mergeConflictExitUsageLimited = "usage_limited"
 )
+
+// mergeConflictEpisodeCap is how many consecutive new episodes a rebase
+// that exited normally may start with no clean read between them before
+// the next escalates: three times the per-episode budget, and at least
+// three.
+func mergeConflictEpisodeCap(maxRetries int) int {
+	return 3 * max(maxRetries, 1)
+}
 
 // mergeConflictExitOf classifies a rebase continuation's worker result for
 // the fingerprint row. An error, a cancellation, or a blocked stop records
 // no exit, so the next pass counts the head as it would any other.
 func mergeConflictExitOf(result WorkerResult) string {
-	if result.ExitKind != WorkerExitNormal {
+	switch result.ExitKind {
+	case WorkerExitCancelled:
+		if errors.Is(result.CancelCause, errCancelShutdown) || errors.Is(result.CancelCause, context.Canceled) {
+			return mergeConflictExitCancelled
+		}
+		return ""
+	case WorkerExitError:
+		if isUsageLimitRefusal(result.Error) {
+			return mergeConflictExitUsageLimited
+		}
+		return ""
+	case WorkerExitNormal:
+	default:
 		return ""
 	}
 	if !result.SoftStop {
@@ -617,6 +669,44 @@ func recordMergeConflictExit(ctx context.Context, store storage.ReactionFingerpr
 	if err := store.RecordReactionExit(ctx, issueID, ReactionKindMergeConflict, lastExit); err != nil {
 		log.Warn("failed to record the rebase exit on the merge conflict fingerprint",
 			slog.String("last_exit", lastExit),
+			slog.Any("error", err),
+		)
+	}
+}
+
+// spendsNoMergeConflictAttempt reports whether a rebase exit recorded as
+// lastExit gives its attempt back.
+func spendsNoMergeConflictAttempt(lastExit string) bool {
+	return lastExit == mergeConflictExitCancelled || lastExit == mergeConflictExitUsageLimited
+}
+
+// refundMergeConflictAttempt gives back the attempt of a rebase that ran no
+// real attempt: one cut off by a shutdown or refused by a usage limit, at
+// its exit (counted, so taken back from the store), or one the retry timer
+// let go before it started (never persisted). A retry that follows the
+// exit keeps the attempt pending, so its start counts it again.
+func refundMergeConflictAttempt(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID string, persisted bool, log *slog.Logger) {
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	attempts := state.ReactionAttempts[rkey]
+	if attempts == 0 {
+		return
+	}
+	if persisted {
+		persistMergeConflictAttempts(ctx, store, issueID, attempts-1, log)
+	}
+	if retry := state.RetryAttempts[issueID]; retry != nil && retry.ReactionKind == ReactionKindMergeConflict {
+		retry.attemptPending = true
+		return
+	}
+	state.ReactionAttempts[rkey] = attempts - 1
+}
+
+// persistMergeConflictEpisodes stores the count of consecutive new episodes
+// no clean read has closed.
+func persistMergeConflictEpisodes(ctx context.Context, store storage.ReactionFingerprintStore, issueID string, episodes int, log *slog.Logger) {
+	if err := store.SetReactionEpisodes(ctx, issueID, ReactionKindMergeConflict, episodes); err != nil {
+		log.Warn("failed to persist merge conflict episodes",
+			slog.Int("episodes", episodes),
 			slog.Any("error", err),
 		)
 	}

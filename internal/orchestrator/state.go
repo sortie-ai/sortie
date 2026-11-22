@@ -464,6 +464,11 @@ type RetryEntry struct {
 	// shortage keeps Attempt. Runtime-only.
 	holdRearmed bool
 
+	// attemptPending is true on a merge-conflict rebase retry whose attempt
+	// the reconcile pass counted in memory and no worker start has
+	// persisted yet. Runtime-only.
+	attemptPending bool
+
 	// dueBeforeRequestMS is the DueAtMS the entry had before the first request
 	// that made it due now; zero when no request did. Runtime-only.
 	dueBeforeRequestMS int64

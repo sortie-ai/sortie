@@ -161,10 +161,10 @@ func (s *Store) GetReactionEpisode(ctx context.Context, issueID, kind string) (s
 		dispatchedInt int
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT fingerprint, dispatched, attempts, last_exit FROM reaction_fingerprints
+		SELECT fingerprint, dispatched, attempts, last_exit, episodes FROM reaction_fingerprints
 		WHERE issue_id = ? AND kind = ?`,
 		issueID, kind,
-	).Scan(&episode.Fingerprint, &dispatchedInt, &episode.Attempts, &episode.LastExit)
+	).Scan(&episode.Fingerprint, &dispatchedInt, &episode.Attempts, &episode.LastExit, &episode.Episodes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return storage.ReactionEpisode{}, nil
 	}
@@ -183,6 +183,17 @@ func (s *Store) SetReactionAttempts(ctx context.Context, issueID, kind string, a
 		UPDATE reaction_fingerprints SET attempts = ?, last_exit = ''
 		WHERE issue_id = ? AND kind = ?`,
 		attempts, issueID, kind,
+	)
+	return err
+}
+
+// SetReactionEpisodes stores the count of consecutive new episodes no clean
+// read has closed. No-op if the row does not exist.
+func (s *Store) SetReactionEpisodes(ctx context.Context, issueID, kind string, episodes int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reaction_fingerprints SET episodes = ?
+		WHERE issue_id = ? AND kind = ?`,
+		episodes, issueID, kind,
 	)
 	return err
 }

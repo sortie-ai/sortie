@@ -1,6 +1,10 @@
 package sqlite
 
-import _ "embed" // enables //go:embed directives for SQL migration files
+import (
+	"context"
+	"database/sql"
+	_ "embed" // enables //go:embed directives for SQL migration files
+)
 
 // Migration is a single numbered schema migration applied sequentially
 // by [Store.Migrate]. SQL may contain multiple semicolon-separated
@@ -9,6 +13,10 @@ type Migration struct {
 	Version     int
 	Description string
 	SQL         string
+
+	// Apply, when non-nil, runs in place of SQL inside the migration's
+	// transaction, for a step plain statements cannot make idempotent.
+	Apply func(ctx context.Context, tx *sql.Tx) error
 }
 
 //go:embed sql/001_initial.sql
@@ -173,9 +181,6 @@ var migration053SQL string
 //go:embed sql/054_run_turns.sql
 var migration054SQL string
 
-//go:embed sql/055_reaction_fingerprint_episode.sql
-var migration055SQL string
-
 // reactionActivityMigration is the version of the migration that creates the
 // reaction_activity table.
 const reactionActivityMigration = 38
@@ -235,5 +240,5 @@ var migrations = []Migration{
 	{Version: 52, Description: "comments each agent conversation was given", SQL: migration052SQL},
 	{Version: 53, Description: "moment a run began its last turn, on run history and parks", SQL: migration053SQL},
 	{Version: 54, Description: "turn records of a run and their per-model tokens", SQL: migration054SQL},
-	{Version: 55, Description: "episode attempts and last run exit on reaction fingerprints", SQL: migration055SQL},
+	{Version: 55, Description: "episode state on reaction fingerprints", Apply: addReactionEpisodeColumns},
 }
