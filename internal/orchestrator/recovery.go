@@ -150,12 +150,15 @@ type PendingReactionRecoveryResult struct {
 }
 
 // RecoverPendingReactions reconstructs runtime pending reaction entries from
-// persisted run history, tracker state, and workspace SCM metadata. It must be
-// called before the orchestrator event loop starts.
+// persisted run history, tracker state, and workspace SCM metadata. Startup
+// calls it before the orchestrator event loop starts; a retry after a failed
+// startup pass calls it on the event loop.
 //
 // Recovery is best-effort: per-candidate invalid data is skipped, while a
-// tracker state fetch failure aborts recovery for this startup and returns a
-// zero result with the fetch error.
+// tracker state fetch failure aborts the pass and returns a zero result with
+// the fetch error, leaving state untouched so the pass can run again
+// (see [OrchestratorParams.PendingReactionRecovery]). A pass skips every kind
+// already watched and every issue running, retry-queued, or claimed.
 func RecoverPendingReactions(ctx context.Context, state *State, runs []storage.RunHistory, params PendingReactionRecoveryParams) (PendingReactionRecoveryResult, error) {
 	if params.HandoffState == "" || (params.SCMAdapter == nil && params.CIProvider == nil && !params.AutoMergeReactionConfigured) {
 		return PendingReactionRecoveryResult{}, nil
