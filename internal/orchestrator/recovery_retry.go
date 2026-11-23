@@ -55,10 +55,10 @@ type PendingReactionRecoveryFunc func(ctx context.Context, state *State) (Pendin
 // pending until it succeeds: on each tick for the first few failures, then
 // backing off up to five minutes, each run bounded by
 // [pendingReactionRecoveryTimeout]. Startup recovery rebuilds the
-// watches of every pull request sitting in the handoff state, and nothing
-// else does for an issue no worker exit reaches again, so one failed tracker
-// read at startup would otherwise leave those pull requests unwatched for
-// the process lifetime. A failure warns on the first retry and on every
+// watches of every pull request sitting in the handoff state, and apart from
+// a standing escalation nothing else does for an issue no worker exit
+// reaches again, so one failed tracker read at startup would otherwise leave
+// those pull requests unwatched for the process lifetime. A failure warns on the first retry and on every
 // [pendingReactionRecoveryWarnEvery]th after it, and logs at debug between.
 // Must run on the event loop, before the reconcile pass.
 func (o *Orchestrator) retryPendingReactionRecovery(ctx context.Context) {
