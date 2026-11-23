@@ -1865,6 +1865,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 			continue
 		}
 		observeParkedLabels(ctx, o.state, o.store, o.logger, entry, issue.ID, issue.Labels)
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, issue.ID, entry, issue.State, issue.Labels, terminalStates, logging.WithIssue(o.logger, issue.ID, entry.Identifier))
 		o.backfillParkedIdentity(ctx, issue.ID, entry, issue)
 	}
 
@@ -1904,6 +1905,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 		if o.state.Parked[id] != entry {
 			continue
 		}
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, id, entry, read.State, read.Labels, terminalStates, logging.WithIssue(o.logger, id, entry.Identifier))
 		if !entry.IssueIdentity.isZero() {
 			continue
 		}
