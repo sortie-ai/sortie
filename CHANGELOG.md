@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard: the Terminal station of the Pipeline header and the issue lane reads `varies` on its second line when Sortie cannot name the state a merged issue ends in, instead of staying blank, and the lane of an issue that ended there names the state it reached, or merged. ([#1648](https://github.com/sortie-ai/sortie/issues/1648))
 - Dashboard: below the width at which the Pipeline panel drops its filter chips, every lane sets its key and agent line under its title, instead of the lanes with a short title keeping it beside the title. ([#1650](https://github.com/sortie-ai/sortie/issues/1650))
 - Dashboard: clicking the Issue or PR button of a needs-attention item on Overview, with or without Cmd or Ctrl held, now opens one tab instead of two. ([#1684](https://github.com/sortie-ai/sortie/issues/1684))
+- When adding the parking label to a parked issue fails, Sortie now adds it again on later polls, waiting longer between tries up to an hour, until the label shows on the issue, instead of holding the issue out of dispatch with no label to say why or to remove.
 
 ## [1.32.0] - 2026-11-09
 
