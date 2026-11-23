@@ -74,6 +74,8 @@ type mockExitStore struct {
 	absenceCountErr           error
 	absenceResetErr           error
 	writesAtPassDelete        int
+
+	fingerprints map[string]exitFingerprint
 }
 
 type recordedStageResult struct {
@@ -83,6 +85,142 @@ type recordedStageResult struct {
 }
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
+
+// exitFingerprint is one row of mockExitStore's reaction fingerprints.
+type exitFingerprint struct {
+	fingerprint string
+	dispatched  bool
+	attempts    int
+	lastExit    string
+	episodes    int
+}
+
+func (m *mockExitStore) fingerprintRows() map[string]exitFingerprint {
+	if m.fingerprints == nil {
+		m.fingerprints = make(map[string]exitFingerprint)
+	}
+	return m.fingerprints
+}
+
+func (m *mockExitStore) UpsertReactionFingerprint(_ context.Context, issueID, kind, fingerprint string) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	row, ok := rows[key]
+	if ok && row.fingerprint == fingerprint {
+		return nil
+	}
+	rows[key] = exitFingerprint{fingerprint: fingerprint, attempts: row.attempts, episodes: row.episodes}
+	return nil
+}
+
+func (m *mockExitStore) GetReactionEpisode(_ context.Context, issueID, kind string) (storage.ReactionEpisode, error) {
+	row, ok := m.fingerprintRows()[ReactionKey(issueID, kind)]
+	if !ok {
+		return storage.ReactionEpisode{}, nil
+	}
+	return storage.ReactionEpisode{Fingerprint: row.fingerprint, Dispatched: row.dispatched, Attempts: row.attempts, LastExit: row.lastExit, Episodes: row.episodes, Found: true}, nil
+}
+
+func (m *mockExitStore) SetReactionAttempts(_ context.Context, issueID, kind string, attempts int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.attempts, row.lastExit = attempts, ""
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) StartReactionEpisode(_ context.Context, issueID, kind, fingerprint string, episodes int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.fingerprint, row.dispatched, row.lastExit, row.attempts, row.episodes = fingerprint, false, "", 0, episodes
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) SetReactionEpisodes(_ context.Context, issueID, kind string, episodes int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.episodes = episodes
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) RecordReactionExit(_ context.Context, issueID, kind, lastExit string) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.dispatched, row.lastExit = false, lastExit
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) RecordReactionExitWithAttempts(_ context.Context, issueID, kind, lastExit string, attempts int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.dispatched, row.lastExit, row.attempts = false, lastExit, attempts
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) ReleaseDispatchedReactions(_ context.Context, kind string, _ bool) (int64, error) {
+	var n int64
+	rows := m.fingerprintRows()
+	for key, row := range rows {
+		if strings.HasSuffix(key, ":"+kind) && row.dispatched {
+			row.dispatched = false
+			rows[key] = row
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *mockExitStore) GetReactionFingerprint(_ context.Context, issueID, kind string) (string, bool, error) {
+	row := m.fingerprintRows()[ReactionKey(issueID, kind)]
+	return row.fingerprint, row.dispatched, nil
+}
+
+func (m *mockExitStore) MarkReactionDispatched(_ context.Context, issueID, kind string) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.dispatched = true
+		rows[key] = row
+	}
+	return nil
+}
+
+func (m *mockExitStore) DeleteReactionFingerprint(_ context.Context, issueID, kind string) error {
+	delete(m.fingerprintRows(), ReactionKey(issueID, kind))
+	return nil
+}
+
+func (m *mockExitStore) DeleteReactionFingerprintsByIssue(_ context.Context, issueID string) error {
+	rows := m.fingerprintRows()
+	for key := range rows {
+		if strings.HasPrefix(key, issueID+":") {
+			delete(rows, key)
+		}
+	}
+	return nil
+}
+
+func (m *mockExitStore) UpsertReactionObservation(_ context.Context, _, _, _ string, _ time.Time) (storage.ReactionObservation, error) {
+	return storage.ReactionObservation{}, errors.New("reaction observations are unsupported by this test double")
+}
+
+func (m *mockExitStore) MarkReactionObservationDispatched(_ context.Context, _, _, _ string) error {
+	return errors.New("reaction observations are unsupported by this test double")
+}
 
 func (m *mockExitStore) AppendRunHistoryWithEvents(_ context.Context, run storage.RunHistory, _ []storage.RunEvent, _ storage.RunEventLimits) (storage.RunHistory, error) {
 	m.runHistories = append(m.runHistories, run)
@@ -10856,5 +10994,67 @@ func TestRunningEntrySessionCost_PricesUnpricedModelAtAgentAmount(t *testing.T) 
 
 	if got.USD == nil || *got.USD != 0.75 || got.Status != pricing.CostEstimated {
 		t.Errorf("sessionCost(nil) = (%v, %q), want (0.75, %q)", got.USD, got.Status, pricing.CostEstimated)
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictExitLiftsDispatchedMark covers the exit
+// of a rebase continuation's worker, whatever way it ends: the head's
+// dispatched mark goes, so a head the rebase did not replace is counted
+// again by the next pass rather than skipped for good. Other kinds keep
+// theirs.
+func TestHandleWorkerExit_MergeConflictExitLiftsDispatchedMark(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		kind           string
+		exitKind       WorkerExitKind
+		wantDispatched bool
+	}{
+		{name: "rebase exits normally", kind: ReactionKindMergeConflict, exitKind: WorkerExitNormal},
+		{name: "rebase fails", kind: ReactionKindMergeConflict, exitKind: WorkerExitError},
+		{name: "rebase is cancelled", kind: ReactionKindMergeConflict, exitKind: WorkerExitCancelled},
+		{name: "ci fix keeps the merge-conflict mark", kind: ReactionKindCI, exitKind: WorkerExitNormal, wantDispatched: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			store := &mockExitStore{}
+			if err := store.UpsertReactionFingerprint(ctx, "MCX-1", ReactionKindMergeConflict, "fp-head"); err != nil {
+				t.Fatalf("UpsertReactionFingerprint: %v", err)
+			}
+			if err := store.MarkReactionDispatched(ctx, "MCX-1", ReactionKindMergeConflict); err != nil {
+				t.Fatalf("MarkReactionDispatched: %v", err)
+			}
+
+			state := exitStateWithIssue(t, "MCX-1", "queue-pr")
+			state.Running["MCX-1"].ReactionKind = tt.kind
+			params := defaultExitParams(t, store)
+
+			result := WorkerResult{
+				IssueID:      "MCX-1",
+				Identifier:   "MCX-1-ident",
+				ExitKind:     tt.exitKind,
+				AgentAdapter: "mock",
+			}
+			if tt.exitKind == WorkerExitError {
+				result.Error = errors.New("agent crashed")
+			}
+			HandleWorkerExit(state, result, params)
+
+			fingerprint, dispatched, err := store.GetReactionFingerprint(ctx, "MCX-1", ReactionKindMergeConflict)
+			if err != nil {
+				t.Fatalf("GetReactionFingerprint: %v", err)
+			}
+			if fingerprint != "fp-head" {
+				t.Errorf("fingerprint = %q, want %q (the head is unchanged)", fingerprint, "fp-head")
+			}
+			if dispatched != tt.wantDispatched {
+				t.Errorf("dispatched = %v, want %v", dispatched, tt.wantDispatched)
+			}
+		})
 	}
 }

@@ -493,19 +493,20 @@ type issueReleaseCounts struct {
 }
 
 // retryEntryDeleter is what [releaseIssueRuntimeState] clears: the issue's
-// persisted retry and its escalation records.
+// persisted retry, its escalation records, and its merge-conflict episode.
 type retryEntryDeleter interface {
 	storage.RetryEntryStore
 	storage.ReactionEscalationStore
+	storage.ReactionFingerprintStore
 }
 
 // releaseIssueRuntimeState drops one issue's runtime reaction bookkeeping
 // and its dispatch claim: every pending reaction entry, every reaction
 // attempt counter, every cached handed-off and reported comment set, the
-// pending retry, the escalation records, and the claim. The stored
-// handed-off rows stay. It
-// performs no tracker call, no source-control call, no reaction-fingerprint
-// read or write, and no workspace removal.
+// pending retry, the escalation records, the merge-conflict fingerprint row
+// with the episode it persists, and the claim. The stored handed-off rows
+// and every other reaction fingerprint stay. It performs no tracker call, no
+// source-control call, and no workspace removal.
 //
 // entryLog must already carry issue_id and issue_identifier, derived by
 // the caller before this function deletes the entries that hold the
@@ -530,6 +531,13 @@ func releaseIssueRuntimeState(ctx context.Context, state *State, store retryEntr
 			delete(state.ReactionAttempts, key)
 			counts.AttemptsReleased++
 		}
+	}
+	// The merge-conflict row persists the episode's counters, which the
+	// in-memory release above would otherwise get back from the store.
+	if err := store.DeleteReactionFingerprint(ctx, issueID, ReactionKindMergeConflict); err != nil {
+		entryLog.Warn("failed to delete merge conflict episode",
+			slog.Any("error", err),
+		)
 	}
 	for key := range state.ReactionHandedOffComments {
 		if strings.HasPrefix(key, prefix) {

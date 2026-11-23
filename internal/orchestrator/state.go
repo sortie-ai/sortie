@@ -464,6 +464,11 @@ type RetryEntry struct {
 	// shortage keeps Attempt. Runtime-only.
 	holdRearmed bool
 
+	// attemptPending is true on a merge-conflict rebase retry whose attempt
+	// the reconcile pass counted in memory and no worker start has
+	// persisted yet. Runtime-only.
+	attemptPending bool
+
 	// dueBeforeRequestMS is the DueAtMS the entry had before the first request
 	// that made it due now; zero when no request did. Runtime-only.
 	dueBeforeRequestMS int64
@@ -1479,6 +1484,18 @@ type State struct {
 	// reaction-triggered continuations. Reset when the issue leaves Running
 	// or RetryAttempts. Runtime-only.
 	ReactionAttempts map[string]int
+
+	// unrecordedMergeConflictExits maps an issue ID to the exit of its last
+	// rebase worker when the store write that lifts the head's dispatched
+	// mark and records that exit failed. The next merge-conflict pass for
+	// the issue writes it again before reading the row. Runtime-only: a
+	// restart lifts every mark at startup.
+	unrecordedMergeConflictExits map[string]unrecordedMergeConflictExit
+
+	// staleMergeConflictMarks is a startup release of stale merge-conflict
+	// dispatch marks the store refused; nil when there is none. Each
+	// merge-conflict pass tries it again. Runtime-only.
+	staleMergeConflictMarks *staleMarkRelease
 
 	// ReactionHandedOffComments maps composite key (issueID:kind) to the set
 	// of [domain.ReviewComment] IDs the issue's runs were given for that

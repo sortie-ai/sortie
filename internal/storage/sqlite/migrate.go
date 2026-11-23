@@ -83,7 +83,11 @@ func (s *Store) applyMigration(ctx context.Context, m Migration) error {
 	// Rollback is a no-op after successful Commit.
 	defer tx.Rollback() //nolint:errcheck // rollback on error path; no-op after commit
 
-	if err := execStatements(ctx, tx, m.SQL); err != nil {
+	apply := func(ctx context.Context, tx *sql.Tx) error { return execStatements(ctx, tx, m.SQL) }
+	if m.Apply != nil {
+		apply = m.Apply
+	}
+	if err := apply(ctx, tx); err != nil {
 		return fmt.Errorf("execute migration %d (%s): %w", m.Version, m.Description, err)
 	}
 
@@ -119,4 +123,55 @@ func execStatements(ctx context.Context, tx *sql.Tx, rawSQL string) error {
 		}
 	}
 	return nil
+}
+
+// reactionEpisodeColumns are the columns of reaction_fingerprints that hold
+// a reaction episode's state: its attempt counter, how the last run
+// dispatched for the fingerprint ended, and the consecutive new episodes a
+// clean read has not closed.
+var reactionEpisodeColumns = []struct{ name, ddl string }{
+	{"attempts", "ALTER TABLE reaction_fingerprints ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"},
+	{"last_exit", "ALTER TABLE reaction_fingerprints ADD COLUMN last_exit TEXT NOT NULL DEFAULT ''"},
+	{"episodes", "ALTER TABLE reaction_fingerprints ADD COLUMN episodes INTEGER NOT NULL DEFAULT 0"},
+}
+
+// addReactionEpisodeColumns adds each episode column reaction_fingerprints
+// lacks. A database that already has them, from a build that added them
+// outside the numbered sequence, is left as it is.
+func addReactionEpisodeColumns(ctx context.Context, tx *sql.Tx) error {
+	have, err := columnNames(ctx, tx, "reaction_fingerprints")
+	if err != nil {
+		return err
+	}
+	for _, col := range reactionEpisodeColumns {
+		if _, ok := have[col.name]; ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, col.ddl); err != nil {
+			return fmt.Errorf("add column %s: %w", col.name, err)
+		}
+	}
+	return nil
+}
+
+// columnNames returns the column names of table.
+func columnNames(ctx context.Context, tx *sql.Tx, table string) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return nil, fmt.Errorf("read columns of %s: %w", table, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+
+	cols := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan column of %s: %w", table, err)
+		}
+		cols[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate columns of %s: %w", table, err)
+	}
+	return cols, nil
 }

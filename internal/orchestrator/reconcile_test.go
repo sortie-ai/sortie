@@ -26,6 +26,35 @@ type unsupportedReactionObservationStore struct {
 	storage.RunHistoryStore
 }
 
+// GetReactionEpisode reports no row: these doubles keep no episode state.
+func (unsupportedReactionObservationStore) GetReactionEpisode(context.Context, string, string) (storage.ReactionEpisode, error) {
+	return storage.ReactionEpisode{}, nil
+}
+
+func (unsupportedReactionObservationStore) SetReactionAttempts(context.Context, string, string, int) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) SetReactionEpisodes(context.Context, string, string, int) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) StartReactionEpisode(context.Context, string, string, string, int) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) RecordReactionExit(context.Context, string, string, string) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) RecordReactionExitWithAttempts(context.Context, string, string, string, int) error {
+	return nil
+}
+
+func (unsupportedReactionObservationStore) ReleaseDispatchedReactions(context.Context, string, bool) (int64, error) {
+	return 0, nil
+}
+
 func (unsupportedReactionObservationStore) UpsertReactionObservation(
 	context.Context,
 	string, string, string,
@@ -1379,9 +1408,11 @@ func TestReleaseTerminalIssueState_NoSideEffects(t *testing.T) {
 
 	ReconcileRunningIssues(state, params)
 
+	// The one delete is the merge-conflict episode row; every other
+	// fingerprint is left alone.
 	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 ||
-		store.markDispatchedCalls != 0 || store.deleteFingerprintCalls != 0 {
-		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want all 0",
+		store.markDispatchedCalls != 0 || store.deleteFingerprintCalls != 1 {
+		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want 0, 0, 0, 1",
 			store.upsertFingerprintCalls, store.getFingerprintCalls, store.markDispatchedCalls, store.deleteFingerprintCalls)
 	}
 	if len(store.savedEntries) != 0 {

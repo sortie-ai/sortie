@@ -810,8 +810,12 @@ func TestMigrate_Migration022_HandedOffCommentsStartEmpty(t *testing.T) {
 
 	s := openTestStore(t)
 	migrateToVersion(t, s, 21)
-	if err := s.UpsertReactionFingerprint(context.Background(), "ISS-PRE022", "review", "fp"); err != nil {
-		t.Fatalf("UpsertReactionFingerprint on a pre-migration-022 store: %v", err)
+	// Written in the columns that schema has: the store's own upsert
+	// writes columns later migrations add.
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO reaction_fingerprints (issue_id, kind, fingerprint, dispatched, updated_at) VALUES (?, ?, ?, 0, ?)`,
+		"ISS-PRE022", "review", "fp", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("insert a reaction fingerprint on a pre-migration-022 store: %v", err)
 	}
 
 	migrateOrFatal(t, s)
@@ -920,8 +924,8 @@ func TestMigrations_Registry(t *testing.T) {
 	versions := make([]int, len(migrations))
 	for i, m := range migrations {
 		versions[i] = m.Version
-		if m.SQL == "" {
-			t.Errorf("migration %d has empty SQL", m.Version)
+		if (m.SQL == "") == (m.Apply == nil) {
+			t.Errorf("migration %d has SQL %t and Apply %t, want exactly one", m.Version, m.SQL != "", m.Apply != nil)
 		}
 		if m.Description == "" {
 			t.Errorf("migration %d has empty Description", m.Version)
@@ -1200,5 +1204,49 @@ func TestMigrate_Migration018_NoAgentTotalsRow(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("aggregate_metrics row count for key 'agent_totals' = %d, want 0 (no row existed to backfill)", count)
+	}
+}
+
+func TestMigrate_Migration055_EpisodeColumnsDefault(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s := openTestStore(t)
+	migrateToVersion(t, s, 54)
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO reaction_fingerprints (issue_id, kind, fingerprint, dispatched, updated_at) VALUES (?, ?, ?, 1, ?)`,
+		"ISS-PRE055", "merge-conflict", "fp", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("insert a reaction fingerprint on a pre-migration-055 store: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	got, err := s.GetReactionEpisode(ctx, "ISS-PRE055", "merge-conflict")
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	want := storage.ReactionEpisode{Fingerprint: "fp", Dispatched: true, Found: true}
+	if got != want {
+		t.Errorf("GetReactionEpisode() after upgrade = %+v, want %+v", got, want)
+	}
+}
+
+func TestMigrate_Migration055_NoOpWhenColumnsExist(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s := openTestStore(t)
+	migrateToVersion(t, s, 54)
+	// A build that added the columns outside the numbered sequence.
+	for _, col := range reactionEpisodeColumns {
+		if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+			t.Fatalf("add column %s ahead of migration 055: %v", col.name, err)
+		}
+	}
+
+	migrateOrFatal(t, s)
+
+	if err := s.SetReactionEpisodes(ctx, "ISS-X", "merge-conflict", 1); err != nil {
+		t.Fatalf("SetReactionEpisodes after upgrade: %v", err)
 	}
 }

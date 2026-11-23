@@ -219,6 +219,16 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 
 	log = logging.WithIssue(log, issueID, popped.Identifier)
 
+	// A rebase retry the pass counted and no worker start persisted gives
+	// its attempt back when this fire neither starts it nor puts it back.
+	if popped.attemptPending {
+		defer func() {
+			if state.Running[issueID] == nil && state.RetryAttempts[issueID] == nil {
+				refundMergeConflictAttempt(state, issueID)
+			}
+		}()
+	}
+
 	rearm := func(attempt int, delayMS, dueAtMS int64, retryErr string) {
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:             issueID,
@@ -245,6 +255,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			OriginTrigger:       popped.OriginTrigger,
 			UsageLimitNotified:  popped.UsageLimitNotified,
 		}, params.OnRetryFire)
+		if entry, ok := state.RetryAttempts[issueID]; ok {
+			entry.attemptPending = popped.attemptPending
+		}
 	}
 
 	reschedule := func(attempt int, delayMS int64, retryErr string) {
@@ -939,14 +952,23 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	metrics.IncDispatches(outcomeSuccess)
 
 	// Mark the reaction fingerprint dispatched only after dispatch
-	// succeeds. Non-reaction retries have no fingerprint row.
+	// succeeds. Non-reaction retries have no fingerprint row. A rebase
+	// starting now supersedes an earlier rebase's exit a failed write left
+	// out, whose late write would lift this run's mark.
 	if isKnownReaction {
+		if popped.ReactionKind == ReactionKindMergeConflict {
+			delete(state.unrecordedMergeConflictExits, issueID)
+		}
 		if err := params.Store.MarkReactionDispatched(ctx, issueID, popped.ReactionKind); err != nil {
 			log.Warn("failed to mark reaction dispatched after retry dispatch",
 				slog.String("kind", popped.ReactionKind),
 				slog.Any("error", err),
 			)
 		}
+	}
+	// A started rebase spends the attempt the pass counted.
+	if popped.attemptPending {
+		persistMergeConflictAttempts(ctx, params.Store, issueID, state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeConflict)], log)
 	}
 
 	log.Info("retried issue dispatched",

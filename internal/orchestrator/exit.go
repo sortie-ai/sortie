@@ -49,6 +49,7 @@ type WorkerExitStore interface {
 	storage.IssueOutcomeStore
 	storage.ReactionActivityStore
 	storage.UsageLimitHoldStore
+	storage.ReactionFingerprintStore
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -728,6 +729,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// released on those arms, so a deferral changes only the retry slot.
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
+
+	// The merge-conflict row's writes outlive a cancelled event-loop
+	// context: an exit handled after shutdown began would otherwise lose
+	// the lifted mark and a refunded attempt, with no pass left to retry.
+	var mergeConflictExit string
+	mergeConflictCtx := ctx
+	if entry.ReactionKind == ReactionKindMergeConflict {
+		var cancel context.CancelFunc
+		mergeConflictCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		mergeConflictExit = mergeConflictExitOf(workerResult)
+		recordMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
+	}
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
@@ -1558,6 +1572,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					)
 				}
 			}
+		}
+	}
+
+	if spendsNoMergeConflictAttempt(mergeConflictExit) {
+		// The refunded count and the exit go in one write, kept together
+		// for the next pass if the store refuses it.
+		if attempts := state.ReactionAttempts[ReactionKey(workerResult.IssueID, ReactionKindMergeConflict)]; attempts > 0 {
+			refundMergeConflictAttempt(state, workerResult.IssueID)
+			recordRefundedMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, attempts-1, log)
 		}
 	}
 

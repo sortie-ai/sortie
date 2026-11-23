@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/storage"
 )
 
 func mustOpenStore(t *testing.T) *Store {
@@ -324,5 +326,107 @@ func TestReactionObservationLifecycle(t *testing.T) {
 	}
 	if fingerprint != "" || dispatched {
 		t.Errorf("GetReactionFingerprint(after observation cleanup) = (%q, %v), want (\"\", false)", fingerprint, dispatched)
+	}
+}
+
+func TestReactionEpisode_AttemptsAndExitAcrossFingerprints(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s := mustOpenStore(t)
+
+	if got, err := s.GetReactionEpisode(ctx, "ISS-1", "merge-conflict"); err != nil || got.Found {
+		t.Fatalf("GetReactionEpisode(absent) = %+v, %v; want not found", got, err)
+	}
+	if err := s.UpsertReactionFingerprint(ctx, "ISS-1", "merge-conflict", "fp-1"); err != nil {
+		t.Fatalf("UpsertReactionFingerprint: %v", err)
+	}
+	if err := s.SetReactionAttempts(ctx, "ISS-1", "merge-conflict", 2); err != nil {
+		t.Fatalf("SetReactionAttempts: %v", err)
+	}
+	if err := s.MarkReactionDispatched(ctx, "ISS-1", "merge-conflict"); err != nil {
+		t.Fatalf("MarkReactionDispatched: %v", err)
+	}
+	if err := s.RecordReactionExit(ctx, "ISS-1", "merge-conflict", "normal"); err != nil {
+		t.Fatalf("RecordReactionExit: %v", err)
+	}
+
+	got, err := s.GetReactionEpisode(ctx, "ISS-1", "merge-conflict")
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	want := storage.ReactionEpisode{Fingerprint: "fp-1", Attempts: 2, LastExit: "normal", Found: true}
+	if got != want {
+		t.Errorf("GetReactionEpisode() after the exit = %+v, want %+v", got, want)
+	}
+
+	// A new fingerprint clears the exit and keeps the episode's counter.
+	if err := s.UpsertReactionFingerprint(ctx, "ISS-1", "merge-conflict", "fp-2"); err != nil {
+		t.Fatalf("UpsertReactionFingerprint: %v", err)
+	}
+	got, err = s.GetReactionEpisode(ctx, "ISS-1", "merge-conflict")
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	want = storage.ReactionEpisode{Fingerprint: "fp-2", Attempts: 2, Found: true}
+	if got != want {
+		t.Errorf("GetReactionEpisode() after a new fingerprint = %+v, want %+v", got, want)
+	}
+}
+
+func TestReleaseDispatchedReactions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		keepTriaged  bool
+		wantReleased int64
+		wantTriaged  bool
+	}{
+		{name: "every mark", keepTriaged: false, wantReleased: 2, wantTriaged: false},
+		{name: "triage verdicts kept", keepTriaged: true, wantReleased: 1, wantTriaged: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			s := mustOpenStore(t)
+			for _, row := range []struct{ issue, kind, fp string }{
+				{"ISS-REBASE", "merge-conflict", "fp-a"},
+				{"ISS-TRIAGED", "merge-conflict", "fp-b"},
+				{"ISS-CI", "ci", "fp-c"},
+			} {
+				if err := s.UpsertReactionFingerprint(ctx, row.issue, row.kind, row.fp); err != nil {
+					t.Fatalf("UpsertReactionFingerprint: %v", err)
+				}
+				if err := s.MarkReactionDispatched(ctx, row.issue, row.kind); err != nil {
+					t.Fatalf("MarkReactionDispatched: %v", err)
+				}
+			}
+			if err := s.RecordReactionTriageOutcome(ctx, storage.ReactionTriageOutcome{
+				IssueID: "ISS-TRIAGED", Kind: "merge-conflict", Fingerprint: "fp-b", Disposition: "handled", RecordedAt: time.Now(),
+			}); err != nil {
+				t.Fatalf("RecordReactionTriageOutcome: %v", err)
+			}
+
+			released, err := s.ReleaseDispatchedReactions(ctx, "merge-conflict", tt.keepTriaged)
+			if err != nil {
+				t.Fatalf("ReleaseDispatchedReactions: %v", err)
+			}
+			if released != tt.wantReleased {
+				t.Errorf("ReleaseDispatchedReactions() = %d, want %d", released, tt.wantReleased)
+			}
+			for issue, want := range map[string]bool{"ISS-REBASE": false, "ISS-TRIAGED": tt.wantTriaged, "ISS-CI": true} {
+				kind := "merge-conflict"
+				if issue == "ISS-CI" {
+					kind = "ci"
+				}
+				if _, dispatched, _ := s.GetReactionFingerprint(ctx, issue, kind); dispatched != want {
+					t.Errorf("%s dispatched = %v, want %v", issue, dispatched, want)
+				}
+			}
+		})
 	}
 }
