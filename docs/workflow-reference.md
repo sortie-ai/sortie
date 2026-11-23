@@ -925,7 +925,7 @@ reactions:
 
 #### Reaction kind: `merge_conflicts`
 
-Merge-conflict detection and resolution. When configured, the orchestrator polls mergeability on Sortie-created open PRs each reconcile cycle and dispatches one rebase-and-resolve continuation turn each time a PR transitions from no-conflict to conflict. The continuation carries the PR's real base branch so the agent rebases the PR head branch onto the correct target and resolves the conflicts on the existing workspace.
+Merge-conflict detection and resolution. When configured, the orchestrator polls mergeability on Sortie-created open PRs each reconcile cycle and dispatches a rebase-and-resolve continuation turn when a PR becomes conflicted, and further turns one at a time while it stays conflicted, each counted against `max_retries` for the episode, until the conflict clears or the budget is spent and the reaction escalates. The continuation carries the PR's real base branch so the agent rebases the PR head branch onto the correct target and resolves the conflicts on the existing workspace.
 
 Retry semantics are episodic: a resolved conflict closes the episode and resets the attempt counter, so a later independent conflict opens a fresh episode rather than counting against the prior budget. The default `max_retries` is `1`, lower than the other kinds, because merge-conflict resolution is less likely to succeed on retry than a CI fix.
 
