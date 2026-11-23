@@ -268,7 +268,10 @@ func handleMergeConflictDirty(
 			escalateMergeConflictFailure(state, params, pending, params.MergeConflictConfig.MaxRetries+1,
 				EscalationTriggerBudget, data, fingerprint, now, pollInterval, log, ctx, metrics)
 			return
-		case episode.LastExit == mergeConflictExitNormal && episode.Fingerprint != fingerprint:
+		case episode.LastExit == mergeConflictExitNormal && episode.Fingerprint != fingerprint &&
+			classifyHeadChange(state, params, pending, now, ctx) != headChangeNotOurs:
+			// A head attributed to a person is not the rebase's: the
+			// attribution gate below resets the counts for it instead.
 			// The rebase exited normally and the head moved: it resolved
 			// the conflict it was given, and this one is new. A rebase
 			// that keeps pushing heads that still conflict looks the
@@ -287,18 +290,28 @@ func handleMergeConflictDirty(
 		}
 	}
 
-	if err := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict, fingerprint); err != nil {
-		log.Warn("failed to upsert merge conflict reaction fingerprint",
-			slog.Any("error", err),
-		)
-	}
 	if newEpisode {
+		// The new head and its fresh counter go in one write: apart, a
+		// failure or a stop between them would leave the new head's row
+		// with the previous episode's attempts, and the exit that called
+		// for the reset would be gone. A refused write leaves the row as it
+		// was, so the next pass decides the same again.
+		if err := params.Store.StartReactionEpisode(ctx, pending.IssueID, ReactionKindMergeConflict, fingerprint, episode.Episodes+1); err != nil {
+			log.Warn("failed to start a new merge conflict episode, deferring",
+				slog.Any("error", err),
+			)
+			pending.PendingRetryAt = now.Add(pollInterval)
+			requeueReaction(state, key, pending, waitBackoff)
+			return
+		}
 		delete(state.ReactionAttempts, rkey)
-		persistMergeConflictAttempts(ctx, params.Store, pending.IssueID, 0, log)
-		persistMergeConflictEpisodes(ctx, params.Store, pending.IssueID, episode.Episodes+1, log)
 		log.Info("rebased head conflicts again, starting a new episode",
 			slog.Int("pr_number", data.PRNumber),
 			slog.Int("episodes", episode.Episodes+1),
+		)
+	} else if err := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict, fingerprint); err != nil {
+		log.Warn("failed to upsert merge conflict reaction fingerprint",
+			slog.Any("error", err),
 		)
 	}
 

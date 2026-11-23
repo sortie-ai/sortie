@@ -730,10 +730,17 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
 
+	// The merge-conflict row's writes outlive a cancelled event-loop
+	// context: an exit handled after shutdown began would otherwise lose
+	// the lifted mark and a refunded attempt, with no pass left to retry.
 	var mergeConflictExit string
+	mergeConflictCtx := ctx
 	if entry.ReactionKind == ReactionKindMergeConflict {
+		var cancel context.CancelFunc
+		mergeConflictCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		mergeConflictExit = mergeConflictExitOf(workerResult)
-		recordMergeConflictExit(ctx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
+		recordMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
 	}
 
 	switch workerResult.ExitKind {
@@ -1569,10 +1576,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	if spendsNoMergeConflictAttempt(mergeConflictExit) {
-		refundMergeConflictAttempt(ctx, state, params.Store, workerResult.IssueID, true, log)
+		refundMergeConflictAttempt(mergeConflictCtx, state, params.Store, workerResult.IssueID, true, log)
 		// Writing the refunded count clears the row's last exit, so the
 		// exit is recorded again after it.
-		recordMergeConflictExit(ctx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
+		recordMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
 	}
 
 	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)

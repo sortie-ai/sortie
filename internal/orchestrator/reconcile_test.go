@@ -39,6 +39,10 @@ func (unsupportedReactionObservationStore) SetReactionEpisodes(context.Context, 
 	return nil
 }
 
+func (unsupportedReactionObservationStore) StartReactionEpisode(context.Context, string, string, string, int) error {
+	return nil
+}
+
 func (unsupportedReactionObservationStore) RecordReactionExit(context.Context, string, string, string) error {
 	return nil
 }

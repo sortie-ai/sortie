@@ -131,6 +131,16 @@ func (m *mockExitStore) SetReactionAttempts(_ context.Context, issueID, kind str
 	return nil
 }
 
+func (m *mockExitStore) StartReactionEpisode(_ context.Context, issueID, kind, fingerprint string, episodes int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.fingerprint, row.dispatched, row.lastExit, row.attempts, row.episodes = fingerprint, false, "", 0, episodes
+		rows[key] = row
+	}
+	return nil
+}
+
 func (m *mockExitStore) SetReactionEpisodes(_ context.Context, issueID, kind string, episodes int) error {
 	rows := m.fingerprintRows()
 	key := ReactionKey(issueID, kind)

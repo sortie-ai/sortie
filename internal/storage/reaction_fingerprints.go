@@ -47,6 +47,11 @@ type ReactionFingerprintStore interface {
 	// SetReactionEpisodes stores the count of consecutive new episodes no
 	// clean read has closed. No-op when the row does not exist.
 	SetReactionEpisodes(ctx context.Context, issueID, kind string, episodes int) error
+	// StartReactionEpisode replaces the row's fingerprint with a new head's
+	// and starts a new episode in the same write: the mark lifted, the run
+	// exit cleared, the attempt counter at zero and the episode count set
+	// to episodes. No-op when the row does not exist.
+	StartReactionEpisode(ctx context.Context, issueID, kind, fingerprint string, episodes int) error
 	// RecordReactionExit lifts the dispatched mark and records how the run
 	// dispatched for the row's fingerprint ended. No-op when the row does
 	// not exist.

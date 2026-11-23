@@ -187,6 +187,21 @@ func (s *Store) SetReactionAttempts(ctx context.Context, issueID, kind string, a
 	return err
 }
 
+// StartReactionEpisode replaces the row's fingerprint and starts a new
+// episode in one statement, so a failure or a stop cannot leave the new
+// head's row with the previous episode's attempts. No-op if the row does
+// not exist.
+func (s *Store) StartReactionEpisode(ctx context.Context, issueID, kind, fingerprint string, episodes int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reaction_fingerprints
+		SET fingerprint = ?, dispatched = 0, last_exit = '', attempts = 0, episodes = ?, updated_at = ?
+		WHERE issue_id = ? AND kind = ?`,
+		fingerprint, episodes, now, issueID, kind,
+	)
+	return err
+}
+
 // SetReactionEpisodes stores the count of consecutive new episodes no clean
 // read has closed. No-op if the row does not exist.
 func (s *Store) SetReactionEpisodes(ctx context.Context, issueID, kind string, episodes int) error {

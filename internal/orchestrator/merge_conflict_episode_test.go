@@ -672,3 +672,134 @@ func TestRetryStaleMergeConflictMarkRelease_RefusedRemarkStartsNoSecondRebase(t 
 		t.Error("a second rebase started while the first was still running")
 	}
 }
+
+// TestMergeConflictEpisode_PersonsHeadAtTheCapResets covers a head no run of
+// Sortie's produced, read after the last rebase exited normally with the
+// episode count at its cap: the head is a person's, so the counts reset and
+// a rebase is dispatched instead of the cap escalating.
+func TestMergeConflictEpisode_PersonsHeadAtTheCapResets(t *testing.T) {
+	t.Parallel()
+
+	const maxRetries = 1
+	p := newRebasePath(t, maxRetries)
+	allowed := 1 + mergeConflictEpisodeCap(maxRetries)
+	for run := 1; run <= allowed; run++ {
+		if !p.pass() {
+			t.Fatalf("pass %d scheduled no rebase, want one (%d allowed)", run, allowed)
+		}
+		p.start()
+		p.exit(WorkerResult{ExitKind: WorkerExitNormal})
+		p.head = fmt.Sprintf("head-%d", run+1)
+	}
+	// The head was last recorded after the last rebase's run ended, and no
+	// run has ended since: the new head is not the orchestrator's.
+	pending := p.state.PendingReactions[ReactionKey(p.issueID, ReactionKindMergeConflict)]
+	pending.HeadRecordedAt = p.now.Add(time.Minute)
+
+	if !p.pass() {
+		t.Fatal("pass on a person's head at the episode cap scheduled no rebase, want the counts reset")
+	}
+	if p.escalated() {
+		t.Error("escalated on a person's head at the episode cap")
+	}
+	episode, err := p.store.GetReactionEpisode(context.Background(), p.issueID, ReactionKindMergeConflict)
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	if episode.Episodes != 0 {
+		t.Errorf("episodes = %d, want 0 after a person's head", episode.Episodes)
+	}
+}
+
+// episodeRefusingStore refuses the write that starts a new episode.
+type episodeRefusingStore struct{ *sqlite.Store }
+
+func (episodeRefusingStore) StartReactionEpisode(context.Context, string, string, string, int) error {
+	return fmt.Errorf("database is locked")
+}
+
+// TestMergeConflictEpisode_NewEpisodeIsOneWrite covers the new head after a
+// normal rebase exit: its fingerprint and the fresh counter are stored
+// together, so a refused write leaves the row as it was and the pass
+// defers, and the next pass starts the episode with no attempt carried over.
+func TestMergeConflictEpisode_NewEpisodeIsOneWrite(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 1)
+	if !p.pass() {
+		t.Fatal("first pass scheduled no rebase")
+	}
+	p.start()
+	p.exit(WorkerResult{ExitKind: WorkerExitNormal})
+	p.head = "head-2"
+
+	p.now = p.now.Add(2 * time.Minute)
+	params := mergeConflictParams(episodeRefusingStore{p.store}, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus(p.head, "main"), nil
+	}}, p.tracker)
+	params.MergeConflictConfig = p.config
+	params.NowFunc = func() time.Time { return p.now }
+	reconcileMergeConflicts(p.state, params, discardLogger(), context.Background(), p.metrics)
+	if retry := p.state.RetryAttempts[p.issueID]; retry != nil {
+		retry.TimerHandle.Stop()
+		t.Fatal("pass scheduled a rebase although the new episode was not stored, want it deferred")
+	}
+	before, err := p.store.GetReactionEpisode(context.Background(), p.issueID, ReactionKindMergeConflict)
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	if before.Attempts != 1 || before.LastExit != mergeConflictExitNormal {
+		t.Fatalf("row after the refused write = attempts %d, last_exit %q; want it unchanged (1, %q)", before.Attempts, before.LastExit, mergeConflictExitNormal)
+	}
+
+	// A restart in between drops the in-memory counter; the row decides.
+	p.restart()
+	if !p.pass() {
+		t.Fatal("pass after the refused write scheduled no rebase, want the new episode started")
+	}
+	if got := p.state.ReactionAttempts[ReactionKey(p.issueID, ReactionKindMergeConflict)]; got != 1 {
+		t.Errorf("attempts = %d, want 1: the new episode's first rebase, none carried over", got)
+	}
+	if p.escalated() {
+		t.Error("new head escalated on its first pass")
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictWritesOutliveCancelledContext covers a
+// rebase exit handled after the event loop's context was cancelled: the
+// mark is still lifted, the outcome recorded and the attempt given back.
+func TestHandleWorkerExit_MergeConflictWritesOutliveCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("pass scheduled no rebase")
+	}
+	p.start()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	params := defaultExitParams(t, nil)
+	params.Store = p.store
+	params.Ctx = ctx
+	params.TrackerAdapter = p.tracker
+	params.HandoffState = rebasePathHandoff
+	params.ActiveStates = []string{"queue"}
+	params.TerminalStates = []string{"done"}
+	params.NowFunc = func() time.Time { return p.now }
+	HandleWorkerExit(p.state, WorkerResult{
+		IssueID: p.issueID, Identifier: p.issueID + "-ident", AgentAdapter: "mock",
+		ExitKind: WorkerExitCancelled, CancelCause: errCancelShutdown,
+	}, params)
+	if retry := p.state.RetryAttempts[p.issueID]; retry != nil {
+		retry.TimerHandle.Stop()
+	}
+
+	episode, err := p.store.GetReactionEpisode(context.Background(), p.issueID, ReactionKindMergeConflict)
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	if episode.Dispatched || episode.LastExit != mergeConflictExitCancelled || episode.Attempts != 0 {
+		t.Errorf("row = dispatched %v, last_exit %q, attempts %d; want false, %q, 0", episode.Dispatched, episode.LastExit, episode.Attempts, mergeConflictExitCancelled)
+	}
+}
