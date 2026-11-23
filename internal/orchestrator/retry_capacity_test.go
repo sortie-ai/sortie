@@ -242,3 +242,73 @@ func TestWakeCapacityWaitingRetries_FiresDoNotOvercommit(t *testing.T) {
 		t.Errorf("WAIT-B Attempt = %d, waitsForCapacity = %v, want 3, true", retry.Attempt, retry.waitsForCapacity)
 	}
 }
+
+// TestHandleWorkerExit_WakesCapacityWaitingRetries exits the session that
+// holds the only slot. The exit wakes the retry waiting for that slot,
+// unless the exiting issue already holds a retry of its own that will
+// take the slot back.
+func TestHandleWorkerExit_WakesCapacityWaitingRetries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		exitOwnRetry bool
+		wantWoken    bool
+	}{
+		{name: "an exit that frees its slot wakes the waiting retry", wantWoken: true},
+		{name: "an exit with its own retry keeps the slot for it", exitOwnRetry: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Polling = config.PollingConfig{IntervalMS: int(time.Hour / time.Millisecond)}
+			state := NewState(cfg.Polling.IntervalMS, 1, 0, nil, AgentTotals{})
+			state.Running["BUSY-1"] = &RunningEntry{
+				Identifier: "BUSY-1",
+				Issue:      candidateIssue("BUSY-1", "BUSY-1", "To Do"),
+				StartedAt:  time.Now().UTC(),
+			}
+			state.Claimed["BUSY-1"] = struct{}{}
+			o := NewOrchestrator(OrchestratorParams{
+				State:           state,
+				Logger:          discardLogger(),
+				TrackerAdapter:  &mockTrackerAdapter{},
+				AgentAdapter:    &mockAgentAdapter{},
+				WorkflowManager: &stubWorkflowManager{config: cfg, template: mustParseTemplate(t, "do {{ .issue.identifier }}")},
+				Store:           &stubStore{},
+				PreflightParams: passingPreflightRegistries(),
+			})
+			state.Claimed["WAIT-1"] = struct{}{}
+			ScheduleRetry(state, ScheduleRetryParams{IssueID: "WAIT-1", Identifier: "WAIT-1", Attempt: 2, DelayMS: time.Hour.Milliseconds()}, o.onRetryFire)
+			markWaitsForCapacity(state, "WAIT-1", "To Do")
+			if tt.exitOwnRetry {
+				ScheduleRetry(state, ScheduleRetryParams{IssueID: "BUSY-1", Identifier: "BUSY-1", Attempt: 1, DelayMS: time.Hour.Milliseconds()}, o.onRetryFire)
+			}
+			t.Cleanup(func() {
+				for _, entry := range state.RetryAttempts {
+					entry.TimerHandle.Stop()
+				}
+			})
+			waiter := state.RetryAttempts["WAIT-1"]
+			dueBefore := waiter.DueAtMS
+
+			o.handleWorkerExit(t.Context(), WorkerResult{IssueID: "BUSY-1", Identifier: "BUSY-1", ExitKind: WorkerExitCancelled})
+
+			if !tt.wantWoken {
+				if waiter.DueAtMS != dueBefore || !waiter.waitsForCapacity {
+					t.Errorf("WAIT-1 DueAtMS moved from %d to %d, waitsForCapacity = %v, want unchanged and still waiting", dueBefore, waiter.DueAtMS, waiter.waitsForCapacity)
+				}
+				return
+			}
+			if waiter.waitsForCapacity || waiter.scheduledDelayMS != 0 || waiter.Attempt != 2 {
+				t.Fatalf("WAIT-1 waitsForCapacity = %v, scheduledDelayMS = %d, Attempt = %d, want false, 0, 2", waiter.waitsForCapacity, waiter.scheduledDelayMS, waiter.Attempt)
+			}
+			if fired := waittest.Receive(t, o.retryTimerCh, "woken retry fire"); fired != "WAIT-1" {
+				t.Errorf("fired retry = %s, want WAIT-1", fired)
+			}
+		})
+	}
+}
