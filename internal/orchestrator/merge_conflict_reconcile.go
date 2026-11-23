@@ -46,6 +46,10 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		now = params.NowFunc().UTC()
 	}
 
+	// A startup release the store refused would leave every recovered
+	// watch's head marked dispatched, so the dedup would skip it for good.
+	retryStaleMergeConflictMarkRelease(ctx, state, params.Store, log)
+
 	ttl := params.MergeConflictPendingTTL
 	pollInterval := max(time.Duration(params.MergeConflictConfig.PollIntervalMS)*time.Millisecond, mergeConflictPendingBackoffBase)
 
@@ -761,15 +765,56 @@ func persistMergeConflictAttempts(ctx context.Context, store storage.ReactionFin
 // its worker's exit (killed, or a drain that abandoned workers) left the
 // mark behind, and the dedup would skip that head for good. With triage
 // configured, a mark a triage verdict set keeps standing. Must run before
-// the event loop starts.
-func ReleaseStaleMergeConflictMarks(ctx context.Context, store storage.ReactionFingerprintStore, triageConfigured bool, log *slog.Logger) {
+// the event loop starts. When the store refuses the release, state keeps
+// it pending and each merge-conflict pass tries it again until it succeeds.
+func ReleaseStaleMergeConflictMarks(ctx context.Context, state *State, store storage.ReactionFingerprintStore, triageConfigured bool, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
+	if !releaseStaleMergeConflictMarks(ctx, store, triageConfigured, log) {
+		state.staleMergeConflictMarks = &staleMarkRelease{triageConfigured: triageConfigured}
+	}
+}
+
+// staleMarkRelease is a startup release of stale merge-conflict dispatch
+// marks the store refused, kept for the passes to try again.
+type staleMarkRelease struct {
+	triageConfigured bool
+}
+
+// retryStaleMergeConflictMarkRelease tries again a startup release the
+// store refused. A rebase that started since the failed release has set
+// its own mark, so each running rebase's head is marked again once the
+// release succeeds. Must be called from the single-writer event loop.
+func retryStaleMergeConflictMarkRelease(ctx context.Context, state *State, store storage.ReactionFingerprintStore, log *slog.Logger) {
+	pending := state.staleMergeConflictMarks
+	if pending == nil {
+		return
+	}
+	if !releaseStaleMergeConflictMarks(ctx, store, pending.triageConfigured, log) {
+		return
+	}
+	state.staleMergeConflictMarks = nil
+	for issueID, entry := range state.Running {
+		if entry.ReactionKind != ReactionKindMergeConflict {
+			continue
+		}
+		if err := store.MarkReactionDispatched(ctx, issueID, ReactionKindMergeConflict); err != nil {
+			log.Warn("failed to mark a running rebase's head dispatched again",
+				slog.String("issue_id", issueID),
+				slog.Any("error", err),
+			)
+		}
+	}
+}
+
+// releaseStaleMergeConflictMarks lifts every stale merge-conflict dispatch
+// mark and reports whether the store took the write.
+func releaseStaleMergeConflictMarks(ctx context.Context, store storage.ReactionFingerprintStore, triageConfigured bool, log *slog.Logger) bool {
 	released, err := store.ReleaseDispatchedReactions(ctx, ReactionKindMergeConflict, triageConfigured)
 	if err != nil {
-		log.Warn("failed to release stale merge conflict dispatch marks", slog.Any("error", err))
-		return
+		log.Warn("failed to release stale merge conflict dispatch marks, retrying on the next pass", slog.Any("error", err))
+		return false
 	}
 	if released > 0 {
 		log.Info("released stale merge conflict dispatch marks",
@@ -777,4 +822,5 @@ func ReleaseStaleMergeConflictMarks(ctx context.Context, store storage.ReactionF
 			slog.Bool("triage_kept", triageConfigured),
 		)
 	}
+	return true
 }

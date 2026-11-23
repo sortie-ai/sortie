@@ -1492,6 +1492,11 @@ type State struct {
 	// restart lifts every mark at startup.
 	unrecordedMergeConflictExits map[string]string
 
+	// staleMergeConflictMarks is a startup release of stale merge-conflict
+	// dispatch marks the store refused; nil when there is none. Each
+	// merge-conflict pass tries it again. Runtime-only.
+	staleMergeConflictMarks *staleMarkRelease
+
 	// ReactionHandedOffComments maps composite key (issueID:kind) to the set
 	// of [domain.ReviewComment] IDs the issue's runs were given for that
 	// kind, a cache over the reaction_handoffs rows. A present

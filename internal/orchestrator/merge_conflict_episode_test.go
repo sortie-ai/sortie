@@ -64,8 +64,8 @@ func newRebasePath(t *testing.T, maxRetries int) *rebasePath {
 // startup: the stale marks released and the watch recovered, nothing else.
 func (p *rebasePath) restart() {
 	p.t.Helper()
-	ReleaseStaleMergeConflictMarks(context.Background(), p.store, false, discardLogger())
 	p.state = stateWithMergeConflict(p.t, p.issueID, 77)
+	ReleaseStaleMergeConflictMarks(context.Background(), p.state, p.store, false, discardLogger())
 }
 
 // pass runs one merge-conflict reconcile pass with the pull request
@@ -515,5 +515,106 @@ func TestMergeConflictEpisode_FailedExitRecordIsWrittenAgain(t *testing.T) {
 	}
 	if got := p.state.ReactionAttempts[ReactionKey(p.issueID, ReactionKindMergeConflict)]; got != 2 {
 		t.Errorf("attempts = %d, want 2", got)
+	}
+}
+
+// TestMergeConflictEpisode_RefundedExitKeepsItsOutcome covers a rebase cut
+// off by a shutdown or refused by a usage limit: the exit gives its attempt
+// back, and writing the refunded count must not erase the outcome the row
+// records for it.
+func TestMergeConflictEpisode_RefundedExitKeepsItsOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result WorkerResult
+		want   string
+	}{
+		{name: "shutdown", result: WorkerResult{ExitKind: WorkerExitCancelled, CancelCause: errCancelShutdown}, want: mergeConflictExitCancelled},
+		{name: "usage limit", result: WorkerResult{ExitKind: WorkerExitError, Error: &domain.AgentError{Kind: domain.ErrUsageLimit, Message: "limit reached"}}, want: mergeConflictExitUsageLimited},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newRebasePath(t, 3)
+			if !p.pass() {
+				t.Fatal("pass scheduled no rebase")
+			}
+			p.start()
+			p.exit(tt.result)
+
+			episode, err := p.store.GetReactionEpisode(context.Background(), p.issueID, ReactionKindMergeConflict)
+			if err != nil {
+				t.Fatalf("GetReactionEpisode: %v", err)
+			}
+			if episode.LastExit != tt.want {
+				t.Errorf("last_exit = %q, want %q", episode.LastExit, tt.want)
+			}
+			if episode.Attempts != 0 {
+				t.Errorf("attempts = %d, want 0: the attempt is given back", episode.Attempts)
+			}
+			if episode.Dispatched {
+				t.Error("row still marked dispatched after the exit")
+			}
+		})
+	}
+}
+
+// releaseRefusingStore refuses the startup release of stale dispatch marks,
+// as a store failing for a moment does.
+type releaseRefusingStore struct{ *sqlite.Store }
+
+func (releaseRefusingStore) ReleaseDispatchedReactions(context.Context, string, bool) (int64, error) {
+	return 0, fmt.Errorf("database is locked")
+}
+
+// TestReleaseStaleMergeConflictMarks_RefusedReleaseIsRetried covers a
+// startup whose release of stale dispatch marks the store refused: the mark
+// a killed process left stays, and a pass would skip the head for good. Each
+// pass tries the release again, and a rebase running by then keeps its mark.
+func TestReleaseStaleMergeConflictMarks_RefusedReleaseIsRetried(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("first pass scheduled no rebase")
+	}
+	p.start()
+
+	// The process is killed with the rebase running; the next one cannot
+	// release the mark at startup.
+	p.state = stateWithMergeConflict(t, p.issueID, 77)
+	ReleaseStaleMergeConflictMarks(context.Background(), p.state, releaseRefusingStore{p.store}, false, discardLogger())
+	if p.state.staleMergeConflictMarks == nil {
+		t.Fatal("refused startup release not kept for the passes")
+	}
+
+	if !p.pass() {
+		t.Fatal("pass after the refused release scheduled no rebase, want the release retried and the head counted")
+	}
+	if p.state.staleMergeConflictMarks != nil {
+		t.Error("release still pending after a pass the store took it on")
+	}
+}
+
+func TestRetryStaleMergeConflictMarkRelease_MarksRunningRebaseAgain(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("pass scheduled no rebase")
+	}
+	p.start()
+	p.state.staleMergeConflictMarks = &staleMarkRelease{}
+
+	retryStaleMergeConflictMarkRelease(context.Background(), p.state, p.store, discardLogger())
+
+	if _, dispatched, err := p.store.GetReactionFingerprint(context.Background(), p.issueID, ReactionKindMergeConflict); err != nil || !dispatched {
+		t.Errorf("running rebase's row dispatched = %v (err %v), want marked again after the release", dispatched, err)
+	}
+	if p.state.staleMergeConflictMarks != nil {
+		t.Error("release still pending after it succeeded")
 	}
 }
