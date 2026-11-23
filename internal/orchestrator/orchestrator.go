@@ -253,6 +253,12 @@ type OrchestratorParams struct {
 	// Once makes Run dispatch from one candidate poll and return when that
 	// work settles. See [Orchestrator.OnceResult].
 	Once bool
+
+	// PendingReactionRecovery, when non-nil, is the startup pending
+	// reaction recovery that failed: each tick runs it again, before the
+	// reconcile pass, until it succeeds. Nil when startup recovery
+	// succeeded or is disabled.
+	PendingReactionRecovery PendingReactionRecoveryFunc
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime state.
@@ -342,6 +348,17 @@ type Orchestrator struct {
 	mergeCompletionConfig             MergeCompletionReactionConfig
 	mergeCompletionReactionConfigured bool
 	handoffParkingLabel               string
+
+	// pendingReactionRecovery is the startup recovery still to succeed;
+	// nil once it has. pendingReactionRecoveryFailures counts its failed
+	// retries. All four are read and written on the event loop only.
+	pendingReactionRecovery         PendingReactionRecoveryFunc
+	pendingReactionRecoveryFailures int
+	// pendingReactionRecoveryNextAt is the earliest instant the next retry
+	// runs; pendingReactionRecoveryNow, when non-nil, replaces the clock
+	// it is compared against.
+	pendingReactionRecoveryNextAt time.Time
+	pendingReactionRecoveryNow    func() time.Time
 
 	// ciTriage is the frozen ci_failure triage configuration, captured once
 	// at construction. Unlike every other CI feedback field, it does not
@@ -509,6 +526,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		ciTriage:                          ciTriage,
 		blockerResolver:                   params.BlockerResolver,
 		abandonCh:                         params.AbandonCh,
+		pendingReactionRecovery:           params.PendingReactionRecovery,
 	}
 	if params.Once {
 		o.once = newOnceState()
@@ -1070,6 +1088,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	if err := o.store.Ping(ctx); !canceled(ctx, err) {
 		o.databaseHealth.record(time.Now(), err)
 	}
+
+	o.retryPendingReactionRecovery(ctx)
 
 	// Reconcile unconditionally so in-flight workers are monitored even when
 	// dispatch is skipped.
@@ -1852,6 +1872,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 			continue
 		}
 		observeParkedLabels(ctx, o.state, o.store, o.logger, entry, issue.ID, issue.Labels)
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, issue.ID, entry, issue.State, issue.Labels, terminalStates, logging.WithIssue(o.logger, issue.ID, entry.Identifier))
 		o.backfillParkedIdentity(ctx, issue.ID, entry, issue)
 	}
 
@@ -1891,6 +1912,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 		if o.state.Parked[id] != entry {
 			continue
 		}
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, id, entry, read.State, read.Labels, terminalStates, logging.WithIssue(o.logger, id, entry.Identifier))
 		if !entry.IssueIdentity.isZero() {
 			continue
 		}
