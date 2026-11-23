@@ -85,7 +85,7 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 	tests := []struct {
 		name       string
 		maxAgents  int
-		reserved   int
+		reserved   map[string]int
 		stateLimit map[string]int
 		sameState  bool // both waiters wait in To Do
 		wantWoken  []string
@@ -93,9 +93,10 @@ func TestWakeCapacityWaitingRetries(t *testing.T) {
 		{name: "one free slot wakes the earliest waiting retry", maxAgents: 2, wantWoken: []string{"WAIT-SOON"}},
 		{name: "two free slots wake both waiting retries", maxAgents: 3, wantWoken: []string{"WAIT-SOON", "WAIT-LATE"}},
 		{name: "no free slot wakes nothing", maxAgents: 1},
-		{name: "a slot an exit's continuation reserved is not given away", maxAgents: 2, reserved: 1},
+		{name: "a slot an exit's continuation reserved is not given away", maxAgents: 2, reserved: map[string]int{"to do": 1}},
 		{name: "a full per-state limit skips its waiter", maxAgents: 3, stateLimit: map[string]int{"review": 1}, wantWoken: []string{"WAIT-LATE"}},
 		{name: "a per-state limit counts the waiters woken before", maxAgents: 4, stateLimit: map[string]int{"to do": 1}, sameState: true, wantWoken: []string{"WAIT-SOON"}},
+		{name: "a continuation reserved under a per-state limit keeps that state's slot", maxAgents: 4, stateLimit: map[string]int{"review": 2}, reserved: map[string]int{"review": 1}, wantWoken: []string{"WAIT-LATE"}},
 		{name: "per-state limits with room wake each waiter", maxAgents: 4, stateLimit: map[string]int{"review": 2, "to do": 1}, wantWoken: []string{"WAIT-SOON", "WAIT-LATE"}},
 	}
 
@@ -211,7 +212,7 @@ func TestWakeCapacityWaitingRetries_FiresDoNotOvercommit(t *testing.T) {
 		}
 	})
 
-	o.wakeCapacityWaitingRetries(t.Context(), 0)
+	o.wakeCapacityWaitingRetries(t.Context(), nil)
 	fired := waittest.Receive(t, o.retryTimerCh, "woken retry fire")
 	if fired != "WAIT-A" {
 		t.Fatalf("woken retry = %s, want WAIT-A (earliest due)", fired)
@@ -243,20 +244,23 @@ func TestWakeCapacityWaitingRetries_FiresDoNotOvercommit(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerExit_WakesCapacityWaitingRetries exits the session that
-// holds the only slot. The exit wakes the retry waiting for that slot,
-// unless the exiting issue already holds a retry of its own that will
-// take the slot back.
+// TestHandleWorkerExit_WakesCapacityWaitingRetries exits a session while a
+// retry waits for its slot. The exit wakes the waiting retry, unless the
+// exiting issue already holds a retry of its own that will take the slot
+// back, globally or under its state's limit.
 func TestHandleWorkerExit_WakesCapacityWaitingRetries(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name         string
+		maxAgents    int
+		stateLimit   map[string]int
 		exitOwnRetry bool
 		wantWoken    bool
 	}{
-		{name: "an exit that frees its slot wakes the waiting retry", wantWoken: true},
-		{name: "an exit with its own retry keeps the slot for it", exitOwnRetry: true},
+		{name: "an exit that frees its slot wakes the waiting retry", maxAgents: 1, wantWoken: true},
+		{name: "an exit with its own retry keeps the slot for it", maxAgents: 1, exitOwnRetry: true},
+		{name: "an exit with its own retry keeps its state's slot for it", maxAgents: 2, stateLimit: map[string]int{"to do": 1}, exitOwnRetry: true},
 	}
 
 	for _, tt := range tests {
@@ -265,7 +269,8 @@ func TestHandleWorkerExit_WakesCapacityWaitingRetries(t *testing.T) {
 
 			cfg := defaultWorkerConfig(t.TempDir())
 			cfg.Polling = config.PollingConfig{IntervalMS: int(time.Hour / time.Millisecond)}
-			state := NewState(cfg.Polling.IntervalMS, 1, 0, nil, AgentTotals{})
+			state := NewState(cfg.Polling.IntervalMS, tt.maxAgents, 0, nil, AgentTotals{})
+			state.MaxConcurrentByState = tt.stateLimit
 			state.Running["BUSY-1"] = &RunningEntry{
 				Identifier: "BUSY-1",
 				Issue:      candidateIssue("BUSY-1", "BUSY-1", "To Do"),

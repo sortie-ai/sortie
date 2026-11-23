@@ -698,6 +698,15 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 	}
 	o.applyQueuedAheadOfExit(ctx, exitingIssueIDs)
 
+	// HandleWorkerExit drops the running entry, so the state an exit's own
+	// retry will need is read before it.
+	exitStates := make(map[string]string, len(exits))
+	for _, result := range exits {
+		if entry := o.state.Running[result.IssueID]; entry != nil {
+			exitStates[result.IssueID] = entry.Issue.State
+		}
+	}
+
 	cfg := o.workflowManager.Config()
 	rates := o.workflowManager.Rates()
 	o.updateRouter(cfg)
@@ -736,13 +745,13 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 		})
 		o.recordOutcome(result, outcome)
 	}
-	reserved := 0
+	reservedByState := make(map[string]int)
 	for _, result := range exits {
 		if retry := o.state.RetryAttempts[result.IssueID]; retry != nil && !retry.waitsForCapacity {
-			reserved++
+			reservedByState[strings.ToLower(exitStates[result.IssueID])]++
 		}
 	}
-	o.wakeCapacityWaitingRetries(ctx, reserved)
+	o.wakeCapacityWaitingRetries(ctx, reservedByState)
 	o.updateGauges(time.Now())
 	o.notifyObservers()
 }

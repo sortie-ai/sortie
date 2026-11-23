@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -110,15 +111,20 @@ func (o *Orchestrator) makeRetryDueNow(ctx context.Context, issueID string, entr
 
 // wakeCapacityWaitingRetries makes due now the retries that found no free
 // slot or SSH host, earliest due first, so a slot a worker exit just freed
-// is not left idle until their next recheck. reserved is the number of
-// retries the exits just scheduled for themselves, a continuation's short
-// delay among them: their slots are theirs, so a waiter never takes the slot
-// a multi-turn issue is about to come back to. A waiter whose state has no
-// free slot under its per-state limit, counting the waiters woken before it,
-// stays asleep. A woken retry that still finds no capacity is re-armed for
-// its recheck again, keeping its attempt. Must run on the event loop.
-func (o *Orchestrator) wakeCapacityWaitingRetries(ctx context.Context, reserved int) {
-	remaining := GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) - reserved
+// is not left idle until their next recheck. reservedByState counts, by
+// lowercased issue state, the retries the exits just scheduled for
+// themselves, a continuation's short delay among them: their slots are
+// theirs, globally and under their state's limit, so a waiter never takes
+// the slot a multi-turn issue is about to come back to. A waiter whose state
+// has no free slot under its per-state limit, counting those reservations
+// and the waiters woken before it, stays asleep. A woken retry that still
+// finds no capacity is re-armed for its recheck again, keeping its attempt.
+// Must run on the event loop.
+func (o *Orchestrator) wakeCapacityWaitingRetries(ctx context.Context, reservedByState map[string]int) {
+	remaining := GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running))
+	for _, reserved := range reservedByState {
+		remaining -= reserved
+	}
 	if remaining <= 0 {
 		return
 	}
@@ -134,17 +140,20 @@ func (o *Orchestrator) wakeCapacityWaitingRetries(ctx context.Context, reserved 
 		}
 		return strings.Compare(a.IssueID, b.IssueID)
 	})
-	wokenByState := make(map[string]int)
+	takenByState := maps.Clone(reservedByState)
+	if takenByState == nil {
+		takenByState = make(map[string]int)
+	}
 	for _, entry := range waiting {
 		if remaining == 0 {
 			return
 		}
 		stateKey := strings.ToLower(entry.capacityState)
-		stateRunning := RunningCountByState(o.state.Running, entry.capacityState) + wokenByState[stateKey]
+		stateRunning := RunningCountByState(o.state.Running, entry.capacityState) + takenByState[stateKey]
 		if StateAvailableSlots(entry.capacityState, o.state.MaxConcurrentByState, stateRunning, remaining) == 0 {
 			continue
 		}
-		wokenByState[stateKey]++
+		takenByState[stateKey]++
 		remaining--
 		entry.waitsForCapacity = false
 		log := logging.WithIssue(o.logger, entry.IssueID, entry.Identifier)
