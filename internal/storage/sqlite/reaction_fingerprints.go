@@ -225,6 +225,19 @@ func (s *Store) RecordReactionExit(ctx context.Context, issueID, kind, lastExit 
 	return err
 }
 
+// RecordReactionExitWithAttempts lifts the dispatched mark, records the run
+// exit and stores the attempt counter in one statement. No-op if the row
+// does not exist.
+func (s *Store) RecordReactionExitWithAttempts(ctx context.Context, issueID, kind, lastExit string, attempts int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reaction_fingerprints SET dispatched = 0, last_exit = ?, attempts = ?, updated_at = ?
+		WHERE issue_id = ? AND kind = ?`,
+		lastExit, attempts, now, issueID, kind,
+	)
+	return err
+}
+
 // ReleaseDispatchedReactions sets dispatched=0 on every row of kind and
 // returns the number of rows changed. With keepTriaged, a row whose
 // fingerprint has a recorded triage outcome of handled or escalate is left

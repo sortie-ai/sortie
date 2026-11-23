@@ -161,6 +161,16 @@ func (m *mockExitStore) RecordReactionExit(_ context.Context, issueID, kind, las
 	return nil
 }
 
+func (m *mockExitStore) RecordReactionExitWithAttempts(_ context.Context, issueID, kind, lastExit string, attempts int) error {
+	rows := m.fingerprintRows()
+	key := ReactionKey(issueID, kind)
+	if row, ok := rows[key]; ok {
+		row.dispatched, row.lastExit, row.attempts = false, lastExit, attempts
+		rows[key] = row
+	}
+	return nil
+}
+
 func (m *mockExitStore) ReleaseDispatchedReactions(_ context.Context, kind string, _ bool) (int64, error) {
 	var n int64
 	rows := m.fingerprintRows()

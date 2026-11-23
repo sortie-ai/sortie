@@ -1576,10 +1576,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	if spendsNoMergeConflictAttempt(mergeConflictExit) {
-		refundMergeConflictAttempt(mergeConflictCtx, state, params.Store, workerResult.IssueID, true, log)
-		// Writing the refunded count clears the row's last exit, so the
-		// exit is recorded again after it.
-		recordMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, log)
+		// The refunded count and the exit go in one write, kept together
+		// for the next pass if the store refuses it.
+		if attempts := state.ReactionAttempts[ReactionKey(workerResult.IssueID, ReactionKindMergeConflict)]; attempts > 0 {
+			refundMergeConflictAttempt(state, workerResult.IssueID)
+			recordRefundedMergeConflictExit(mergeConflictCtx, state, params.Store, workerResult.IssueID, mergeConflictExit, attempts-1, log)
+		}
 	}
 
 	deleteLivePass(ctx, params.Store, workerResult.IssueID, storage.LivePassRunning, log)

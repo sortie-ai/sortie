@@ -207,6 +207,16 @@ func handleMergeConflictDirty(
 		return
 	}
 
+	// A worker running for the issue holds it as a retry would: a rebase
+	// counted its attempt when it started, and counting the head again,
+	// when its mark could not be set, would escalate a rebase still in
+	// flight. The pass runs again after the worker exits.
+	if state.Running[pending.IssueID] != nil {
+		pending.WatchRestartedAt = now
+		requeueReaction(state, key, pending, waitRetrySlot)
+		return
+	}
+
 	// An empty head provides no rebase anchor. Defer without burning an
 	// attempt: a deferral is not a resolution attempt.
 	if status.HeadSHA == "" {
@@ -694,15 +704,43 @@ func mergeConflictExitOf(result WorkerResult) string {
 // in state and written again by the issue's next pass, so a transient
 // store failure does not leave the head marked until a restart.
 func recordMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID, lastExit string, log *slog.Logger) {
-	if err := store.RecordReactionExit(ctx, issueID, ReactionKindMergeConflict, lastExit); err != nil {
+	writeMergeConflictExit(ctx, state, store, issueID, unrecordedMergeConflictExit{lastExit: lastExit}, log)
+}
+
+// recordRefundedMergeConflictExit records a rebase's exit together with
+// the attempt count its refund gave back, in one write, so a refused write
+// keeps both for the next pass and a restart never restores the refunded
+// attempt.
+func recordRefundedMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID, lastExit string, attempts int, log *slog.Logger) {
+	writeMergeConflictExit(ctx, state, store, issueID, unrecordedMergeConflictExit{lastExit: lastExit, attempts: attempts, refunded: true}, log)
+}
+
+// unrecordedMergeConflictExit is a rebase exit the store refused, kept for
+// the issue's next pass: how the run ended and, for a refunded run, the
+// attempt count to store with it.
+type unrecordedMergeConflictExit struct {
+	lastExit string
+	attempts int
+	refunded bool
+}
+
+func writeMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID string, exit unrecordedMergeConflictExit, log *slog.Logger) {
+	var err error
+	if exit.refunded {
+		err = store.RecordReactionExitWithAttempts(ctx, issueID, ReactionKindMergeConflict, exit.lastExit, exit.attempts)
+	} else {
+		err = store.RecordReactionExit(ctx, issueID, ReactionKindMergeConflict, exit.lastExit)
+	}
+	if err != nil {
 		log.Warn("failed to record the rebase exit on the merge conflict fingerprint",
-			slog.String("last_exit", lastExit),
+			slog.String("last_exit", exit.lastExit),
+			slog.Bool("refunded", exit.refunded),
 			slog.Any("error", err),
 		)
 		if state.unrecordedMergeConflictExits == nil {
-			state.unrecordedMergeConflictExits = make(map[string]string)
+			state.unrecordedMergeConflictExits = make(map[string]unrecordedMergeConflictExit)
 		}
-		state.unrecordedMergeConflictExits[issueID] = lastExit
+		state.unrecordedMergeConflictExits[issueID] = exit
 		return
 	}
 	delete(state.unrecordedMergeConflictExits, issueID)
@@ -713,11 +751,11 @@ func recordMergeConflictExit(ctx context.Context, state *State, store storage.Re
 // was none to write). Until it does, the row's mark is stale and its last
 // exit missing, so the pass must not read it.
 func recordUnrecordedMergeConflictExit(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID string, log *slog.Logger) bool {
-	lastExit, unrecorded := state.unrecordedMergeConflictExits[issueID]
+	exit, unrecorded := state.unrecordedMergeConflictExits[issueID]
 	if !unrecorded {
 		return true
 	}
-	recordMergeConflictExit(ctx, state, store, issueID, lastExit, log)
+	writeMergeConflictExit(ctx, state, store, issueID, exit, log)
 	_, stillUnrecorded := state.unrecordedMergeConflictExits[issueID]
 	return !stillUnrecorded
 }
@@ -728,19 +766,17 @@ func spendsNoMergeConflictAttempt(lastExit string) bool {
 	return lastExit == mergeConflictExitCancelled || lastExit == mergeConflictExitUsageLimited
 }
 
-// refundMergeConflictAttempt gives back the attempt of a rebase that ran no
-// real attempt: one cut off by a shutdown or refused by a usage limit, at
-// its exit (counted, so taken back from the store), or one the retry timer
-// let go before it started (never persisted). A retry that follows the
-// exit keeps the attempt pending, so its start counts it again.
-func refundMergeConflictAttempt(ctx context.Context, state *State, store storage.ReactionFingerprintStore, issueID string, persisted bool, log *slog.Logger) {
+// refundMergeConflictAttempt gives back, in memory, the attempt of a rebase
+// that ran no real attempt: one cut off by a shutdown or refused by a usage
+// limit, at its exit (whose caller stores the refunded count with the exit,
+// [recordRefundedMergeConflictExit]), or one the retry timer let go before
+// it started (never persisted). A retry that follows the exit keeps the
+// attempt pending, so its start counts it again.
+func refundMergeConflictAttempt(state *State, issueID string) {
 	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
 	attempts := state.ReactionAttempts[rkey]
 	if attempts == 0 {
 		return
-	}
-	if persisted {
-		persistMergeConflictAttempts(ctx, store, issueID, attempts-1, log)
 	}
 	if retry := state.RetryAttempts[issueID]; retry != nil && retry.ReactionKind == ReactionKindMergeConflict {
 		retry.attemptPending = true

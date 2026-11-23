@@ -1490,7 +1490,7 @@ type State struct {
 	// mark and records that exit failed. The next merge-conflict pass for
 	// the issue writes it again before reading the row. Runtime-only: a
 	// restart lifts every mark at startup.
-	unrecordedMergeConflictExits map[string]string
+	unrecordedMergeConflictExits map[string]unrecordedMergeConflictExit
 
 	// staleMergeConflictMarks is a startup release of stale merge-conflict
 	// dispatch marks the store refused; nil when there is none. Each

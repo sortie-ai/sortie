@@ -56,6 +56,11 @@ type ReactionFingerprintStore interface {
 	// dispatched for the row's fingerprint ended. No-op when the row does
 	// not exist.
 	RecordReactionExit(ctx context.Context, issueID, kind, lastExit string) error
+	// RecordReactionExitWithAttempts records the run exit as
+	// RecordReactionExit does and stores the attempt counter in the same
+	// write, for a run whose attempt was given back. No-op when the row
+	// does not exist.
+	RecordReactionExitWithAttempts(ctx context.Context, issueID, kind, lastExit string, attempts int) error
 	// ReleaseDispatchedReactions lifts the dispatched mark of every row of
 	// kind and reports how many it lifted. With keepTriaged, a row whose
 	// fingerprint a triage verdict of handled or escalate consumed keeps it.

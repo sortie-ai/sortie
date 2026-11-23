@@ -630,8 +630,8 @@ func (markRefusingStore) MarkReactionDispatched(context.Context, string, string)
 // covers a retried startup release that lifts a running rebase's mark and
 // cannot set it again: the head reads undispatched while the worker runs.
 // Even with a watch held for the issue (the dispatch consumed the one that
-// fired it), a pass that schedules another rebase cannot start it: the
-// retry timer reschedules it while the worker is still running.
+// fired it), the pass defers while the worker runs: it schedules no second
+// rebase and counts no second attempt for the head the running one counted.
 func TestRetryStaleMergeConflictMarkRelease_RefusedRemarkStartsNoSecondRebase(t *testing.T) {
 	t.Parallel()
 
@@ -641,35 +641,41 @@ func TestRetryStaleMergeConflictMarkRelease_RefusedRemarkStartsNoSecondRebase(t 
 	}
 	p.start()
 	running := p.state.Running[p.issueID]
+	rkey := ReactionKey(p.issueID, ReactionKindMergeConflict)
+	attemptsBefore := p.state.ReactionAttempts[rkey]
 	p.state.staleMergeConflictMarks = &staleMarkRelease{}
 	p.watch()
 
-	p.now = p.now.Add(2 * time.Minute)
-	params := mergeConflictParams(markRefusingStore{p.store}, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
-		return dirtyStatus(p.head, "main"), nil
-	}}, p.tracker)
-	params.MergeConflictConfig = p.config
-	params.NowFunc = func() time.Time { return p.now }
-	reconcileMergeConflicts(p.state, params, discardLogger(), context.Background(), p.metrics)
-	p.state.TrackerOpsWg.Wait()
+	for pass := 1; pass <= 3; pass++ {
+		p.now = p.now.Add(2 * time.Minute)
+		params := mergeConflictParams(markRefusingStore{p.store}, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+			return dirtyStatus(p.head, "main"), nil
+		}}, p.tracker)
+		params.MergeConflictConfig = p.config
+		params.NowFunc = func() time.Time { return p.now }
+		reconcileMergeConflicts(p.state, params, discardLogger(), context.Background(), p.metrics)
+		p.state.TrackerOpsWg.Wait()
+
+		if retry := p.state.RetryAttempts[p.issueID]; retry != nil {
+			retry.TimerHandle.Stop()
+			t.Fatalf("pass %d scheduled a second rebase while the first was running", pass)
+		}
+	}
 
 	if _, dispatched, err := p.store.GetReactionFingerprint(context.Background(), p.issueID, ReactionKindMergeConflict); err != nil || dispatched {
 		t.Fatalf("row dispatched = %v (err %v), want the re-mark refused for this test", dispatched, err)
 	}
-	retry := p.state.RetryAttempts[p.issueID]
-	if retry == nil {
-		t.Fatal("pass scheduled no rebase for the unmarked head; the timer guard is what this test exercises")
+	if got := p.state.ReactionAttempts[rkey]; got != attemptsBefore {
+		t.Errorf("attempts = %d, want %d: no attempt counted while the rebase runs", got, attemptsBefore)
 	}
-	retry.TimerHandle.Stop()
-	retry.scheduledAt = time.Time{}
-	HandleRetryTimer(p.state, p.issueID, p.retryParams())
-	if again := p.state.RetryAttempts[p.issueID]; again != nil {
-		again.TimerHandle.Stop()
-	} else {
-		t.Error("retry for the running rebase's issue was dropped, want it rescheduled until the worker exits")
+	if p.escalated() {
+		t.Error("escalated while the rebase was still running")
 	}
 	if p.state.Running[p.issueID] != running {
 		t.Error("a second rebase started while the first was still running")
+	}
+	if _, watched := p.state.PendingReactions[rkey]; !watched {
+		t.Error("watch dropped while the rebase runs, want it kept for after the exit")
 	}
 }
 
@@ -801,5 +807,70 @@ func TestHandleWorkerExit_MergeConflictWritesOutliveCancelledContext(t *testing.
 	}
 	if episode.Dispatched || episode.LastExit != mergeConflictExitCancelled || episode.Attempts != 0 {
 		t.Errorf("row = dispatched %v, last_exit %q, attempts %d; want false, %q, 0", episode.Dispatched, episode.LastExit, episode.Attempts, mergeConflictExitCancelled)
+	}
+}
+
+// refundRefusingStore refuses every write of a refunded attempt count.
+type refundRefusingStore struct{ *sqlite.Store }
+
+func (refundRefusingStore) RecordReactionExitWithAttempts(context.Context, string, string, string, int) error {
+	return fmt.Errorf("database is locked")
+}
+
+func (refundRefusingStore) SetReactionAttempts(context.Context, string, string, int) error {
+	return fmt.Errorf("database is locked")
+}
+
+// TestMergeConflictEpisode_RefusedRefundIsWrittenAgain covers a rebase cut
+// off by a shutdown whose refund write the store refused: the refunded
+// count and the exit are kept together, the next pass writes both, and a
+// restart then resumes the episode without the given-back attempt.
+func TestMergeConflictEpisode_RefusedRefundIsWrittenAgain(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("pass scheduled no rebase")
+	}
+	p.start()
+
+	params := defaultExitParams(t, nil)
+	params.Store = refundRefusingStore{p.store}
+	params.TrackerAdapter = p.tracker
+	params.HandoffState = rebasePathHandoff
+	params.ActiveStates = []string{"queue"}
+	params.TerminalStates = []string{"done"}
+	params.NowFunc = func() time.Time { return p.now }
+	HandleWorkerExit(p.state, WorkerResult{
+		IssueID: p.issueID, Identifier: p.issueID + "-ident", AgentAdapter: "mock",
+		ExitKind: WorkerExitCancelled, CancelCause: errCancelShutdown,
+	}, params)
+	if retry := p.state.RetryAttempts[p.issueID]; retry != nil {
+		retry.TimerHandle.Stop()
+	}
+	p.watch()
+
+	if _, kept := p.state.unrecordedMergeConflictExits[p.issueID]; !kept {
+		t.Fatal("refused refund not kept for the next pass")
+	}
+
+	p.pass()
+	if retry := p.state.RetryAttempts[p.issueID]; retry != nil {
+		retry.TimerHandle.Stop()
+	}
+	if _, still := p.state.unrecordedMergeConflictExits[p.issueID]; still {
+		t.Error("kept exit not cleared after the pass wrote it")
+	}
+
+	p.restart()
+	episode, err := p.store.GetReactionEpisode(context.Background(), p.issueID, ReactionKindMergeConflict)
+	if err != nil {
+		t.Fatalf("GetReactionEpisode: %v", err)
+	}
+	if episode.Attempts != 0 {
+		t.Errorf("attempts on the row after a restart = %d, want 0: the refund holds, and the rebase the pass scheduled never started", episode.Attempts)
+	}
+	if episode.LastExit != mergeConflictExitCancelled {
+		t.Errorf("last_exit = %q, want %q", episode.LastExit, mergeConflictExitCancelled)
 	}
 }

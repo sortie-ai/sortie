@@ -47,6 +47,10 @@ func (unsupportedReactionObservationStore) RecordReactionExit(context.Context, s
 	return nil
 }
 
+func (unsupportedReactionObservationStore) RecordReactionExitWithAttempts(context.Context, string, string, string, int) error {
+	return nil
+}
+
 func (unsupportedReactionObservationStore) ReleaseDispatchedReactions(context.Context, string, bool) (int64, error) {
 	return 0, nil
 }

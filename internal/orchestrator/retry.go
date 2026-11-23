@@ -224,7 +224,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.attemptPending {
 		defer func() {
 			if state.Running[issueID] == nil && state.RetryAttempts[issueID] == nil {
-				refundMergeConflictAttempt(ctx, state, params.Store, issueID, false, log)
+				refundMergeConflictAttempt(state, issueID)
 			}
 		}()
 	}
