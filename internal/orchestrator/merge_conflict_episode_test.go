@@ -618,3 +618,57 @@ func TestRetryStaleMergeConflictMarkRelease_MarksRunningRebaseAgain(t *testing.T
 		t.Error("release still pending after it succeeded")
 	}
 }
+
+// markRefusingStore refuses every write that marks a head dispatched.
+type markRefusingStore struct{ *sqlite.Store }
+
+func (markRefusingStore) MarkReactionDispatched(context.Context, string, string) error {
+	return fmt.Errorf("database is locked")
+}
+
+// TestRetryStaleMergeConflictMarkRelease_RefusedRemarkStartsNoSecondRebase
+// covers a retried startup release that lifts a running rebase's mark and
+// cannot set it again: the head reads undispatched while the worker runs.
+// Even with a watch held for the issue (the dispatch consumed the one that
+// fired it), a pass that schedules another rebase cannot start it: the
+// retry timer reschedules it while the worker is still running.
+func TestRetryStaleMergeConflictMarkRelease_RefusedRemarkStartsNoSecondRebase(t *testing.T) {
+	t.Parallel()
+
+	p := newRebasePath(t, 3)
+	if !p.pass() {
+		t.Fatal("pass scheduled no rebase")
+	}
+	p.start()
+	running := p.state.Running[p.issueID]
+	p.state.staleMergeConflictMarks = &staleMarkRelease{}
+	p.watch()
+
+	p.now = p.now.Add(2 * time.Minute)
+	params := mergeConflictParams(markRefusingStore{p.store}, &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus(p.head, "main"), nil
+	}}, p.tracker)
+	params.MergeConflictConfig = p.config
+	params.NowFunc = func() time.Time { return p.now }
+	reconcileMergeConflicts(p.state, params, discardLogger(), context.Background(), p.metrics)
+	p.state.TrackerOpsWg.Wait()
+
+	if _, dispatched, err := p.store.GetReactionFingerprint(context.Background(), p.issueID, ReactionKindMergeConflict); err != nil || dispatched {
+		t.Fatalf("row dispatched = %v (err %v), want the re-mark refused for this test", dispatched, err)
+	}
+	retry := p.state.RetryAttempts[p.issueID]
+	if retry == nil {
+		t.Fatal("pass scheduled no rebase for the unmarked head; the timer guard is what this test exercises")
+	}
+	retry.TimerHandle.Stop()
+	retry.scheduledAt = time.Time{}
+	HandleRetryTimer(p.state, p.issueID, p.retryParams())
+	if again := p.state.RetryAttempts[p.issueID]; again != nil {
+		again.TimerHandle.Stop()
+	} else {
+		t.Error("retry for the running rebase's issue was dropped, want it rescheduled until the worker exits")
+	}
+	if p.state.Running[p.issueID] != running {
+		t.Error("a second rebase started while the first was still running")
+	}
+}
