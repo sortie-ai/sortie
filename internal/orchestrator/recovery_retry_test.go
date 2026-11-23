@@ -234,3 +234,29 @@ func TestRetryPendingReactionRecovery_BacksOffAndBoundsEachRun(t *testing.T) {
 		t.Errorf("recovery calls once the backoff passed = %d, want %d", calls, pendingReactionRecoveryEveryTick+2)
 	}
 }
+
+// TestRetryPendingReactionRecovery_BackoffStartsWhenRunFails pins the
+// backoff to the end of a slow failed run, so a run that took most of its
+// timeout is not retried before the full delay has passed.
+func TestRetryPendingReactionRecovery_BackoffStartsWhenRunFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	var calls int
+	recovery := func(context.Context, *State) (PendingReactionRecoveryResult, error) {
+		calls++
+		now = now.Add(50 * time.Second)
+		return PendingReactionRecoveryResult{}, errors.New("tracker unavailable")
+	}
+	o := recoveryRetryOrchestrator(t, recovery, &lockedBuf{}, false)
+	o.pendingReactionRecoveryNow = func() time.Time { return now }
+
+	for range pendingReactionRecoveryEveryTick + 1 {
+		o.retryPendingReactionRecovery(context.Background())
+	}
+	now = now.Add(pendingReactionRecoveryBackoffBase - time.Second)
+	o.retryPendingReactionRecovery(context.Background())
+	if calls != pendingReactionRecoveryEveryTick+1 {
+		t.Errorf("recovery calls before the backoff passed since the last failure = %d, want %d", calls, pendingReactionRecoveryEveryTick+1)
+	}
+}

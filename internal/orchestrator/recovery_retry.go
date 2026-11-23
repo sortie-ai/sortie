@@ -65,8 +65,7 @@ func (o *Orchestrator) retryPendingReactionRecovery(ctx context.Context) {
 	if o.pendingReactionRecovery == nil || o.once != nil {
 		return
 	}
-	now := o.recoveryClock()
-	if now.Before(o.pendingReactionRecoveryNextAt) {
+	if o.recoveryClock().Before(o.pendingReactionRecoveryNextAt) {
 		return
 	}
 	runCtx, cancel := context.WithTimeout(ctx, pendingReactionRecoveryTimeout)
@@ -77,7 +76,7 @@ func (o *Orchestrator) retryPendingReactionRecovery(ctx context.Context) {
 			return
 		}
 		o.pendingReactionRecoveryFailures++
-		o.pendingReactionRecoveryNextAt = now.Add(pendingReactionRecoveryDelay(o.pendingReactionRecoveryFailures))
+		o.pendingReactionRecoveryNextAt = o.recoveryClock().Add(pendingReactionRecoveryDelay(o.pendingReactionRecoveryFailures))
 		level := slog.LevelDebug
 		if o.pendingReactionRecoveryFailures%pendingReactionRecoveryWarnEvery == 1 {
 			level = slog.LevelWarn
