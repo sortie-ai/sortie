@@ -63,7 +63,8 @@ type Source struct {
 	// request's record when a turn is killed or cancelled by ending its
 	// process, because it writes records late rather than as each request
 	// completes. Such an ending can then leave the turn's amount unknown, never
-	// zero.
+	// zero. A turn cancelled without ending the process can also reply before
+	// its records are written, so the records are read again until they hold it.
 	WrittenAtTurnEnd bool
 }
 

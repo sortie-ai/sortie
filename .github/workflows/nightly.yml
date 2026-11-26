@@ -49,7 +49,7 @@ jobs:
             guard: SORTIE_CLAUDE_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/claude/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @anthropic-ai/claude-code
             version_cmd: claude --version
@@ -61,7 +61,7 @@ jobs:
             guard: SORTIE_CODEX_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/codex/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g @openai/codex
             version_cmd: codex --version
@@ -73,7 +73,7 @@ jobs:
             guard: SORTIE_COPILOT_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/copilot/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -86,7 +86,7 @@ jobs:
             guard: SORTIE_OPENCODE_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/opencode/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @opencode/cli@2
             version_cmd: opencode --version
@@ -121,7 +121,7 @@ jobs:
             credential_env: COPILOT_PROVIDER_API_KEY
             run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -145,7 +145,7 @@ jobs:
             credential_env: COPILOT_PROVIDER_API_KEY
             run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -167,7 +167,7 @@ jobs:
             credential_env: GOOGLE_GENERATIVE_AI_API_KEY
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @opencode/cli@2
             version_cmd: opencode --version
@@ -442,6 +442,10 @@ jobs:
             export "${GUARD%_TEST}_CREDENTIAL_ENV=${CREDENTIAL_ENV}"
           fi
 
+          # Every scripted conformance suite gets the same 900s: the slowest
+          # healthy run plus one hung scenario. The suite's own per-wait
+          # bounds catch a hang and end short of this deadline, so the budget
+          # never decides a verdict.
           TIMEOUT_FLAG=()
           if [ -n "${TIMEOUT}" ]; then TIMEOUT_FLAG=(-timeout "${TIMEOUT}"); fi
           SKIP_FLAG=()
