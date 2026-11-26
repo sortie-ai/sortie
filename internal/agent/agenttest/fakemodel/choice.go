@@ -84,13 +84,25 @@ func WriteFile(path, content string) ToolChoice {
 // one named description, in declaration order. The command value is a quoted
 // cat command line.
 func CatFile(path string) ToolChoice {
+	return shellCommand(sshutil.QuoteArgv([]string{"cat", path}))
+}
+
+// TeeFile returns a [ToolChoice] that prints path through the same tool as
+// [CatFile] while tee writes a copy beside it. The write keeps the command out
+// of the read-only commands a runtime may run without asking, so a policy
+// that asks before shell commands gates it.
+func TeeFile(path string) ToolChoice {
+	return shellCommand(sshutil.QuoteArgv([]string{"cat", path}) + " | " + sshutil.QuoteArgv([]string{"tee", path + ".copy"}))
+}
+
+func shellCommand(command string) ToolChoice {
 	return func(declared []Tool) (FunctionCall, error) {
 		for _, tool := range declared {
 			commandProperty, descriptionProperty, ok := commandProperties(tool.Parameters)
 			if !ok {
 				continue
 			}
-			arguments := map[string]string{commandProperty: sshutil.QuoteArgv([]string{"cat", path})}
+			arguments := map[string]string{commandProperty: command}
 			if descriptionProperty != "" {
 				arguments[descriptionProperty] = catDescription
 			}

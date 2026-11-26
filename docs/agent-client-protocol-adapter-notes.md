@@ -35,7 +35,7 @@ A local launch needs up to three command-line switches: one that puts the runtim
 | Trust | `--skip-trust` | `-a` | none | none |
 | Posture | `--approval-mode yolo` | `-a`, the same switch | `--allow-all-tools` | none |
 
-`kiro-cli` uses one switch for trust and posture, so you cannot take back one without the other. Without `--allow-all-tools`, a `copilot` tool call raises `session/request_permission`, a refusal fails the call, and the turn ends without a follow-up model request. `opencode` takes no model switch either: its model comes from its own configuration, which the qualification passes through `OPENCODE_CONFIG_CONTENT`.
+`kiro-cli` uses one switch for trust and posture, so you cannot take back one without the other. Without `--allow-all-tools`, a `copilot` tool call raises `session/request_permission`, a refusal fails the call, and the turn ends without a follow-up model request. The exception is a shell command `copilot` recognizes as read-only, such as `cat`: it runs without asking, even on a file outside the working directory and with `--disallow-temp-dir`, so Sortie never sees a request to refuse. A command that also writes, such as one piped through `tee` into a file, still asks. `opencode` takes no model switch either: its model comes from its own configuration, which the qualification passes through `OPENCODE_CONFIG_CONTENT`.
 
 Some runtimes send many notifications under their own vendor method prefix. They are notifications, not requests, so the client answers none of them and depends on none of them.
 
