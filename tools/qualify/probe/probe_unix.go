@@ -474,6 +474,11 @@ func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixt
 	induceIfInducible(coords, fixture, byCase, surface, evidence.CaseHumanInput, func() gradedObservation {
 		return induceHumanInputNative(t, coords, fixture, surface)
 	})
+	if _, statesStandIn := coords.Profile.FailingModelEnviron(""); statesStandIn {
+		induceIfInducible(coords, fixture, byCase, surface, evidence.CaseLimitReached, func() gradedObservation {
+			return induceNativeLimit(t, coords, fixture, surface)
+		})
+	}
 
 	collected.semantic[surface] = byCase
 

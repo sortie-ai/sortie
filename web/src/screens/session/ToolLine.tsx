@@ -1,5 +1,7 @@
 import { BookOpenIcon, FileIcon, FilePenIcon, TerminalIcon, WrenchIcon } from "@/components/icons";
 import { StatusMark } from "@/components/StatusMark";
+import { MONO } from "@/components/ui/mono";
+import { cn } from "@/lib/cn";
 import { fmtDuration, plural } from "@/lib/format";
 
 import type { RunEventResponse } from "@/api/types.gen";
@@ -41,11 +43,13 @@ function foldKindOf(call: RunEventResponse): FoldKind {
 
 export interface ToolTextProps {
   text: string;
+  /** Set the text in monospace, for a name rather than a sentence. */
+  isMono?: boolean;
 }
 
-export function ToolText({ text }: ToolTextProps) {
+export function ToolText({ text, isMono = false }: ToolTextProps) {
   return (
-    <span title={text} className="block min-w-0 truncate">
+    <span title={text} className={cn("block min-w-0 truncate", isMono && MONO)}>
       {text}
     </span>
   );

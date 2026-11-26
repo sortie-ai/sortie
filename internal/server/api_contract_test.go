@@ -10,10 +10,12 @@ import (
 	"go/parser"
 	"go/token"
 	"maps"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +26,61 @@ import (
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/runstats"
 )
+
+const (
+	defaultAPIHost = "127.0.0.1"
+	defaultAPIPort = "7678"
+)
+
+const apiDescription = "Read and control a running Sortie orchestrator. The API serves its current state, run history, usage statistics and prices, " +
+	"accepts a few operator actions, and streams changes and agent events as they happen.\n\n" +
+	"## Errors\n\n" +
+	"A failed request returns an `error` object with a machine-readable `code` and a human-readable `message`, " +
+	"unless the route documents its own response body. Treat a code you do not know by its HTTP status.\n\n" +
+	"## Compatibility\n\n" +
+	"Within `v1`, a release only adds to the API.\n\n" +
+	"- Ignore response members, enumerated values and event names you do not know.\n" +
+	"- Anything to be removed is first marked `deprecated` and stays, unchanged, for at least 60 days.\n" +
+	"- A fix for a security or correctness defect in the contract is the only change made without that notice, and the changelog announces it.\n" +
+	"- A route marked `x-stability-level` is not yet stable and may change in any release.\n" +
+	"- Message and display text may be reworded in any release, so branch on codes and enumerated values."
+
+// The document's top-level fields are written in the order the OpenAPI
+// specification lists them, which a map cannot keep.
+type openAPIDocument struct {
+	OpenAPI      string          `json:"openapi"`
+	Info         openAPIInfo     `json:"info"`
+	Servers      []openAPIServer `json:"servers"`
+	Paths        map[string]any  `json:"paths"`
+	Components   map[string]any  `json:"components"`
+	Tags         []openAPITag    `json:"tags"`
+	ExternalDocs map[string]any  `json:"externalDocs"`
+}
+
+type openAPITag struct {
+	Name string `json:"name"`
+}
+
+type openAPIInfo struct {
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	License     map[string]any `json:"license"`
+	Version     string         `json:"version"`
+}
+
+type openAPIOperation struct {
+	Tags        []string       `json:"tags"`
+	Summary     string         `json:"summary"`
+	Description string         `json:"description"`
+	Parameters  []any          `json:"parameters,omitempty"`
+	Responses   map[string]any `json:"responses"`
+}
+
+type openAPIServer struct {
+	URL         string         `json:"url"`
+	Description string         `json:"description"`
+	Variables   map[string]any `json:"variables"`
+}
 
 var updateContract = flag.Bool("update", false, "rewrite the generated API contract files")
 
@@ -62,6 +119,8 @@ type jsonField struct {
 var contractEnums = map[reflect.Type]map[string][]string{
 	reflect.TypeFor[holdResponse]():        {"reason": holdReasonValues()},
 	reflect.TypeFor[usageWindowResponse](): {"status": usageWindowStatusValues()},
+	reflect.TypeFor[runstats.Spend]():      {"period": spendPeriodValues()},
+	reflect.TypeFor[runstats.SpanReport](): {"period": spendPeriodValues()},
 }
 
 var contractNeverNull = map[reflect.Type][]string{
@@ -89,6 +148,16 @@ func holdReasonValues() []string {
 		values[i] = string(r)
 	}
 	return values
+}
+
+func spendPeriodValues() []string {
+	return []string{
+		string(runstats.PeriodFiveMinutes),
+		string(runstats.PeriodQuarterHour),
+		string(runstats.PeriodHour),
+		string(runstats.PeriodDay),
+		string(runstats.PeriodMonth),
+	}
 }
 
 func usageWindowStatusValues() []string {
@@ -199,7 +268,7 @@ func (c *contract) convert(t reflect.Type) (contractNode, error) {
 			return contractNode{}, fmt.Errorf("%v is an unnamed struct type", t)
 		}
 		name, err := c.addStruct(t)
-		return contractNode{name, map[string]any{"$ref": "#/$defs/" + name}}, err
+		return contractNode{name, map[string]any{"$ref": "#/components/schemas/" + name}}, err
 	}
 	return contractNode{}, fmt.Errorf("%v has unsupported kind %v", t, t.Kind())
 }
@@ -356,8 +425,76 @@ func (c *contract) typescript() []byte {
 	return []byte(b.String())
 }
 
-func (c *contract) jsonSchema() ([]byte, error) {
-	defs := map[string]any{}
+func contractRoots(routes []apiRoute) []reflect.Type {
+	var roots []reflect.Type
+	for _, route := range routes {
+		for _, response := range route.responses {
+			if response.body != nil {
+				roots = append(roots, response.body)
+			}
+			for _, event := range response.events {
+				if event.data != nil {
+					roots = append(roots, event.data)
+				}
+			}
+		}
+	}
+	return roots
+}
+
+func registeredRoutes(path string) ([]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	var patterns []string
+	var failure error
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || failure != nil {
+			return failure == nil
+		}
+		fn, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (fn.Sel.Name != "Handle" && fn.Sel.Name != "HandleFunc") || len(call.Args) == 0 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			failure = fmt.Errorf("%s: %s pattern is not a string literal", fset.Position(call.Args[0].Pos()), fn.Sel.Name)
+			return false
+		}
+		pattern, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			failure = fmt.Errorf("%s: unquote %s: %w", fset.Position(lit.Pos()), lit.Value, err)
+			return false
+		}
+		_, route, found := strings.Cut(pattern, " ")
+		if !found {
+			route = pattern
+		}
+		if strings.HasPrefix(route, "/api/v1/") || route == "/livez" || route == "/readyz" {
+			patterns = append(patterns, pattern)
+		}
+		return true
+	})
+	return patterns, failure
+}
+
+func absentFrom(names, others []string) []string {
+	var absent []string
+	for _, name := range names {
+		if !slices.Contains(others, name) {
+			absent = append(absent, name)
+		}
+	}
+	return absent
+}
+
+var pathParamPattern = regexp.MustCompile(`\{([^}]+)\}`)
+
+func (c *contract) schemas() map[string]any {
+	schemas := map[string]any{}
 	for name, members := range c.members {
 		properties, required := map[string]any{}, []string{}
 		for _, m := range members {
@@ -366,12 +503,123 @@ func (c *contract) jsonSchema() ([]byte, error) {
 				required = append(required, m.name)
 			}
 		}
-		defs[name] = map[string]any{"type": "object", "properties": properties, "required": required}
+		schemas[name] = map[string]any{"type": "object", "properties": properties, "required": required}
 	}
-	out, err := json.MarshalIndent(map[string]any{
-		"$schema": "https://json-schema.org/draft/2020-12/schema",
-		"title":   "Sortie JSON API responses",
-		"$defs":   defs,
+	return schemas
+}
+
+func operationParameters(route apiRoute, path string) ([]any, error) {
+	var parameters []any
+	for _, match := range pathParamPattern.FindAllStringSubmatch(path, -1) {
+		parameters = append(parameters, map[string]any{
+			"name": match[1], "in": "path", "required": true, "schema": map[string]any{"type": "string"},
+		})
+	}
+	for _, location := range []struct {
+		in    string
+		names []string
+	}{{"query", route.query}, {"header", route.headers}} {
+		for _, name := range location.names {
+			param, ok := route.params[name]
+			if !ok {
+				return nil, fmt.Errorf("%s has %s parameter %q without a params entry", route.pattern, location.in, name)
+			}
+			parameter := map[string]any{"name": name, "in": location.in, "schema": param.schema}
+			if param.required {
+				parameter["required"] = true
+			}
+			if param.description != "" {
+				parameter["description"] = param.description
+			}
+			parameters = append(parameters, parameter)
+		}
+	}
+	return parameters, nil
+}
+
+func (c *contract) content(response apiResponse) (map[string]any, error) {
+	if response.events == nil {
+		node, err := c.convert(response.body)
+		return map[string]any{"application/json": map[string]any{"schema": node.schema}}, err
+	}
+	alternatives := make([]any, len(response.events))
+	for i, event := range response.events {
+		data := map[string]any{"type": "object"}
+		if event.data != nil {
+			node, err := c.convert(event.data)
+			if err != nil {
+				return nil, err
+			}
+			data = node.schema
+		}
+		alternatives[i] = map[string]any{"properties": map[string]any{
+			"event": map[string]any{"const": event.name},
+			"data":  map[string]any{"contentMediaType": "application/json", "contentSchema": data},
+		}}
+	}
+	text := map[string]any{"type": "string"}
+	return map[string]any{"text/event-stream": map[string]any{"itemSchema": map[string]any{
+		"type":       "object",
+		"required":   []string{"id", "event", "data"},
+		"properties": map[string]any{"id": text, "event": text, "data": text},
+		"oneOf":      alternatives,
+	}}}, nil
+}
+
+func (c *contract) openAPI(routes []apiRoute) ([]byte, error) {
+	paths := map[string]any{}
+	for _, route := range routes {
+		path := strings.TrimPrefix(route.pattern, route.method+" ")
+		if route.summary == "" || route.description == "" || !slices.Contains(apiTags, route.tag) {
+			return nil, fmt.Errorf("%s: a route needs a summary, a description and a tag from apiTags", route.pattern)
+		}
+		parameters, err := operationParameters(route, path)
+		if err != nil {
+			return nil, err
+		}
+		responses := map[string]any{}
+		for _, response := range route.responses {
+			content, err := c.content(response)
+			if err != nil {
+				return nil, fmt.Errorf("%s response %d: %w", route.pattern, response.status, err)
+			}
+			responses[strconv.Itoa(response.status)] = map[string]any{"description": http.StatusText(response.status), "content": content}
+		}
+		operation := openAPIOperation{Tags: []string{route.tag}, Summary: route.summary, Description: route.description, Parameters: parameters, Responses: responses}
+		item, ok := paths[path].(map[string]any)
+		if !ok {
+			item = map[string]any{}
+			paths[path] = item
+		}
+		item[strings.ToLower(route.method)] = operation
+	}
+	tags := make([]openAPITag, len(apiTags))
+	for i, name := range apiTags {
+		tags[i] = openAPITag{Name: name}
+	}
+	out, err := json.MarshalIndent(openAPIDocument{
+		OpenAPI: "3.2.1",
+		Info: openAPIInfo{
+			Title:       "Sortie JSON API",
+			Description: apiDescription,
+			License:     map[string]any{"name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
+			Version:     "v1",
+		},
+		Servers: []openAPIServer{{
+			URL:         "http://{host}:{port}",
+			Description: "Your Sortie instance",
+			Variables: map[string]any{
+				"host": map[string]any{"default": defaultAPIHost, "description": "Address the instance listens on"},
+				"port": map[string]any{"default": defaultAPIPort, "description": "Port the instance listens on"},
+			},
+		}},
+		Paths:      paths,
+		Components: map[string]any{"schemas": c.schemas()},
+		Tags:       tags,
+		ExternalDocs: map[string]any{
+			"description": "HTTP API reference",
+			"url":         "https://docs.sortie-ai.com/reference/http-api/",
+		},
 	}, "", "  ")
 	return append(out, '\n'), err
 }
@@ -382,23 +630,29 @@ func TestAPIContract(t *testing.T) {
 		t.Fatalf("sorted HoldReasons() = %v, want the SkipReason constants less SkipNone and SkipIneligible, each once: %v", served, declared)
 	}
 
-	c, err := newContract(
-		reflect.TypeFor[stateResponse](), reflect.TypeFor[issueDetailResponse](), reflect.TypeFor[runsResponse](), reflect.TypeFor[issueGroupsResponse](),
-		reflect.TypeFor[runstats.Report](), reflect.TypeFor[refreshResponse](), reflect.TypeFor[retryNowResponse](), reflect.TypeFor[checkNowResponse](),
-		reflect.TypeFor[acknowledgeResponse](), reflect.TypeFor[errorResponse](),
-		reflect.TypeFor[healthResponse](), reflect.TypeFor[readyResponse](), reflect.TypeFor[runEventsResponse](),
-		agentEventType, reflect.TypeFor[runEndedFrame](), reflect.TypeFor[runResetFrame](),
-		reflect.TypeFor[pricesResponse](),
-	)
+	registered, err := registeredRoutes("server.go")
+	if err != nil {
+		t.Fatalf("registeredRoutes: %v", err)
+	}
+	described := make([]string, len(apiRoutes))
+	for i, route := range apiRoutes {
+		described[i] = route.pattern
+	}
+	missing, extra := absentFrom(registered, described), absentFrom(described, registered)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Fatalf("server.go and apiRoutes disagree: registered without an apiRoutes entry: %q; apiRoutes entries without a registration: %q", missing, extra)
+	}
+
+	c, err := newContract(contractRoots(apiRoutes)...)
 	if err != nil {
 		t.Fatalf("newContract: %v", err)
 	}
-	schema, err := c.jsonSchema()
+	document, err := c.openAPI(apiRoutes)
 	if err != nil {
-		t.Fatalf("jsonSchema: %v", err)
+		t.Fatalf("openAPI: %v", err)
 	}
 
-	files := map[string][]byte{"../../web/src/api/types.gen.ts": c.typescript(), "../../docs/api.schema.json": schema}
+	files := map[string][]byte{"../../web/src/api/types.gen.ts": c.typescript(), "../../docs/openapi.json": document}
 	for path, want := range files {
 		if *updateContract {
 			if err := os.WriteFile(path, want, 0o644); err != nil {

@@ -20,10 +20,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/server/ui"
 )
 
-// SnapshotFunc returns a point-in-time capture of the orchestrator's
-// runtime state. The server calls this on each API request; it must
-// be safe to call from any goroutine.
-type SnapshotFunc func() (orchestrator.RuntimeSnapshotResult, error)
+// SnapshotFunc returns the orchestrator's last published runtime state, with
+// the time-derived fields computed at the call. It never blocks and is safe to
+// call from any goroutine. The result shares slices and maps with other reads,
+// so callers must not modify it.
+type SnapshotFunc func() orchestrator.RuntimeSnapshotResult
 
 // RefreshFunc signals the orchestrator to perform an immediate
 // poll+reconciliation cycle. Returns true if the signal was accepted,
@@ -351,7 +352,8 @@ type DBPingFunc func(ctx context.Context) error
 // Params holds construction-time dependencies for [New].
 type Params struct {
 	// SnapshotFn returns the current runtime state. Called on each
-	// GET /api/v1/state and GET /api/v1/{identifier}.
+	// GET /api/v1/state, GET /api/v1/runs/issues, and
+	// GET /api/v1/{identifier}.
 	SnapshotFn SnapshotFunc
 
 	// WorkflowShapeFn returns the effective workflow shape. Called on
@@ -431,6 +433,10 @@ type Params struct {
 	// GET /api/v1/stats; nil answers 503.
 	Stats StatsFunc
 
+	// StatsSpan computes the report of one stretch of time. Called on each
+	// GET /api/v1/stats/span; nil answers 503.
+	StatsSpan SpanFunc
+
 	// ModelUse lists the agent kind and model pairs with a recorded run.
 	// Called on each GET /api/v1/prices; nil answers 503.
 	ModelUse ModelUseFunc
@@ -484,6 +490,7 @@ type Server struct {
 	runEventsFn      RunEventsFunc
 	runEventsAfterFn RunEventsAfterFunc
 	stats            StatsFunc
+	statsSpan        SpanFunc
 
 	modelUse           ModelUseFunc
 	configuredModelsFn func() []orchestrator.ConfiguredModel
@@ -537,6 +544,7 @@ func New(params Params) *Server {
 		runEventsFn:      params.RunEventsFn,
 		runEventsAfterFn: params.RunEventsAfterFn,
 		stats:            params.Stats,
+		statsSpan:        params.StatsSpan,
 
 		modelUse:           params.ModelUse,
 		configuredModelsFn: params.ConfiguredModelsFn,
@@ -571,6 +579,7 @@ func New(params Params) *Server {
 	mux.HandleFunc("/api/v1/runs/issues", s.routeIssueGroups)
 	mux.HandleFunc("/api/v1/runs/{dispatch_id}/events", s.routeRunEvents)
 	mux.HandleFunc("/api/v1/stats", s.routeStats)
+	mux.HandleFunc("/api/v1/stats/span", s.routeStatsSpan)
 	mux.HandleFunc("/api/v1/prices", s.routePrices)
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/retries/{identifier}/run", s.routeRetryNow)

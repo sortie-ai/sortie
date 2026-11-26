@@ -119,16 +119,17 @@ export function pluralVerb(
   return { count: fmtCount(n), noun, verb, subject: plural(n, nouns[0], nouns[1]) };
 }
 
-/** Two decimals below $100, whole dollars with thousands separators from $100; a cost above zero and below one cent reads "under $0.01", so only a cost of zero reads "$0.00". */
+const DOLLARS = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Two decimals with thousands separators at every size; a cost above zero and below one cent reads "under $0.01", so only zero reads "$0.00". */
 export function fmtMoney(usd: number): string {
   if (usd > 0 && usd < 0.01) {
     return "under $0.01";
   }
-  const cents = Math.round(usd * 100);
-  if (cents >= 10_000) {
-    return `$${fmtCount(Math.round(usd))}`;
-  }
-  return `$${(cents / 100).toFixed(2)}`;
+  return `$${DOLLARS.format(Math.round(usd * 100) / 100)}`;
 }
 
 const EXACT = new Intl.NumberFormat("en-US", {
@@ -149,13 +150,10 @@ export function fmtMoneyExact(usd: number): string {
   return `$${fmtCount(Number(whole))}.${fraction.padEnd(2, "0")}`;
 }
 
-/** Cut, never rounded up, so the text never exceeds the spend it bounds: below one cent after the first non-zero digit ("$0.004"), below $100 after two fraction digits (4.205 reads "$4.20"), from $100 before the decimal point (149.6 reads "$149"). */
+/** Cut, never rounded up, so the text never exceeds the spend it bounds: after the first non-zero digit below one cent ("$0.004"), else after two decimals (4.205 reads "$4.20"). */
 export function fmtMoneyCut(usd: number): string {
   const { value, whole, fraction } = exactDigits(usd);
   const grouped = fmtCount(Number(whole));
-  if (value >= 100) {
-    return `$${grouped}`;
-  }
   if (value > 0 && value < 0.01) {
     return `$${grouped}.${/^0*[1-9]/.exec(fraction)?.[0] ?? fraction}`;
   }
@@ -187,6 +185,34 @@ export function fmtPercent(ratio: number): string {
   const percent = Math.round(ratio * 100);
   const isPartial = ratio > 0 && ratio < 1;
   return `${isPartial ? Math.min(99, Math.max(1, percent)) : percent}%`;
+}
+
+/** Rounds a half away from zero after dropping float noise, so 0.94 - 0.935 counts as the half it is and a decline keeps its sign. */
+function roundHalfAway(x: number): number {
+  const clean = Number(x.toPrecision(12));
+  return Math.sign(clean) * Math.round(Math.abs(clean));
+}
+
+/** Words how far a figure moved against the same figure of an earlier range: a signed whole percent below double and a multiple from double up. Zero is unsigned, and an earlier figure of zero or less states no change. */
+export function fmtChange(now: number | null, before: number | null): string | null {
+  if (now === null || before === null || before <= 0) {
+    return null;
+  }
+  const ratio = now / before;
+  if (ratio >= 2) {
+    return `${ratio.toFixed(1)}x`;
+  }
+  const percent = roundHalfAway(((now - before) / before) * 100);
+  return `${percent > 0 ? "+" : ""}${percent}%`;
+}
+
+/** Words how far a rate moved in whole percentage points of the unrounded rates, so two rates that both read "99%" can still differ by a point. Zero is unsigned. */
+export function fmtPoints(now: number | null, before: number | null): string | null {
+  if (now === null || before === null) {
+    return null;
+  }
+  const points = roundHalfAway((now - before) * 100);
+  return `${points > 0 ? "+" : ""}${points} pts`;
 }
 
 /** Writes a quantity with en-US digit grouping and at most two fraction digits, trailing zeros dropped. */
@@ -265,6 +291,7 @@ export function fmtStamp(at: string): string {
 const UTC_WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
 const UTC_MONTH = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" });
 const UTC_MONTH_SHORT = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+const UTC_WEEKDAY_SHORT = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" });
 
 function utcClock(date: Date): string {
   return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
@@ -278,6 +305,16 @@ export function fmtUtcStamp(at: string): string {
   }
   const date = new Date(instant);
   return `${UTC_WEEKDAY.format(date)} ${date.getUTCDate()} ${UTC_MONTH.format(date)}, ${utcClock(date)} UTC`;
+}
+
+/** Writes the UTC date of an instant as "Wed 28 Oct", the form `fmtStamp` gives a day other than today; an unparsable instant reads as `fmtStamp` reads it. */
+export function fmtUtcDay(at: string): string {
+  const instant = parseInstant(at);
+  if (instant === null) {
+    return UNKNOWN;
+  }
+  const date = new Date(instant);
+  return `${UTC_WEEKDAY_SHORT.format(date)} ${date.getUTCDate()} ${UTC_MONTH_SHORT.format(date)}`;
 }
 
 /** Writes the 24-hour `HH:MM` of an instant in UTC; an unparsable instant reads as `fmtStamp` reads it. */

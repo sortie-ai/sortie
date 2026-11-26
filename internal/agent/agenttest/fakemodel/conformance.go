@@ -274,6 +274,18 @@ const (
 	// moment after the runtime's own process.
 	holdEndBound = 5 * time.Second
 
+	// reportReserve covers collecting and reporting what a scenario observed
+	// after its last wait.
+	reportReserve = 5 * time.Second
+
+	// teardownReserve is what a scenario still needs when a working wait ends:
+	// a session stop, the hold-end check and the report.
+	teardownReserve = stopBound + holdEndBound + reportReserve
+
+	// interruptionReserve is what an interruption scenario still needs when a
+	// working wait ends: a kill, two interrupt waits, then its teardown.
+	interruptionReserve = waittest.HangGuard + 2*interruptBound + teardownReserve
+
 	livenessPoll = 25 * time.Millisecond
 )
 
@@ -747,7 +759,7 @@ func driveTurn(t *testing.T, b Binding, d drive) (run Run, timedOut bool) {
 	p := prepareSession(t, b, d)
 	adapter, events := p.adapter, p.events
 
-	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
+	ctx, cancel := workContext(t, teardownReserve)
 	defer cancel()
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: d.workspace,
@@ -861,7 +873,7 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 	p := prepareSession(t, b, d)
 	preexisting := agenttest.LiveDescendants(os.Getpid())
 
-	startCtx, startCancel := context.WithTimeout(context.Background(), turnBound)
+	startCtx, startCancel := workContext(t, interruptionReserve)
 	defer startCancel()
 	session, err := p.adapter.StartSession(startCtx, domain.StartSessionParams{
 		WorkspacePath: workspace,
@@ -874,7 +886,7 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 		t.Fatalf("StartSession() error = %v%s", err, exchangeLines(server.Exchanges()))
 	}
 
-	turnCtx, cancelTurn := context.WithTimeout(context.Background(), turnBound)
+	turnCtx, cancelTurn := workContext(t, interruptionReserve)
 	defer cancelTurn()
 	outcome := make(chan turnOutcome, 1)
 	go func() {
@@ -896,7 +908,7 @@ func runInterruption(t *testing.T, b Binding, scenario Scenario, remote *remoteL
 		turn  turnOutcome
 		ended bool
 	)
-	holdCtx, holdCancel := context.WithTimeout(context.Background(), turnBound)
+	holdCtx, holdCancel := workContext(t, interruptionReserve)
 	defer holdCancel()
 	select {
 	case <-server.holding():
@@ -1179,7 +1191,7 @@ func (c *continuation) drive(t *testing.T, role sessionRole, resumeID string, tu
 
 	// A persistent runtime exits when this context ends, so the deferred stop
 	// below must run before the cancel.
-	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
+	ctx, cancel := workContext(t, teardownReserve)
 	defer cancel()
 	sessionStart := len(c.server.Exchanges())
 	session, err := c.adapter.StartSession(ctx, domain.StartSessionParams{
@@ -1373,7 +1385,7 @@ func (c verificationSessions) drive(t *testing.T, credentialVerification bool) {
 
 	// A persistent runtime exits when this context ends, so the deferred stop
 	// below must run before the cancel.
-	ctx, cancel := context.WithTimeout(context.Background(), turnBound)
+	ctx, cancel := workContext(t, teardownReserve)
 	defer cancel()
 	session, err := c.adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:          c.workspace,
@@ -1462,6 +1474,18 @@ func carriesText(body []byte, text string) bool {
 	return bytes.Contains(body, []byte(text)) || (err == nil && bytes.Contains(body, escaped[1:len(escaped)-1]))
 }
 
+// workContext bounds a wait that ends when the runtime finishes its work by
+// turnBound, and by the test's deadline less reserve, the time the scenario's
+// later waits and report take.
+func workContext(t *testing.T, reserve time.Duration) (context.Context, context.CancelFunc) {
+	t.Helper()
+	within := waittest.Within(t, turnBound, reserve)
+	if within < turnBound {
+		t.Logf("the test binary's deadline shortens this wait from %v to %v", turnBound, within.Round(time.Millisecond))
+	}
+	return context.WithTimeout(t.Context(), within)
+}
+
 // awaitGone's deadline is shared with awaitHolds, which may have spent all
 // of it; the check still runs once then.
 func awaitGone(pids []int, remaining func(pid int) string, launches []func() (bool, error), deadline time.Time) {
@@ -1479,6 +1503,8 @@ func awaitGone(pids []int, remaining func(pid int) string, launches []func() (bo
 }
 
 func awaitRemoteGone(ctx context.Context, lab agenttest.SSHLab, deadline time.Time) []string {
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	var left []string
 	_ = waittest.UntilWithin(max(time.Until(deadline), time.Nanosecond), livenessPoll, func() error {
 		procs, err := lab.Processes(ctx)

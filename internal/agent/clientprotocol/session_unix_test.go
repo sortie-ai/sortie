@@ -1234,11 +1234,13 @@ func TestStartSessionLaunchAddition(t *testing.T) {
 		name         string
 		remote       bool
 		verification bool
+		mergeOnly    bool
 		wantBase     string
 	}{
 		{name: "a local working launch merges into the operator's value", wantBase: "operator"},
 		{name: "a local verification launch merges into the claimed switch's value", verification: true, wantBase: "marker"},
 		{name: "a remote launch carries the merged value in its SSH options", remote: true, wantBase: "operator"},
+		{name: "a remote merge-only verification launch carries the operator's document on the preamble only", remote: true, verification: true, mergeOnly: true},
 	}
 
 	for _, tt := range tests {
@@ -1246,12 +1248,21 @@ func TestStartSessionLaunchAddition(t *testing.T) {
 			if !tt.verification {
 				t.Setenv(additionVariable, "operator")
 			}
+			variable, executable, adapter := additionVariable, probeExecutable, additionAdapter()
+			if tt.mergeOnly {
+				executable, variable = mergeOnlyVerificationRuntime(t)
+				adapter = &ClientProtocolAdapter{}
+			}
 			dir := t.TempDir()
 			capturePath := filepath.Join(dir, "captured.jsonl")
-			agent := agenttest.FakeRuntime(t, dir, probeExecutable, scenarioProtocolAgent, protocolAgentParams{
-				Handshake: true, EnvCaptureNames: []string{additionVariable}, EnvCapturePath: capturePath,
+			agent := agenttest.FakeRuntime(t, dir, executable, scenarioProtocolAgent, protocolAgentParams{
+				Handshake: true, EnvCaptureNames: []string{variable}, EnvCapturePath: capturePath,
 			})
 			params := domain.StartSessionParams{WorkspacePath: t.TempDir(), AgentConfig: domain.AgentConfig{Command: agent}, CredentialVerification: tt.verification}
+			if tt.mergeOnly {
+				params.AgentConfig = domain.AgentConfig{CommandArgv: []string{agent, "acp"}}
+				params.Settings = map[string]any{envKey: map[string]any{variable: `{"model":"m"}`}}
+			}
 			if tt.remote {
 				sshDir := t.TempDir()
 				agenttest.FakeRuntime(t, sshDir, "ssh", scenarioSSHStandIn, sshStandInParams{PATH: sshStandInEnvPath(t, true)})
@@ -1259,7 +1270,7 @@ func TestStartSessionLaunchAddition(t *testing.T) {
 				params.SSHHost, params.SSHEnvNames = "user@stand-in-host", []string{additionVariable}
 			}
 
-			session, err := startTestSession(context.Background(), additionAdapter(), params)
+			session, err := startTestSession(context.Background(), adapter, params)
 			if err != nil {
 				t.Fatalf("startSession() error = %v, want nil", err)
 			}
@@ -1271,7 +1282,11 @@ func TestStartSessionLaunchAddition(t *testing.T) {
 			if len(captures) != 1 {
 				t.Fatalf("runtime starts = %d, want 1", len(captures))
 			}
-			got := captures[0][additionVariable]
+			got := captures[0][variable]
+			if tt.mergeOnly {
+				assertRemoteMergedDocument(t, variable, got, session.Internal.(*sessionState).launch.Args)
+				return
+			}
 			if base, merged := strings.CutSuffix(got, "+off"); !merged || filepath.Base(base) != tt.wantBase {
 				t.Errorf("runtime observed %s = %q, want %q merged with the addition", additionVariable, got, tt.wantBase)
 			}
@@ -1285,6 +1300,25 @@ func TestStartSessionLaunchAddition(t *testing.T) {
 				t.Errorf("launch environment entries for %s = %q, want %q", additionVariable, entries, want)
 			}
 		})
+	}
+}
+
+func assertRemoteMergedDocument(t *testing.T, variable, got string, sshArgs []string) {
+	t.Helper()
+
+	var document struct {
+		Model      string
+		Agent      struct{ Title struct{ Disable bool } }
+		Permission map[string]string
+	}
+	if err := json.Unmarshal([]byte(got), &document); err != nil {
+		t.Fatalf("runtime observed %s = %q, want a JSON document: %v", variable, got, err)
+	}
+	if document.Model != "m" || !document.Agent.Title.Disable || document.Permission["*"] != "deny" {
+		t.Errorf("runtime observed %s = %q, want model m, the title switch and the \"*\":\"deny\" rule", variable, got)
+	}
+	if slices.ContainsFunc(sshArgs, func(arg string) bool { return strings.Contains(arg, `"model"`) }) {
+		t.Errorf("ssh arguments = %q, want none carrying the document", sshArgs)
 	}
 }
 

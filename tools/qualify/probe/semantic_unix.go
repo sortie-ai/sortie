@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/waittest"
 
@@ -100,7 +102,7 @@ func launchNativeOneTurn(t *testing.T, coords Coordinates, fixture *sharedFixtur
 		seededID = newRFC4122V4(t)
 		argv = append(argv, substituteSessionID(seedArgs, seededID)...)
 	}
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.newLaunchWorkspace(t), withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.newLaunchWorkspace(t), coords.launchEnviron(fixture.env), fixture.ownership())
 	fixture.recordNativeOutput(surface, output)
 	return output, seededID, launchErr
 }
@@ -167,12 +169,50 @@ func induceSuccess(t *testing.T, coords Coordinates, fixture *sharedFixture, sur
 // yielding a turn-level error rather than an ambiguous exit code.
 const runtimeFailureModel = "sortie-qualification-refused-model"
 
+// standInFailureMessage names none of context, length, size, or tokens: a
+// message that reads as an overflow takes a runtime's compaction route
+// instead of failing the turn.
+const standInFailureMessage = "sortie qualification induced failure"
+
+// withRuntimeFailureLaunch returns coords set up to make the runtime fail a
+// turn: a profile that states failing_value launches against a local
+// stand-in upstream answering one HTTP 400, and any other profile names a
+// model no backend resolves.
+func withRuntimeFailureLaunch(t *testing.T, coords Coordinates) Coordinates {
+	t.Helper()
+	if _, ok := coords.Profile.FailingModelEnviron(""); !ok {
+		coords.Model = runtimeFailureModel
+		return coords
+	}
+	return withScriptedUpstream(t, coords, []fakemodel.Response{{Status: http.StatusBadRequest, Text: standInFailureMessage}})
+}
+
+// withScriptedUpstream returns coords launching against a local stand-in
+// upstream that answers script, through the profile's failing_value. The
+// profile must state one.
+func withScriptedUpstream(t *testing.T, coords Coordinates, script []fakemodel.Response) Coordinates {
+	t.Helper()
+	upstream := fakemodel.Start(t, script)
+	coords.Model = ""
+	coords.modelEnviron, _ = coords.Profile.FailingModelEnviron(upstream.URL())
+	return coords
+}
+
+// withAskingLaunch returns coords carrying the model_env entry an asking
+// launch states.
+func withAskingLaunch(coords Coordinates) Coordinates {
+	if entry, ok := coords.Profile.AskingModelEnviron(coords.Model); ok {
+		coords.modelEnviron = entry
+	}
+	return coords
+}
+
 // induceRuntimeFailure induces the runtime_failure case, graded from
 // domain.ErrResponseError on the protocol surface and from the
 // recognizer's error member on a native one.
 func induceRuntimeFailure(t *testing.T, coords Coordinates, fixture *sharedFixture, surface evidence.Surface) gradedObservation {
 	t.Helper()
-	coords.Model = runtimeFailureModel
+	coords = withRuntimeFailureLaunch(t, coords)
 	prompt := coords.Profile.ProbePrompts[promptKeySuccess]
 	if surface == evidence.SurfaceProtocol {
 		sessionID, err := launchProtocolOneTurn(t, coords, fixture, prompt)
@@ -445,21 +485,61 @@ func induceNativeAsyncSignal(t *testing.T, coords Coordinates, fixture *sharedFi
 
 // induceProtocolLimit induces limit_reached with an oversize filler
 // sized from clientProtocolMaxLineBytesMirror, graded from the
-// runtime's own token or request limit error.
+// runtime's own token or request limit error. A profile that states
+// failing_value sends its success prompt instead, to a stand-in whose first
+// reply is cut off at the output-token limit: an oversize request would
+// overflow a real model's context and fail the turn instead of completing it.
 func induceProtocolLimit(t *testing.T, coords Coordinates, fixture *sharedFixture) gradedObservation {
 	t.Helper()
 	fillerSize := clientProtocolMaxLineBytesMirror - limitReachedMargin
 	prompt := strings.Repeat("a", fillerSize) + "\n\nReply with exactly SORTIE_LIMIT_PROBE_DONE."
+	turn := "the oversize turn"
+	if _, statesStandIn := coords.Profile.FailingModelEnviron(""); statesStandIn {
+		coords = withScriptedUpstream(t, coords, []fakemodel.Response{
+			{Text: "sortie qualification partial reply", Truncated: true},
+			{Text: "sortie qualification complete reply"},
+		})
+		prompt = coords.Profile.ProbePrompts[promptKeySuccess]
+		turn = "the turn whose reply stopped at the output-token limit"
+	}
 	sessionID, err := launchProtocolOneTurn(t, coords, fixture, prompt)
 	var agentErr *domain.AgentError
 	switch {
 	case errors.As(err, &agentErr) && (agentErr.Kind == domain.ErrTurnTokenLimit || agentErr.Kind == domain.ErrTurnRequestLimit):
-		return transportGraded(evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the oversize turn ended at the runtime's own token or request limit", SessionID: sessionID, EvidencePath: evidence.SemanticEvidencePath(evidence.SurfaceProtocol)})
+		return transportGraded(evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: turn + " ended at the runtime's own token or request limit", SessionID: sessionID, EvidencePath: evidence.SemanticEvidencePath(evidence.SurfaceProtocol)})
 	case err == nil:
-		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "the oversize turn completed normally instead of reaching a limit", SessionID: sessionID})
+		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: turn + " completed normally instead of reaching a limit", SessionID: sessionID})
 	default:
-		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the oversize turn failed for a reason other than reaching a limit", SessionID: sessionID})
+		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: turn + " failed for a reason other than reaching a limit", SessionID: sessionID})
 	}
+}
+
+// truncatedReplyCount is the number of cut-off replies a runtime that
+// continues a truncated reply twice before it gives up requests: the reply
+// and its two continuations. A runtime that gives up sooner leaves script
+// entries unserved, which the stand-in reports.
+const truncatedReplyCount = 3
+
+// induceNativeLimit induces limit_reached on a native surface against a
+// stand-in upstream that cuts every reply off at the output-token limit,
+// graded from the recognizer's limit member.
+func induceNativeLimit(t *testing.T, coords Coordinates, fixture *sharedFixture, surface evidence.Surface) gradedObservation {
+	t.Helper()
+	script := make([]fakemodel.Response, truncatedReplyCount)
+	for i := range script {
+		script[i] = fakemodel.Response{Text: "sortie qualification partial reply", Truncated: true}
+	}
+	coords = withScriptedUpstream(t, coords, script)
+	prompt := coords.Profile.ProbePrompts[promptKeySuccess]
+	output, seededID, launchErr := launchNativeOneTurn(t, coords, fixture, surface, prompt)
+	argv, _ := coords.Profile.EntryArgs(surface, coords.Model, "", prompt)
+	launch := newNativeLaunchRecord(argv, coords, string(evidence.InputDispositionLimitReached), seededID, launchErr)
+	streams := boundStreamCapture(output)
+	obs, found := eval.Recognize(coords.Profile, surface, evidence.CaseLimitReached, launch, streams)
+	if !found {
+		recordUnrecognizedTerminal(coords, fixture, surface, output)
+	}
+	return recognizerGraded(obs, launch, streams)
 }
 
 // induceToolServer runs on its own permissive-posture launch, separate
@@ -527,6 +607,7 @@ func inducePermissionPolicyHumanInput(t *testing.T, coords Coordinates, fixture 
 		g := transportGraded(obs)
 		return g, g, g
 	}
+	coords = withAskingLaunch(coords)
 
 	workspace := fixture.newLaunchWorkspace(t)
 	adapter, session, err := startInductionSession(t, coords, argv, workspace, mcpConfigPath)
@@ -555,6 +636,7 @@ func inducePermissionPolicyHumanInput(t *testing.T, coords Coordinates, fixture 
 		toolRecorded:        recorded,
 		turnFailed:          runErr != nil,
 		endedRequiringInput: errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrTurnInputRequired,
+		endedFailed:         errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrTurnFailed,
 		sessionID:           session.ID,
 	}
 	permissionObs, policyObs, humanInputObs := gradePermissionLaunch(signals)
@@ -577,7 +659,11 @@ type permissionLaunchSignals struct {
 	// endedRequiringInput reports that the turn's error was the
 	// human-input-required outcome.
 	endedRequiringInput bool
-	sessionID           string
+	// endedFailed reports that the turn's error was the failed-turn
+	// outcome. It is not turnFailed: a failure of another kind, such as a
+	// usage limit or a lost transport, must not record a verdict.
+	endedFailed bool
+	sessionID   string
 }
 
 func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, humanInput evidence.Observation) {
@@ -586,9 +672,9 @@ func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, hum
 		permission = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the request offered no refusing option and the attempt ended requiring human input", SessionID: sig.sessionID}
 	case sig.noOptionNotice:
 		permission = evidence.Observation{Grade: evidence.GradeGap, Outcome: evidence.OutcomePass, Detail: "the request offered no refusing option and the attempt did not end", SessionID: sig.sessionID}
-	case sig.continuableNotice && sig.endedRequiringInput:
+	case sig.continuableNotice && (sig.endedRequiringInput || sig.endedFailed):
 		permission = evidence.Observation{Grade: evidence.GradeGap, Outcome: evidence.OutcomePass, Detail: "a continuable refusal was transmitted and the attempt ended anyway", SessionID: sig.sessionID}
-	case sig.continuableNotice:
+	case sig.continuableNotice && !sig.turnFailed:
 		permission = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "a continuable refusal was transmitted and the turn stayed open", SessionID: sig.sessionID}
 	case sig.turnFailed:
 		permission = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the turn did not complete", SessionID: sig.sessionID}
@@ -614,6 +700,8 @@ func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, hum
 		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "a continuable refusal was transmitted and the attempt still ended requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	case sig.endedRequiringInput:
 		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the turn ended requiring human input with no permission request to attribute it to", SessionID: sig.sessionID, EvidencePath: humanInputPath}
+	case sig.continuableNotice && !sig.noOptionNotice && sig.endedFailed:
+		humanInput = evidence.Observation{Grade: evidence.GradeNotApplicable, Outcome: evidence.OutcomeNotApplicable, Detail: "the request offered a refusing option and was answered inside the protocol, and the turn then ended without a human-input outcome", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	case sig.turnFailed:
 		humanInput = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the turn did not complete, so no human-input case was induced", SessionID: sig.sessionID}
 	case sig.noOptionNotice:
@@ -635,8 +723,9 @@ func induceHumanInputNative(t *testing.T, coords Coordinates, fixture *sharedFix
 	if !ok {
 		return transportGraded(evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "the profile states no asking posture for this surface"})
 	}
+	coords = withAskingLaunch(coords)
 	workspace := fixture.newLaunchWorkspace(t)
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, workspace, withModelEnviron(fixture.env, coords.Profile, coords.Model), fixture.ownership())
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, workspace, coords.launchEnviron(fixture.env), fixture.ownership())
 	fixture.recordNativeOutput(surface, output)
 	marker := probeStarted(workspace)
 	launch := newNativeLaunchRecord(argv, coords, string(evidence.InputRetryHumanInput), "", launchErr)

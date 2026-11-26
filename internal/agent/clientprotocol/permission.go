@@ -1,5 +1,10 @@
 package clientprotocol
 
+import (
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/typeutil"
+)
+
 // outcomeSelected and outcomeCancelled are the two literal values the
 // pinned schema declares for RequestPermissionOutcome's discriminator.
 const (
@@ -24,4 +29,57 @@ func selectRefusingOption(options []permissionOption) (optionID string, found bo
 		}
 	}
 	return "", false
+}
+
+const permissionsKey = "permissions"
+
+const (
+	permissionsDenyAll    = "deny-all"
+	permissionsApproveAll = "approve-all"
+)
+
+// permissionsSetting reads the operator's declared answer to permission
+// requests. An absent or null key refuses, as the kind always has.
+func permissionsSetting(settings map[string]any) (agentcore.PermissionDeclaration, *settingFault) {
+	raw, present := settings[permissionsKey]
+	if !present || raw == nil {
+		return agentcore.DeclaredRefusal, nil
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return agentcore.DeclaredRefusal, newTypeFault("agent-client-protocol.permissions.wrong_type",
+			&typeutil.TypeFault{Key: permissionsKey, Want: "string", Got: typeutil.DescribeYAMLType(raw)})
+	}
+
+	switch value {
+	case permissionsDenyAll:
+		return agentcore.DeclaredRefusal, nil
+	case permissionsApproveAll:
+		return agentcore.DeclaredApproval, nil
+	default:
+		return agentcore.DeclaredRefusal, &settingFault{
+			check:   "agent-client-protocol.permissions.invalid_value",
+			message: permissionsKey + `: accepted values are "` + permissionsDenyAll + `" and "` + permissionsApproveAll + `"`,
+		}
+	}
+}
+
+// selectApprovingOption returns the offer's allow_once option when it holds
+// exactly one, chosen by kind alone and never by identifier, name or
+// position. It never returns allow_always: the runtime keeps that grant in
+// its own store, where it outlives the declared posture. Several allow_once
+// options are a choice among answers, not consent to one call, so they are
+// not found either.
+func selectApprovingOption(options []permissionOption) (optionID string, found bool) {
+	for _, opt := range options {
+		if opt.Kind != permissionOptionKindAllowOnce {
+			continue
+		}
+		if found {
+			return "", false
+		}
+		optionID, found = string(opt.OptionID), true
+	}
+	return optionID, found
 }

@@ -284,6 +284,12 @@ func withModelEnviron(env []string, p profile.RuntimeProfile, model string) []st
 	if !ok {
 		return env
 	}
+	return withEnvironEntry(env, entry)
+}
+
+// withEnvironEntry returns env with entry in place of any variable of the
+// same name.
+func withEnvironEntry(env []string, entry string) []string {
 	name, _, _ := strings.Cut(entry, "=")
 	carried := slices.DeleteFunc(slices.Clone(env), func(variable string) bool {
 		return strings.HasPrefix(variable, name+"=")
@@ -291,11 +297,23 @@ func withModelEnviron(env []string, p profile.RuntimeProfile, model string) []st
 	return append(carried, entry)
 }
 
+// launchEnviron returns env with the entry this launch carries: the override
+// when coords states one, else the profile's model_env entry for coords.Model.
+func (c Coordinates) launchEnviron(env []string) []string {
+	if c.modelEnviron != "" {
+		return withEnvironEntry(env, c.modelEnviron)
+	}
+	return withModelEnviron(env, c.Profile, c.Model)
+}
+
 // modelEnvironPrefix returns the words that put the model_env entry in front
 // of a command string, which the adapter splits on whitespace without a
 // shell, and nil when the profile carries its model through model_args.
 func modelEnvironPrefix(p profile.RuntimeProfile, model string) []string {
-	entries := withModelEnviron(nil, p, model)
+	return environPrefix(withModelEnviron(nil, p, model))
+}
+
+func environPrefix(entries []string) []string {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -303,10 +321,10 @@ func modelEnvironPrefix(p profile.RuntimeProfile, model string) []string {
 }
 
 // modelCarryingCommand renders the launch of coords' runtime with argv through
-// the run's environment wrapper, carrying the model_env entry the profile
+// the run's environment wrapper, carrying the model_env entry the launch
 // states.
 func (f *sharedFixture) modelCarryingCommand(coords Coordinates, argv []string) string {
-	launch := append(modelEnvironPrefix(coords.Profile, coords.Model), coords.CommandPath)
+	launch := append(environPrefix(coords.launchEnviron(nil)), coords.CommandPath)
 	return f.controlledCommand(strings.Join(launch, " "), argv)
 }
 

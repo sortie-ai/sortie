@@ -52,6 +52,10 @@ type Coordinates struct {
 	// OutputDir is where Run writes its artifacts, defaulting to a
 	// run-scoped directory under the OS temporary root when empty.
 	OutputDir string
+
+	// modelEnviron is a NAME=value entry that replaces the profile's
+	// model_env entry for one launch; empty selects Profile.ModelEnviron.
+	modelEnviron string
 }
 
 // Result is what one Run call produced, naming every artifact the run wrote

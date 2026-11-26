@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
@@ -229,6 +230,39 @@ func BenchmarkLaunchTarget_ScanRuntimeFile_SSHLab(b *testing.B) {
 				if !errors.Is(err, bench.wantErr) {
 					b.Fatalf("ScanRuntimeFile(%q) = %v, want %v", bench.file, err, bench.wantErr)
 				}
+			}
+		})
+	}
+}
+
+func TestLaunchTarget_SSHOptions_Precedence(t *testing.T) {
+	// Not parallel: sets process environment via t.Setenv.
+	const name = "SSH_PRECEDENCE_TEST"
+	t.Setenv(name, "from-process")
+	configured := []sshutil.EnvVar{{Name: name, Value: "configured"}}
+	setting := sshutil.EnvVar{Name: name, Value: "setting"}
+
+	tests := []struct {
+		name       string
+		configured []sshutil.EnvVar
+		withheld   []string
+		settings   []sshutil.EnvVar
+		want       []sshutil.EnvVar
+	}{
+		{name: "configured beats SSHEnvNames", configured: configured, want: configured},
+		{name: "settings beat configured and SSHEnvNames", configured: configured, settings: []sshutil.EnvVar{setting}, want: []sshutil.EnvVar{setting}},
+		{name: "empty configured value is carried", configured: []sshutil.EnvVar{{Name: name}}, want: []sshutil.EnvVar{{Name: name}}},
+		{name: "withheld name is carried from neither SSHEnvNames nor configured", configured: configured, withheld: []string{name}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := LaunchTarget{SSHEnvNames: []string{name}, ConfiguredEnv: tt.configured, WithheldEnv: tt.withheld}
+
+			got := target.SSHOptions(tt.settings...)
+
+			if !slices.Equal(got.Env, tt.want) {
+				t.Errorf("SSHOptions(%v).Env = %+v, want %+v", tt.settings, got.Env, tt.want)
 			}
 		})
 	}

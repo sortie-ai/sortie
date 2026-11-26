@@ -163,3 +163,44 @@ func TestNewGitHubSCMAdapter_MalformedEndpoint(t *testing.T) {
 	}
 	assertUserinfoRedacted(t, err.Error())
 }
+
+func TestWebBase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{name: "public API", endpoint: "https://api.github.com", want: "https://github.com"},
+		{name: "enterprise API", endpoint: "https://ghe.example.com/api/v3", want: "https://ghe.example.com"},
+		{name: "local test server", endpoint: "http://127.0.0.1:7750", want: "http://127.0.0.1:7750"},
+		{name: "endpoint with userinfo", endpoint: "https://user:secret@ghe.example.com/api/v3", want: "https://ghe.example.com"},
+		{name: "unparsable", endpoint: "::", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := webBase(tt.endpoint); got != tt.want {
+				t.Errorf("webBase(%q) = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGitHubAdapter_ProjectURL(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewGitHubAdapter(validConfig("https://api.github.com"))
+	if err != nil {
+		t.Fatalf("NewGitHubAdapter() error = %v", err)
+	}
+	linker, ok := adapter.(domain.ProjectLinker)
+	if !ok {
+		t.Fatal("GitHubAdapter does not implement domain.ProjectLinker")
+	}
+	if got, want := linker.ProjectURL(), "https://github.com/owner/repo"; got != want {
+		t.Errorf("ProjectURL() = %q, want %q", got, want)
+	}
+}

@@ -237,6 +237,22 @@ type AgentMeta struct {
 	// UsageLimitNotRecognizedReason is required with
 	// UsageLimitNotRecognized and empty otherwise.
 	UsageLimitNotRecognizedReason string
+
+	// LiteralSettings lists the keys of the kind's settings block whose
+	// string values load as written: no $VAR resolves under them.
+	// Optional; nil means every key resolves.
+	LiteralSettings []string
+}
+
+// LiteralSettingsOf returns the LiteralSettings the registered agent
+// kind declares, and nil for a name [Agents] does not register. Safe
+// for concurrent use.
+func LiteralSettingsOf(kind string) []string {
+	meta, ok := Agents.Meta(kind)
+	if !ok {
+		return nil
+	}
+	return meta.LiteralSettings
 }
 
 // UsageLimitRecognition declares whether a kind's adapter returns

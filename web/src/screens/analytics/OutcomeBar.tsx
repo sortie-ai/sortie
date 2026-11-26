@@ -1,6 +1,7 @@
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
 import { fmtCount } from "@/lib/format";
+import { Panel } from "@/components/Panel";
 
 import type { Summary } from "@/api/types.gen";
 
@@ -45,26 +46,32 @@ export function OutcomeBar({ summary }: OutcomeBarProps) {
   }
 
   return (
-    <Card title="Outcomes">
-      <div className="flex flex-col gap-xs px-md py-sm">
-        <div className="flex flex-wrap gap-x-md gap-y-xxs text-body-sm text-ink-body">
-          {segments.map((segment) => (
-            <span key={segment.label} className="inline-flex items-center gap-xs">
-              <span aria-hidden="true" className={cn("size-sm rounded", segment.fill)} />
-              {segment.label} {fmtCount(segment.count)}
-            </span>
-          ))}
+    <Panel title="Outcomes">
+      <Card>
+        <div className="flex flex-col gap-xs px-md py-sm">
+          <div className="flex flex-wrap gap-x-md gap-y-xxs text-body-sm text-ink-body">
+            {segments.map((segment) => (
+              <span key={segment.label} className="inline-flex items-center gap-xs">
+                <span aria-hidden="true" className={cn("size-sm rounded", segment.fill)} />
+                {segment.label}: {fmtCount(segment.count)}
+              </span>
+            ))}
+          </div>
+          <div aria-hidden="true" className="flex h-4 gap-xxs">
+            {segments.map((segment, index) => (
+              <div
+                key={segment.label}
+                className={cn(
+                  "min-w-xxs basis-0",
+                  segment.fill,
+                  roundingOf(index, segments.length),
+                )}
+                style={{ flexGrow: segment.count }}
+              />
+            ))}
+          </div>
         </div>
-        <div aria-hidden="true" className="flex h-4 gap-xxs">
-          {segments.map((segment, index) => (
-            <div
-              key={segment.label}
-              className={cn("min-w-xxs basis-0", segment.fill, roundingOf(index, segments.length))}
-              style={{ flexGrow: segment.count }}
-            />
-          ))}
-        </div>
-      </div>
-    </Card>
+      </Card>
+    </Panel>
   );
 }

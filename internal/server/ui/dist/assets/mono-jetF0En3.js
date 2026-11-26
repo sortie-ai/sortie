@@ -1,0 +1,1 @@
+var e=`font-mono leading-none`;export{e as t};

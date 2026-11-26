@@ -1,42 +1,41 @@
+import { useState } from "react";
+
 import { ApiError } from "@/api/client";
-import { useStateQuery, useStatsQuery } from "@/api/queries";
+import { useStateQuery, useStatsPreviousQuery, useStatsQuery } from "@/api/queries";
+import { useScreenCommands } from "@/app/screen-commands";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { ServedText } from "@/components/ServedText";
-import { StatusMark } from "@/components/StatusMark";
-import { hasRateSource } from "@/lib/budget";
-import { cn } from "@/lib/cn";
+import { RunStatusText } from "@/components/RunStatusText";
+import { NameText } from "@/components/NameText";
+import { UnitsSwitch } from "@/components/UnitsSwitch";
 import { agentLabel, isNamedRuleGroup, modelLabel, ruleLabel, startLabel } from "@/lib/labels";
 import { runStatus } from "@/lib/run-status";
+import { useUnits } from "@/lib/units";
+import { Panel } from "@/components/Panel";
 
 import { ChainFunnel } from "./ChainFunnel";
 import { GroupTable } from "./GroupTable";
 import { OutcomeBar } from "./OutcomeBar";
 import { RangePicker } from "./RangePicker";
 import { SkillTable } from "./SkillTable";
-import { SpendChart } from "./SpendChart";
 import { SummaryTiles } from "./SummaryTiles";
-import { useAnalyticsRange } from "./analytics-range";
+import { UsageChart } from "./UsageChart";
+import { canZoomInto, selectedWindowOf, spanIndexesOf } from "./activity";
+import { RANGE_OPTIONS, previousPeriodOf, useAnalyticsView } from "./analytics-range";
 
-import type { Group, Report } from "@/api/types.gen";
+import type { AnalyticsRange, StatsWindow } from "@/api/queries";
+import type { ScreenCommand } from "@/app/screen-commands";
+import type { Group, Report, Spend } from "@/api/types.gen";
+import type { Units } from "@/lib/units";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { AnalyticsView, AnalyticsViewActions } from "./analytics-range";
 import type { NameColumn } from "./GroupTable";
+import type { Comparison } from "./SummaryTiles";
 
 const MESSAGE = "text-body-md text-ink-body";
 
 function isUnavailable(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503 && error.code === "history_unavailable";
-}
-
-interface NameTextProps {
-  name: string;
-  label: string;
-}
-
-// A name the client has no wording for reads as served, in the monospace face.
-function NameText({ name, label }: NameTextProps) {
-  return (
-    <span className={cn(label === name && "font-mono text-body-sm")}>
-      <ServedText text={label} />
-    </span>
-  );
 }
 
 const RULE_COLUMN: NameColumn<Group> = {
@@ -56,14 +55,7 @@ const AGENT_COLUMN: NameColumn<Group> = {
 };
 const STATUS_COLUMN: NameColumn<Group> = {
   header: "Status",
-  cell: (row) => {
-    const { word, mark } = runStatus(row.name);
-    return mark === null ? (
-      <ServedText text={word} />
-    ) : (
-      <StatusMark mark={mark} label={<ServedText text={word} />} />
-    );
-  },
+  cell: (row) => <RunStatusText status={row.name} />,
   sortText: (row) => runStatus(row.name).word,
 };
 const TRIGGER_COLUMN: NameColumn<Group> = {
@@ -80,12 +72,12 @@ const ORIGIN_COLUMN: NameColumn<Group> = {
 interface BreakdownsProps {
   report: Report;
   hasRules: boolean;
-  hasRates: boolean;
+  units: Units;
 }
 
-function Breakdowns({ report, hasRules, hasRates }: BreakdownsProps) {
+function Breakdowns({ report, hasRules, units }: BreakdownsProps) {
   const tier = report.schema_tier;
-  const common = { tier, hasRates };
+  const common = { tier, units };
   const byRule = report.by_rule ?? [];
   const byModel = report.by_model ?? [];
   const byAdapter = report.by_adapter ?? [];
@@ -160,19 +152,111 @@ function Breakdowns({ report, hasRules, hasRates }: BreakdownsProps) {
   );
 }
 
+function standfirstOf(range: AnalyticsRange): string {
+  const label = RANGE_OPTIONS.find((option) => option.value === range)?.label ?? "";
+  return range === "all" ? "Every run on record." : `Runs finished in the ${label.toLowerCase()}.`;
+}
+
+function comparisonOf(
+  range: AnalyticsRange,
+  zoom: StatsWindow | null,
+  previous: UseQueryResult<Report>,
+): Comparison | "pending" | null {
+  const period = previousPeriodOf(range, zoom);
+  if (period === null) {
+    return null;
+  }
+  if (previous.data === undefined) {
+    return previous.isPending ? "pending" : null;
+  }
+  return previous.data.summary.runs === 0 ? null : { period, previous: previous.data.summary };
+}
+
+function zoomCommandsOf(
+  view: AnalyticsView,
+  actions: AnalyticsViewActions,
+  chart: Spend | undefined,
+): ScreenCommand[] {
+  const commands: ScreenCommand[] = [];
+  const buckets = chart?.buckets ?? [];
+  const indexes =
+    chart === undefined
+      ? null
+      : spanIndexesOf(
+          buckets.map((bucket) => Date.parse(bucket.start)),
+          view.selection,
+        );
+  if (chart !== undefined && view.selection !== null && indexes !== null) {
+    const window = selectedWindowOf(view.selection, chart.period);
+    const selectedCount = indexes[1] - indexes[0] + 1;
+    if (canZoomInto(window, chart.period, selectedCount, buckets.length)) {
+      commands.push({ value: "zoom:in", label: "Zoom in", run: () => actions.zoomIn(window) });
+    }
+  }
+  if (view.zoom !== null) {
+    commands.push(
+      { value: "zoom:out", label: "Zoom out", run: actions.zoomOut },
+      { value: "zoom:reset", label: "Reset zoom", run: actions.resetZoom },
+    );
+  }
+  return commands;
+}
+
 export function AnalyticsScreen() {
   const { data: state } = useStateQuery();
   const config = state?.config;
-  const [range] = useAnalyticsRange();
-  const stats = useStatsQuery(range);
+  const [view, actions] = useAnalyticsView();
+  const { range, zoom } = view;
+  const stats = useStatsQuery(range, zoom);
   const report = stats.data;
+  const previous = useStatsPreviousQuery(
+    range,
+    zoom,
+    report !== undefined && report.summary.runs > 0 ? report.since : null,
+  );
+  const [hasLoadedBefore, setHasLoadedBefore] = useState(false);
+  if (report !== undefined && !hasLoadedBefore) {
+    setHasLoadedBefore(true);
+  }
+  const hasReport =
+    (hasLoadedBefore || report !== undefined) && !(stats.isError && report === undefined);
+  const unitsView = useUnits(state, hasReport);
+  const units = unitsView.shown;
+  const showsChart =
+    report !== undefined &&
+    report.schema_tier === "full" &&
+    (report.spend.buckets ?? []).length > 0;
+  const chart = showsChart ? (
+    <UsageChart
+      spend={report.spend}
+      since={report.since}
+      units={units}
+      view={view}
+      actions={actions}
+    />
+  ) : undefined;
+  useScreenCommands(zoomCommandsOf(view, actions, showsChart ? report.spend : undefined));
+
+  const emptyMessage = (
+    <p className={MESSAGE}>
+      {range === "all" && zoom === null
+        ? "No run has finished yet."
+        : "No run finished in this range."}
+    </p>
+  );
 
   return (
-    <div className="flex flex-col gap-lg">
-      <div className="flex items-center justify-between gap-md">
-        <h1 className="font-heading text-h4 font-semibold text-ink">Analytics</h1>
-        <RangePicker className="md:hidden" />
-      </div>
+    <div className="flex flex-col">
+      <ScreenHeader
+        title="Analytics"
+        standfirst={standfirstOf(range)}
+        actions={
+          <div className="flex flex-wrap items-center gap-xs">
+            <UnitsSwitch view={unitsView} />
+            <RangePicker />
+          </div>
+        }
+      />
       {report === undefined ? (
         stats.isError ? (
           <p className={MESSAGE}>
@@ -188,32 +272,38 @@ export function AnalyticsScreen() {
           {(report.warnings ?? []).map((warning, index) => (
             <p
               key={index}
-              className="rounded-lg bg-warning-container px-md py-sm text-body-md text-ink"
+              className="rounded-xl bg-warning-container px-md py-sm text-body-md text-ink"
             >
               <ServedText text={warning} />
             </p>
           ))}
           {report.summary.runs === 0 ? (
-            <p className={MESSAGE}>
-              {range === "all" ? "No run has finished yet." : "No run finished in this range."}
-            </p>
+            zoom !== null && showsChart ? (
+              <div className="flex flex-col gap-xl">
+                {emptyMessage}
+                {chart}
+              </div>
+            ) : (
+              emptyMessage
+            )
           ) : (
             <div key={range} className="flex flex-col gap-xl">
-              <SummaryTiles report={report} hasCost={hasRateSource(state)} />
+              <Panel title="Summary">
+                <SummaryTiles
+                  report={report}
+                  units={units}
+                  comparison={comparisonOf(range, zoom, previous)}
+                />
+              </Panel>
               <OutcomeBar summary={report.summary} />
-              {hasRateSource(state) &&
-              range !== "24h" &&
-              report.spend !== null &&
-              (report.spend.buckets ?? []).length > 0 ? (
-                <SpendChart spend={report.spend} since={report.since} />
-              ) : undefined}
+              {chart}
               {(report.chain_funnels ?? []).map((funnel) => (
                 <ChainFunnel key={funnel.stages?.[0]?.rule} funnel={funnel} config={config} />
               ))}
               <Breakdowns
                 report={report}
                 hasRules={(config?.dispatch.rules ?? []).length > 0}
-                hasRates={hasRateSource(state)}
+                units={units}
               />
             </div>
           )}

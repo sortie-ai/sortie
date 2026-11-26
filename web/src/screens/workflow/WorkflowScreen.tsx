@@ -1,10 +1,12 @@
 import { useStateQuery } from "@/api/queries";
+import { MONO } from "@/components/ui/mono";
 import { usageByKind } from "@/lib/agent-kinds";
 import { hasRateSource } from "@/lib/budget";
 import { fmtCount, fmtMoney, fmtStamp, fmtTokens } from "@/lib/format";
 import { rateText, UNSET_RATE, UNSET_RATE_FROM_INPUT } from "@/lib/rates";
 import { Code } from "@/components/Code";
 import { Pair, Pairs, Panel } from "@/components/Panel";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { StateBadge } from "@/components/StateBadge";
 
 import { DispatchSection } from "./DispatchSection";
@@ -14,27 +16,17 @@ import { joinCode, msText, Note, usageText } from "./workflow-text";
 import type { ConfigResponse, TokenRateResponse, WorkflowHealthResponse } from "@/api/types.gen";
 import type { ReactNode } from "react";
 
-const HEADING = "font-heading text-h5 font-semibold text-ink";
-const STANDFIRST = "text-body-lg text-ink-body";
 const NONE = "none";
 
-interface StandfirstProps {
-  workflow: WorkflowHealthResponse | undefined;
-}
-
-function Standfirst({ workflow }: StandfirstProps) {
+function standfirstOf(workflow: WorkflowHealthResponse | undefined): string | undefined {
   if (workflow?.last_success_at == null) {
     return undefined;
   }
-  const loaded = `Loaded at ${fmtStamp(workflow.last_success_at)}`;
+  const loaded = `Configuration as of ${fmtStamp(workflow.last_success_at)}`;
   if (workflow.status === "fail") {
-    return (
-      <p className={STANDFIRST}>
-        {loaded}; the newer edit did not load, so no new issue starts until it does.
-      </p>
-    );
+    return `${loaded}; no new issue starts until the newer edit loads.`;
   }
-  return <p className={STANDFIRST}>{loaded}.</p>;
+  return `${loaded}.`;
 }
 
 interface StateListProps {
@@ -61,9 +53,11 @@ interface ConfigProps {
 function TrackerPanel({ config }: ConfigProps) {
   const { tracker, polling } = config;
   return (
-    <Panel title="Tracker">
+    <Panel isRuled title="Tracker">
       <Pairs>
-        <Pair label="Kind">{tracker.kind}</Pair>
+        <Pair label="Kind">
+          <span className={MONO}>{tracker.kind}</span>
+        </Pair>
         {tracker.project ? <Pair label="Project">{tracker.project}</Pair> : undefined}
         <Pair label="Active">
           <StateList states={tracker.active_states} />
@@ -100,9 +94,11 @@ function AgentPanel({ config }: ConfigProps) {
   const hosts = worker.ssh_hosts ?? [];
   const perHost = worker.max_concurrent_agents_per_host;
   return (
-    <Panel title="Agent">
+    <Panel isRuled title="Agent">
       <Pairs>
-        <Pair label="Kind">{agent.kind}</Pair>
+        <Pair label="Kind">
+          <span className={MONO}>{agent.kind}</span>
+        </Pair>
         <Pair label="Max turns">{fmtCount(agent.max_turns)}</Pair>
         <Pair label="Stall timeout">
           {agent.stall_timeout_ms === null ? "off" : msText(agent.stall_timeout_ms)}
@@ -155,7 +151,7 @@ function RateList({ name, rate }: RateListProps) {
     rate.per_kind && rate.input_per_mtok !== null ? UNSET_RATE_FROM_INPUT : UNSET_RATE;
   return (
     <div className="flex flex-col gap-xs">
-      <p className="font-mono text-body-sm text-ink">{name}</p>
+      <p className={`${MONO} text-ink`}>{name}</p>
       <Pairs>
         <Pair label="Input">{rateText(rate.input_per_mtok, UNSET_RATE)}</Pair>
         <Pair label="Output">{rateText(rate.output_per_mtok, UNSET_RATE)}</Pair>
@@ -178,7 +174,7 @@ interface TokenRatesPanelProps extends ConfigProps {
 function TokenRatesPanel({ config, hasSource }: TokenRatesPanelProps) {
   const rates = config.token_rates;
   return (
-    <Panel title="Token rates">
+    <Panel isRuled title="Token rates">
       {rates === null ? (
         <p className="text-body-md text-ink-body">
           {hasSource ? "Not set: costs come from the price table." : "Not set: no cost is shown."}
@@ -199,25 +195,17 @@ function hasReactions(config: ConfigResponse): boolean {
 export function WorkflowScreen(): ReactNode {
   const { data } = useStateQuery();
   if (data === undefined) {
-    return <h1 className={HEADING}>Workflow</h1>;
+    return <ScreenHeader title="Workflow" />;
   }
   const { config } = data;
   if (config === undefined) {
-    return (
-      <div className="flex flex-col gap-xs">
-        <h1 className={HEADING}>Workflow</h1>
-        <p className={STANDFIRST}>Sortie serves no configuration.</p>
-      </div>
-    );
+    return <ScreenHeader title="Workflow" standfirst="Sortie serves no configuration." />;
   }
 
   return (
-    <div className="flex flex-col gap-lg">
-      <div className="flex flex-col gap-xs">
-        <h1 className={HEADING}>Workflow</h1>
-        <Standfirst workflow={data.health?.workflow} />
-      </div>
-      <div className="grid grid-cols-1 items-start gap-x-xxxl gap-y-xl min-[1024px]:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="flex flex-col">
+      <ScreenHeader title="Workflow" standfirst={standfirstOf(data.health?.workflow)} />
+      <div className="grid grid-cols-1 items-start gap-x-xxxl gap-y-xl xl:grid-cols-[minmax(0,1fr)_var(--size-margin)]">
         <div className="flex min-w-0 flex-col gap-xl">
           <DispatchSection
             dispatch={config.dispatch}

@@ -5,6 +5,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -12,39 +17,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 	"github.com/sortie-ai/sortie/internal/waittest"
 )
-
-func TestStartSessionWrongTypedMCPConfigFailsBeforeLaunch(t *testing.T) {
-	t.Parallel()
-
-	settings := map[string]any{mcpConfigKey: 123}
-	adapter, _ := NewClientProtocolAdapter()
-
-	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: "sortie-never-launched"},
-		Settings:      settings,
-	})
-
-	agentErr, ok := errors.AsType[*domain.AgentError](err)
-	if !ok || agentErr.Kind != domain.ErrAgentNotFound {
-		t.Fatalf("StartSession(mcp_config=123) error = %v, want *domain.AgentError of kind %q", err, domain.ErrAgentNotFound)
-	}
-	fault, ok := errors.AsType[*typeutil.TypeFault](err)
-	if !ok || fault.Key != mcpConfigKey {
-		t.Fatalf("StartSession(mcp_config=123) error = %v, want a wrapped *typeutil.TypeFault on %q", err, mcpConfigKey)
-	}
-	diags := validateConfig(registry.AgentConfigFields{Kind: "agent-client-protocol", Passthrough: settings})
-	if len(diags) != 1 || diags[0].Message != agentErr.Message {
-		t.Errorf("validateConfig(mcp_config=123) = %+v, want one diagnostic carrying the text StartSession refused with: %q", diags, agentErr.Message)
-	}
-}
 
 func TestRunTurnFinalize(t *testing.T) {
 	t.Parallel()
@@ -436,5 +414,70 @@ func TestDoInitializeVersionPin(t *testing.T) {
 	}
 	if outcome.err.Kind != domain.ErrResponseError {
 		t.Errorf("doInitialize() error kind = %q, want %q", outcome.err.Kind, domain.ErrResponseError)
+	}
+}
+
+const scenarioEnvDump = "clientprotocol.env-dump"
+
+func init() { fakeRuntimeScenarios[scenarioEnvDump] = agenttest.Typed(runEnvDump) }
+
+func runEnvDump(_ []string, path string) int {
+	if err := os.WriteFile(path, []byte(strings.Join(os.Environ(), "\x00")), 0o600); err != nil {
+		return 2
+	}
+	return 0
+}
+
+func mergeOnlyVerificationRuntime(t *testing.T) (executable, variable string) {
+	t.Helper()
+
+	for _, kind := range usagesource.VerificationAdditions.Kinds() {
+		constructor, _ := usagesource.VerificationAdditions.Get(kind)
+		addition := constructor()
+		switches, claimed := addition.Claim(agentcore.LaunchTarget{Command: kind})
+		addition.Close()
+		if claimed && len(switches.Merges) == 1 {
+			return kind, switches.Merges[0].Name
+		}
+	}
+	t.Fatal("no registered verification addition claims by merging one environment variable")
+	return "", ""
+}
+
+func TestStartSessionConfiguredEnvOnTheLaunchEnvironment(t *testing.T) {
+	executable, documentName := mergeOnlyVerificationRuntime(t)
+	const inherited = "W1_PROBE_INHERITED"
+	t.Setenv(inherited, "inherited")
+	variant, document := strings.ToLower(inherited), documentName
+	if runtime.GOOS == "windows" {
+		document = strings.ToLower(documentName)
+	}
+	dumpPath := filepath.Join(t.TempDir(), "env")
+	agent := agenttest.FakeRuntime(t, t.TempDir(), executable, scenarioEnvDump, dumpPath)
+
+	_, _ = startSession(t.Context(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{CommandArgv: []string{agent, "acp"}},
+		Settings:      map[string]any{envKey: map[string]any{document: `{"model":"m"}`, variant: "configured"}},
+	}, agentcore.NewTurnEndUsage())
+
+	dump, err := os.ReadFile(dumpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", dumpPath, err)
+	}
+	var got []string
+	for entry := range strings.SplitSeq(string(dump), "\x00") {
+		if key, _, _ := strings.Cut(entry, "="); strings.EqualFold(key, inherited) || strings.EqualFold(key, documentName) {
+			got = append(got, entry)
+		}
+	}
+	slices.Sort(got)
+
+	want := []string{documentName + `={"agent":{"title":{"disable":true}},"model":"m"}`, inherited + "=inherited", variant + "=configured"}
+	if runtime.GOOS == "windows" {
+		want = slices.Delete(want, 1, 2)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("runtime environment entries for %s and %s = %q, want %q", inherited, documentName, got, want)
 	}
 }

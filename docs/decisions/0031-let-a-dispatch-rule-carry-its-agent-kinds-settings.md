@@ -115,13 +115,13 @@ A rule that carries a settings block must have a `name`. The name is how an atte
 The block an attempt runs with is the top-level block of the rule's kind with the rule's block laid over it, one level deep:
 
 1. A key written in the rule replaces the inherited value whole, whatever its type. Maps are not merged and lists are not appended.
-2. A key written as `null` in the rule removes the inherited key, so the adapter sees the key as never written and applies its own default. For `model` and `effort` that means the runtime's own default.
+2. A key written as `null` in the rule removes the inherited key, so the adapter sees the key as never written and applies its own default. For `model` and `effort` that means the runtime's own default, with the one exception for `effort` stated below.
 3. Every key the rule does not write is inherited.
 4. A kind with no top-level block inherits nothing; the rule's block is the whole block. A rule that introduces a kind other than `agent.kind` and carries that kind's block therefore needs no top-level block for it. A selection that reaches a non-default kind with neither, through `dispatch.default.agent` or a rule without a block, still fails the missing-block check as before.
 
 The rule's block is layered only over the top-level block of the same kind, never over another kind's.
 
-`model` joins `effort` as a key with a single meaning in every kind's block that reads it: a string handed to the runtime as written, where absent, `null` and empty all mean the runtime's own default. The orchestrator reads these two keys for validation advisories and for recording, and never interprets their values.
+`model` joins `effort` as a key with a single meaning in every kind's block that reads it: a string handed to the runtime as written, where absent, `null` and empty all mean the runtime's own default. One exception holds for `effort` on a kind that sets the level through the runtime's session configuration rather than with each turn: that configuration has no way to send an absent level, so a continued session with no level keeps the level its runtime holds, and the kind logs that level when the session opens. The orchestrator reads these two keys for validation advisories and for recording, and never interprets their values.
 
 ### Binding: freeze the selection, resolve the settings per attempt
 
@@ -135,9 +135,9 @@ The operator learns one rule: an issue keeps its agent kind, template and rule u
 
 ### Session continuity across a settings change
 
-A change of settings between attempts does not by itself end a session: an attempt that resumes resumes with the settings it resolved. Every kind that reads `model` and `effort` continues the same conversation when a session is resumed under a different model or level, carrying the earlier history to the new model as context: the runtimes behind `copilot-cli` and `opencode` apply the model and level given at resume to the resumed session, `codex` sends the model and level on every turn of a thread, and `claude-code` already switches models inside one session. Continuity is owed to the conversation, not to the model, so the reason that freezes the kind does not extend to its settings.
+A change of settings between attempts does not by itself end a session: an attempt that resumes resumes with the settings it resolved. Every kind that reads `model` and `effort` continues the same conversation when a session is resumed under a different model or level, carrying the earlier history to the new model as context: the runtimes behind `copilot-cli` and `opencode` apply the model and level given at resume to the resumed session, `codex` sends the model and level on every turn of a thread, `agent-client-protocol` sets the level on the session's reasoning option each time a session opens, and `claude-code` already switches models inside one session. Continuity is owed to the conversation, not to the model, so the reason that freezes the kind does not extend to its settings.
 
-What this requires of an adapter is that it deliver the resolved settings on a resumed session as on a new one, on every turn, rather than rely on the runtime to remember them; a runtime may keep the model of a session but forget its level. Keys other than `model` and `effort` follow the same rule, as `mcp_config` always has.
+What this requires of an adapter is that it deliver the resolved settings on a resumed session as on a new one, on every turn or, where the runtime keeps a session configuration, each time a session opens and before its first turn, rather than rely on the runtime to remember them; a runtime may keep the model of a session but forget its level. Keys other than `model` and `effort` follow the same rule, as `mcp_config` always has.
 
 ### Reload
 
@@ -164,7 +164,7 @@ Errors, which fail the load or block dispatch:
 Warnings, which never block:
 
 - Every advisory the top-level block of a kind draws is also drawn by a rule's resolved block, such as `effort` set on a kind that does not forward it.
-- A rule writes `model`, does not write `effort`, and inherits a non-empty `effort`. Level names depend on the model, so the rule's model would be asked for a level chosen for another one; the message tells the operator to write `effort` in the rule to set it or `null` to clear it.
+- A rule writes `model`, does not write `effort`, and inherits a non-empty `effort`. Level names depend on the model, so the rule's model would be asked for a level chosen for another one; the message tells the operator to write `effort` in the rule to set it or `null` to send no level.
 - An unknown key directly under `dispatch` stays a warning, as before.
 
 Model and level names are not checked against any catalog. The runtime judges them, as it does for the top-level block.
@@ -310,7 +310,7 @@ The decision is implemented when all of the following hold:
 2. A rule's block overlays the top-level block of its kind key by key; `null` removes an inherited key; a rule block for a kind with no top-level block stands alone.
 3. `sortie validate` reports, offline and through the same path as preflight: a block named for another kind, a block without a rule `name`, a derived key in a rule block, a non-map block, every adapter check against each rule's resolved block with the rule named, and the inherited-`effort` warning.
 4. A retry and a reaction continuation keep the frozen kind, template and rule, and run with the settings of the configuration in force at their start; the retry exception and the vanished-rule fallback behave as stated.
-5. A retry whose resolved `model` or `effort` changed since the previous attempt resumes the same session and runs every turn with the new values, level included.
+5. A retry whose resolved `model` or `effort` changed since the previous attempt resumes the same session and runs every turn with the new values, level included, apart from a removed level on a kind that sets it through the runtime's session configuration.
 6. An edit to a top-level kind block applies to the next attempt without a restart.
 7. Each run-history row carries the configured model and effort and the reported model, `sortie stats` groups by configured model, and the snapshot API and dashboard show the rule and configured settings of a running session.
 8. The workflow reference, the architecture specification and the operator guide describe the rule block, the merge rule, the binding rule, the source order for `model` and `effort`, and the new reload behavior of kind blocks.

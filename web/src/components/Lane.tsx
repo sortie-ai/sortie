@@ -1,9 +1,13 @@
-import { Meter } from "@base-ui/react/meter";
+import { useRef } from "react";
 
 import { CircleAlertFilledIcon } from "@/components/icons";
+import { Panel } from "@/components/Panel";
 import { markWord } from "@/components/StatusMark";
+import { useWidth } from "@/components/use-width";
 import { cn } from "@/lib/cn";
+import { plural } from "@/lib/format";
 import { reactionCountLabel, ruleLabel } from "@/lib/labels";
+import { stationName } from "@/lib/lane";
 
 import type {
   LaneMarker,
@@ -12,45 +16,89 @@ import type {
   StageProgress,
   StationState,
 } from "@/lib/lane";
+import type { CSSProperties } from "react";
 
-const SEGMENT_LIMIT = 12;
+// A ring broken at north, east, south, and west marks a station that waits. A mask cuts the gaps from a
+// border, so the ring draws as smoothly as the outlined marks beside it and the track never shows inside.
+const GAPS =
+  "before:absolute before:inset-0 before:rounded-full before:border-current before:[mask:repeating-conic-gradient(from_20deg,#000_0_50deg,transparent_0_90deg)]";
+const WAITING_MARK = `size-3.5 bg-(--ground) text-ink-muted before:border-2 ${GAPS}`;
+
+// The alert icon's circle stops short of its box, so the mark fills its ground behind it.
+function markGlyph(mark: LaneMarker) {
+  return mark === "needs" ? <CircleAlertFilledIcon className="size-4" /> : undefined;
+}
 
 const MARKER: Record<LaneMarker, string> = {
   running: "size-3.5 bg-ink-body",
   current: "size-3.5 bg-ink-body",
-  waiting: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
-  approval: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
-  retry: "size-3.5 border-2 border-ink-muted bg-canvas",
-  held: "size-3.5 border-[1.5px] border-dashed border-ink-muted bg-canvas",
-  stopped: "size-3.5 border-[1.5px] border-dashed border-ink-muted bg-canvas",
-  needs: "size-4 text-warning-fill",
-  handed: "size-2.75 border-[1.5px] border-dashed border-ink-body bg-canvas",
+  waiting: WAITING_MARK,
+  approval: WAITING_MARK,
+  retry: "size-3.5 border-2 border-ink-muted bg-(--ground)",
+  held: WAITING_MARK,
+  stopped: WAITING_MARK,
+  needs: "size-4 bg-(--ground) text-warning-fill",
+  handed: WAITING_MARK,
   succeeded: "size-3.5 bg-ink-body",
-  failed: "size-3.5 border-2 border-error-fill bg-canvas",
-  degraded: "size-3.5 border-2 border-error-fill bg-canvas",
+  failed: "size-3.5 border-2 border-error-fill bg-(--ground)",
+  degraded: "size-3.5 border-2 border-error-fill bg-(--ground)",
   clear: "size-3.5 bg-ink-body",
   ended:
-    "size-3.5 border-2 border-ink-body bg-[radial-gradient(circle,var(--color-ink-body)_0_3px,var(--color-canvas)_3px)]",
+    "size-3.5 border-2 border-ink-body bg-[radial-gradient(circle,var(--color-ink-body)_0_3px,var(--ground)_3px)]",
 };
+
+export const WAITING_DOT = `bg-(--ground) text-ink-muted before:border-2 ${GAPS}`;
 
 // A reaction station reads the same filled dot whatever Sortie did there; only a standing
 // escalation, which needs a person, takes the attention fill.
 const DOT: Record<StationState, string> = {
-  passed: "border-ink-body bg-ink-body",
-  acted: "border-ink-body bg-ink-body",
-  quiet: "border-ink-body bg-ink-body",
-  escalated: "border-ink-body bg-ink-body",
-  needs: "border-warning-fill bg-warning-fill",
-  current: "border-ink-body bg-ink-body",
-  waiting: "border-dashed border-ink-body bg-canvas",
-  approval: "border-dashed border-ink-body bg-canvas",
-  ahead: "border-ink-faint bg-canvas",
-  idle: "border-ink-faint bg-canvas",
+  passed: "border-[1.5px] border-ink-body bg-ink-body",
+  acted: "border-[1.5px] border-ink-body bg-ink-body",
+  quiet: "border-[1.5px] border-ink-body bg-ink-body",
+  escalated: "border-[1.5px] border-ink-body bg-ink-body",
+  needs: "border-[1.5px] border-warning-fill bg-warning-fill",
+  current: "border-[1.5px] border-ink-body bg-ink-body",
+  waiting: WAITING_DOT,
+  approval: WAITING_DOT,
+  ahead: "border-[1.5px] border-ink-faint bg-(--ground)",
+  idle: "border-[1.5px] border-ink-faint bg-(--ground)",
 };
 
-/** Gives the share of the track width, in percent, where the station at `index` of `count` stands. */
-export function stationX(index: number, count: number): number {
-  return 5 + (index * 90) / Math.max(1, count - 1);
+/** The widest box a station's name takes under its station, on the issue page and in the Pipeline's header. */
+export const STATION_NAME_BOX_PX = 88;
+
+// The end stations stand in from the track's ends by half the header's station circle (`size-5`).
+const TRACK_INSET_PX = 10;
+
+/** How far words under an end station stand in from the track's end: to the outer edge of its `size-3.5` marker. */
+const LANE_TEXT_INSET_PX = TRACK_INSET_PX - 7;
+
+/** The length, as a CSS `calc()`, that `steps` gaps between `count` stations take along the track. */
+export function stationSpan(steps: number, count: number): string {
+  return `calc((100% - ${2 * TRACK_INSET_PX}px) * ${steps} / ${Math.max(1, count - 1)})`;
+}
+
+/** Places words under or over the station at `index` of `count`: centered on it, or flush with the end station's mark, `edgePx` in from the track's edge, at either end. */
+export function stationPlace(
+  index: number,
+  count: number,
+  edgePx = 0,
+): { className: string; style: CSSProperties } {
+  if (count > 1 && index === 0) {
+    return { className: "text-left", style: { left: edgePx } };
+  }
+  if (count > 1 && index === count - 1) {
+    return { className: "text-right", style: { right: edgePx } };
+  }
+  return {
+    className: "-translate-x-1/2 text-center",
+    style: { left: stationX(index, count) },
+  };
+}
+
+/** The offset from the track's left edge, as a CSS length, of the station at `index` of `count`, on a whole pixel so every circle draws alike. */
+export function stationX(index: number, count: number): string {
+  return `round(calc(${TRACK_INSET_PX}px + ${stationSpan(index, count)}), 1px)`;
 }
 
 function laneMarkerWord(mark: LaneMarker): string {
@@ -87,66 +135,27 @@ function countLineOf(station: LaneStation, variant: LaneVariant): string {
   return reactionCountLabel(station.key, station.continuations);
 }
 
-export interface StageMeterProps {
+export interface StageNoteProps {
   position: StagePosition;
   progress: StageProgress;
-  needs: boolean;
-  /** Whether the issue stands at the agent station; elsewhere the meter shows only the stages done. */
+  /** Whether the issue stands at the agent station; elsewhere the note counts the stages. */
   atAgent: boolean;
-  /** Whether the caption shows under the meter; the meter keeps its accessible name without it. */
-  caption: boolean;
+  className?: string;
+  style?: CSSProperties;
 }
 
-export function StageMeter({ position, progress, needs, atAgent, caption }: StageMeterProps) {
+/** Says where the issue stands on its stage chain, in the type of the station detail. */
+export function StageNote({ position, progress, atAgent, className, style }: StageNoteProps) {
   const { k, n, done } = progress;
-  const focus = atAgent ? progress.focus : null;
-  const place = atAgent ? `${k} of ${n}` : `${done} of ${n}`;
-  const name = atAgent ? `${ruleLabel(position.current)}, ${place}` : place;
-  const stages = Array.from({ length: n }, (_, index) => index + 1);
-  const currentTone = needs ? "bg-warning-fill" : "bg-ink";
-
+  const text = atAgent
+    ? `${ruleLabel(position.current)} (${k} of ${n})`
+    : done === n
+      ? plural(n, "stage", "stages")
+      : `${done} of ${n} stages`;
   return (
-    <div className="flex flex-col items-center gap-xxs">
-      <Meter.Root value={done} max={n} aria-label={name} className="w-full">
-        {n <= SEGMENT_LIMIT ? (
-          <div aria-hidden="true" className="flex h-1 gap-px">
-            {stages.map((stage) => (
-              <span
-                key={stage}
-                className={cn(
-                  "min-w-0 flex-1 rounded-[1px]",
-                  stage <= done
-                    ? "bg-ink-body"
-                    : focus?.kind === "current" && stage === k
-                      ? currentTone
-                      : "bg-ink-faint",
-                )}
-              />
-            ))}
-          </div>
-        ) : (
-          <Meter.Track className="relative block h-1 overflow-hidden rounded-full bg-ink-faint">
-            <Meter.Indicator className="block h-full bg-ink-body" />
-            {focus?.kind === "current" ? (
-              <span
-                aria-hidden="true"
-                className={cn("absolute inset-y-0", currentTone)}
-                style={{
-                  left: `${((k - 1) / n) * 100}%`,
-                  width: `${100 / n}%`,
-                }}
-              />
-            ) : undefined}
-          </Meter.Track>
-        )}
-      </Meter.Root>
-      {caption ? (
-        <p aria-hidden="true" className="flex gap-xs whitespace-nowrap text-body-sm text-ink-body">
-          {atAgent ? <span className="font-mono">{ruleLabel(position.current)}</span> : undefined}
-          <span className="tabular-nums">{place}</span>
-        </p>
-      ) : undefined}
-    </div>
+    <span className={cn("text-body-sm whitespace-nowrap text-ink-muted", className)} style={style}>
+      {text}
+    </span>
   );
 }
 
@@ -165,21 +174,22 @@ export interface LaneProps {
   pullRequestNumber?: number | null;
 }
 
-const TRACK_HEIGHT: Record<LaneVariant, string> = {
-  page: "h-18",
-  peek: "h-10",
-  lane: "h-11",
-  dense: "h-7",
+// The air is the gap between the line and the text beside it, over and under. The line starts below the time
+// over a marker and ends where the text under it ends, so the track is as tall with or without that text; the
+// peek, which has no room to spare, ends at the line unless a stage note stands under it.
+const AIR = "[--air:--spacing(3)] [--line:var(--text-body-sm--line-height)]";
+const TIME_ROOM = `${AIR} [--mid:calc(var(--line)+var(--air))]`;
+const BELOW = "top-[calc(var(--mid)+var(--air))]";
+const BELOW_SECOND = "top-[calc(var(--mid)+var(--air)+var(--line))]";
+
+const TRACK_SIZE: Record<LaneVariant, string> = {
+  page: `${TIME_ROOM} h-[calc(var(--mid)+var(--air)+2*var(--line))]`,
+  lane: `${TIME_ROOM} h-[calc(var(--mid)+var(--air)+var(--line))]`,
+  peek: `${TIME_ROOM} h-[calc(var(--mid)+var(--air))]`,
+  dense: `${AIR} h-7 [--mid:50%]`,
 };
 
-const METER_MARGIN: Record<LaneVariant, string | undefined> = {
-  page: "mb-xl",
-  peek: "mb-md",
-  lane: "mb-lg",
-  dense: undefined,
-};
-
-/** The stage meter sits under the agent station, which holds all agent work whatever stage the issue is on; positions are shares of the width, so the track never scrolls sideways. */
+/** The stage note sits under the agent station, which holds all agent work whatever stage the issue is on; positions are shares of the width, so the track never scrolls sideways. */
 export function Lane({
   stations,
   position,
@@ -193,15 +203,15 @@ export function Lane({
   const standing = current < 0 ? undefined : stations[current];
   const agent = stations.findIndex((station) => station.kind === "agent");
   const handoff = stations.findIndex((station) => station.kind === "handoff");
-  const hasMeter = position !== null && progress !== null && agent >= 0;
-  const hasCount = stations.some((station) => countLineOf(station, variant) !== "");
+  const hasStages = position !== null && progress !== null && agent >= 0;
+  const hasNote = hasStages && variant !== "dense";
   const hasPullRequest =
     variant === "lane" && pullRequestNumber !== null && handoff >= 0 && current >= handoff;
   const furthest = stations.reduce(
     (last, station, index) => (isWorkedReaction(station) && index > last ? index : last),
     current,
   );
-  const reached = furthest < 0 ? 0 : stationX(furthest, count) - stationX(0, count);
+  const reached = furthest < 0 ? "0px" : stationSpan(furthest, count);
   const headWord =
     standing === undefined
       ? undefined
@@ -211,62 +221,76 @@ export function Lane({
           ? undefined
           : laneMarkerWord(standing.mark);
 
+  // Names stand under every station only while each fits its box; narrower, only the standing station keeps its words.
+  const trackRef = useRef<HTMLDivElement>(null);
+  const isCrowded = useWidth(trackRef) < (STATION_NAME_BOX_PX + 8) * Math.max(1, count - 1);
+
   const track = (
     <div
+      ref={trackRef}
       aria-hidden="true"
       className={cn(
         "relative",
-        TRACK_HEIGHT[variant],
-        hasMeter && METER_MARGIN[variant],
-        !hasMeter && hasCount && variant === "page" && "mb-md",
+        TRACK_SIZE[variant],
+        variant === "peek" && hasNote && "h-[calc(var(--mid)+var(--air)+var(--line))]",
       )}
     >
       <div
-        className="absolute top-1/2 h-px bg-ink-faint"
-        style={{
-          left: `${stationX(0, count)}%`,
-          right: `${100 - stationX(count - 1, count)}%`,
-        }}
+        className="absolute top-(--mid) h-px bg-ink-faint"
+        style={{ left: `${TRACK_INSET_PX}px`, right: `${TRACK_INSET_PX}px` }}
       />
       <div
-        className="absolute top-[calc(50%-1px)] h-0.75 rounded-full bg-ink-body"
-        style={{ left: `${stationX(0, count)}%`, width: `${reached}%` }}
+        className="absolute top-[calc(var(--mid)-1px)] h-0.75 rounded-full bg-ink-body"
+        style={{ left: `${TRACK_INSET_PX}px`, width: reached }}
       />
       {stations.map((station, index) => {
-        const left = `${stationX(index, count)}%`;
+        const left = stationX(index, count);
+        const place = stationPlace(index, count, LANE_TEXT_INSET_PX);
         const isCurrent = index === current;
         const countLine = countLineOf(station, variant);
         return (
           <div key={station.key}>
             {isCurrent ? (
-              <CurrentMarker
-                station={station}
-                left={left}
-                variant={variant}
-                edge={index === count - 1 ? "end" : index === 0 ? "start" : null}
-              />
+              <CurrentMarker station={station} left={left} place={place} variant={variant} />
             ) : (
               <StationDot station={station} left={left} countLine={countLine} />
             )}
             {variant === "page" ? (
               <span
                 className={cn(
-                  "absolute top-[calc(50%+12px)] -translate-x-1/2 whitespace-nowrap text-body-sm",
-                  index === count - 1 && "max-md:-translate-x-full",
-                  isCurrent ? "text-ink-body" : "text-ink-body max-md:hidden",
+                  `absolute ${BELOW} whitespace-nowrap text-body-sm text-ink-body`,
+                  place.className,
+                  !isCurrent && (isCrowded ? "hidden" : "max-md:hidden"),
                 )}
-                style={{ left }}
+                style={place.style}
               >
                 {station.label}
+              </span>
+            ) : undefined}
+            {/* The count and the stage note take the detail's line where they stand. */}
+            {variant === "page" &&
+            station.detail !== undefined &&
+            countLine === "" &&
+            !(hasNote && index === agent) ? (
+              <span
+                className={cn(
+                  `absolute ${BELOW_SECOND} text-body-sm whitespace-nowrap text-ink-muted`,
+                  place.className,
+                  !isCurrent && (isCrowded ? "hidden" : "max-md:hidden"),
+                )}
+                style={place.style}
+              >
+                {station.detail}
               </span>
             ) : undefined}
             {countLine === "" ? undefined : (
               <span
                 className={cn(
-                  "absolute -translate-x-1/2 text-body-sm whitespace-nowrap text-ink-muted tabular-nums max-md:hidden",
-                  variant === "page" ? "top-[calc(50%+28px)]" : "top-[calc(50%+8px)]",
+                  "absolute text-body-sm whitespace-nowrap text-ink-muted tabular-nums max-md:hidden",
+                  place.className,
+                  variant === "page" ? BELOW_SECOND : BELOW,
                 )}
-                style={{ left }}
+                style={place.style}
               >
                 {countLine}
               </span>
@@ -276,28 +300,22 @@ export function Lane({
       })}
       {hasPullRequest ? (
         <span
-          className="absolute top-[calc(50%+8px)] -translate-x-1/2 font-mono text-body-sm whitespace-nowrap text-ink-muted max-md:hidden"
-          style={{ left: `${stationX(handoff, count)}%` }}
+          className={cn(
+            `absolute ${BELOW} -translate-x-1/2 text-body-sm whitespace-nowrap text-ink-muted max-md:hidden`,
+          )}
+          style={{ left: stationX(handoff, count) }}
         >
           {`#${pullRequestNumber}`}
         </span>
       ) : undefined}
-      {hasMeter ? (
-        <div
-          className={cn(
-            "absolute -translate-x-1/2",
-            variant === "page" ? "top-[calc(50%+32px)] w-24" : "top-[calc(50%+16px)] w-14",
-          )}
-          style={{ left: `${stationX(agent, count)}%` }}
-        >
-          <StageMeter
-            position={position}
-            progress={progress}
-            needs={stations[agent]?.mark === "needs"}
-            atAgent={current === agent}
-            caption={variant !== "dense"}
-          />
-        </div>
+      {hasNote ? (
+        <StageNote
+          position={position}
+          progress={progress}
+          atAgent={current === agent}
+          className={cn("absolute -translate-x-1/2", variant === "page" ? BELOW_SECOND : BELOW)}
+          style={{ left: stationX(agent, count) }}
+        />
       ) : undefined}
     </div>
   );
@@ -307,7 +325,7 @@ export function Lane({
       {stations.map((station) => (
         <li key={station.key}>
           {[
-            station.label,
+            stationName(station),
             station.state === "idle" ? undefined : stateWord(station.state),
             countLineOf(station, variant) || undefined,
             station.time,
@@ -316,7 +334,7 @@ export function Lane({
             .join(", ")}
         </li>
       ))}
-      {hasMeter ? (
+      {hasStages ? (
         <li>{`${ruleLabel(position.current)}, ${progress.k} of ${progress.n}`}</li>
       ) : undefined}
     </ol>
@@ -331,14 +349,12 @@ export function Lane({
     );
   }
   return (
-    <section className="min-w-0 rounded-xl border border-line bg-canvas px-lg py-md max-md:px-md">
-      <h2 className="mb-xxs flex items-baseline gap-sm text-body-sm text-ink-muted">
-        <span className="font-semibold text-ink-body">Pipeline</span>
-        {headWord === undefined ? undefined : <span>{headWord}</span>}
-      </h2>
-      {list}
-      {track}
-    </section>
+    <Panel title="Pipeline" meta={headWord}>
+      <div className="min-w-0 rounded-xl border border-line bg-canvas p-md">
+        {list}
+        {track}
+      </div>
+    </Panel>
   );
 }
 
@@ -355,12 +371,25 @@ export function StandingMark({ marker, className }: StandingMarkProps) {
       aria-label={laneMarkerWord(marker)}
       title={laneMarkerWord(marker)}
       className={cn(
-        "inline-grid shrink-0 place-items-center rounded-full",
+        "relative inline-grid shrink-0 place-items-center rounded-full",
         MARKER[marker],
         className,
       )}
     >
-      {marker === "needs" ? <CircleAlertFilledIcon className="size-4" /> : undefined}
+      {markGlyph(marker)}
+    </span>
+  );
+}
+
+export interface MarkSlotProps {
+  marker: LaneMarker | null;
+}
+
+/** Holds a row's {@link StandingMark} in a box one title line tall, so the mark centers on the title. */
+export function MarkSlot({ marker }: MarkSlotProps) {
+  return (
+    <span className="flex h-lh w-(--size-icon) shrink-0 items-center justify-center text-body-md">
+      {marker === null ? undefined : <StandingMark marker={marker} />}
     </span>
   );
 }
@@ -375,33 +404,33 @@ interface StationDotProps extends StationMarkProps {
 }
 
 interface CurrentMarkerProps extends StationMarkProps {
+  /** Where the time over the marker stands. */
+  place: ReturnType<typeof stationPlace>;
   variant: LaneVariant;
-  /** Which end of the track the station sits at, so its time stays inside the card. */
-  edge: "start" | "end" | null;
 }
 
-function CurrentMarker({ station, left, variant, edge }: CurrentMarkerProps) {
+function CurrentMarker({ station, left, place, variant }: CurrentMarkerProps) {
   const mark = station.mark ?? "current";
   return (
     <>
       <span
         className={cn(
-          "absolute top-1/2 z-(--z-raised) grid -translate-1/2 place-items-center rounded-full shadow-[0_0_0_2px_var(--color-canvas)]",
+          "absolute top-(--mid) z-(--z-raised) grid -translate-1/2 place-items-center rounded-full shadow-[0_0_0_2px_var(--ground)]",
           MARKER[mark],
         )}
         style={{ left }}
-        title={`${station.label}: ${laneMarkerWord(mark)}`}
+        title={`${stationName(station)}: ${laneMarkerWord(mark)}`}
       >
-        {mark === "needs" ? <CircleAlertFilledIcon className="size-4" /> : undefined}
+        {markGlyph(mark)}
       </span>
       {station.time === null || variant === "dense" ? undefined : (
         <span
           className={cn(
-            "absolute whitespace-nowrap text-body-sm text-ink-body tabular-nums",
-            variant === "lane" ? "bottom-[calc(50%+6px)] max-md:hidden" : "bottom-[calc(50%+10px)]",
-            edge === "end" ? "-translate-x-full" : edge === "start" ? "" : "-translate-x-1/2",
+            "absolute bottom-[calc(100%-var(--mid)+var(--air))] whitespace-nowrap text-body-sm text-ink-body tabular-nums",
+            place.className,
+            variant === "lane" && "max-md:hidden",
           )}
-          style={{ left }}
+          style={place.style}
         >
           {station.time}
         </span>
@@ -411,17 +440,22 @@ function CurrentMarker({ station, left, variant, edge }: CurrentMarkerProps) {
 }
 
 function StationDot({ station, left, countLine }: StationDotProps) {
+  // A broken ring keeps a gap to the thick line it stands on, as the standing marker does, so it does not melt into it.
+  const isWaiting = station.state === "waiting" || station.state === "approval";
   const word = [station.state === "idle" ? "" : stateWord(station.state), countLine]
     .filter((part) => part !== "")
     .join(", ");
   return (
     <span
       className={cn(
-        "absolute top-1/2 size-2.75 -translate-1/2 rounded-full border-[1.5px]",
+        "absolute top-(--mid) size-2.75 -translate-1/2 rounded-full",
         DOT[station.state],
+        isWaiting && "shadow-[0_0_0_2px_var(--ground)]",
       )}
       style={{ left }}
-      title={station.kind === "reaction" && word !== "" ? `${station.label}: ${word}` : undefined}
+      title={
+        station.kind === "reaction" && word !== "" ? `${stationName(station)}: ${word}` : undefined
+      }
     />
   );
 }

@@ -18,7 +18,9 @@ const (
 
 	// EffortForwarded declares that the adapter reads the key through
 	// [EffortSetting] and delivers a non-empty value to its runtime on
-	// every turn of every session it starts.
+	// each turn's invocation, or once when each session opens for a carrier
+	// that lives in the runtime's session configuration. Credential
+	// verification sessions are included.
 	EffortForwarded EffortForwarding = "forwarded"
 
 	// EffortNotForwarded declares that the adapter reads no such key and

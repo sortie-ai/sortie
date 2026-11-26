@@ -75,6 +75,7 @@ func TestAppendRunHistoryWithEvents_FailureIsolation(t *testing.T) {
 		trigger       string
 		wantEventsErr bool
 		wantHistory   int64
+		wantTurns     int64
 	}{
 		{
 			name:        "run_history insert raises",
@@ -86,6 +87,12 @@ func TestAppendRunHistoryWithEvents_FailureIsolation(t *testing.T) {
 			trigger:       `CREATE TRIGGER fail BEFORE INSERT ON run_events WHEN NEW.seq = 2 BEGIN SELECT RAISE(ABORT, 'boom'); END`,
 			wantEventsErr: true,
 			wantHistory:   1,
+			wantTurns:     1,
+		},
+		{
+			name:        "run_turn_models insert raises",
+			trigger:     `CREATE TRIGGER fail BEFORE INSERT ON run_turn_models BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+			wantHistory: 0,
 		},
 	}
 
@@ -98,7 +105,12 @@ func TestAppendRunHistoryWithEvents_FailureIsolation(t *testing.T) {
 				t.Fatalf("create trigger: %v", err)
 			}
 
-			_, err := s.AppendRunHistoryWithEvents(context.Background(), runWithDispatch("d1", "2026-03-19T10:00:30Z"), twoEvents(), unboundedRunEvents)
+			run := runWithDispatch("d1", "2026-03-19T10:00:30Z")
+			run.Turns = []storage.RunTurn{{
+				Seq: 1, EndedAt: time.Date(2026, 3, 19, 10, 0, 10, 0, time.UTC), TokensMeasured: true,
+				Models: map[string]storage.ModelTokens{"model-a": {InputTokens: 10}},
+			}}
+			_, err := s.AppendRunHistoryWithEvents(context.Background(), run, twoEvents(), unboundedRunEvents)
 
 			var eventsErr *storage.RunEventsError
 			if err == nil {
@@ -109,6 +121,12 @@ func TestAppendRunHistoryWithEvents_FailureIsolation(t *testing.T) {
 			}
 			if got := scalar(t, s, `SELECT COUNT(*) FROM run_history`); got != tt.wantHistory {
 				t.Errorf("run_history rows = %d, want %d", got, tt.wantHistory)
+			}
+			if got := scalar(t, s, `SELECT COUNT(*) FROM run_turns`); got != tt.wantTurns {
+				t.Errorf("run_turns rows = %d, want %d", got, tt.wantTurns)
+			}
+			if got := scalar(t, s, `SELECT COUNT(*) FROM run_turn_models`); got != tt.wantTurns {
+				t.Errorf("run_turn_models rows = %d, want %d", got, tt.wantTurns)
 			}
 			if got := scalar(t, s, `SELECT COUNT(*) FROM run_events`); got != 0 {
 				t.Errorf("run_events rows = %d, want 0", got)

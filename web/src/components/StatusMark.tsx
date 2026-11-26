@@ -4,6 +4,7 @@ import {
   CircleAlertFilledIcon,
   CircleDotIcon,
   CirclePauseIcon,
+  CircleSlashIcon,
   CircleXIcon,
   ClockIcon,
   LoaderCircleIcon,
@@ -41,6 +42,7 @@ const STATUS: Record<Mark, StatusEntry> = {
   handed: { Glyph: ArrowRightIcon, word: "Handed off", tone: "neutral" },
   succeeded: { Glyph: CheckIcon, word: "Succeeded", tone: "success" },
   failed: { Glyph: XIcon, word: "Failed", tone: "error" },
+  cancelled: { Glyph: CircleSlashIcon, word: "Cancelled", tone: "neutral" },
   degraded: { Glyph: CircleXIcon, word: "Degraded", tone: "error" },
   clear: { Glyph: CheckIcon, word: "All clear", tone: "neutral" },
   stalled: { Glyph: TriangleAlertIcon, word: "No events for longer than usual", tone: "neutral" },
@@ -79,17 +81,27 @@ export function StatusMark({ mark, label, title, className }: StatusMarkProps) {
   const isSpinning = mark === "running";
   const hasLabel = label !== undefined;
 
+  const glyph = (
+    <Glyph
+      className={cn(GLYPH_TONE[tone], isSpinning && "animate-spin motion-reduce:animate-none")}
+      style={isSpinning ? { animationDuration: "var(--duration-spin)" } : undefined}
+    />
+  );
+
   return (
     <span
-      className={cn("inline-flex items-center gap-xs", className)}
+      className={cn("inline-flex gap-xs", hasLabel ? "items-start" : "items-center", className)}
       title={hasLabel ? undefined : (title ?? word)}
     >
-      <Glyph
-        className={cn(GLYPH_TONE[tone], isSpinning && "animate-spin motion-reduce:animate-none")}
-        style={isSpinning ? { animationDuration: "var(--duration-spin)" } : undefined}
-      />
       {hasLabel ? (
-        <span className={LABEL_TONE[tone]}>{label}</span>
+        // A box one line tall centers the glyph on the label's first line when the label wraps.
+        <span className="flex h-lh shrink-0 items-center">{glyph}</span>
+      ) : (
+        glyph
+      )}
+      {hasLabel ? (
+        // The label, not the glyph, gives the mark its baseline, so it lines up with its row.
+        <span className={cn("self-baseline", LABEL_TONE[tone])}>{label}</span>
       ) : (
         <span className="sr-only">{word}</span>
       )}

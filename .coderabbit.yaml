@@ -1,6 +1,7 @@
 # yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
 
 reviews:
+  review_status: true
   high_level_summary_in_walkthrough: true
 
   suggested_reviewers: false
@@ -33,7 +34,7 @@ reviews:
     - "!internal/agent/clientprotocol/wire_gen.go"
     - "!internal/server/ui/dist/**"
     - "!web/src/api/types.gen.ts"
-    - "!docs/api.schema.json"
+    - "!docs/openapi.json"
     - "!internal/pricing/snapshot/**"
 
 chat:

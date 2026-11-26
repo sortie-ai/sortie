@@ -599,7 +599,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 		},
 		{
-			name:    "no available slots reschedules with backoff",
+			name:    "no available slots rechecks at the poll interval",
 			issueID: "ISS-1",
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
@@ -624,8 +624,8 @@ func TestHandleRetryTimer(t *testing.T) {
 				if !ok {
 					t.Fatalf("RetryAttempts[%s] missing after no-slots", id)
 				}
-				if entry.Attempt != 2 {
-					t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+				if entry.Attempt != 1 {
+					t.Errorf("RetryAttempts[%s].Attempt = %d, want 1 (a full slot is no failed attempt)", id, entry.Attempt)
 				}
 				if entry.Error != "no available orchestrator slots" {
 					t.Errorf("RetryAttempts[%s].Error = %q, want %q", id, entry.Error, "no available orchestrator slots")
@@ -2032,8 +2032,8 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		if !ok {
 			t.Fatal("RetryAttempts[ISS-FULL] missing, want rescheduled")
 		}
-		if entry.Attempt != 2 {
-			t.Errorf("rescheduled Attempt = %d, want 2", entry.Attempt)
+		if entry.Attempt != 1 {
+			t.Errorf("rescheduled Attempt = %d, want 1 (no free host is no failed attempt)", entry.Attempt)
 		}
 		if entry.Error != "no available SSH hosts" {
 			t.Errorf("rescheduled Error = %q, want %q", entry.Error, "no available SSH hosts")
@@ -3104,8 +3104,8 @@ func TestHandleRetryTimer_ReactionHandoffNoSlotsPreservesContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("RetryAttempts[%s] missing after no-slots reschedule", id)
 	}
-	if entry.Attempt != 2 {
-		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	if entry.Attempt != 1 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 1 (a full slot is no failed attempt)", id, entry.Attempt)
 	}
 	if entry.Error != "no available orchestrator slots" {
 		t.Errorf("RetryAttempts[%s].Error = %q, want %q", id, entry.Error, "no available orchestrator slots")
@@ -3174,8 +3174,8 @@ func TestHandleRetryTimer_ReactionHandoffPerStateCapExhaustedPreservesContext(t 
 	if !ok {
 		t.Fatalf("RetryAttempts[%s] missing after per-state cap reschedule", id)
 	}
-	if entry.Attempt != 2 {
-		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	if entry.Attempt != 1 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 1 (a full slot is no failed attempt)", id, entry.Attempt)
 	}
 	if entry.ReactionKind != ReactionKindCI {
 		t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindCI)

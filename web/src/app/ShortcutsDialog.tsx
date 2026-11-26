@@ -3,12 +3,18 @@ import { useMatch } from "react-router";
 import { Kbd } from "@/app/Kbd";
 import { modifierLabel } from "@/app/keys";
 import { Dialog, DialogPopup, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/cn";
 
 import type { ScreenEntry } from "@/app/Rail";
 
 interface Shortcut {
   label: string;
   keys: string[];
+}
+
+interface ShortcutGroup {
+  label: string;
+  shortcuts: Shortcut[];
 }
 
 const OVERVIEW_SHORTCUTS: Shortcut[] = [
@@ -33,20 +39,21 @@ const PIPELINE_SHORTCUTS: Shortcut[] = [
 
 const ISSUE_SHORTCUTS: Shortcut[] = [{ label: "Open the latest session", keys: ["O"] }];
 
-function everywhereShortcuts(screens: ScreenEntry[]): Shortcut[] {
-  return [
-    { label: "Refresh now", keys: ["R"] },
-    { label: "Pause or resume live updates", keys: ["P"] },
-    { label: "Mark everything read", keys: ["Shift", "U"] },
-    { label: "Next theme", keys: ["T"] },
-    ...screens.map((screen) => ({
-      label: `Go to ${screen.label}`,
-      keys: ["G", screen.key.toUpperCase()],
-    })),
-    { label: "Keyboard shortcuts", keys: ["?"] },
-    { label: "Command palette", keys: [modifierLabel(), "K"] },
-    { label: "Close, go back", keys: ["Esc"] },
-  ];
+const EVERYWHERE_SHORTCUTS: Shortcut[] = [
+  { label: "Refresh now", keys: ["R"] },
+  { label: "Pause or resume live updates", keys: ["P"] },
+  { label: "Mark everything read", keys: ["Shift", "U"] },
+  { label: "Command palette", keys: [modifierLabel(), "K"] },
+  { label: "Keyboard shortcuts", keys: ["?"] },
+  { label: "Next theme", keys: ["T"] },
+  { label: "Close, go back", keys: ["Esc"] },
+];
+
+function screenShortcuts(screens: ScreenEntry[]): Shortcut[] {
+  return screens.map((screen) => ({
+    label: `Go to ${screen.label}`,
+    keys: ["G", screen.key.toUpperCase()],
+  }));
 }
 
 export interface ShortcutsDialogProps {
@@ -59,33 +66,48 @@ export function ShortcutsDialog({ screens, open, onOpenChange }: ShortcutsDialog
   const isOverview = useMatch("/") !== null;
   const isPipeline = useMatch("/pipeline") !== null;
   const isIssue = useMatch("/issues/:identifier") !== null;
-  const shortcuts = [
-    ...(isOverview ? OVERVIEW_SHORTCUTS : []),
-    ...(isPipeline ? PIPELINE_SHORTCUTS : []),
-    ...(isIssue ? ISSUE_SHORTCUTS : []),
-    ...everywhereShortcuts(screens),
+  const groups: ShortcutGroup[] = [
+    { label: "Navigation", shortcuts: screenShortcuts(screens) },
+    { label: "Everywhere", shortcuts: EVERYWHERE_SHORTCUTS },
+    ...(isOverview ? [{ label: "This page", shortcuts: OVERVIEW_SHORTCUTS }] : []),
+    ...(isPipeline ? [{ label: "This page", shortcuts: PIPELINE_SHORTCUTS }] : []),
+    ...(isIssue ? [{ label: "This page", shortcuts: ISSUE_SHORTCUTS }] : []),
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup>
-        <div className="overflow-y-auto p-lg">
-          <DialogTitle className="mb-md">Keyboard shortcuts</DialogTitle>
-          <ul className="grid grid-cols-2 gap-x-xl gap-y-xs max-md:grid-cols-1">
-            {shortcuts.map((shortcut) => (
-              <li
-                key={shortcut.label}
-                className="flex items-center justify-between gap-sm border-b border-line py-xxs text-body-md"
+        {/* The last row's own padding counts toward the bottom edge, so the content ends as far from it as from the sides. */}
+        <div className="overflow-y-auto px-md pt-sm pb-[calc(var(--spacing-md)-(var(--size-control)-var(--size-kbd))/2)]">
+          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          {groups.map((group, index) => (
+            <section key={group.label} className={cn(index > 0 && "mt-sm border-t border-line")}>
+              {/* The first label sits as low as the palette's, whose input rule is one pixel tall. */}
+              <h3
+                className={cn(
+                  "pb-xxs text-label-caps font-medium text-ink-muted",
+                  index === 0 ? "pt-[calc(var(--spacing-md)+1px)]" : "pt-sm",
+                )}
               >
-                <span>{shortcut.label}</span>
-                <span className="flex shrink-0 gap-xxs">
-                  {shortcut.keys.map((key) => (
-                    <Kbd key={key}>{key}</Kbd>
-                  ))}
-                </span>
-              </li>
-            ))}
-          </ul>
+                {group.label}
+              </h3>
+              <ul className="columns-2 gap-x-xl max-md:columns-1">
+                {group.shortcuts.map((shortcut) => (
+                  <li
+                    key={shortcut.label}
+                    className="flex min-h-8 break-inside-avoid items-center justify-between gap-sm py-xxs text-body-md"
+                  >
+                    <span>{shortcut.label}</span>
+                    <span className="flex shrink-0 gap-xxs">
+                      {shortcut.keys.map((key) => (
+                        <Kbd key={key}>{key}</Kbd>
+                      ))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
         </div>
       </DialogPopup>
     </Dialog>

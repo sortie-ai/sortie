@@ -164,6 +164,6 @@ Windows live qualification is unobserved.
 
 The generic adapter's gated suite covers this route when its command coordinate points at `kiro-cli acp`. Its scripted contract (`TestIntegration_ScriptedModel`) runs with the settings of the nightly "Kiro CLI - ACP (scripted)" row: the command, the credential variable, the model document path, and the model document, including the spend declaration `Kiro CLI Agent`. Every scenario expects no token figure and asserts no credits, because the scripted model endpoint emits no metering and the vendor's service computes credits.
 
-The contract's SSH variants add `SORTIE_CLIENTPROTOCOL_SSH_COMMAND`, `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and an `SORTIE_CLIENTPROTOCOL_SSH_INSTALL` that puts `kiro-cli` and `kiro-cli-chat` on the lab user's PATH. The nightly row installs the latest stable release (`https://prod.download.cli.kiro.dev/stable/latest/kirocli-x86_64-linux.tar.gz`). A local lab keeps the release it first fetched until its image is removed (`make ssh-lab-clean`).
+The contract's SSH variants add `SORTIE_CLIENTPROTOCOL_SSH_COMMAND`, `SORTIE_CLIENTPROTOCOL_HTTP_TOOLS=1`, and an `SORTIE_CLIENTPROTOCOL_SSH_INSTALL` that puts `kiro-cli` on the lab user's PATH. The nightly row installs the latest stable release (`https://prod.download.cli.kiro.dev/stable/latest/kirocli-x86_64-linux.tar.gz`). A local lab keeps the release it first fetched until its image is removed (`make ssh-lab-clean`).
 
 The live qualification profile is gated separately and spends real credits.

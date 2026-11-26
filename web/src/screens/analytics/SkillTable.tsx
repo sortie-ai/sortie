@@ -1,4 +1,5 @@
 import { Hint } from "@/components/ui/hint";
+import { MONO } from "@/components/ui/mono";
 import {
   SortableHead,
   Table,
@@ -9,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { useTableSort } from "@/components/use-table-sort";
 import { fmtCount } from "@/lib/format";
+import { Panel } from "@/components/Panel";
 
 import { COLUMN_WIDTH, ShowMore, usePaging } from "./GroupTable";
 
@@ -48,8 +50,8 @@ export function SkillTable({ report }: SkillTableProps) {
   const { visible, hasMore, attachBody, handleShowMore } = usePaging(ordered);
 
   return (
-    <section className="flex flex-col gap-sm">
-      <Table title="By skill" className="table-fixed min-w-208" frozenColumns={1}>
+    <Panel title="By skill">
+      <Table className="table-fixed min-w-208" frozenColumns={1}>
         <TableHeader>
           <SortableHead columnId="name" sort={sort} className={COLUMN_WIDTH.name}>
             Skill
@@ -57,15 +59,16 @@ export function SkillTable({ report }: SkillTableProps) {
           <SortableHead
             columnId="runs"
             sort={sort}
+            align="right"
             title="A run counts once however often it called the skill."
             className={COLUMN_WIDTH.runs}
           >
             Runs
           </SortableHead>
-          <SortableHead columnId="calls" sort={sort} className={COLUMN_WIDTH.measure}>
+          <SortableHead columnId="calls" sort={sort} align="right" className={COLUMN_WIDTH.measure}>
             Calls
           </SortableHead>
-          <SortableHead columnId="failed_calls" sort={sort}>
+          <SortableHead columnId="failed_calls" sort={sort} align="right">
             Failed calls
           </SortableHead>
         </TableHeader>
@@ -73,17 +76,20 @@ export function SkillTable({ report }: SkillTableProps) {
           {visible.map((row) => (
             <TableRow key={row.skill} tabIndex={-1}>
               <TableCell>
-                <span title={row.skill} className={`block truncate ${COLUMN_WIDTH.nameText}`}>
+                <span
+                  title={row.skill}
+                  className={`block truncate ${MONO} ${COLUMN_WIDTH.nameText}`}
+                >
                   {row.skill}
                 </span>
               </TableCell>
-              <TableCell>
+              <TableCell look="number">
                 <Bounded hint={hint}>{fmtCount(row.runs)}</Bounded>
               </TableCell>
-              <TableCell>
+              <TableCell look="number">
                 <Bounded hint={hint}>{fmtCount(row.calls)}</Bounded>
               </TableCell>
-              <TableCell look={row.failed_calls === 0 ? "muted" : "text"}>
+              <TableCell look={row.failed_calls === 0 ? "number-muted" : "number"}>
                 <Bounded hint={hint}>{fmtCount(row.failed_calls)}</Bounded>
               </TableCell>
             </TableRow>
@@ -91,6 +97,6 @@ export function SkillTable({ report }: SkillTableProps) {
         </TableBody>
       </Table>
       <ShowMore hasMore={hasMore} onShowMore={handleShowMore} />
-    </section>
+    </Panel>
   );
 }

@@ -1555,10 +1555,14 @@ on_retry_timer(issue_id, state, release_held=false):
   if available_slots(state) == 0:
     if retry_entry.hold_rearmed:                         // a held retry keeps its attempt number until a slot frees; the same holds when no SSH host is free
       return rearm_retry(state, issue_id, retry_entry.attempt, state.poll_interval_ms, retry_entry, hold_rearmed=true)
-    return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
+    // a full slot is no failed attempt: recheck one poll interval ahead at the same attempt;
+    // a worker exit that frees a slot makes the entry due at once (waits_for_capacity)
+    return schedule_retry(state, issue_id, retry_entry.attempt, {
       identifier: issue.identifier,
       error: "no available orchestrator slots",
-      session_id: retry_entry.session_id
+      session_id: retry_entry.session_id,
+      delay_ms: state.poll_interval_ms,
+      waits_for_capacity: true
     })
 
   frozen = (retry_entry.agent_kind, retry_entry.template_id, retry_entry.rule_name)

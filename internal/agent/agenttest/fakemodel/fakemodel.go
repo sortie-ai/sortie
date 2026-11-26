@@ -45,6 +45,9 @@ type Response struct {
 	Usage  Usage
 	Header http.Header // headers the answer carries beside the wire's own; nil adds none
 
+	// Truncated stops the Text reply at the output-token limit, as a provider reports when it cuts a reply short.
+	Truncated bool
+
 	// Status is the HTTP status of a refusal answer; zero answers 200
 	// with Text or Call.
 	Status int
@@ -190,6 +193,7 @@ type reply struct {
 	model     string
 	streaming bool
 	text      string
+	truncated bool
 	call      *FunctionCall
 	usage     Usage
 }
@@ -260,6 +264,7 @@ func Background(classify func(Exchange) bool) Option {
 // Start fails t with Fatalf, naming the first invalid index, unless each
 // entry has exactly one of a non-empty Text, a non-nil Call and a true Hold,
 // no negative count, and CachedContent plus CacheWrite no greater than Prompt.
+// A truncated entry has a Text.
 // A held entry reports no usage and carries no Header. An entry with a
 // non-zero Status is a refusal: it carries no Call, no Hold and no Usage, and
 // the exactly-one rule does not apply to it. A request that
@@ -305,12 +310,14 @@ func Start(t testing.TB, script []Response, opts ...Option) *Server {
 func invalidScriptRule(r Response) string {
 	u := r.Usage
 	switch {
-	case r.Status != 0 && (r.Call != nil || r.Hold || u != (Usage{})):
-		return "refuses with a Status but holds a Call, a Hold or usage"
+	case r.Status != 0 && (r.Call != nil || r.Hold || r.Truncated || u != (Usage{})):
+		return "refuses with a Status but holds a Call, a Hold, a truncation or usage"
 	case r.Status != 0:
 		return ""
 	case !exactlyOne(r.Text != "", r.Call != nil, r.Hold):
 		return "must hold exactly one of Text, Call and Hold"
+	case r.Truncated && r.Text == "":
+		return "truncates a reply that has no Text"
 	case r.Hold && (u != (Usage{}) || r.Header != nil):
 		return "holds a request but reports usage or a header"
 	case min(u.Prompt, u.Candidates, u.Thoughts, u.CachedContent, u.CacheWrite) < 0:
@@ -536,7 +543,11 @@ func (s *Server) respond(ex *Exchange, r *http.Request) (contentType, failure st
 	if entry.Status != 0 {
 		return refuse(ex, c, entry)
 	}
-	turn := reply{seq: ex.Seq, model: dec.model, streaming: dec.streaming, operation: dec.operation, text: entry.Text, usage: entry.Usage}
+	if entry.Truncated && c.wire() == WireGenerateAssistantResponse {
+		return failWire(ex, c, ExchangeUnmatched,
+			label+" meets a truncated script entry this wire cannot carry", "")
+	}
+	turn := reply{seq: ex.Seq, model: dec.model, streaming: dec.streaming, operation: dec.operation, text: entry.Text, truncated: entry.Truncated, usage: entry.Usage}
 	if entry.Call != nil {
 		call, err := entry.Call(dec.tools)
 		if err == nil && !isJSONObject(call.Arguments) {

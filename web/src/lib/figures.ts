@@ -46,19 +46,22 @@ export const UNPRICED_TEXT = "unpriced";
 export const NOT_AVAILABLE = "N/A";
 export const NOT_RECORDED = "not recorded";
 export const NO_COST = "none";
-const UNKNOWN_FIGURE = "unknown";
+export const UNKNOWN_FIGURE = "unknown";
 const BASE_TIER = "base";
 const UNKNOWN_MODEL = "";
 
-export const TOKENS_TILE_CAPTION = "every run measured";
+export const TOKENS_TILE_CAPTION = "Counts every run, since every run reported its tokens.";
 export const COST_PER_RUN_TILE_CAPTION = "Estimated cost divided by the runs that succeeded.";
 
 export const LABEL_TOKENS = "Tokens";
+export const LABEL_CACHE_HIT_RATE = "Cache hit rate";
+export const CACHE_HIT_RATE_HINT = "Share of input tokens read from the prompt cache.";
 export const LABEL_EST_COST = "Est. cost";
 export const LABEL_MEASURED_FROM = "Measured from";
 export const LABEL_AGENT_REPORTED = "Agent reported";
 export const LABEL_PRICED_FROM = "Priced from";
-export const LABEL_MODEL_NOT_REPORTED = "Model not reported";
+export const LABEL_MODEL = "Model";
+export const MODEL_NOT_REPORTED = "not reported";
 
 export const UNMEASURED_ENDED_EARLY =
   "The run ended before the agent reported any usage. It will not be measured later, and nothing needs doing on your side.";
@@ -81,7 +84,6 @@ export const COST_LOWER_BOUND =
 export const STATS_UNPRICED = "The configured rates leave these runs unpriced.";
 export const VENDOR_LOWER_BOUND =
   "Some turns were not fully counted, so the real amount is higher. It will not be corrected later.";
-export const CHART_ESTIMATED = "Estimated cost of the runs that finished in this period.";
 export const CHART_UNKNOWN = "Cost unknown. The runs could not be priced or measured.";
 
 const SOURCE_WORDS = new Map([
@@ -130,10 +132,6 @@ export function UNMEASURED_AMOUNTS_ONLY(units: readonly string[]): string {
 
 export function MEASURED_FROM(phrases: readonly string[]): string {
   return `Measured from ${listed(phrases)}.`;
-}
-
-export function CACHE_READS(tokens: string): string {
-  return `${tokens} cache reads.`;
 }
 
 export function EXACT(usd: number): string {
@@ -277,11 +275,7 @@ export function runTokensFigure(run: RunResponse): Figure {
       note: joinNotes(RUN_TOKENS_LOWER_BOUND, runSource(run)),
     };
   }
-  const cacheReads = runCacheReadsText(run);
-  return {
-    text: fmtTokens(tokens),
-    note: joinNotes(runSource(run), cacheReads === null ? undefined : CACHE_READS(cacheReads)),
-  };
+  return { text: fmtTokens(tokens), note: runSource(run) };
 }
 
 /** Words the cost of a run in US dollars alone; vendor amounts are not folded in. */
@@ -570,33 +564,15 @@ export function issueCostFigure(detail: IssueDetailResponse, cost: CostFigure): 
     : liveCostFigure(cost.status, cost.usd, "runs");
 }
 
+/** Words a kind's amount, cut down while its figure is a lower bound; the note belongs to the whole figure. */
+export function tokensKindFigure(isLowerBound: boolean): (n: number) => Figure {
+  return (n) => ({ text: isLowerBound ? fmtTokensCut(n) : fmtTokens(n) });
+}
+
 export function runningTokensText(running: RunningEntryResponse): string {
   const figure = running.uncached_tokens;
   if (!running.tokens_measured || figure === null) {
     return NOT_MEASURED;
   }
   return fmtTokens(figure);
-}
-
-function cacheReadsText(cacheReads: number | null, tokensFigure: number | null): string | null {
-  // A zero also means an agent that reports no cache data, and a zero is a claim.
-  if (tokensFigure === null || cacheReads === null || cacheReads === 0) {
-    return null;
-  }
-  return fmtTokens(cacheReads);
-}
-
-export function runCacheReadsText(run: RunResponse): string | null {
-  return cacheReadsText(run.tokens.cache_read_tokens, run.uncached_tokens);
-}
-
-export function totalsCacheReadsText(totals: HistoryTotalsResponse): string | null {
-  return cacheReadsText(totals.tokens.cache_read_tokens, totals.uncached_tokens);
-}
-
-export function statsCacheReadsText(f: StatsFigures, tier: string): string | null {
-  if (tier === BASE_TIER || f.tokens === null) {
-    return null;
-  }
-  return cacheReadsText(f.tokens.cache_read, f.tokens.uncached);
 }

@@ -33,7 +33,6 @@ type permissionAction string
 
 const (
 	permissionAllow permissionAction = "allow"
-	permissionAsk   permissionAction = "ask"
 	permissionDeny  permissionAction = "deny"
 )
 
@@ -337,17 +336,20 @@ type inlineCompaction struct {
 // buildInlineConfig returns the OPENCODE_CONFIG_CONTENT document: the
 // session's tool policy, sharing fixed to disabled, autocompaction disabled
 // when pt asks for it, the title agent disabled, and mcp, the tool-server
-// delivery, when non-empty. Unless pt skips permissions, the policy sets
-// external_directory to ask when the tool lists leave it undecided, because
-// OpenCode 2.x applies no default for it.
+// delivery, when non-empty. Unless pt skips permissions, the policy sets the
+// "*" key to deny when the tool lists leave it undecided, because OpenCode's own
+// default allows every tool, and a project's saved approvals override any
+// configured rule except a deny. The runtime applies the last matching rule and
+// the JSON encoder orders map keys bytewise, which puts "*" ahead of every
+// tool name, so each rule the lists produce still decides its own key.
 func buildInlineConfig(pt passthroughConfig, mcp []byte) (string, error) {
 	policy, _ := buildPermissionPolicy(pt)
 	if !pt.DangerousSkipPermissions {
 		if policy == nil {
 			policy = permissionPolicy{}
 		}
-		if _, decided := policy["external_directory"]; !decided {
-			policy["external_directory"] = permissionAsk
+		if _, decided := policy["*"]; !decided {
+			policy["*"] = permissionDeny
 		}
 	}
 	return marshalInlineConfig(pt, policy, mcp)

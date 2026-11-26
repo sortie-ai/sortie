@@ -70,6 +70,22 @@ func UntilWithin(bound, interval time.Duration, cond func() error) error {
 	}
 }
 
+// Within returns bound, shortened so that reserve still remains before t's
+// deadline when the wait ends, and at least a millisecond. A live suite bounds
+// each working wait with it, so a hung step fails its own test while the
+// suite keeps the time to stop what it started and report, instead of the
+// binary's timeout ending every test at once. Without a deadline it returns
+// bound. It MUST NOT be called inside a synctest bubble, where t.Deadline
+// panics.
+func Within(t *testing.T, bound, reserve time.Duration) time.Duration {
+	requirePositive("bound", bound)
+	deadline, ok := t.Deadline()
+	if !ok {
+		return bound
+	}
+	return max(min(bound, time.Until(deadline)-reserve), time.Millisecond)
+}
+
 // Receive returns the value ch delivers, or the zero value once ch is closed,
 // and fails the test when nothing arrives within HangGuard. what names the
 // event. It MUST run on the test goroutine.

@@ -195,6 +195,12 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			},
 		},
 		{
+			name: "a measured surface whose asking_args equal args without an asking_value is rejected",
+			mutate: func(doc map[string]any) {
+				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp"}
+			},
+		},
+		{
 			name: "an entry_points asking_args entry carrying a placeholder outside the allowed set is rejected",
 			mutate: func(doc map[string]any) {
 				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp", "{bogus}"}
@@ -268,6 +274,12 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			name: "a discriminated locator missing its discriminator key is rejected",
 			mutate: func(doc map[string]any) {
 				doc["recognizers"].(map[string]any)["native_stream_json"].(map[string]any)["locator"].(map[string]any)["discriminator_key"] = ""
+			},
+		},
+		{
+			name: "a discriminated locator carrying both discriminator_key and discriminator_path is rejected",
+			mutate: func(doc map[string]any) {
+				doc["recognizers"].(map[string]any)["native_stream_json"].(map[string]any)["locator"].(map[string]any)["discriminator_path"] = []string{"error", "type"}
 			},
 		},
 		{
@@ -653,6 +665,27 @@ func TestRecognizerTerminal(t *testing.T) {
 			output:     `{"type":"result","status":"success"}`,
 			want:       Terminal{EndTurn: true},
 			wantOK:     true,
+		},
+		{
+			name: "error_locator: a line it selects recognizes Error though the terminal locator selects none",
+			recognizer: Recognizer{
+				Locator:      discriminatedRecognizer.Locator,
+				ErrorLocator: TerminalLocator{Mode: "discriminated", DiscriminatorKey: "type", DiscriminatorValue: "error"},
+			},
+			output: `{"type":"error","error":{"message":"x"}}`,
+			want:   Terminal{Error: true},
+			wantOK: true,
+		},
+		{
+			name: "limit_locator: a line it selects wins over an error_locator selecting the same line",
+			recognizer: Recognizer{
+				Locator:      discriminatedRecognizer.Locator,
+				ErrorLocator: TerminalLocator{Mode: "discriminated", DiscriminatorKey: "type", DiscriminatorValue: "error"},
+				LimitLocator: TerminalLocator{Mode: "discriminated", DiscriminatorPath: []string{"error", "type"}, DiscriminatorValue: "output-limit"},
+			},
+			output: `{"type":"error","error":{"type":"output-limit"}}`,
+			want:   Terminal{Case: evidence.CaseLimitReached},
+			wantOK: true,
 		},
 		{
 			name:       "discriminated: a type result line with status refusal recognizes the mapped case",
@@ -1629,6 +1662,8 @@ func TestDecodeRuntimeProfileModelEnv(t *testing.T) {
 		envValue   string
 		modelArgs  []string
 		protoArgs  []string
+		askingEnv  string
+		failingEnv string
 		wantSub    string
 		wantAccept bool
 	}{
@@ -1638,6 +1673,8 @@ func TestDecodeRuntimeProfileModelEnv(t *testing.T) {
 		{name: "a value with the model placeholder twice is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}","small_model":"{model}"}`, wantSub: "model_env"},
 		{name: "a name that is not a bare variable name is rejected", envName: "BAD NAME", envValue: `{"model":"{model}"}`, wantSub: "model_env"},
 		{name: "model_args alongside model_env is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, modelArgs: []string{"--model", "{model}"}, wantSub: "model_args"},
+		{name: "an asking_value without the model placeholder is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, askingEnv: `{"model":"x"}`, wantSub: "model_env"},
+		{name: "a failing_value without the upstream placeholder is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, failingEnv: `{"model":"x"}`, wantSub: "model_env"},
 		{name: "an entry point carrying the model alongside model_env is rejected", envName: "OPENCODE_CONFIG_CONTENT", envValue: `{"model":"{model}"}`, protoArgs: []string{"--acp", "--model", "{model}"}, wantSub: "entry_points[protocol]"},
 	}
 
@@ -1650,9 +1687,16 @@ func TestDecodeRuntimeProfileModelEnv(t *testing.T) {
 			if tt.modelArgs != nil {
 				doc["model_args"] = tt.modelArgs
 			}
-			doc["model_env"] = map[string]any{"name": tt.envName, "value": tt.envValue}
+			modelEnv := map[string]any{"name": tt.envName, "value": tt.envValue}
+			if tt.askingEnv != "" {
+				modelEnv["asking_value"] = tt.askingEnv
+			}
+			if tt.failingEnv != "" {
+				modelEnv["failing_value"] = tt.failingEnv
+			}
+			doc["model_env"] = modelEnv
 			if tt.protoArgs != nil {
-				doc["entry_points"].(map[string]any)["protocol"] = map[string]any{"args": tt.protoArgs, "asking_args": tt.protoArgs}
+				doc["entry_points"].(map[string]any)["protocol"] = map[string]any{"args": tt.protoArgs, "asking_args": append(slices.Clone(tt.protoArgs), "--ask")}
 			}
 			data := marshalProfileDoc(t, doc)
 

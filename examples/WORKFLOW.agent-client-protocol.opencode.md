@@ -40,6 +40,11 @@ agent:
   stop_grace_ms: 5000
   max_retry_backoff_ms: 300000
 
+agent-client-protocol:
+  permissions: approve-all
+  env:
+    OPENCODE_DISABLE_AUTOUPDATE: "true"
+
 server:
   port: 8642
 ---
@@ -62,7 +67,10 @@ server:
        3. acp takes no model switch; set the model key in OpenCode's config.
           A model id OpenCode cannot resolve silently selects its default.
        4. Authenticate first with: opencode auth login
-       5. acp has no posture switch; OpenCode's own permission rules apply.
+       5. acp has no posture switch; permissions: approve-all above grants
+          each tool call OpenCode asks about, as the "opencode" agent
+          kind does by default; without it the call is refused and the
+          turn fails. A tool OpenCode's own rules deny stays denied.
        6. opencode.json and .opencode/agents in the workspace apply to a run.
        7. Run this agent inside a hardened sandbox.
        8. max_turns: 15 above is a sample default, not a route property.

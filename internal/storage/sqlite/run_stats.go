@@ -108,6 +108,11 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (storage.RunHistoryC
 		return storage.RunHistoryCapabilities{}, err
 	}
 
+	hasRunTurns, err := s.tableExists(ctx, "run_turns")
+	if err != nil {
+		return storage.RunHistoryCapabilities{}, err
+	}
+
 	return storage.RunHistoryCapabilities{
 		HasTurnsCompleted: columns["turns_completed"],
 		HasReviewMetadata: columns["review_metadata"],
@@ -126,6 +131,7 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (storage.RunHistoryC
 		HasSkills:        columns["skills"],
 		HasUsageProvenance: columns["usage_completeness"] && columns["usage_provenance"] &&
 			hasReportedAmounts,
+		HasRunTurns: hasRunTurns,
 	}, nil
 }
 

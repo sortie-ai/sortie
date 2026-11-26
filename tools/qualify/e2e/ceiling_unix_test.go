@@ -117,10 +117,7 @@ func awaitTokenBudgetHold(t *testing.T, harness *Harness) orchestrator.SnapshotB
 
 	var hold orchestrator.SnapshotBudgetEntry
 	waittest.Until(t, func() error {
-		snapshot, err := harness.orchestrator.SnapshotFunc()()
-		if err != nil {
-			t.Fatalf("runtime snapshot: %v", err)
-		}
+		snapshot := harness.orchestrator.SnapshotFunc()()
 		for _, entry := range snapshot.BudgetExhausted {
 			if entry.IssueID == issueID {
 				hold = entry

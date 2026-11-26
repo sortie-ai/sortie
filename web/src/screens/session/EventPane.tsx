@@ -2,9 +2,11 @@ import { Collapsible } from "@base-ui/react/collapsible";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ChevronDownIcon } from "@/components/icons";
+import { Parts } from "@/components/Parts";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
 import { Button } from "@/components/ui/button";
+import { usePageTop } from "@/components/use-page-top";
 import { cn } from "@/lib/cn";
 import { fmtClockSec, fmtCount, fmtDuration, fmtTokens, parseInstant, plural } from "@/lib/format";
 import { runOutcome } from "@/lib/run-status";
@@ -90,19 +92,24 @@ interface TurnItemsProps {
 }
 
 function TurnItems({ turn, tokens, seconds, className }: TurnItemsProps) {
-  return (
-    <>
-      {turn === null ? undefined : (
-        <span className={cn("whitespace-nowrap", className)}>{`Turn ${turn}`}</span>
-      )}
-      {tokens === null ? undefined : (
-        <span className={cn("whitespace-nowrap", className)}>{`${fmtTokens(tokens)} tokens`}</span>
-      )}
-      {seconds === null ? undefined : (
-        <span className={cn("whitespace-nowrap", className)}>{fmtDuration(seconds)}</span>
-      )}
-    </>
-  );
+  const parts = [
+    turn === null ? undefined : (
+      <span key="turn" className="whitespace-nowrap">
+        {`Turn ${turn}`}
+      </span>
+    ),
+    tokens === null ? undefined : (
+      <span key="tokens" className="whitespace-nowrap">
+        {`${fmtTokens(tokens)} tokens`}
+      </span>
+    ),
+    seconds === null ? undefined : (
+      <span key="seconds" className="whitespace-nowrap">
+        {fmtDuration(seconds)}
+      </span>
+    ),
+  ].filter((part) => part !== undefined);
+  return parts.length === 0 ? undefined : <Parts parts={parts} className={className} />;
 }
 
 interface EventLineProps {
@@ -237,13 +244,16 @@ function ToolsLine({ line, isOpen, onOpenChange, isFresh }: ToolsLineProps) {
               !isOpen && "-rotate-90",
             )}
           />
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-sm gap-y-xxs">
-            <span>{foldPhraseOf(calls)}</span>
-            {duration === undefined ? undefined : <span>{duration}</span>}
-            {failed.length === 0 ? undefined : (
-              <StatusMark mark="failed" label={`${failed.length} failed`} />
-            )}
-          </span>
+          <Parts
+            className="min-w-0"
+            parts={[
+              <span key="phrase">{foldPhraseOf(calls)}</span>,
+              ...(duration === undefined ? [] : [<span key="duration">{duration}</span>]),
+              ...(failed.length === 0
+                ? []
+                : [<StatusMark key="failed" mark="failed" label={`${failed.length} failed`} />]),
+            ]}
+          />
         </Collapsible.Trigger>
         <Collapsible.Panel>
           <div className="grid gap-xxs pt-xs text-body-sm">
@@ -285,22 +295,24 @@ function Foot({ isLive, isPaused, isFollowing, lastEventAt, heldEvents, isEmpty 
     content = undefined;
   } else if (isLive) {
     content = (
-      <>
-        <span className="inline-flex items-center gap-xs">
-          <span
-            aria-hidden="true"
-            className={cn(
-              "size-xs shrink-0 rounded-full",
-              isPaused ? "bg-ink-muted" : "bg-success-fill",
-            )}
-          />
-          {isPaused ? "Paused" : "Live"}
-        </span>
-        {lastEventAt === null ? undefined : (
-          <span>{`last event at ${fmtClockSec(lastEventAt)}`}</span>
-        )}
-        {isFollowing ? <span>following new events</span> : undefined}
-      </>
+      <Parts
+        parts={[
+          <span key="state" className="inline-flex items-center gap-xs">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-xs shrink-0 rounded-full",
+                isPaused ? "bg-ink-muted" : "bg-success-fill",
+              )}
+            />
+            {isPaused ? "Paused" : "Live"}
+          </span>,
+          ...(lastEventAt === null
+            ? []
+            : [<span key="last">{`last event at ${fmtClockSec(lastEventAt)}`}</span>]),
+          ...(isFollowing ? [<span key="following">following new events</span>] : []),
+        ]}
+      />
     );
   } else {
     content = <span>{plural(heldEvents, "event", "events")}</span>;
@@ -333,6 +345,7 @@ export interface EventPaneProps {
 export function EventPane({ timeline, end, isNotRetained, isPaused, lastEventAt }: EventPaneProps) {
   const isLive = end === null;
   const paneRef = useRef<HTMLDivElement>(null);
+  const paneTop = usePageTop(paneRef);
   const isHeldRef = useRef(false);
   const newestSeq = newestSeqOf(timeline);
   const [follow, setFollow] = useState<FollowState>({ isFollowing: true, unseen: 0, newestSeq });
@@ -442,7 +455,11 @@ export function EventPane({ timeline, end, isNotRetained, isPaused, lastEventAt 
         onKeyDown={handleKeyDown}
         onPointerDown={handleHold}
         onTouchStart={handleHold}
-        className="relative max-h-[calc(100vh-250px)] min-h-70 overflow-y-auto rounded-xl border border-line bg-canvas px-md py-xs focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-focus-ring"
+        // The pane ends where its foot still fits in the window, level with the rail's last links.
+        style={{
+          maxHeight: `calc(100dvh - ${paneTop}px - var(--size-control) - var(--spacing-lg) + (var(--size-control) - var(--text-body-sm--line-height)) / 2)`,
+        }}
+        className="relative min-h-70 overflow-y-auto rounded-xl border border-line bg-canvas px-md py-xs focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-focus-ring"
       >
         {isEmpty ? (
           <Row>

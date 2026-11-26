@@ -16,16 +16,23 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-const mcpConfigKey = "mcp_config"
+const (
+	// kindName repeats the registered kind because the registration keeps its
+	// own literal, which the kind-completeness scan reads syntactically.
+	kindName     = "agent-client-protocol"
+	mcpConfigKey = "mcp_config"
+	variantKey   = "variant"
+)
 
 func init() {
 	registry.Agents.RegisterWithMeta("agent-client-protocol", NewClientProtocolAdapter, registry.AgentMeta{
 		RequiresCommand:       true,
 		ValidateAgentConfig:   validateConfig,
 		MCPDialect:            registry.MCPDialectACPSession,
+		LiteralSettings:       []string{envKey},
 		UsageSources:          usage.Sources{Live: usagesource.Default.Live},
 		CredentialEnv:         registry.DeclareCredentialEnv(),
-		EffortForwarding:      registry.EffortNotForwarded,
+		EffortForwarding:      registry.EffortForwarded,
 		UsageLimitRecognition: registry.UsageLimitRecognized,
 		VerificationContext: registry.DeclareVerificationContext(
 			registry.VerificationKeepsAllTools,
@@ -54,15 +61,14 @@ type ClientProtocolAdapter struct {
 
 	// declarations is the registry finishSession selects a usage declaration
 	// from. Nil means usagesource.Declarations. Set by a test before
-	// StartSession, as drainGrace is; every production caller reaches only
-	// NewClientProtocolAdapter, which leaves it at its zero value.
+	// StartSession, as drainGrace is.
 	declarations *registry.Registry[usagesource.Declaration, struct{}]
 }
 
-// NewClientProtocolAdapter constructs a [ClientProtocolAdapter]. The kind's
-// settings arrive per session; it reads mcp_config only to check its type (the
-// shared tool delivery owns the path a session uses) and model as the model a
-// usage-limit refusal holds and whose pulled window supplies its reset.
+// NewClientProtocolAdapter constructs a [ClientProtocolAdapter]; the kind's
+// settings arrive per session, config_options among them. The env values load
+// as written, because a runtime's own configuration document carries "$"
+// characters that variable resolution would corrupt.
 func NewClientProtocolAdapter() (domain.AgentAdapter, error) {
 	return &ClientProtocolAdapter{}, nil
 }

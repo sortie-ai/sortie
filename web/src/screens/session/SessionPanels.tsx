@@ -1,13 +1,18 @@
 import { NotedFigure } from "@/components/NotedFigure";
 import { Pair, Pairs, Panel } from "@/components/Panel";
 import { StatusMark } from "@/components/StatusMark";
+import { NameText } from "@/components/NameText";
+import { KIND_ORDER, KindLabel, cacheHitRate, freshInputOf } from "@/components/TokenKinds";
+import { MONO } from "@/components/ui/mono";
 import {
   LABEL_AGENT_REPORTED,
+  LABEL_CACHE_HIT_RATE,
   LABEL_EST_COST,
   LABEL_MEASURED_FROM,
-  LABEL_MODEL_NOT_REPORTED,
+  LABEL_MODEL,
   LABEL_PRICED_FROM,
   LABEL_TOKENS,
+  MODEL_NOT_REPORTED,
   NOT_MEASURED,
   liveCostFigure,
   NOT_RECORDED,
@@ -20,7 +25,7 @@ import {
   runTokensFigure,
   vendorAmountFigure,
 } from "@/lib/figures";
-import { fmtCount, fmtDuration } from "@/lib/format";
+import { fmtCount, fmtDuration, fmtPercent } from "@/lib/format";
 
 import { ToolText } from "./ToolLine";
 
@@ -33,6 +38,7 @@ import type {
   TokenInfo,
   VendorAmountResponse,
 } from "@/api/types.gen";
+import type { TokenKind } from "@/components/TokenKinds";
 import type { SessionRun } from "@/components/use-session-run";
 import type { ReactNode } from "react";
 
@@ -42,37 +48,51 @@ function figureText(n: number | null): string {
   return n === null ? NOT_MEASURED : fmtCount(n);
 }
 
-function liveTokensOf(total: number | null): ReactNode {
-  return total === null ? (
-    NOT_MEASURED
-  ) : (
+function counterOf(tokens: TokenInfo, key: TokenKind["key"]): number | null {
+  switch (key) {
+    case "input":
+      return freshInputOf(tokens);
+    case "output":
+      return tokens.output_tokens;
+    case "cache_write":
+      return tokens.cache_write_tokens;
+    case "cache_read":
+      return tokens.cache_read_tokens;
+  }
+}
+
+interface KindPairsProps {
+  tokens: TokenInfo;
+  total: ReactNode;
+}
+
+function KindPairs({ tokens, total }: KindPairsProps) {
+  const rate = cacheHitRate(tokens.input_tokens, tokens.cache_read_tokens);
+  return (
     <>
-      <strong className="font-bold">{fmtCount(total)}</strong> so far
+      {KIND_ORDER.map((kind) => (
+        <Pair key={kind.key} label={<KindLabel kind={kind} />}>
+          {figureText(counterOf(tokens, kind.key))}
+        </Pair>
+      ))}
+      {rate === null ? undefined : <Pair label={LABEL_CACHE_HIT_RATE}>{fmtPercent(rate)}</Pair>}
+      <Pair label={LABEL_TOKENS}>{total}</Pair>
     </>
   );
 }
 
-/** Input arrives cache-inclusive, so the fresh input leaves out both cache counters. */
-function freshInputOf(tokens: TokenInfo): number | null {
-  const { input_tokens: input, cache_read_tokens: read, cache_write_tokens: write } = tokens;
-  if (input === null || read === null || write === null) {
-    return null;
-  }
-  return Math.max(0, input - read - write);
+interface PricedFromPairProps {
+  part: ModelUsageResponse;
 }
 
-interface ClassPairsProps {
-  tokens: TokenInfo;
-}
-
-function ClassPairs({ tokens }: ClassPairsProps) {
-  return (
-    <>
-      <Pair label="Input">{figureText(freshInputOf(tokens))}</Pair>
-      <Pair label="Output">{figureText(tokens.output_tokens)}</Pair>
-      <Pair label="Cache read">{figureText(tokens.cache_read_tokens)}</Pair>
-      <Pair label="Cache write">{figureText(tokens.cache_write_tokens)}</Pair>
-    </>
+function PricedFromPair({ part }: PricedFromPairProps) {
+  const pricedFrom = priceSourceFigure(part);
+  return pricedFrom === null ? undefined : (
+    <Pair label={LABEL_PRICED_FROM}>
+      <span className={part.price_source === null ? "text-ink-muted" : undefined}>
+        <NotedFigure figure={pricedFrom} />
+      </span>
+    </Pair>
   );
 }
 
@@ -100,6 +120,8 @@ function FinishedUsagePairs({ run }: FinishedUsagePairsProps) {
   const lines = provenanceLines(run);
   const reported = amountsByUnit(run.vendor_amounts ?? []);
   const tokens = runTokensFigure(run);
+  const parts = run.model_usage ?? [];
+  const onlyPart = parts.length === 1 ? parts[0] : undefined;
 
   return (
     <>
@@ -108,24 +130,22 @@ function FinishedUsagePairs({ run }: FinishedUsagePairsProps) {
           <NotedFigure figure={tokens} />
         </Pair>
       ) : (
-        <>
-          <ClassPairs tokens={run.tokens} />
-          <Pair label={LABEL_TOKENS}>
-            <strong className="font-bold">
-              <NotedFigure
-                figure={{
-                  text: fmtCount(total),
-                  note:
-                    run.usage_completeness === "lower_bound" ? RUN_TOKENS_LOWER_BOUND : undefined,
-                }}
-              />
-            </strong>
-          </Pair>
-        </>
+        <KindPairs
+          tokens={run.tokens}
+          total={
+            <NotedFigure
+              figure={{
+                text: fmtCount(total),
+                note: run.usage_completeness === "lower_bound" ? RUN_TOKENS_LOWER_BOUND : undefined,
+              }}
+            />
+          }
+        />
       )}
       <Pair label={LABEL_EST_COST}>
         <NotedFigure figure={runBaseCostFigure(run)} />
       </Pair>
+      {onlyPart === undefined ? undefined : <PricedFromPair part={onlyPart} />}
       {lines === null ? (
         <Pair label={LABEL_MEASURED_FROM}>
           <span className="text-ink-muted">
@@ -164,10 +184,14 @@ function LiveUsagePairs({ running }: LiveUsagePairsProps) {
   return (
     <>
       {running.tokens_measured ? (
-        <>
-          <ClassPairs tokens={running.tokens} />
-          <Pair label={LABEL_TOKENS}>{liveTokensOf(running.uncached_tokens)}</Pair>
-        </>
+        <KindPairs
+          tokens={running.tokens}
+          total={
+            running.uncached_tokens === null
+              ? NOT_MEASURED
+              : `${fmtCount(running.uncached_tokens)} so far`
+          }
+        />
       ) : (
         <Pair label={LABEL_TOKENS}>{NOT_MEASURED}</Pair>
       )}
@@ -186,7 +210,7 @@ export interface UsagePanelProps {
 
 export function UsagePanel({ session }: UsagePanelProps) {
   return (
-    <Panel title="Usage">
+    <Panel isRuled title="Usage">
       <Pairs>
         {session.kind === "finished" ? (
           <FinishedUsagePairs run={session.run} />
@@ -204,32 +228,27 @@ export interface ModelCostPanelProps {
 
 export function ModelCostPanel({ parts }: ModelCostPanelProps) {
   return (
-    <Panel title="Cost per model">
-      {parts.map((part) => {
-        const pricedFrom = priceSourceFigure(part);
-        return (
-          <div key={part.model} className="flex flex-col gap-xs">
-            {part.model === "" ? (
-              <p className="text-body-md font-medium text-ink">{LABEL_MODEL_NOT_REPORTED}</p>
-            ) : (
-              <p className="font-mono text-body-sm text-ink wrap-anywhere">{part.model}</p>
-            )}
+    <Panel isRuled title="Cost per model">
+      <div className="flex flex-col gap-lg">
+        {parts.map((part) => (
+          <div key={part.model}>
             <Pairs>
-              <Pair label={LABEL_TOKENS}>{fmtCount(part.uncached_tokens)}</Pair>
+              <Pair label={LABEL_MODEL}>
+                {part.model === "" ? (
+                  MODEL_NOT_REPORTED
+                ) : (
+                  <span className={`${MONO} wrap-anywhere`}>{part.model}</span>
+                )}
+              </Pair>
+              <KindPairs tokens={part.tokens} total={fmtCount(part.uncached_tokens)} />
               <Pair label={LABEL_EST_COST}>
                 <NotedFigure figure={partCostFigure(part)} />
               </Pair>
-              {pricedFrom === null ? undefined : (
-                <Pair label={LABEL_PRICED_FROM}>
-                  <span className={part.price_source === null ? "text-ink-muted" : undefined}>
-                    <NotedFigure figure={pricedFrom} />
-                  </span>
-                </Pair>
-              )}
+              <PricedFromPair part={part} />
             </Pairs>
           </div>
-        );
-      })}
+        ))}
+      </div>
     </Panel>
   );
 }
@@ -240,7 +259,7 @@ export interface SkillsPanelProps {
 
 export function SkillsPanel({ skills }: SkillsPanelProps) {
   return (
-    <Panel title="Skills">
+    <Panel isRuled title="Skills">
       <ol className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-md gap-y-xs text-body-md">
         {skills.map((call, index) => (
           <li key={index} className="contents">
@@ -248,12 +267,12 @@ export function SkillsPanel({ skills }: SkillsPanelProps) {
             {call.tool_error === true ? (
               <StatusMark
                 mark="failed"
-                label={<ToolText text={call.skill} />}
+                label={<ToolText text={call.skill} isMono />}
                 className="min-w-0 *:min-w-0"
               />
             ) : (
               <span className="min-w-0 text-ink">
-                <ToolText text={call.skill} />
+                <ToolText text={call.skill} isMono />
               </span>
             )}
           </li>
@@ -271,7 +290,7 @@ export interface SessionPanelProps {
 
 function ShortValue({ full, shown }: { full: string; shown: string }) {
   return (
-    <span title={full} className="font-mono text-body-sm">
+    <span title={full} className={MONO}>
       {shown}
     </span>
   );
@@ -287,10 +306,14 @@ export function SessionPanel({ session, config }: SessionPanelProps) {
   const stallTimeoutMs = config?.agent.stall_timeout_ms ?? null;
 
   return (
-    <Panel title="Session">
+    <Panel isRuled title="Details">
       <Pairs>
-        <Pair label="Configured">{source.configured_model || "agent default"}</Pair>
-        <Pair label="Reported model">{source.model_name || "not reported"}</Pair>
+        <Pair label="Configured">
+          {source.configured_model ? <NameText name={source.configured_model} /> : "agent default"}
+        </Pair>
+        <Pair label="Reported model">
+          {source.model_name ? <NameText name={source.model_name} /> : MODEL_NOT_REPORTED}
+        </Pair>
         {source.ssh_host ? <Pair label="Host">{`${source.ssh_host} (SSH)`}</Pair> : undefined}
         {isLive ? (
           <Pair label="Workspace">

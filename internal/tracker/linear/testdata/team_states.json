@@ -5,6 +5,7 @@
         {
           "id": "team-uuid-sor",
           "key": "SOR",
+          "organization": { "urlKey": "acme" },
           "states": {
             "nodes": [
               { "id": "state-backlog", "name": "Backlog", "type": "backlog", "position": 0 },

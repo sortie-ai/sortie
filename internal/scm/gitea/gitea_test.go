@@ -2245,3 +2245,34 @@ func TestEnsureLabelID(t *testing.T) {
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})
 }
+
+func TestNewGiteaAdapter_ProjectURL(t *testing.T) {
+	t.Parallel()
+
+	mux := newPreflightMux(t)
+	root := http.NewServeMux()
+	root.Handle("/gitea/", http.StripPrefix("/gitea", mux))
+	root.Handle("/", mux)
+	srv := httptest.NewServer(root)
+	t.Cleanup(srv.Close)
+
+	tests := []struct{ name, endpoint, want string }{
+		{"bare host", srv.URL, srv.URL + "/acme/widgets"},
+		{"api suffix is dropped", srv.URL + "/api/v1", srv.URL + "/acme/widgets"},
+		{"subpath install keeps its subpath", srv.URL + "/gitea/api/v1", srv.URL + "/gitea/acme/widgets"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			adapter, err := NewGiteaAdapter(validConfig(tt.endpoint))
+			if err != nil {
+				t.Fatalf("NewGiteaAdapter(%q): %v", tt.endpoint, err)
+			}
+
+			if got := adapter.(*GiteaAdapter).ProjectURL(); got != tt.want {
+				t.Errorf("ProjectURL() with endpoint %q = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}

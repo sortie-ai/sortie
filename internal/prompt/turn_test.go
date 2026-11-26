@@ -34,11 +34,11 @@ func TestRuntimeStatusSuffixContent(t *testing.T) {
 		}
 	}
 
-	if !strings.HasPrefix(RuntimeStatusSuffix, originalStatusSuffix+"\n\n") {
-		t.Errorf("RuntimeStatusSuffix does not start with the original two paragraphs followed by a blank line:\n%s", RuntimeStatusSuffix)
+	if !strings.HasPrefix(RuntimeStatusSuffix, "## Report your status\n\n"+originalStatusSuffix+"\n\n") {
+		t.Errorf("RuntimeStatusSuffix does not start with the \"## Report your status\" heading, a blank line, and the original two paragraphs followed by a blank line:\n%s", RuntimeStatusSuffix)
 	}
 
-	appended := strings.TrimPrefix(RuntimeStatusSuffix, originalStatusSuffix)
+	appended := strings.TrimPrefix(strings.TrimPrefix(RuntimeStatusSuffix, "## Report your status\n\n"), originalStatusSuffix)
 	for _, want := range []string{
 		"Give your reason on the lines after the value",
 		"path in the repository",

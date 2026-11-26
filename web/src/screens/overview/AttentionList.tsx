@@ -1,3 +1,5 @@
+import { Panel } from "@/components/Panel";
+
 import { AttentionItem } from "./AttentionItem";
 import { attentionNavKey } from "./rows";
 
@@ -12,7 +14,6 @@ export interface AttentionListProps {
   pending: ReadonlySet<string>;
   onOpen: (item: AttentionItemResponse) => void;
   onAcknowledge: (item: AttentionItemResponse) => void;
-  onAction: (item: AttentionItemResponse) => void;
 }
 
 /** Its items in served order, never reordered by the client. */
@@ -24,15 +25,10 @@ export function AttentionList({
   pending,
   onOpen,
   onAcknowledge,
-  onAction,
 }: AttentionListProps) {
   return (
-    <section className="flex flex-col gap-sm">
-      <div className="flex flex-wrap items-baseline gap-x-sm">
-        <h2 className="font-heading text-h7 font-semibold text-ink">Needs attention</h2>
-        <span className="text-body-md text-ink-muted">critical first, then oldest</span>
-      </div>
-      <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-canvas">
+    <Panel title="Needs attention" meta="critical first, then oldest">
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-canvas">
         {items.map((item) => {
           const navKey = attentionNavKey(item.id);
           return (
@@ -46,11 +42,10 @@ export function AttentionList({
               isPending={pending.has(item.id)}
               onOpen={onOpen}
               onAcknowledge={onAcknowledge}
-              onAction={onAction}
             />
           );
         })}
       </ul>
-    </section>
+    </Panel>
   );
 }

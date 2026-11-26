@@ -12,12 +12,13 @@ export type Mark =
   | "handed"
   | "succeeded"
   | "failed"
+  | "cancelled"
   | "degraded"
   | "clear"
   | "stalled";
 
-/** The marks that state where work stands; `stalled` is a separate marker beside them, never a state. */
-export type StateMark = Exclude<Mark, "stalled">;
+/** The marks that state where work stands; `stalled` is a marker beside them and `cancelled` marks only how a run ended. */
+export type StateMark = Exclude<Mark, "stalled" | "cancelled">;
 
 const STATE_WORDS: Record<StateMark, string> = {
   running: "Running",
@@ -46,7 +47,7 @@ const RUN_STATUSES: Record<string, { word: string; mark: Mark | null }> = {
   needs_person: { word: "Needed input", mark: "stopped" },
   budget_stopped: { word: "Stopped at a budget", mark: "stopped" },
   usage_limited: { word: "Usage limit reached", mark: "stopped" },
-  cancelled: { word: "Cancelled", mark: null },
+  cancelled: { word: "Cancelled", mark: "cancelled" },
 };
 
 export const RUN_STATUS_NAMES: readonly string[] = Object.keys(RUN_STATUSES);

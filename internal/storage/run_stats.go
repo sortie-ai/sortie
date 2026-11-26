@@ -47,6 +47,10 @@ type RunHistoryCapabilities struct {
 	// [RunStatsRow.UsageProvenance] and the amounts a run reported, which
 	// [RunStatsRow.ReportedUnits] reads.
 	HasUsageProvenance bool // [RunStatsRow.UsageCompleteness] and [RunStatsRow.UsageProvenance] are stored
+
+	// HasRunTurns is outside [RunHistoryCapabilities.Full]. It is true when
+	// the database has the turn-record tables that [RunTurnStore] reads.
+	HasRunTurns bool
 }
 
 // Full reports whether the database carries every optional [RunHistory]

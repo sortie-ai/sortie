@@ -26,14 +26,8 @@ import (
 )
 
 func fixedSnapshot(snap orchestrator.RuntimeSnapshotResult) SnapshotFunc {
-	return func() (orchestrator.RuntimeSnapshotResult, error) {
-		return snap, nil
-	}
-}
-
-func failingSnapshot(msg string) SnapshotFunc {
-	return func() (orchestrator.RuntimeSnapshotResult, error) {
-		return orchestrator.RuntimeSnapshotResult{}, fmt.Errorf("%s", msg)
+	return func() orchestrator.RuntimeSnapshotResult {
+		return snap
 	}
 }
 
@@ -2172,21 +2166,6 @@ func TestHandleState(t *testing.T) {
 		}
 	})
 
-	t.Run("snapshot error returns 503 with generic message", func(t *testing.T) {
-		t.Parallel()
-
-		ts := testServer(t, failingSnapshot("connection refused"), acceptingRefresh())
-
-		status, body := getJSON[errorResponse](t, ts, "/api/v1/state")
-
-		if status != http.StatusServiceUnavailable || body.Error.Code != "snapshot_unavailable" {
-			t.Errorf("GET /api/v1/state = %d %q, want %d %q", status, body.Error.Code, http.StatusServiceUnavailable, "snapshot_unavailable")
-		}
-		if wantMsg := "orchestrator state snapshot unavailable"; body.Error.Message != wantMsg {
-			t.Errorf("GET /api/v1/state error message = %q, want %q", body.Error.Message, wantMsg)
-		}
-	})
-
 	t.Run("empty state returns non-null JSON arrays", func(t *testing.T) {
 		t.Parallel()
 
@@ -2543,21 +2522,6 @@ func TestHandleIssueDetail(t *testing.T) {
 
 		if status != http.StatusNotFound || body.Error.Code != "issue_not_found" {
 			t.Errorf("GET /api/v1/NONEXISTENT = %d %q, want %d %q", status, body.Error.Code, http.StatusNotFound, "issue_not_found")
-		}
-	})
-
-	t.Run("snapshot error returns 503 with generic message", func(t *testing.T) {
-		t.Parallel()
-
-		ts := testServer(t, failingSnapshot("connection refused"), acceptingRefresh())
-
-		status, body := getJSON[errorResponse](t, ts, "/api/v1/MT-100")
-
-		if status != http.StatusServiceUnavailable {
-			t.Errorf("GET /api/v1/MT-100 status = %d, want %d", status, http.StatusServiceUnavailable)
-		}
-		if wantMsg := "orchestrator state snapshot unavailable"; body.Error.Message != wantMsg {
-			t.Errorf("GET /api/v1/MT-100 error message = %q, want %q", body.Error.Message, wantMsg)
 		}
 	})
 

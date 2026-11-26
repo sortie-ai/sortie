@@ -68,13 +68,9 @@ type Observer interface {
 	// operator request the loop applies that changes what the API serves (a
 	// retry made due now, an attention item acknowledged), and the start of
 	// shutdown. It can run many times a second while sessions are active.
+	// The snapshot read through [Orchestrator.SnapshotFunc] already holds the
+	// change when it runs.
 	OnStateChange()
-}
-
-// snapshotRequest is a request for a point-in-time snapshot, processed by
-// the event loop, which replies on ReplyCh.
-type snapshotRequest struct {
-	ReplyCh chan<- RuntimeSnapshotResult
 }
 
 // loopAction is work a caller asks the event loop to run. state decides who
@@ -257,6 +253,12 @@ type OrchestratorParams struct {
 	// Once makes Run dispatch from one candidate poll and return when that
 	// work settles. See [Orchestrator.OnceResult].
 	Once bool
+
+	// PendingReactionRecovery, when non-nil, is the startup pending
+	// reaction recovery that failed: each tick runs it again, before the
+	// reconcile pass, until it succeeds. Nil when startup recovery
+	// succeeded or is disabled.
+	PendingReactionRecovery PendingReactionRecoveryFunc
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime state.
@@ -292,7 +294,6 @@ type Orchestrator struct {
 	issueReadCh        chan issueReadMsg
 	commentsGivenCh    chan commentsGivenMsg
 	unaccountedTurnsCh chan unaccountedTurnsMsg
-	snapshotCh         chan snapshotRequest
 	refreshCh          chan struct{}
 
 	// actionCh carries work for the event loop; only Run reads it. stopping
@@ -303,6 +304,11 @@ type Orchestrator struct {
 	// commentFeedAccessDenied latches, for the process, that the tracker
 	// token was refused the author access lookup, so the refusal is logged once.
 	commentFeedAccessDenied atomic.Bool
+
+	// published is the capture of the last state change. It is never nil
+	// after [NewOrchestrator]; only the event loop and the constructor store
+	// to it.
+	published atomic.Pointer[snapshotCapture]
 
 	preflightParams PreflightParams
 	observers       []Observer
@@ -342,6 +348,17 @@ type Orchestrator struct {
 	mergeCompletionConfig             MergeCompletionReactionConfig
 	mergeCompletionReactionConfigured bool
 	handoffParkingLabel               string
+
+	// pendingReactionRecovery is the startup recovery still to succeed;
+	// nil once it has. pendingReactionRecoveryFailures counts its failed
+	// retries. All four are read and written on the event loop only.
+	pendingReactionRecovery         PendingReactionRecoveryFunc
+	pendingReactionRecoveryFailures int
+	// pendingReactionRecoveryNextAt is the earliest instant the next retry
+	// runs; pendingReactionRecoveryNow, when non-nil, replaces the clock
+	// it is compared against.
+	pendingReactionRecoveryNextAt time.Time
+	pendingReactionRecoveryNow    func() time.Time
 
 	// ciTriage is the frozen ci_failure triage configuration, captured once
 	// at construction. Unlike every other CI feedback field, it does not
@@ -474,7 +491,6 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		issueReadCh:                       make(chan issueReadMsg, eventBuf),
 		commentsGivenCh:                   make(chan commentsGivenMsg, eventBuf),
 		unaccountedTurnsCh:                make(chan unaccountedTurnsMsg, eventBuf),
-		snapshotCh:                        make(chan snapshotRequest, 4),
 		refreshCh:                         make(chan struct{}, 1),
 		actionCh:                          make(chan *loopAction, 4),
 		stopping:                          make(chan struct{}),
@@ -510,6 +526,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		ciTriage:                          ciTriage,
 		blockerResolver:                   params.BlockerResolver,
 		abandonCh:                         params.AbandonCh,
+		pendingReactionRecovery:           params.PendingReactionRecovery,
 	}
 	if params.Once {
 		o.once = newOnceState()
@@ -526,9 +543,11 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	}
 	if params.WorkflowManager != nil {
 		o.updateRouter(params.WorkflowManager.Config())
+		o.applyStartConfig(params.WorkflowManager.Config())
 	}
 	// Startup preflight must have passed for construction to reach here.
 	o.preflightOK.Store(true)
+	o.publishSnapshot()
 	return o
 }
 
@@ -625,13 +644,19 @@ func (o *Orchestrator) applyIssueRead(msg issueReadMsg) {
 // it at once so the read-only tool server sees the count without waiting for
 // the throttle or the worker exit. Before that row exists the count waits
 // for the first write, which keeps a row existing exactly when the session
-// reported a measurement. A no-op for an unknown issue.
+// reported a measurement. It also republishes the session's turn records when
+// the count changes. A no-op for an unknown issue.
 func (o *Orchestrator) applyUnaccountedTurns(ctx context.Context, msg unaccountedTurnsMsg) {
 	entry, ok := o.state.Running[msg.IssueID]
 	if !ok {
 		return
 	}
+	changed := entry.UnaccountedTurns != msg.UnaccountedTurns
 	entry.UnaccountedTurns = msg.UnaccountedTurns
+	if changed && len(entry.turns) > 0 {
+		entry.turnSpend.UnaccountedTurns = msg.UnaccountedTurns
+		publishTurns(o.state, msg.IssueID, entry)
+	}
 	if entry.LastMetadataWrite.IsZero() {
 		return
 	}
@@ -673,6 +698,15 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 	}
 	o.applyQueuedAheadOfExit(ctx, exitingIssueIDs)
 
+	// HandleWorkerExit drops the running entry, so the state an exit's own
+	// retry will need is read before it.
+	exitStates := make(map[string]string, len(exits))
+	for _, result := range exits {
+		if entry := o.state.Running[result.IssueID]; entry != nil {
+			exitStates[result.IssueID] = entry.Issue.State
+		}
+	}
+
 	cfg := o.workflowManager.Config()
 	rates := o.workflowManager.Rates()
 	o.updateRouter(cfg)
@@ -711,6 +745,13 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 		})
 		o.recordOutcome(result, outcome)
 	}
+	reservedByState := make(map[string]int)
+	for _, result := range exits {
+		if retry := o.state.RetryAttempts[result.IssueID]; retry != nil && !retry.waitsForCapacity {
+			reservedByState[strings.ToLower(exitStates[result.IssueID])]++
+		}
+	}
+	o.wakeCapacityWaitingRetries(ctx, reservedByState)
 	o.updateGauges(time.Now())
 	o.notifyObservers()
 }
@@ -738,15 +779,11 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	// force before it is activated.
 	startCfg := o.workflowManager.Config()
 	o.applyWorkerConfig(startCfg)
-	o.state.ReactionMaxAttempts = o.reactionMaxAttempts(startCfg)
-	o.state.ReactionWatchWindows = o.reactionWatchWindows(startCfg)
-	o.state.StageChains = startCfg.Dispatch.Chains()
-	o.state.RuleAgents = o.ruleAgents(startCfg)
-	o.state.HopCeiling = startCfg.Dispatch.HopCeiling()
-	o.state.StallTimeoutMS = startCfg.Agent.StallTimeoutMS
+	o.applyStartConfig(startCfg)
 	o.prepareConfiguredModels(startCfg)
 	o.prepareReportedModels(ctx)
 	o.activateReconstructedRetries()
+	o.publishSnapshot()
 
 	tickTimer := time.NewTimer(0)
 	defer tickTimer.Stop()
@@ -849,11 +886,6 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case msg := <-o.unaccountedTurnsCh:
 			o.applyUnaccountedTurns(ctx, msg)
 			o.notifyObservers()
-
-		case req := <-o.snapshotCh:
-			refreshActiveOrder(o.state)
-			snap := RuntimeSnapshot(o.state, time.Now())
-			req.ReplyCh <- snap
 
 		case action := <-o.actionCh:
 			if action.state.CompareAndSwap(loopActionPending, loopActionTaken) {
@@ -966,6 +998,20 @@ func (o *Orchestrator) applyWorkerConfig(cfg config.ServiceConfig) []config.Advi
 	return wc.Warnings
 }
 
+// applyStartConfig writes the State fields the snapshot and the first dispatch
+// read from the start configuration: reaction ceilings and watch windows,
+// stage chains, rule agents, hop ceiling, and stall timeout. The constructor
+// applies it before the first publish so a read before Run already carries
+// them, and Run applies it again.
+func (o *Orchestrator) applyStartConfig(cfg config.ServiceConfig) {
+	o.state.ReactionMaxAttempts = o.reactionMaxAttempts(cfg)
+	o.state.ReactionWatchWindows = o.reactionWatchWindows(cfg)
+	o.state.StageChains = cfg.Dispatch.Chains()
+	o.state.RuleAgents = o.ruleAgents(cfg)
+	o.state.HopCeiling = cfg.Dispatch.HopCeiling()
+	o.state.StallTimeoutMS = cfg.Agent.StallTimeoutMS
+}
+
 // reactionMaxAttempts returns the ceiling each counting reaction kind's pass
 // applies under cfg; a kind with none is absent.
 func (o *Orchestrator) reactionMaxAttempts(cfg config.ServiceConfig) map[string]int {
@@ -1051,6 +1097,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	if err := o.store.Ping(ctx); !canceled(ctx, err) {
 		o.databaseHealth.record(time.Now(), err)
 	}
+
+	o.retryPendingReactionRecovery(ctx)
 
 	// Reconcile unconditionally so in-flight workers are monitored even when
 	// dispatch is skipped.
@@ -1523,6 +1571,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
+		relayed := relayedInstantFrom(ctx)
 
 		deps := WorkerDeps{
 			TrackerAdapter:         o.trackerAdapter,
@@ -1537,6 +1586,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			AgentSettings:          attemptSettings.Settings,
 			UsageLimitNotified:     usageLimitNotifiedFrom(ctx),
 			OnEvent: func(issueID string, event domain.AgentEvent) {
+				relayed.observe(event.Timestamp)
 				select {
 				case o.agentEventCh <- agentEventMsg{IssueID: issueID, Event: event}:
 				default:
@@ -1831,6 +1881,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 			continue
 		}
 		observeParkedLabels(ctx, o.state, o.store, o.logger, entry, issue.ID, issue.Labels)
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, issue.ID, entry, issue.State, issue.Labels, terminalStates, logging.WithIssue(o.logger, issue.ID, entry.Identifier))
 		o.backfillParkedIdentity(ctx, issue.ID, entry, issue)
 	}
 
@@ -1870,6 +1921,7 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 		if o.state.Parked[id] != entry {
 			continue
 		}
+		rewriteUnconfirmedParkLabel(ctx, o.state, o.trackerAdapter, id, entry, read.State, read.Labels, terminalStates, logging.WithIssue(o.logger, id, entry.Identifier))
 		if !entry.IssueIdentity.isZero() {
 			continue
 		}
@@ -2547,11 +2599,6 @@ func (o *Orchestrator) drainRunningWorkers() {
 			o.applyUnaccountedTurns(drainCtx, msg)
 			o.notifyObservers()
 
-		case req := <-o.snapshotCh:
-			refreshActiveOrder(o.state)
-			snap := RuntimeSnapshot(o.state, time.Now())
-			req.ReplyCh <- snap
-
 		case <-o.refreshCh:
 			// Discard refresh signals during drain; the event loop is no
 			// longer accepting new work.
@@ -2625,13 +2672,23 @@ func (o *Orchestrator) cancelRetryTimers() {
 	}
 }
 
-// notifyObservers calls [Observer.OnStateChange] on each observer. Called
-// from the event loop goroutine only, after the change is applied.
+// notifyObservers publishes the snapshot, then calls
+// [Observer.OnStateChange] on each observer, so a reader signaled by an
+// observer finds the change. Called from the event loop goroutine only, after
+// the change is applied.
 func (o *Orchestrator) notifyObservers() {
-	refreshActiveOrder(o.state)
+	o.publishSnapshot()
 	for _, obs := range o.observers {
 		obs.OnStateChange()
 	}
+}
+
+// publishSnapshot stores a capture of the current state for
+// [Orchestrator.SnapshotFunc] reads. Called from the event loop goroutine, or
+// from [NewOrchestrator] before the loop starts.
+func (o *Orchestrator) publishSnapshot() {
+	refreshActiveOrder(o.state)
+	o.published.Store(captureSnapshot(o.state))
 }
 
 // AddObserver appends an observer. Must be called before [Orchestrator.Run]
@@ -2646,26 +2703,13 @@ func (o *Orchestrator) PreflightOK() bool {
 	return o.preflightOK.Load()
 }
 
-// SnapshotFunc returns a function that retrieves a point-in-time runtime
-// snapshot via the event loop channel. Safe to call from any goroutine; it
-// blocks until the snapshot arrives or a 5-second timeout expires.
-func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
-	return func() (RuntimeSnapshotResult, error) {
-		replyCh := make(chan RuntimeSnapshotResult, 1)
-		req := snapshotRequest{ReplyCh: replyCh}
-
-		select {
-		case o.snapshotCh <- req:
-		case <-time.After(5 * time.Second):
-			return RuntimeSnapshotResult{}, fmt.Errorf("timed out sending snapshot request")
-		}
-
-		select {
-		case snap := <-replyCh:
-			return snap, nil
-		case <-time.After(5 * time.Second):
-			return RuntimeSnapshotResult{}, fmt.Errorf("timed out waiting for snapshot reply")
-		}
+// SnapshotFunc returns a function that reads the last published runtime
+// state, with the fields that depend on the moment of the call computed at the
+// call. Safe to call from any goroutine; it never blocks. The result is shared
+// with other reads and MUST NOT be modified.
+func (o *Orchestrator) SnapshotFunc() func() RuntimeSnapshotResult {
+	return func() RuntimeSnapshotResult {
+		return o.published.Load().at(time.Now())
 	}
 }
 

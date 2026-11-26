@@ -22,7 +22,7 @@ A runtime moves onto the protocol when its protocol surface carries every load-b
 
 3. **What separates the routes is transport-wide, not runtime-specific.** The differences that block removal are properties of a generic kind that knows no runtime and may not learn one. Closing one for a single runtime closes it for none.
 
-4. **Deprecation is a promise; direction is not.** A deprecation notice commits the project to a removal. Issuing one before the removal is achievable teaches operators that notices need not be acted on, which is expensive to unlearn.
+4. **Deprecation is a promise; direction is not.** A deprecation notice commits the project to a removal. Issuing one before every difference between the routes is known and stated teaches operators that notices need not be acted on, which is expensive to unlearn.
 
 5. **A migration costs the operator a mechanical edit, nothing more.** The project's transition is not the operator's to pay for: the same workflow, the same behavior, a configuration edit made mechanically. A route that withdraws a capability an operator holds fails that test whatever it gains elsewhere.
 
@@ -47,7 +47,7 @@ A workflow file naming either kind keeps working across the release that publish
 
 ### What an operator is told
 
-The protocol is the transport this project builds on. New runtimes arrive on it, and a runtime that qualifies moves onto it. That is a direction rather than a deprecation: a hand-written kind is deprecated only once its condition is met, never before.
+The protocol is the transport this project builds on. New runtimes arrive on it, and a runtime that qualifies moves onto it. That is a direction rather than a deprecation until the difference between the routes is fully known: a hand-written kind is deprecated once every difference has been graded, by measurement or, where none could be made, as unmeasured, and each one still standing is stated to the operator, with the advice to stay on the hand-written kind while it is needed. Deprecation announces the direction with the remaining cost named; it does not wait for parity, and removal does.
 
 Where two routes reach one runtime, what each costs is documented for that runtime, where `agent.kind` is chosen rather than in an adapter's working notes. It is per runtime because the difference is per runtime, and one sentence covering every pair would be wrong somewhere.
 
@@ -67,18 +67,24 @@ Each is stated as the capability required rather than the deficiency observed, s
 
 On a generic protocol-driven kind the runtime invocation stays one opaque command, written as a string or as a list whose every element is one argument. The kind gains no field naming a runtime's switch and no offline check beyond those every kind performs. Judging a switch, a model or a trust posture offline would take a table of every runtime's switches, which a kind that launches any runtime does not hold. Only the runtime can judge its own arguments, so what the operator is owed is the runtime's own account of what it rejected.
 
-**Typed runtime-neutral fields**, such as a model applied through the protocol's session configuration, were rejected. No such value is verifiable offline: whether it is valid is known only once the runtime reports what it accepts, and the runtime's own switches already work inside the command.
+**Typed runtime-neutral fields**, such as a model applied through the protocol's session configuration, were rejected, the reasoning level excepted. No such value is verifiable offline: whether it is valid is known only once the runtime reports what it accepts, and the runtime's own switches already work inside the command.
+
+**The reasoning level is the one such field the kind applies.** The kind reads the shared `effort` key and, each time a session opens, created, continued or verifying a credential, before its first turn, sets it on the first select option the runtime lists under the protocol's `thought_level` category. The option is found by that category, never by the runtime's option id, so the kind still knows no runtime. The level is checked against the option's offered values before it is sent. A runtime that lists no such option, does not offer the level, refuses or leaves the request unanswered, or reports another value draws a warning, and the session runs at the runtime's own level: the level never fails a session. Like the model, the level cannot be judged offline, and the warning when the session opens takes the place of an offline check rather than meeting that ground. It differs from the model on the second ground: a runtime whose protocol entry point takes no reasoning switch, OpenCode among them, has no carrier for the level inside the command.
+
+The offline checks carry one exception of the same origin. A `variant` key in the kind's block, the `opencode` kind's second name for the level, draws a `sortie validate` warning naming `effort`, so a block carried over from that kind does not lose its level without a word. The exception lasts while the `opencode` kind is registered, and that kind's removal deletes it.
+
+**The runtime's own session options, named by the operator, are the other values the kind applies through the session configuration.** A `config_options` mapping in the kind's block pairs an option id the runtime lists with one of that option's value ids, and each time a session opens, created, continued or verifying a credential, before its first turn, the kind sets every pair on the select option the runtime lists under that id. It is not a typed field: it names no setting and holds no table of runtimes, the operator writes the runtime's own vocabulary as the command does, and only the runtime judges it. Like the level, an entry cannot be judged offline, and the warning when the session opens takes the place of an offline check: each value is checked against the option's offered values before it is sent, and an entry the session does not apply draws a warning while the session runs with the runtime's current value. An entry never fails a session. It never reaches an option the runtime lists under the protocol's `model` or `thought_level` category: the model stays out of the session configuration, and the level has the one key `effort`. The mapping carries what the command cannot: a runtime can accept a switch on its protocol entry point and apply nothing, as Copilot CLI does with a named agent.
 
 The list form of the command is not such a field. It names no switch and is checked offline only for its shape: a list, non-empty, with a non-empty string in every element. It exists because a local launch splits a string on whitespace, so only a list carries a switch value that holds a space, such as an agent name. The string form keeps working unchanged.
 
-**Workflow-declared properties**, such as tool calls being pre-authorized, with a configuration contradicting one refused offline, were rejected. The failure they would guard against, a runtime waiting on an approval nobody can give, does not occur on this route, because this project answers every permission request inside the protocol. A missing trust switch costs a refused tool call, reported at run time.
+**Workflow-declared properties** of the runtime, with a configuration contradicting one refused offline, were rejected. The failure they would guard against, a runtime waiting on an approval nobody can give, does not occur on this route, because this project answers every permission request inside the protocol. How this project answers is the one permission property the workflow declares, because it is this project's own reply rather than a property of the runtime: refusal by default, or the once-only approval of a request that offers exactly one way to grant it, one value for every runtime the kind drives. It names no runtime's switch, so the invocation stays the one opaque command above, and offline it is checked only for holding one of its values. Without the approval, a missing trust switch costs a refused tool call, reported at run time.
 
 ### The staged path out
 
-Deprecation begins only after the condition above is met, and proceeds in stages.
+Deprecation begins once every difference is graded and stated, as above. Removal waits for the condition above. The path proceeds in stages.
 
-1. The kind is marked deprecated and stays registered. A configuration naming it runs, and draws a deprecation warning naming a migration guide.
-2. It holds for one release at minimum and two by preference, so an operator who upgrades rarely still meets the warning.
+1. The kind is marked deprecated and stays registered. A configuration naming it runs, and draws a deprecation warning naming the replacement kind.
+2. It holds for one release at minimum and two by preference, so an operator who upgrades rarely still meets the warning, and in any case until the removal condition is met.
 3. On removal, a configuration naming the kind is converted on the fly onto the surviving route, and the operator is warned, from `sortie validate` as well as at run time, that the kind is gone, that it was converted, and that the conversion is temporary.
 
 No release turns a working workflow file into a failing one without that path having been walked first.
@@ -116,13 +122,19 @@ Two things reopen the policy rather than apply it. The first is a pair whose con
 - **The condition carries no date, and nothing forces the last difference closed.** A hand-written route can outlive its usefulness while each difference stays open on its own merits.
 - **Compensating above the transport moves cost rather than removing it.** A helper written to reach parity is code this project owns, and the obligation to retire it once the protocol carries the capability is unenforced.
 - **A mistake in a protocol runtime's command surfaces at launch, not offline.** `sortie validate` accepts a misspelled switch or an unknown model on a generic kind; the runtime reports it when it starts.
+- **A reasoning level the runtime does not offer surfaces at run time.** It draws a warning when the session opens, never an offline error and never a refused turn, and the session runs at the runtime's own level.
+- **A continued session with no level keeps the level its runtime holds.** The session configuration has no way to send an absent level, so the kind logs the level the session runs at rather than restoring the runtime's default.
+- **A session option the runtime does not offer surfaces at run time.** A `config_options` entry is checked offline only for its type; an id or value the session does not list draws a warning when the session opens, never an offline error and never a refused turn.
+- **Removing a `config_options` entry does not reset its option.** An option no entry names keeps the value its runtime holds, which on a continued session can be one an earlier session set.
+- **A deprecation can precede the route an operator needs.** An operator who relies on a capability the protocol route still lacks meets the warning with nowhere to move yet, and is told to stay on the hand-written kind until the difference closes.
 - **A standing policy is applied by whoever moves a runtime.** Nothing checks that a move was documented or that a removal met the condition, so the policy holds only while it is read.
 
 ## Confirmation
 
 1. A workflow file naming either kind for a runtime reachable both ways runs unchanged across the release that publishes the second route.
 2. The description of `agent.kind` an operator reads states the direction and, for a runtime reachable both ways, what each route costs.
-3. No kind is deprecated while any difference in the removal condition stands, and a deprecated kind stays registered, runs, and warns naming a migration guide through at least one release before removal.
+3. No kind is deprecated while a difference between its routes is ungraded or unstated to the operator, and no kind is removed while any difference in the removal condition stands. A deprecated kind stays registered, runs, and warns naming the replacement kind through at least one release before removal.
 4. After removal, a configuration naming the removed kind is converted on the fly, and `sortie validate` and the run both warn that the kind is gone, that it was converted, and that the conversion is temporary.
 5. A runtime whose first integration is the protocol is documented and operated like every other kind, with no route-specific procedure and no capability an operator is told to do without.
 6. A move onto the protocol produces a measurement and a documentation change, not a second decision record. A record is opened only for a pair whose configuration cannot be converted, or to remove a route at a capability cost.
+7. The reasoning level is the only typed setting the generic kind applies through the protocol's session configuration; no other typed setting, the model included, is applied that way. Beside it only an operator's `config_options` entry is applied that way, never to an option the runtime lists under the `model` or `thought_level` category. The `variant` warning is the kind's only offline check keyed on one runtime's vocabulary.

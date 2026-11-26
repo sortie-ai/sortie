@@ -12,7 +12,7 @@ const ORIGIN_LABELS: Record<string, string> = {
   continuation: "Continuation",
   ci_fix: "CI fix",
   ci: "CI fix",
-  review: "Review fix",
+  review: "Human review fix",
   "bot-review": "Bot review fix",
   "merge-conflict": "Merge conflict fix",
   "label-review": "Review command",
@@ -37,11 +37,11 @@ const HOP_NOT_MADE_REASONS: Record<string, string> = {
 };
 
 const REACTION_LABELS: Record<string, string> = {
-  ci_failure: "CI fix",
-  review_comments: "Review",
+  ci_failure: "CI",
   bot_review: "Bot review",
-  merge_conflicts: "Conflicts",
-  auto_merge: "Merge",
+  review_comments: "Human review",
+  merge_conflicts: "Merge",
+  auto_merge: "Auto-merge",
   merge_completion: "Merge completion",
   label_commands: "Label commands",
 };
@@ -102,7 +102,7 @@ export function reactionCountLabel(configKey: string, count: number): string {
 
 const REACTION_SHORT_LABELS: Record<string, string> = {
   bot_review: "Bot",
-  merge_conflicts: "Confl.",
+  review_comments: "Human",
   merge_completion: "Completion",
   label_commands: "Commands",
 };
@@ -136,4 +136,18 @@ export function hopLabel(target: string, result: string | undefined): string {
     default:
       return `hop to ${rule}: ${result}`;
   }
+}
+
+const REACTION_WATCHES: Record<string, string> = {
+  ci_failure: "failures",
+  bot_review: "comments",
+  review_comments: "comments",
+  merge_conflicts: "conflicts",
+  auto_merge: "when ready",
+  label_commands: "labels",
+};
+
+/** Words what sets a reaction off, as a plural noun; a key without wording has none. */
+export function reactionWatchLabel(configKey: string): string | undefined {
+  return Object.hasOwn(REACTION_WATCHES, configKey) ? REACTION_WATCHES[configKey] : undefined;
 }

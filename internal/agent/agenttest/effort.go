@@ -14,8 +14,10 @@ import (
 // one when resumed is true, and returns the level each of its first turns
 // invocations carries ("" for none). A StartSession failure is returned.
 //
-// A probe reads each entry off the invocation the adapter itself built for
-// that turn, never off settings.
+// A probe reads each entry off what the adapter itself built or sent for that
+// turn, never off settings. For a carrier that lives in the runtime's session
+// configuration, that is the value of the last request the adapter sent in
+// that session before the turn's prompt, "" when it sent none.
 type EffortProbe func(t *testing.T, settings map[string]any, verification, resumed bool, turns int) ([]string, error)
 
 const (

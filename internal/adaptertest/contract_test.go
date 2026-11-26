@@ -126,6 +126,7 @@ const (
 	ruleIMPORT    contractRule = "IMPORT"
 	ruleTEARDOWN  contractRule = "TEARDOWN"
 	ruleBLOCKER   contractRule = "BLOCKER"
+	ruleLINKER    contractRule = "LINKER"
 	ruleIDENTITY  contractRule = "IDENTITY"
 	ruleSTOPGRACE contractRule = "STOPGRACE"
 	ruleCAPTURE   contractRule = "CAPTURE"
@@ -189,28 +190,24 @@ type contractSharedPackage struct {
 // packages under its own path. An entry whose coreImportable is false
 // stays importable across family roots but not by the orchestrator.
 var contractSharedFamilyPackages = map[string]contractSharedPackage{
-	"github.com/sortie-ai/sortie/internal/scm/scmcore":                     {reason: "shared forge decision core; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/scm/cilog":                       {reason: "shared CI log excerpt assembly for the forge CI providers; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/procutil":                  {reason: "shared subprocess group handling, Windows process containment, and bounded output capture; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/usage":                     {reason: "shared usage normalization and merge for provider usage windows, and spend accounting; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate":      {reason: "shared Copilot CLI journal location, read caps, records declaration, and the record and checkpoint parsers; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport":    {reason: "shared OpenCode session export arguments and document parser; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/copilot/quota":             {reason: "shared Copilot CLI quota windows read from its endpoint or headless server; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/copilot/usagelimits":       {reason: "shared Copilot CLI session-error refusal vocabulary; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/opencode/usagelimits":      {reason: "shared OpenCode console usage limits read from the runtime usage command; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/sshutil":                   {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/toolrelay":                 {reason: "shared HTTP tool-server relay lifecycle and delivery decision; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/jsonrpc":                   {reason: "shared JSON-RPC framing (newline-delimited and Content-Length) and message delivery; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/agent/agenttest":                 {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest":  {reason: "shared credential-verification conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest":      {reason: "shared launch-record bind, kill and release verdict for tests and the qualification tool, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel":       {reason: "shared scripted model endpoint and scripted-model conformance driver; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/notify/route":                    {reason: "shared notification routing for orchestrator events; registers no kind and holds no adapter", coreImportable: true},
-	"github.com/sortie-ai/sortie/internal/notify/notifyhttp":               {reason: "shared JSON-over-HTTP transport for the notifier kinds; registers no kind and holds no adapter", coreImportable: false},
-	"github.com/sortie-ai/sortie/internal/notify/render":                   {reason: "shared notification text rendering for every destination; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/scm/scmcore":                      {reason: "shared forge decision core; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/scm/cilog":                        {reason: "shared CI log excerpt assembly for the forge CI providers; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/procutil":                   {reason: "shared subprocess group handling, Windows process containment, and bounded output capture; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/agentcore":                  {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/usage":                      {reason: "shared usage normalization and merge for provider usage windows, and spend accounting; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource": {reason: "the protocol kind's per-runtime seam, keyed because the copilot-cli and opencode kinds import its Copilot CLI and OpenCode readers; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                  {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/sshutil":                    {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/toolrelay":                  {reason: "shared HTTP tool-server relay lifecycle and delivery decision; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc":                    {reason: "shared JSON-RPC framing (newline-delimited and Content-Length) and message delivery; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest":                  {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest":  {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest":   {reason: "shared credential-verification conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/launchtest":       {reason: "shared launch-record bind, kill and release verdict for tests and the qualification tool, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel":        {reason: "shared scripted model endpoint and scripted-model conformance driver; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/notify/route":                     {reason: "shared notification routing for orchestrator events; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/notify/notifyhttp":                {reason: "shared JSON-over-HTTP transport for the notifier kinds; registers no kind and holds no adapter", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/notify/render":                    {reason: "shared notification text rendering for every destination; registers no kind and holds no adapter", coreImportable: false},
 }
 
 // contractPackageBannedImports maps one package's import path to the
@@ -226,7 +223,8 @@ var contractPackageBannedImports = map[string]map[string]string{
 // one rule and states why; it stays subject to every other rule.
 var contractAllowlist = map[string]map[contractRule]string{
 	"file": {
-		ruleHOOK: "no HTTP, no credential, no remote project, and no config to validate",
+		ruleHOOK:   "no HTTP, no credential, no remote project, and no config to validate",
+		ruleLINKER: "a file tracker has no web page to link to",
 	},
 	"procutil": {
 		ruleTEARDOWN:  "owns SetGroupCancel and SetGroupKill, the helpers every other launcher calls",
@@ -262,6 +260,12 @@ var contractAllowlist = map[string]map[contractRule]string{
 	},
 	"workspacekit": {
 		ruleANCHOR: "owns the workspace-anchoring mechanism",
+	},
+	"copilot": {
+		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
+	},
+	"opencode": {
+		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
 	},
 }
 
@@ -1398,11 +1402,11 @@ func bodyCallsTrackermetricsTrack(file *ast.File, body *ast.BlockStmt) bool {
 }
 
 // contractTrackerAdapterType returns the type a non-test file names in
-// "var _ domain.TrackerAdapter = (*T)(nil)", with the domain qualifier
+// "var _ domain.<iface> = (*T)(nil)", with the domain qualifier
 // resolved from the file's own imports, or "" when no file asserts one.
 // A package that also holds a source-control adapter declares its tracker
 // adapter this way, which is how rule METRICS tells the two apart.
-func contractTrackerAdapterType(files []*ast.File) string {
+func contractTrackerAdapterType(files []*ast.File, iface string) string {
 	for _, file := range files {
 		domainIdent := resolveContractImportName(file, contractDomainImportPath)
 		if domainIdent == "" {
@@ -1414,7 +1418,7 @@ func contractTrackerAdapterType(files []*ast.File) string {
 				continue
 			}
 			for _, spec := range gen.Specs {
-				if name := contractTrackerAssertionType(spec, domainIdent); name != "" {
+				if name := contractTrackerAssertionType(spec, domainIdent, iface); name != "" {
 					return name
 				}
 			}
@@ -1423,13 +1427,13 @@ func contractTrackerAdapterType(files []*ast.File) string {
 	return ""
 }
 
-func contractTrackerAssertionType(spec ast.Spec, domainIdent string) string {
+func contractTrackerAssertionType(spec ast.Spec, domainIdent, iface string) string {
 	value, ok := spec.(*ast.ValueSpec)
 	if !ok || len(value.Names) != 1 || value.Names[0].Name != "_" || len(value.Values) != 1 {
 		return ""
 	}
 	typ, ok := value.Type.(*ast.SelectorExpr)
-	if !ok || typ.Sel.Name != "TrackerAdapter" {
+	if !ok || typ.Sel.Name != iface {
 		return ""
 	}
 	if qualifier, ok := typ.X.(*ast.Ident); !ok || qualifier.Name != domainIdent {
@@ -1519,6 +1523,20 @@ func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker 
 	})
 
 	return violations
+}
+
+// A new tracker kind must not ship without a project page; the file kind
+// is exempt through the allowlist.
+func checkContractProjectLinker(fset *token.FileSet, pkg contractPackage) []contractViolation {
+	registers, _, _, _, _, pos := contractRegistrationFacts(fset, pkg.files)
+	if !registers || contractExempt(pkg.dirName, ruleLINKER) {
+		return nil
+	}
+	trackerType := contractTrackerAdapterType(pkg.files, "TrackerAdapter")
+	if trackerType != "" && contractTrackerAdapterType(pkg.files, "ProjectLinker") == trackerType {
+		return nil
+	}
+	return []contractViolation{{pos: pos, text: "tracker adapter does not assert domain.ProjectLinker"}}
 }
 
 // contractPathIsUnder reports whether importPath is prefix or a path
@@ -2675,7 +2693,7 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, factsPos := contractRegistrationFacts(fset, pkg.files)
 
 	if !contractExempt(pkg.dirName, ruleMETRICS) {
-		trackerType := contractTrackerAdapterType(pkg.files)
+		trackerType := contractTrackerAdapterType(pkg.files, "TrackerAdapter")
 		for _, file := range pkg.files {
 			violations = append(violations, checkContractMetrics(fset, file, registers, trackerType)...)
 		}
@@ -2833,6 +2851,9 @@ func TestCheckAdapterContract(t *testing.T) {
 	sort.Slice(walked, func(i, j int) bool { return walked[i].dir < walked[j].dir })
 	for _, w := range walked {
 		for _, v := range checkAdapterContractPackage(fset, w.pkg) {
+			t.Errorf("%s: %s", v.pos, v.text)
+		}
+		for _, v := range checkContractProjectLinker(fset, w.pkg) {
 			t.Errorf("%s: %s", v.pos, v.text)
 		}
 	}

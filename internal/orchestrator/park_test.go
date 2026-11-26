@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -871,6 +872,211 @@ func TestParkReleaseHandOff(t *testing.T) {
 			}
 			if rows, err := store.ListParkedIssues(ctx); err != nil || len(rows) != 0 {
 				t.Errorf("parked_issues after the dispatch = %+v, %v, want none", rows, err)
+			}
+		})
+	}
+}
+
+// TestRefreshParkedIssuesRewritesUnconfirmedLabel covers a park whose label
+// write failed. A park releases only on a confirmed label's removal or a
+// state change, so without a label the issue would read as active with
+// nothing to say why it is never dispatched. Each refresh that reads the
+// label absent writes it again, one write at a time, until a read
+// confirms it.
+func TestRefreshParkedIssuesRewritesUnconfirmedLabel(t *testing.T) {
+	t.Parallel()
+
+	const parkedID = "UNLABELED-1"
+	issue := domain.Issue{ID: parkedID, Identifier: "PROJ-UNLABELED-1", Title: "T", State: "In Progress"}
+	labeled := issue
+	labeled.Labels = []string{"Needs-Human"}
+
+	tests := []struct {
+		name string
+		// refresh runs one refresh in which a read shows the issue with
+		// labels, either as a candidate or by the batched read of the
+		// issues the candidates omit.
+		refresh func(o *Orchestrator, reads map[string]domain.IssueStateAndLabels, labels []string)
+	}{
+		{name: "parked issue among the candidates", refresh: func(o *Orchestrator, _ map[string]domain.IssueStateAndLabels, labels []string) {
+			candidate := issue
+			candidate.Labels = labels
+			o.refreshParkedIssues(context.Background(), []domain.Issue{candidate}, nil)
+		}},
+		{name: "parked issue the candidates omit", refresh: func(o *Orchestrator, reads map[string]domain.IssueStateAndLabels, labels []string) {
+			reads[parkedID] = domain.IssueStateAndLabels{State: issue.State, Labels: labels}
+			o.refreshParkedIssues(context.Background(), nil, nil)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(1000, 1, 0, nil, AgentTotals{})
+			entry := &ParkedEntry{
+				Identifier:    issue.Identifier,
+				IssueIdentity: IssueIdentity{Title: issue.Title},
+				Reason:        parkReasonAgentBlocked,
+				ParkedState:   issue.State,
+				Label:         "needs-human",
+			}
+			state.Parked[parkedID] = entry
+			reads := map[string]domain.IssueStateAndLabels{}
+			tracker := newRecordingHandoffTracker()
+			tracker.addLabelErr = errors.New("label service unavailable")
+			tracker.fetchStatesAndLabelsFn = func(context.Context, []string) (map[string]domain.IssueStateAndLabels, error) {
+				return maps.Clone(reads), nil
+			}
+			o := newParkedOrchestrator(state, tracker)
+
+			// A park loaded at startup has started no write in this
+			// process, so the first refresh that reads no label writes it.
+			tt.refresh(o, reads, nil)
+			state.TrackerOpsWg.Wait()
+			if calls := tracker.labels(); len(calls) != 1 || calls[0] != (handoffLabelCall{issueID: parkedID, label: "needs-human"}) {
+				t.Fatalf("AddLabel calls after the first refresh = %+v, want one write of needs-human", calls)
+			}
+
+			// The write still within its timeout: no second write.
+			tt.refresh(o, reads, nil)
+			state.TrackerOpsWg.Wait()
+			if calls := tracker.labels(); len(calls) != 1 {
+				t.Fatalf("AddLabel calls while a write may still be in flight = %d, want 1", len(calls))
+			}
+
+			// That write failed; once its timeout has passed, the next
+			// refresh writes again.
+			entry.labelWriteStartedAt = time.Now().Add(-parkLabelWriteTimeout)
+			tracker.addLabelErr = nil
+			tt.refresh(o, reads, nil)
+			state.TrackerOpsWg.Wait()
+			if calls := tracker.labels(); len(calls) != 2 {
+				t.Fatalf("AddLabel calls after the timeout = %d, want 2", len(calls))
+			}
+
+			// A read that observes the label confirms it, and no write follows.
+			entry.labelWriteStartedAt = time.Time{}
+			tt.refresh(o, reads, labeled.Labels)
+			state.TrackerOpsWg.Wait()
+			if !entry.LabelApplied {
+				t.Error("LabelApplied = false after a read observed the label, want true")
+			}
+			if calls := tracker.labels(); len(calls) != 2 {
+				t.Errorf("AddLabel calls after the label was observed = %d, want 2", len(calls))
+			}
+			if _, parked := state.Parked[parkedID]; !parked {
+				t.Error("park released, want held")
+			}
+		})
+	}
+}
+
+func TestRefreshParkedIssuesLeavesConfirmedOrUnlabeledParks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		entry ParkedEntry
+	}{
+		{name: "confirmed label", entry: ParkedEntry{Label: "needs-human", LabelApplied: true}},
+		{name: "no parking label configured", entry: ParkedEntry{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const parkedID = "LEAVE-1"
+			state := NewState(1000, 1, 0, nil, AgentTotals{})
+			entry := tt.entry
+			entry.Identifier = "PROJ-LEAVE-1"
+			entry.IssueIdentity = IssueIdentity{Title: "T"}
+			entry.Reason = parkReasonAgentBlocked
+			entry.ParkedState = "In Progress"
+			state.Parked[parkedID] = &entry
+			tracker := newRecordingHandoffTracker()
+			candidates := []domain.Issue{{ID: parkedID, Identifier: entry.Identifier, Title: "T", State: "In Progress", Labels: []string{"needs-human"}}}
+			if !entry.LabelApplied {
+				candidates[0].Labels = nil
+			}
+
+			newParkedOrchestrator(state, tracker).refreshParkedIssues(context.Background(), candidates, nil)
+			state.TrackerOpsWg.Wait()
+
+			if calls := tracker.labels(); len(calls) != 0 {
+				t.Errorf("AddLabel calls = %+v, want none", calls)
+			}
+		})
+	}
+}
+
+func TestParkLabelRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		writes int
+		want   time.Duration
+	}{
+		{writes: 0, want: 0},
+		{writes: 1, want: 30 * time.Second},
+		{writes: 2, want: time.Minute},
+		{writes: 3, want: 2 * time.Minute},
+		{writes: 7, want: 32 * time.Minute},
+		{writes: 8, want: time.Hour},
+		{writes: 40, want: time.Hour},
+	}
+	for _, tt := range tests {
+		if got := parkLabelRetryDelay(tt.writes); got != tt.want {
+			t.Errorf("parkLabelRetryDelay(%d) = %v, want %v", tt.writes, got, tt.want)
+		}
+	}
+}
+
+// TestRewriteUnconfirmedParkLabel_Gates covers the reads that start no write
+// (an empty or terminal state, a write still inside its backoff) and the
+// single warning once the label has gone unobserved for several writes.
+func TestRewriteUnconfirmedParkLabel_Gates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		observed  string
+		writes    int
+		startedAt time.Duration // before now; zero means never
+		wantWrite bool
+		wantWarn  bool
+	}{
+		{name: "empty state", observed: "", wantWrite: false},
+		{name: "terminal state", observed: "Done", wantWrite: false},
+		{name: "inside the backoff", observed: "In Progress", writes: 3, startedAt: time.Minute, wantWrite: false},
+		{name: "past the backoff", observed: "In Progress", writes: 3, startedAt: 3 * time.Minute, wantWrite: true},
+		{name: "warns at the fifth write", observed: "In Progress", writes: parkLabelWarnAfter, startedAt: 2 * time.Hour, wantWrite: true, wantWarn: true},
+		{name: "debug after the warning", observed: "In Progress", writes: parkLabelWarnAfter + 1, startedAt: 2 * time.Hour, wantWrite: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "GATE-1"
+			state := NewState(1000, 1, 0, nil, AgentTotals{})
+			entry := &ParkedEntry{Identifier: "PROJ-GATE-1", Label: "needs-human", labelWrites: tt.writes}
+			if tt.startedAt != 0 {
+				entry.labelWriteStartedAt = time.Now().Add(-tt.startedAt)
+			}
+			state.Parked[id] = entry
+			tracker := newRecordingHandoffTracker()
+			var logs bytes.Buffer
+
+			rewriteUnconfirmedParkLabel(context.Background(), state, tracker, id, entry, tt.observed, nil, []string{"Done"}, debugLogger(t, &logs))
+			state.TrackerOpsWg.Wait()
+
+			if wrote := len(tracker.labels()) == 1; wrote != tt.wantWrite {
+				t.Errorf("label written = %v, want %v", wrote, tt.wantWrite)
+			}
+			if warned := strings.Contains(logs.String(), "park label still not observed"); warned != tt.wantWarn {
+				t.Errorf("warning logged = %v, want %v\nlogs: %s", warned, tt.wantWarn, logs.String())
 			}
 		})
 	}

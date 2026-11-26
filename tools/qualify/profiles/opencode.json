@@ -19,7 +19,9 @@
   "model_args": [],
   "model_env": {
     "name": "OPENCODE_CONFIG_CONTENT",
-    "value": "{\"model\":\"{model}\"}"
+    "value": "{\"model\":\"{model}\"}",
+    "asking_value": "{\"model\":\"{model}\",\"permission\":{\"*\":\"ask\"}}",
+    "failing_value": "{\"model\":\"scripted/scripted-model\",\"provider\":{\"scripted\":{\"npm\":\"@ai-sdk/google\",\"name\":\"scripted\",\"options\":{\"baseURL\":\"{upstream}/v1beta\",\"apiKey\":\"sortie-stand-in\"},\"models\":{\"scripted-model\":{\"name\":\"scripted-model\"}}}}}"
   },
   "capability_gap_labels": [],
   "config_root_env_names": [
@@ -101,7 +103,20 @@
       "model_request_path": [],
       "session_id_path": [
         "sessionID"
-      ]
+      ],
+      "error_locator": {
+        "mode": "discriminated",
+        "discriminator_key": "type",
+        "discriminator_value": "error"
+      },
+      "limit_locator": {
+        "mode": "discriminated",
+        "discriminator_path": [
+          "error",
+          "type"
+        ],
+        "discriminator_value": "output-limit"
+      }
     }
   },
   "declarations": [
@@ -114,6 +129,12 @@
       "capability": "retry_classification",
       "case": "non_retryable_refusal",
       "reason": "outcome_never_produced"
+    },
+    {
+      "capability": "turn_disposition",
+      "case": "limit_reached",
+      "reason": "outcome_folded_into_another",
+      "surface": "protocol"
     }
   ],
   "absent_surfaces": [
@@ -123,16 +144,6 @@
     }
   ],
   "not_inducible_cases": [
-    {
-      "surface": "protocol",
-      "case": "limit_reached",
-      "reason": "prompt_channel_too_small"
-    },
-    {
-      "surface": "native_stream_json",
-      "case": "limit_reached",
-      "reason": "prompt_channel_too_small"
-    },
     {
       "surface": "native_stream_json",
       "case": "cancellation",

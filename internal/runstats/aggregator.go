@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -366,17 +365,14 @@ type totalAccum struct {
 	provenanceAccum
 }
 
-// dayAccum accumulates the runs that completed within one UTC calendar day.
-type dayAccum struct {
-	runs       int
-	unmeasured int
-	costAccum
-}
-
-// withUncached returns t with Uncached derived from its Total and
-// CacheRead sums.
-func withUncached(t Tokens) Tokens {
+// withDerived returns t with Uncached and FreshInput derived from its sums.
+func withDerived(t Tokens) Tokens {
 	t.Uncached = domain.TokenUsage{TotalTokens: t.Total, CacheReadTokens: t.CacheRead}.Uncached()
+	t.FreshInput = domain.TokenUsage{
+		InputTokens:      t.Input,
+		CacheReadTokens:  t.CacheRead,
+		CacheWriteTokens: t.CacheWrite,
+	}.FreshInput()
 	return t
 }
 
@@ -573,7 +569,7 @@ type Aggregator struct {
 	tierLabel string
 
 	total totalAccum
-	days  map[time.Time]*dayAccum // keyed by the UTC midnight starting the day
+	spend *series // nil until SetSpend
 
 	byStatus     map[string]*groupAccum
 	byAdapter    map[string]*groupAccum
@@ -601,7 +597,6 @@ func New(caps storage.RunHistoryCapabilities) *Aggregator {
 	return &Aggregator{
 		caps:         caps,
 		tierLabel:    tier(caps),
-		days:         make(map[time.Time]*dayAccum),
 		byStatus:     make(map[string]*groupAccum),
 		byAdapter:    make(map[string]*groupAccum),
 		byRule:       make(map[string]*groupAccum),
@@ -651,7 +646,6 @@ func (a *Aggregator) Add(row storage.RunStatsRow) error {
 	}
 
 	seconds, hasDuration := duration(row)
-	var cost costOutcome
 
 	full := a.caps.Full()
 	if full {
@@ -719,7 +713,7 @@ func (a *Aggregator) Add(row storage.RunStatsRow) error {
 			}
 
 			if a.caps.RecordedCost() {
-				cost = classifyCost(row.Status, spentTokens(row), row.EstimatedCostUSD, row.CostStatus)
+				cost := classifyCost(row.Status, spentTokens(row), row.EstimatedCostUSD, row.CostStatus)
 				if cost.priced {
 					cost.agentUSD, cost.agentPriced = agentPricedOf(row.Parts)
 				}
@@ -737,10 +731,6 @@ func (a *Aggregator) Add(row storage.RunStatsRow) error {
 		if a.caps.SkillBreakdown() {
 			a.foldSkills(row)
 		}
-	}
-
-	if a.caps.RecordedCost() {
-		a.foldSpend(row, cost)
 	}
 
 	if !hasDuration {
@@ -828,34 +818,6 @@ func (a *Aggregator) foldModels(row storage.RunStatsRow, isSucceeded bool, secon
 	}
 }
 
-// utcDay returns the UTC midnight that starts the calendar day holding t.
-func utcDay(t time.Time) time.Time {
-	y, m, d := t.UTC().Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-}
-
-// foldSpend folds row into the accumulator of the UTC day it completed on. A
-// run whose completion time does not parse joins no day. cost is the zero
-// outcome for a run whose tokens were not measured.
-func (a *Aggregator) foldSpend(row storage.RunStatsRow, cost costOutcome) {
-	completed, err := time.Parse(time.RFC3339, row.CompletedAt)
-	if err != nil {
-		return
-	}
-	day := utcDay(completed)
-	d, ok := a.days[day]
-	if !ok {
-		d = &dayAccum{}
-		a.days[day] = d
-	}
-	d.runs++
-	if !row.TokensMeasured {
-		d.unmeasured++
-		return
-	}
-	d.add(cost)
-}
-
 // foldChain folds row into its chain's by_chain accumulator. Rows arrive
 // in ascending id order, so the last non-empty value of a field is the
 // latest one.
@@ -915,7 +877,7 @@ func (a *Aggregator) Report(
 		SchemaTier:   a.tierLabel,
 		Warnings:     a.composeWarnings(),
 		Summary:      a.summary(full),
-		Spend:        a.spend(generatedAt, since, until),
+		Spend:        a.spendReport(generatedAt, since, until),
 		ByStatus:     a.groupSlice(a.byStatus, full),
 		ByAdapter:    a.groupSlice(a.byAdapter, full),
 		ByRule:       []Group{},
@@ -960,117 +922,56 @@ func (a *Aggregator) Report(
 	return rpt
 }
 
-// spendPeriods maps the length of a report's range to the period its spend is
-// bucketed by; the first entry whose limit holds the range names it.
-var spendPeriods = []struct {
-	limit  time.Duration
-	period string
-}{
-	{limit: 2160 * time.Hour, period: "day"},
+// SetSpend sets the range, period, report time, and running sessions the spend
+// series is built from. An empty p lets [SpendPeriodOf] pick the period. It
+// MUST run before the first [Aggregator.AddTurn] or
+// [Aggregator.AddUntrackedRun]. running is the snapshot taken before the stored
+// turns are read, and the aggregator does not modify it.
+func (a *Aggregator) SetSpend(r Range, p Period, generatedAt time.Time, running []RunningSession) {
+	a.spend = newSeries(a.caps, r, p, generatedAt, running)
 }
 
-// spendPeriod names the period a range from since to end is bucketed by. An
-// open range, and one longer than every entry of spendPeriods, takes months.
-func spendPeriod(since *time.Time, end time.Time) string {
-	if since == nil {
-		return "month"
+// SpendWindow returns the half-open instants the spend series counts, which
+// are the bounds to scan stored turns and untracked runs over; a nil bound is
+// open. Both are nil before [Aggregator.SetSpend].
+func (a *Aggregator) SpendWindow() (since, until *time.Time) {
+	if a.spend == nil {
+		return nil, nil
 	}
-	for _, rule := range spendPeriods {
-		if end.Sub(*since) <= rule.limit {
-			return rule.period
-		}
+	if a.spend.ws != nil {
+		since = new(*a.spend.ws)
 	}
-	return "month"
+	return since, new(a.spend.we)
 }
 
-// periodStart returns the UTC instant that starts the period holding t.
-func periodStart(t time.Time, period string) time.Time {
-	day := utcDay(t)
-	if period == "month" {
-		return day.AddDate(0, 0, 1-day.Day())
+// AddTurn folds one stored turn record into the spend series. It is the visit
+// callback [storage.RunTurnStore.ScanRunTurnsRange] calls once per record; it
+// calls no Store method and always returns nil.
+func (a *Aggregator) AddTurn(row storage.RunTurnRow) error {
+	if a.spend != nil {
+		a.spend.addTurn(row)
 	}
-	return day
+	return nil
 }
 
-// nextPeriod returns the start of the period after the one starting at start.
-func nextPeriod(start time.Time, period string) time.Time {
-	if period == "month" {
-		return start.AddDate(0, 1, 0)
+// AddUntrackedRun folds one run recorded without turn records into the spend
+// series at its completion instant. It is the visit callback
+// [storage.RunTurnStore.ScanUntrackedRunsRange] calls once per run; it calls no
+// Store method and always returns nil.
+func (a *Aggregator) AddUntrackedRun(row storage.UntrackedRunRow) error {
+	if a.spend != nil {
+		a.spend.addUntrackedRun(row)
 	}
-	return start.AddDate(0, 0, 1)
+	return nil
 }
 
-// spend lists the recorded cost of the folded runs per UTC period, every
-// period from the one holding the range's first instant to the one holding its
-// last, so a period without runs is listed with none. It is nil unless the
-// database records cost.
-func (a *Aggregator) spend(generatedAt time.Time, since, until *time.Time) *Spend {
-	if !a.caps.RecordedCost() {
-		return nil
+// spendReport serves the series set by SetSpend. Without one it lists the
+// buckets of the range the report received, every bucket empty.
+func (a *Aggregator) spendReport(generatedAt time.Time, since, until *time.Time) Spend {
+	if a.spend == nil {
+		return newSeries(a.caps, Range{Since: since, Until: until}, "", generatedAt, nil).report()
 	}
-	end := generatedAt
-	if until != nil {
-		end = *until
-	}
-	period := spendPeriod(since, end)
-	out := &Spend{Period: period, Buckets: []SpendBucket{}}
-	if len(a.days) == 0 {
-		return out
-	}
-
-	// Days are summed in ascending order so a bucket's cost does not depend
-	// on map iteration order.
-	days := slices.SortedFunc(maps.Keys(a.days), time.Time.Compare)
-	sums := make(map[time.Time]*dayAccum)
-	for _, day := range days {
-		start := periodStart(day, period)
-		sum, ok := sums[start]
-		if !ok {
-			sum = &dayAccum{}
-			sums[start] = sum
-		}
-		d := a.days[day]
-		sum.runs += d.runs
-		sum.unmeasured += d.unmeasured
-		sum.costUSD += d.costUSD
-		sum.pricedRuns += d.pricedRuns
-		sum.costUnpricedRuns += d.costUnpricedRuns
-		sum.costPartialRuns += d.costPartialRuns
-		sum.agentPricedUSD += d.agentPricedUSD
-		sum.hasAgentPriced = sum.hasAgentPriced || d.hasAgentPriced
-	}
-
-	firstAt := days[0]
-	if since != nil {
-		firstAt = *since
-	}
-	lastAt := generatedAt
-	if until != nil {
-		lastAt = until.Add(-time.Nanosecond)
-	}
-	first := periodStart(firstAt, period)
-	last := periodStart(lastAt, period)
-	if latest := periodStart(days[len(days)-1], period); latest.After(last) {
-		last = latest
-	}
-
-	for start := first; !start.After(last); start = nextPeriod(start, period) {
-		bucket := SpendBucket{Start: start.Format(time.RFC3339)}
-		if sum, ok := sums[start]; ok {
-			bucket.Runs = sum.runs
-			bucket.TokensUnmeasuredRuns = sum.unmeasured
-			bucket.CostUnpricedRuns = sum.costUnpricedRuns
-			bucket.CostPartialRuns = sum.costPartialRuns
-			if sum.pricedRuns > 0 {
-				bucket.CostUSD = new(round9(sum.costUSD))
-			}
-			bucket.CostLowerBound = bucket.CostUSD != nil &&
-				(sum.costUnpricedRuns > 0 || sum.costPartialRuns > 0 || sum.unmeasured > 0)
-			bucket.AgentPricedUSD = sum.agentPriced()
-		}
-		out.Buckets = append(out.Buckets, bucket)
-	}
-	return out
+	return a.spend.report()
 }
 
 // composeWarnings returns the non-nil warning list: at most one warning,
@@ -1111,7 +1012,7 @@ func (a *Aggregator) summary(full bool) Summary {
 		s.TokensUnmeasuredRuns = a.total.unmeasuredRuns
 	}
 	if full && a.total.measuredRuns > 0 {
-		s.Tokens = new(withUncached(a.total.tokens))
+		s.Tokens = new(withDerived(a.total.tokens))
 	}
 	if full && a.total.pricedRuns > 0 {
 		cost := round9(a.total.costUSD)
@@ -1195,7 +1096,7 @@ func (a *Aggregator) groupStat(g *groupAccum, full bool) Group {
 		stat.CostUnpricedRuns = g.costUnpricedRuns
 		stat.CostPartialRuns = g.costPartialRuns
 		if g.measuredRuns > 0 {
-			stat.Tokens = new(withUncached(g.tokens))
+			stat.Tokens = new(withDerived(g.tokens))
 		}
 		if g.pricedRuns > 0 {
 			cost := round9(g.costUSD)

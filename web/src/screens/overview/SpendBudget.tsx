@@ -25,7 +25,7 @@ function SpendMeter({ name, window }: SpendMeterProps) {
           </>
         }
       />
-      <p className="text-body-sm text-ink-muted">
+      <p className="text-body-sm text-balance text-ink-muted">
         {window.holds_dispatch ? "Holding dispatch, resets " : "Resets "}
         {fmtUtcStamp(resetsAt)}
       </p>
@@ -58,7 +58,7 @@ export interface SpendBudgetProps {
 
 export function SpendBudget({ ceiling, isEstimateNoted }: SpendBudgetProps) {
   return (
-    <div className="flex flex-col gap-sm rounded-lg border border-line bg-canvas p-md">
+    <div className="flex flex-col gap-sm rounded-xl border border-line bg-canvas p-md">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-sm text-body-md">
         <h3 className="font-medium text-ink">Budget</h3>
         {isEstimateNoted ? (

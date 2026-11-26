@@ -403,6 +403,13 @@ export interface IssueResponse {
   state?: string;
 }
 
+export interface KindCosts {
+  fresh_input_usd: number;
+  output_usd: number;
+  cache_write_usd: number;
+  cache_read_usd: number;
+}
+
 export interface LastStageResponse {
   chain: string[] | null;
   rule: string;
@@ -571,7 +578,7 @@ export interface Report {
   schema_tier: string;
   warnings: string[] | null;
   summary: Summary;
-  spend: Spend | null;
+  spend: Spend;
   by_status: Group[] | null;
   by_adapter: Group[] | null;
   by_rule: Group[] | null;
@@ -927,6 +934,7 @@ export interface ShapeSelection {
 export interface ShapeTracker {
   kind: string;
   project?: string;
+  project_url?: string;
   active_states: string[] | null;
   in_progress_state?: string;
   handoff_state?: string;
@@ -968,20 +976,54 @@ export interface SnapshotAgentTotals {
   running_non_reporting: number;
 }
 
+export interface SpanReport {
+  generated_at: string;
+  since: string;
+  until: string | null;
+  period: "five_minutes" | "quarter_hour" | "hour" | "day" | "month";
+  totals: SpendBucket;
+  sessions: SpanSession[] | null;
+}
+
+export interface SpanSession {
+  identifier: string;
+  display_identifier?: string;
+  issue_title: string;
+  dispatch_id: string | null;
+  rule_name: string;
+  agent_kind: string;
+  status: string;
+  turns: number | null;
+  tokens: Tokens | null;
+  cost_usd: number | null;
+  cost_unpriced: boolean;
+  cost_share: number | null;
+  tokens_share: number | null;
+}
+
 export interface Spend {
-  period: string;
+  period: "five_minutes" | "quarter_hour" | "hour" | "day" | "month";
   buckets: SpendBucket[] | null;
 }
 
 export interface SpendBucket {
   start: string;
   runs: number;
+  turns: number;
+  tool_calls: number;
+  errors: number;
+  turns_unrecorded_runs: number;
+  tokens: Tokens | null;
   cost_usd: number | null;
+  cost_by_kind: KindCosts | null;
   tokens_unmeasured_runs: number;
   cost_unpriced_runs: number;
   cost_partial_runs: number;
+  tokens_lower_bound_runs: number;
+  tokens_lower_bound: boolean;
   cost_lower_bound: boolean;
   agent_priced_usd: number | null;
+  in_progress: boolean;
 }
 
 export interface SpendCeilingResponse {
@@ -1153,6 +1195,7 @@ export interface Tokens {
   cache_read: number;
   cache_write: number;
   uncached: number;
+  fresh_input: number;
 }
 
 export interface UnitAmountResponse {

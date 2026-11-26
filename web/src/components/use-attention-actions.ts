@@ -29,14 +29,13 @@ export function linkActionOf(item: AttentionItemResponse): LinkAction | null {
     const key = item.display_identifier || item.issue_identifier;
     return {
       url,
-      label: "Open issue",
-      title: key ? `Open ${key} in the tracker` : "Open issue",
+      label: "Issue",
+      title: key ? `Open ${key} in the tracker` : "Open the issue in the tracker",
     };
   }
   if (item.action.kind === "open_pull_request") {
     const number = item.evidence.pull_request?.number;
-    const label = number === undefined ? "Open pull request" : `Open pull request #${number}`;
-    return { url, label, title: label };
+    return { url, label: "PR", title: number === undefined ? "Open the PR" : `Open PR #${number}` };
   }
   return null;
 }

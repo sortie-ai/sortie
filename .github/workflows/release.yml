@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -106,7 +106,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -142,7 +142,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -175,7 +175,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -209,7 +209,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -229,7 +229,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -252,7 +252,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -288,7 +288,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -321,7 +321,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -334,7 +334,7 @@ jobs:
         run: npm install -g --ignore-scripts=false @anthropic-ai/claude-code
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/claude/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/claude/...
 
   test-integration-copilot:
     name: "Integration: Copilot"
@@ -362,7 +362,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -375,7 +375,7 @@ jobs:
         run: npm install -g @github/copilot
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/copilot/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/copilot/...
 
   test-integration-codex:
     name: "Integration: Codex"
@@ -403,7 +403,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -422,7 +422,7 @@ jobs:
         run: codex sandbox -- /usr/bin/true
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/codex/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/codex/...
 
   test-integration-opencode:
     name: "Integration: OpenCode"
@@ -451,7 +451,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -466,7 +466,7 @@ jobs:
       - name: Run integration tests
         run: |
           for attempt in 1 2; do
-            if go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...; then
+            if go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/opencode/...; then
               exit 0
             fi
             if [ "$attempt" -eq 2 ]; then
@@ -504,7 +504,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -552,7 +552,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -564,6 +564,87 @@ jobs:
 
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/clientprotocol/...
+
+  test-integration-acp-copilot:
+    name: "Integration: Copilot - ACP"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CLIENTPROTOCOL_TEST: "1"
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: COPILOT_PROVIDER_API_KEY
+      SORTIE_CLIENTPROTOCOL_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
+      SORTIE_CLIENTPROTOCOL_ASKING_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp"
+      SORTIE_CLIENTPROTOCOL_SSH_COMMAND: "env COPILOT_PROVIDER_TYPE=anthropic COPILOT_OFFLINE=1 COPILOT_MODEL=scripted-model copilot --acp --allow-all-tools"
+      SORTIE_CLIENTPROTOCOL_SSH_INSTALL: npm install -g @github/copilot
+      SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: "1"
+      SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: COPILOT_PROVIDER_BASE_URL
+      SORTIE_CLIENTPROTOCOL_USER_INSTRUCTIONS: .copilot/copilot-instructions.md
+      SORTIE_CLIENTPROTOCOL_PROFILE: tools/qualify/profiles/copilot-cli.json
+      SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: Copilot
+      SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: testdata/usage_limit/copilot_rate_limit_answer.json
+      SORTIE_CLIENTPROTOCOL_CONFIG_OPTION: testdata/config_option/copilot_agent.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 900s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+
+  test-integration-acp-opencode:
+    name: "Integration: OpenCode - ACP"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CLIENTPROTOCOL_TEST: "1"
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: GOOGLE_GENERATIVE_AI_API_KEY
+      SORTIE_CLIENTPROTOCOL_COMMAND: "opencode acp"
+      SORTIE_CLIENTPROTOCOL_SSH_COMMAND: "opencode acp"
+      SORTIE_CLIENTPROTOCOL_SSH_INSTALL: npm install -g --ignore-scripts=false @opencode/cli@2
+      SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: "1"
+      SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: OPENCODE_CONFIG
+      SORTIE_CLIENTPROTOCOL_MODEL_DOCUMENT: '{"$schema":"https://opencode.ai/config.json","model":"scripted/scripted-model","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"{url}/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}'
+      SORTIE_CLIENTPROTOCOL_PROFILE: tools/qualify/profiles/opencode.json
+      SORTIE_CLIENTPROTOCOL_SPEND_DECLARATION: OpenCode
+      SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: scripted/
+      SORTIE_CLIENTPROTOCOL_STATUS_CALL: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
+      SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: testdata/usage_limit/opencode_free_limit_answer.json
+      SORTIE_CLIENTPROTOCOL_EFFORT: high
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install OpenCode CLI
+        run: npm install -g --ignore-scripts=false @opencode/cli@2
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 900s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
 
   announcement:
     name: Release announcement
@@ -630,6 +711,8 @@ jobs:
       - test-integration-opencode
       - test-integration-acp-gemini
       - test-integration-acp-kiro
+      - test-integration-acp-copilot
+      - test-integration-acp-opencode
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -642,7 +725,7 @@ jobs:
           persist-credentials: true
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -719,7 +802,7 @@ jobs:
 
       - name: Sign Windows binaries
         if: ${{ !inputs.dry_run }}
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORG_ID }}
@@ -770,6 +853,7 @@ jobs:
           echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_amd64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_arm64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`checksums.txt\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`openapi.json\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- SBOM manifests (\`*.sbom.json\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry run summary
@@ -813,7 +897,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log into GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

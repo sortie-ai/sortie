@@ -691,6 +691,7 @@ func TestStartInvalidScript(t *testing.T) {
 		{"negative CachedContent", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, CachedContent: -1}}}, 0},
 		{"negative CacheWrite", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, CacheWrite: -1}}}, 0},
 		{"cache above Prompt", []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 10, CachedContent: 6, CacheWrite: 5}}}, 0},
+		{"truncated call", []fakemodel.Response{{Call: choice, Truncated: true}}, 0},
 		{"first invalid index is named", []fakemodel.Response{valid, {}, {Text: "ok", Call: choice}}, 1},
 	}
 
@@ -1459,6 +1460,21 @@ func TestGenerateContentUnsupportedShapes(t *testing.T) {
 	}
 }
 
+func TestAssistantWireRefusesTruncatedReply(t *testing.T) {
+	t.Parallel()
+
+	srv, ledger := startLedgered(t, []fakemodel.Response{{Text: "answer", Truncated: true}})
+
+	reply := assistantWire.post(t, srv, assistantWire.turnBody)
+
+	assertFailureRow(t, srv, ledger, reply, failureWant{
+		seq:    1,
+		status: http.StatusBadRequest, kind: fakemodel.ExchangeUnmatched, wire: assistantWire.wire,
+		message:  requestLabel(1, http.MethodPost, assistantWire.path) + " meets a truncated script entry this wire cannot carry",
+		envelope: assistantWire.envelope,
+	})
+}
+
 type generateContentChunk struct {
 	Candidates []struct {
 		Content struct {
@@ -1508,6 +1524,7 @@ func TestGenerateContentAnswerChunk(t *testing.T) {
 		{"text, plain", plainTarget, fakemodel.Response{Text: "answer", Usage: fullUsage}, fakemodel.Usage{Prompt: 500, Candidates: 40, Thoughts: 12, CachedContent: 100}},
 		{"call, streaming", streamTarget, fakemodel.Response{Call: call, Usage: fullUsage}, fakemodel.Usage{Prompt: 500, Candidates: 40, Thoughts: 12, CachedContent: 100}},
 		{"call, plain", plainTarget, fakemodel.Response{Call: call, Usage: fullUsage}, fakemodel.Usage{Prompt: 500, Candidates: 40, Thoughts: 12, CachedContent: 100}},
+		{"text, truncated", streamTarget, fakemodel.Response{Text: "answer", Truncated: true, Usage: fullUsage}, fakemodel.Usage{Prompt: 500, Candidates: 40, Thoughts: 12, CachedContent: 100}},
 	}
 
 	for _, tt := range tests {
@@ -1527,8 +1544,12 @@ func TestGenerateContentAnswerChunk(t *testing.T) {
 			}
 			var chunk generateContentChunk
 			unmarshal(t, payload, &chunk)
-			if len(chunk.Candidates) != 1 || chunk.Candidates[0].Content.Role != "model" || chunk.Candidates[0].FinishReason != "STOP" || chunk.Candidates[0].Index != 0 || len(chunk.Candidates[0].Content.Parts) != 1 {
-				t.Fatalf("chunk = %s, want one model candidate with finishReason STOP holding one part", payload)
+			wantFinish := "STOP"
+			if tt.response.Truncated {
+				wantFinish = "MAX_TOKENS"
+			}
+			if len(chunk.Candidates) != 1 || chunk.Candidates[0].Content.Role != "model" || chunk.Candidates[0].FinishReason != wantFinish || chunk.Candidates[0].Index != 0 || len(chunk.Candidates[0].Content.Parts) != 1 {
+				t.Fatalf("chunk = %s, want one model candidate with finishReason %s holding one part", payload, wantFinish)
 			}
 			if chunk.ModelVersion != testModel {
 				t.Errorf("chunk modelVersion = %q, want %q", chunk.ModelVersion, testModel)
@@ -1782,6 +1803,11 @@ func TestMessagesAnswerStream(t *testing.T) {
 			fakemodel.Response{Call: readFile, Usage: fullUsage},
 			370, 52, fakemodel.Usage{Prompt: 500, Candidates: 52, CachedContent: 100, CacheWrite: 30},
 		},
+		{
+			"truncated text answer",
+			fakemodel.Response{Text: "answer", Truncated: true, Usage: fullUsage},
+			370, 52, fakemodel.Usage{Prompt: 500, Candidates: 52, CachedContent: 100, CacheWrite: 30},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1822,6 +1848,9 @@ func TestMessagesAnswerStream(t *testing.T) {
 			wantStop := "end_turn"
 			if tt.response.Call != nil {
 				wantStop = "tool_use"
+			}
+			if tt.response.Truncated {
+				wantStop = "max_tokens"
 			}
 			if stop.Usage.OutputTokens != tt.wantOut || stop.Delta.StopReason != wantStop {
 				t.Errorf("message_delta = (output_tokens %d, stop_reason %q), want (%d, %q)", stop.Usage.OutputTokens, stop.Delta.StopReason, tt.wantOut, wantStop)
@@ -2099,6 +2128,7 @@ func TestResponsesAnswerStream(t *testing.T) {
 		"response.function_call_arguments.delta", "response.function_call_arguments.done",
 		"response.output_item.done", "response.completed",
 	}
+	truncatedEvents := append(slices.Clone(textEvents[:len(textEvents)-1]), "response.incomplete")
 	tests := []struct {
 		name       string
 		response   fakemodel.Response
@@ -2106,6 +2136,7 @@ func TestResponsesAnswerStream(t *testing.T) {
 	}{
 		{"text", fakemodel.Response{Text: "answer", Usage: fullUsage}, textEvents},
 		{"call", fakemodel.Response{Call: readFile, Usage: fullUsage}, callEvents},
+		{"truncated text", fakemodel.Response{Text: "answer", Truncated: true, Usage: fullUsage}, truncatedEvents},
 	}
 
 	for _, tt := range tests {
@@ -2120,9 +2151,12 @@ func TestResponsesAnswerStream(t *testing.T) {
 			}
 			var completed struct {
 				Response struct {
-					ID     string `json:"id"`
-					Status string `json:"status"`
-					Usage  struct {
+					ID                string `json:"id"`
+					Status            string `json:"status"`
+					IncompleteDetails struct {
+						Reason string `json:"reason"`
+					} `json:"incomplete_details"`
+					Usage struct {
 						InputTokens        int64 `json:"input_tokens"`
 						InputTokensDetails struct {
 							CachedTokens     int64 `json:"cached_tokens"`
@@ -2136,13 +2170,18 @@ func TestResponsesAnswerStream(t *testing.T) {
 					} `json:"usage"`
 				} `json:"response"`
 			}
-			unmarshal(t, eventData(t, events, "response.completed"), &completed)
+			closing := tt.wantEvents[len(tt.wantEvents)-1]
+			unmarshal(t, eventData(t, events, closing), &completed)
 			usage := completed.Response.Usage
 			if usage.InputTokens != 500 || usage.InputTokensDetails.CachedTokens != 100 || usage.InputTokensDetails.CacheWriteTokens != 30 || usage.OutputTokens != 52 || usage.OutputTokensDetails.ReasoningTokens != 12 || usage.TotalTokens != 552 {
 				t.Errorf("response.completed usage = %+v, want input 500, cached 100, cache write 30, output 52, reasoning 12, total 552", usage)
 			}
-			if completed.Response.ID != "resp_scripted_1" || completed.Response.Status != "completed" {
-				t.Errorf("response.completed (id, status) = (%q, %q), want (%q, %q)", completed.Response.ID, completed.Response.Status, "resp_scripted_1", "completed")
+			wantStatus, wantReason := "completed", ""
+			if tt.response.Truncated {
+				wantStatus, wantReason = "incomplete", "max_output_tokens"
+			}
+			if completed.Response.ID != "resp_scripted_1" || completed.Response.Status != wantStatus || completed.Response.IncompleteDetails.Reason != wantReason {
+				t.Errorf("%s (id, status, incomplete reason) = (%q, %q, %q), want (%q, %q, %q)", closing, completed.Response.ID, completed.Response.Status, completed.Response.IncompleteDetails.Reason, "resp_scripted_1", wantStatus, wantReason)
 			}
 			wantUsage := fakemodel.Usage{Prompt: 500, Candidates: 40, Thoughts: 12, CachedContent: 100, CacheWrite: 30}
 			if ex.Answer.Usage != wantUsage {

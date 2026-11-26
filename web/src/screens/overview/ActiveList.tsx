@@ -1,34 +1,18 @@
 import { useSearchParams } from "react-router";
 
-import { ActiveHead } from "@/components/ActiveHead";
-import { PhaseFilter } from "@/components/PhaseFilter";
+import { ACTIVE_SECTION_ID } from "@/components/ActiveHead";
+import { Panel } from "@/components/Panel";
+import { PhaseCount, PhaseFilter } from "@/components/PhaseFilter";
 import { RuleFilter } from "@/components/RuleFilter";
 import { Button } from "@/components/ui/button";
 import { filterRows } from "@/lib/active-rows";
-import { plural } from "@/lib/format";
+import { ROW_LIST } from "@/lib/rows";
 
 import { ActiveRow } from "./ActiveRow";
 import { activeNavKey } from "./rows";
 
 import type { ConfigResponse } from "@/api/types.gen";
-import type { ActiveRow as ActiveRowModel, Phase } from "@/lib/active-rows";
-
-const TALLY: readonly { word: string; phases: readonly Phase[] }[] = [
-  { word: "running", phases: ["running"] },
-  { word: "waiting", phases: ["pull_request", "between_stages"] },
-  { word: "retrying", phases: ["retry"] },
-  { word: "held", phases: ["needs_attention"] },
-];
-
-function tallyOf(rows: readonly ActiveRowModel[]): string {
-  return TALLY.map(({ word, phases }) => ({
-    word,
-    count: rows.filter((row) => phases.includes(row.phase)).length,
-  }))
-    .filter(({ count }) => count > 0)
-    .map(({ word, count }) => `${count} ${word}`)
-    .join(", ");
-}
+import type { ActiveRow as ActiveRowModel } from "@/lib/active-rows";
 
 export interface ActiveListProps {
   /** The served `active` rows in served order, before any filter. */
@@ -68,18 +52,15 @@ export function ActiveList({
   }
 
   return (
-    <section className="flex flex-col gap-sm">
-      <ActiveHead
-        view="list"
-        meta={`${plural(rows.length, "issue", "issues")}, dispatch order`}
-        tally={tallyOf(rows)}
-      />
-      <div className="flex flex-wrap items-center justify-between gap-xs empty:hidden">
-        <PhaseFilter rows={ruleRows} />
-        <RuleFilter config={config} rows={rows} />
-      </div>
+    <Panel
+      id={ACTIVE_SECTION_ID}
+      title="Active"
+      meta={<PhaseCount rows={ruleRows} />}
+      beside={<PhaseFilter rows={ruleRows} />}
+      right={<RuleFilter config={config} rows={rows} />}
+    >
       {visibleRows.length > 0 ? (
-        <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-canvas">
+        <ul className={ROW_LIST}>
           {visibleRows.map((row) => (
             <ActiveRow
               key={row.issueId}
@@ -95,11 +76,11 @@ export function ActiveList({
         // Holds the list's place so the sections below do not shift when work starts.
         <div aria-hidden="true" className="min-h-lh border border-transparent py-lg text-body-md" />
       ) : (
-        <div className="flex flex-wrap items-center gap-sm rounded-lg border border-line bg-canvas px-md py-lg text-body-md text-ink-body">
+        <div className="flex flex-wrap items-center gap-sm rounded-xl border border-line bg-canvas px-md py-lg text-body-md text-ink-body">
           No active issue matches these filters.
           <Button onClick={handleShowAll}>Show all</Button>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }

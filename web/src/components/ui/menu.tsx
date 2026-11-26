@@ -59,7 +59,7 @@ export function MenuPopup({
 
 export interface MenuRadioGroupProps<Value extends string> {
   value: Value;
-  onValueChange: (value: Value) => void;
+  onValueChange?: (value: Value) => void;
   children: ReactNode;
 }
 
@@ -69,7 +69,7 @@ export function MenuRadioGroup<Value extends string>({
   children,
 }: MenuRadioGroupProps<Value>) {
   return (
-    <BaseMenu.RadioGroup value={value} onValueChange={(next) => onValueChange(next as Value)}>
+    <BaseMenu.RadioGroup value={value} onValueChange={(next) => onValueChange?.(next as Value)}>
       {children}
     </BaseMenu.RadioGroup>
   );
@@ -77,13 +77,18 @@ export function MenuRadioGroup<Value extends string>({
 
 export interface MenuRadioItemProps {
   value: string;
+  /** Fires on every press, including one on the checked item, which the group reports no change for. */
+  onClick?: () => void;
+  closeOnClick?: boolean;
   children: ReactNode;
 }
 
-export function MenuRadioItem({ value, children }: MenuRadioItemProps) {
+export function MenuRadioItem({ value, onClick, closeOnClick, children }: MenuRadioItemProps) {
   return (
     <BaseMenu.RadioItem
       value={value}
+      onClick={onClick}
+      closeOnClick={closeOnClick}
       className="grid cursor-default grid-cols-[var(--size-icon)_1fr] items-center gap-xs px-sm py-xs text-body-md outline-hidden select-none data-highlighted:bg-item-hover active:bg-item-selected"
     >
       <BaseMenu.RadioItemIndicator className="col-start-1 flex text-ink-muted">

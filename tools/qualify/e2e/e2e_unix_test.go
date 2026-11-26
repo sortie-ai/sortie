@@ -520,6 +520,50 @@ func TestDispatchWatchAdd(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps waiting on a running session read before the hold", func(t *testing.T) {
+		t.Parallel()
+
+		w := &dispatchWatch{}
+		if w.add(ceilingSample{runs: 1, running: true}) {
+			t.Fatal("add(running=true before the hold) = true, want false: a snapshot published before the exit still lists the stopped run")
+		}
+		if w.add(ceilingSample{runs: 1, held: true}) || w.running {
+			t.Fatalf("after the hold sample: watch state = %+v, want held, still waiting and nothing running", w)
+		}
+	})
+
+	t.Run("ends on a new session before the hold", func(t *testing.T) {
+		t.Parallel()
+
+		stopped := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		tests := []struct {
+			name    string
+			samples []ceilingSample
+		}{
+			{"a different start", []ceilingSample{
+				{runs: 1, running: true, startedAt: stopped},
+				{runs: 1, running: true, startedAt: stopped.Add(time.Millisecond)},
+			}},
+			{"after an idle read", []ceilingSample{
+				{runs: 1, running: true, startedAt: stopped},
+				{runs: 1},
+				{runs: 1, running: true, startedAt: stopped},
+			}},
+		}
+		for _, tt := range tests {
+			w := &dispatchWatch{}
+			last := len(tt.samples) - 1
+			for i, sample := range tt.samples[:last] {
+				if w.add(sample) {
+					t.Fatalf("%s: add(sample %d) = true, want false", tt.name, i)
+				}
+			}
+			if !w.add(tt.samples[last]) || !w.running {
+				t.Errorf("%s: watch state = %+v, want the new session ending the watch as a dispatch", tt.name, w)
+			}
+		}
+	})
+
 	t.Run("ends on the first sample showing a running session, inside the quiet window", func(t *testing.T) {
 		t.Parallel()
 

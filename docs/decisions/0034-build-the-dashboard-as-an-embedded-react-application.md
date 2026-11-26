@@ -70,7 +70,7 @@ default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; c
 
 ### Type contract
 
-A Go test in the server package, standard library only, walks the response types from each route's root type with `reflect`, follows `encoding/json`'s rules (a pointer, slice, or map without `omitempty` is `T | null`, because nil encodes as `null`; with `omitempty` it is `field?: T`, because nil, and an empty slice or map, is omitted; a type with its own `MarshalJSON` fails the test until it is mapped), and emits TypeScript declarations and a JSON Schema 2020-12 document. It compares both with the committed copies, and an update flag rewrites them. A Go-only contributor who changes a response type sees a red `go test` and regenerates without Node. If the change breaks code the dashboard uses, the dashboard's type check fails, which is correct because that change needs a TypeScript edit anyway.
+A Go test in the server package, standard library only, walks the response types from each route's root type with `reflect`, follows `encoding/json`'s rules (a pointer, slice, or map without `omitempty` is `T | null`, because nil encodes as `null`; with `omitempty` it is `field?: T`, because nil, and an empty slice or map, is omitted; a type with its own `MarshalJSON` fails the test until it is mapped), and emits TypeScript declarations and an OpenAPI 3.2 description of the API whose schemas come from the same walk. It compares both with the committed copies, and an update flag rewrites them. A Go-only contributor who changes a response type sees a red `go test` and regenerates without Node. If the change breaks code the dashboard uses, the dashboard's type check fails, which is correct because that change needs a TypeScript edit anyway.
 
 ### Design tokens and accessibility
 
@@ -140,7 +140,7 @@ ADR-0006 states that any addition must be pure Go with no CGo, and ADR-0008 fram
 
 - Operators keep one binary with nothing to install and nothing fetched at runtime, through every install channel including `go install`.
 - Go-only contributors, the release job, and the container build stay Go-only, and the Go-side gates (type contract and embedded assets) run on every OS without Node.
-- A response-type change in Go cannot drift silently from the client, and third parties get a JSON Schema derived from the same walk.
+- A response-type change in Go cannot drift silently from the client, and third parties get an OpenAPI description derived from the same walk.
 - Each later surface lands as one lazily loaded module, using mainstream libraries agents already know.
 
 ### Negative
@@ -158,7 +158,7 @@ ADR-0006 states that any addition must be pure Go with no CGo, and ADR-0008 fram
 ## Confirmation
 
 1. `go build`, `go vet ./...` and `go test ./...` pass on a clean checkout with no Node installed, and the resulting binary serves the full dashboard at `/ui/`.
-2. Adding a field to a response type turns `go test` red until the generated TypeScript and JSON Schema are regenerated.
+2. Adding a field to a response type turns `go test` red until the generated TypeScript and OpenAPI description are regenerated.
 3. Committing output that differs from a fresh build, including a missing new file, fails the dashboard CI job.
 4. A browser loading a deep link under `/ui/` from the binary renders the app with the content security policy enforced and no console violations.
 5. With the server's write timeout in force, a stream stays open past it; shutting the server down with a stream open returns without waiting out the shutdown deadline; and a client that stops reading never delays the orchestrator's event loop.

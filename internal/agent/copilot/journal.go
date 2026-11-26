@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 )
 
@@ -18,7 +18,7 @@ func (s *sessionState) readJournal(ctx context.Context) usage.RecordsRead {
 	scan := func(ctx context.Context, path agentcore.RuntimePath, limit, lineLimit int64, fn func(line []byte) error) error {
 		return s.target.ScanRuntimeFile(ctx, nil, path, limit, lineLimit, fn)
 	}
-	readings, err := sessionstate.ScanRecords(ctx, s.copilotSessionID, scan)
+	readings, err := usagesource.CopilotScanRecords(ctx, s.copilotSessionID, scan)
 	if err != nil {
 		s.logger().Debug("copilot journal read failed", slog.Any("error", err))
 		return usage.RecordsRead{}

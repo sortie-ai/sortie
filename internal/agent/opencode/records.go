@@ -8,7 +8,7 @@ import (
 	"slices"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/opencode/sessionexport"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -31,11 +31,11 @@ func (s *sessionState) runtimeCommand(args []string, limit int64) agentcore.Host
 // its error alone: the export may hold tool output, which never reaches an
 // error or a log.
 func (s *sessionState) readExport(ctx context.Context, sessionID string) ([]usage.SpendReading, error) {
-	out, err := s.target.RunHostCommand(ctx, buildRunEnv(os.Environ()), s.runtimeCommand(sessionexport.Args(sessionID), usage.MaxRecordsBytes))
+	out, err := s.target.RunHostCommand(ctx, buildRunEnv(os.Environ()), s.runtimeCommand(usagesource.OpenCodeArgs(sessionID), usage.MaxRecordsBytes))
 	if err != nil {
 		return nil, err
 	}
-	return sessionexport.Parse(out, sessionID)
+	return usagesource.OpenCodeParse(out, sessionID)
 }
 
 // ProbeResume reads the export of the session resumeID names. Only an export
@@ -62,7 +62,7 @@ func (s *sessionState) ProbeResume(ctx context.Context, resumeID string) (agentc
 // a lost SSH connection wraps neither error that marks a missing one.
 func exportFailureVerdict(readCtx context.Context, err error) agentcore.ResumeVerdict {
 	if readCtx.Err() == nil &&
-		(errors.Is(err, agentcore.ErrHostCommandFailed) || errors.Is(err, sessionexport.ErrOtherSession)) {
+		(errors.Is(err, agentcore.ErrHostCommandFailed) || errors.Is(err, usagesource.ErrOpenCodeOtherSession)) {
 		return agentcore.ResumeReplaced
 	}
 	return agentcore.ResumeUnknown

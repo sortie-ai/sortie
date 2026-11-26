@@ -66,7 +66,7 @@ func TestRunTurn_PulledLimitWindows(t *testing.T) {
 		turns  int
 		want   []domain.UsageWindow
 	}{
-		{"signed in", string(loadFixture(t, "../usagelimits/testdata/api-limits-signed.json")), 1, signedIn},
+		{"signed in", string(loadFixture(t, "../../clientprotocol/usagesource/testdata/api-limits-signed.json")), 1, signedIn},
 		{"command fails", "", 2, nil},
 	}
 	for _, tt := range tests {

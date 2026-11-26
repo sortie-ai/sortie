@@ -221,8 +221,11 @@ type teamState struct {
 type teamStatesData struct {
 	Teams struct {
 		Nodes []struct {
-			ID     string `json:"id"`
-			Key    string `json:"key"`
+			ID           string `json:"id"`
+			Key          string `json:"key"`
+			Organization struct {
+				URLKey string `json:"urlKey"`
+			} `json:"organization"`
 			States struct {
 				Nodes []teamState `json:"nodes"`
 			} `json:"states"`

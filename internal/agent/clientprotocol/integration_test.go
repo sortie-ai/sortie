@@ -93,6 +93,20 @@
 //	                                  report, and how many requests the runtime
 //	                                  makes before it gives up (default 1); unset
 //	                                  skips the usage-limit case
+//	SORTIE_CLIENTPROTOCOL_EFFORT      a reasoning level the runtime offers on
+//	                                  its thought_level option, such as high;
+//	                                  unset skips the effort case, which runs
+//	                                  one scripted turn under that level and
+//	                                  holds the runtime to applying it
+//	SORTIE_CLIENTPROTOCOL_CONFIG_OPTION
+//	                                  path of a JSON document {"option", "value",
+//	                                  "files", "marker"}: a session option the
+//	                                  runtime offers once the files (work tree
+//	                                  path to content) exist, the value to set,
+//	                                  and a word the value's instructions make
+//	                                  the model request carry; unset skips the
+//	                                  session option case, which runs one
+//	                                  scripted turn with that option set
 //
 // Run:
 //
@@ -124,6 +138,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+const (
+	realModelTurnTimeoutMS = 300000
+	realModelReadTimeoutMS = 30000
 )
 
 type liveProtocolCapture struct {
@@ -168,10 +187,9 @@ func captureAgentConfig(t *testing.T, command string, expect captureExpectation,
 	t.Cleanup(func() { assertLiveProtocolConformance(t, capture) })
 
 	return domain.AgentConfig{
-		Command: wrapperPath + " " + command,
-		// Generous for a real model's latency.
-		TurnTimeoutMS: 300000,
-		ReadTimeoutMS: 30000,
+		Command:       wrapperPath + " " + command,
+		TurnTimeoutMS: realModelTurnTimeoutMS,
+		ReadTimeoutMS: realModelReadTimeoutMS,
 	}, capture
 }
 
@@ -488,8 +506,8 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 			WorkspacePath: gitInitWorkspace(t),
 			AgentConfig: domain.AgentConfig{
 				Command:       os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND"),
-				TurnTimeoutMS: 300000,
-				ReadTimeoutMS: 30000,
+				TurnTimeoutMS: realModelTurnTimeoutMS,
+				ReadTimeoutMS: realModelReadTimeoutMS,
 			},
 		}
 	}
@@ -499,7 +517,6 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
-		// Not parallel: t.Setenv carries the invalid credential.
 		credentialtest.SetRefusedCredential(t, "SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
@@ -516,8 +533,8 @@ func TestIntegration_EarlyExit(t *testing.T) {
 	}
 	unknownSwitchConfig := domain.AgentConfig{
 		Command:       os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND") + " --sortie-unknown-switch",
-		TurnTimeoutMS: 300000,
-		ReadTimeoutMS: 30000,
+		TurnTimeoutMS: realModelTurnTimeoutMS,
+		ReadTimeoutMS: realModelReadTimeoutMS,
 	}
 
 	t.Run("verification session with an unknown switch", func(t *testing.T) {
@@ -690,6 +707,178 @@ func spendSources(t *testing.T) *fakemodel.SpendSources {
 	}
 }
 
+type effortOption struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	Category     string `json:"category"`
+	CurrentValue string `json:"currentValue"`
+}
+
+type effortBody struct {
+	SessionID     string         `json:"sessionId"`
+	ConfigID      string         `json:"configId"`
+	Value         string         `json:"value"`
+	StopReason    string         `json:"stopReason"`
+	ConfigOptions []effortOption `json:"configOptions"`
+	Update        struct {
+		SessionUpdate string         `json:"sessionUpdate"`
+		ConfigOptions []effortOption `json:"configOptions"`
+	} `json:"update"`
+}
+
+type optionCapture struct {
+	sets                       int
+	sentAfterPrompt            bool
+	sent, opened, applied, end effortBody
+	updates                    []effortBody
+}
+
+func readOptionCapture(t *testing.T, streams []string) optionCapture {
+	t.Helper()
+
+	var got optionCapture
+	var newID, setID, promptID json.RawMessage
+	for _, line := range capturedJSONLines(t, streams[0]) {
+		var frame liveEnvelope
+		_ = json.Unmarshal(line, &frame)
+		switch frame.Method {
+		case methodSessionNew:
+			newID = frame.ID
+		case methodSessionPrompt:
+			if promptID == nil {
+				promptID = frame.ID
+			}
+		case methodSessionSetConfigOption:
+			got.sets++
+			setID = frame.ID
+			_ = json.Unmarshal(frame.Params, &got.sent)
+			got.sentAfterPrompt = got.sentAfterPrompt || promptID != nil
+		}
+	}
+
+	var answered bool
+	for _, line := range capturedJSONLines(t, streams[1]) {
+		var frame liveEnvelope
+		_ = json.Unmarshal(line, &frame)
+		switch {
+		case frame.Method == methodSessionUpdate && answered && got.end.StopReason == "":
+			var update effortBody
+			_ = json.Unmarshal(frame.Params, &update)
+			got.updates = append(got.updates, update)
+		case frame.Method != "":
+		case string(frame.ID) == string(newID):
+			_ = json.Unmarshal(frame.Result, &got.opened)
+		case string(frame.ID) == string(setID):
+			answered = true
+			_ = json.Unmarshal(frame.Result, &got.applied)
+		case string(frame.ID) == string(promptID):
+			_ = json.Unmarshal(frame.Result, &got.end)
+		}
+	}
+	return got
+}
+
+func assertOptionForwarded(t *testing.T, got optionCapture, configID, value string) {
+	t.Helper()
+
+	if got.sets != 1 {
+		t.Fatalf("session/set_config_option requests = %d, want 1", got.sets)
+	}
+	if got.sentAfterPrompt {
+		t.Errorf("session/set_config_option sent after the first session/prompt, want before")
+	}
+	if got.sent.ConfigID != configID || got.sent.Value != value {
+		t.Errorf("session/set_config_option = {configId %q, value %q}, want {configId %q, value %q}", got.sent.ConfigID, got.sent.Value, configID, value)
+	}
+	if !slices.ContainsFunc(got.applied.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue == value }) {
+		t.Errorf("session/set_config_option result options = %+v, want %q at %q", got.applied.ConfigOptions, configID, value)
+	}
+	for _, update := range got.updates {
+		if update.SessionID == got.opened.SessionID && update.Update.SessionUpdate == sessionUpdateConfigOptionUpdate &&
+			slices.ContainsFunc(update.Update.ConfigOptions, func(option effortOption) bool { return option.ID == configID && option.CurrentValue != value }) {
+			t.Errorf("config_option_update options = %+v before the turn ended, want %q at %q", update.Update.ConfigOptions, configID, value)
+		}
+	}
+	if got.end.StopReason != "end_turn" {
+		t.Errorf("session/prompt stopReason = %q, want %q", got.end.StopReason, "end_turn")
+	}
+}
+
+func assertEffortForwarded(t *testing.T, streams []string, level string) {
+	t.Helper()
+
+	got := readOptionCapture(t, streams)
+	target := slices.IndexFunc(got.opened.ConfigOptions, func(option effortOption) bool {
+		return option.Type == "select" && option.Category == "thought_level"
+	})
+	if target < 0 {
+		t.Fatalf("session/new configOptions = %+v, want a thought_level select option", got.opened.ConfigOptions)
+	}
+
+	assertOptionForwarded(t, got, got.opened.ConfigOptions[target].ID, level)
+}
+
+type sessionOptionDocument struct {
+	Option string            `json:"option"`
+	Value  string            `json:"value"`
+	Files  map[string]string `json:"files"`
+	Marker string            `json:"marker"`
+}
+
+func sessionOptionDocumentFromEnv(t *testing.T) sessionOptionDocument {
+	t.Helper()
+
+	const variable = "SORTIE_CLIENTPROTOCOL_CONFIG_OPTION"
+	path := os.Getenv(variable)
+	if path == "" {
+		t.Skipf("skipping session option case: %s must name the JSON document of the option, its value, the files that make the value available and the marker the instructions produce", variable)
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator names the document
+	if err != nil {
+		t.Fatalf("%s = %q: %v", variable, path, err)
+	}
+	var doc sessionOptionDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("%s = %q, want a JSON object with option, value, files and marker: %v", variable, path, err)
+	}
+	if doc.Option == "" || doc.Value == "" || doc.Marker == "" {
+		t.Fatalf("%s = %q holds option %q, value %q, marker %q, want all three non-empty", variable, path, doc.Option, doc.Value, doc.Marker)
+	}
+	return doc
+}
+
+func writeWorkspaceFiles(t *testing.T, workspace string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		if !filepath.IsLocal(name) {
+			t.Fatalf("writeWorkspaceFiles: %q is not a path inside the work tree", name)
+		}
+		path := filepath.Join(workspace, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("writeWorkspaceFiles: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("writeWorkspaceFiles: %v", err)
+		}
+	}
+}
+
+func assertSessionOptionApplied(t *testing.T, run fakemodel.Run, doc sessionOptionDocument) {
+	t.Helper()
+
+	got := readOptionCapture(t, run.Streams)
+	if !slices.ContainsFunc(got.opened.ConfigOptions, func(option effortOption) bool { return option.ID == doc.Option }) {
+		t.Fatalf("session/new configOptions = %+v, want an option %q", got.opened.ConfigOptions, doc.Option)
+	}
+
+	assertOptionForwarded(t, got, doc.Option, doc.Value)
+	if !slices.ContainsFunc(run.Exchanges, func(ex fakemodel.Exchange) bool {
+		return ex.Kind == fakemodel.ExchangeTurn && strings.Contains(string(ex.Body), doc.Marker)
+	}) {
+		t.Errorf("model requests of the turn = %d, want one carrying %q", len(run.Exchanges), doc.Marker)
+	}
+}
+
 func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
@@ -732,7 +921,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		VerificationContext:  claimedVerificationContext(os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")),
 		Read:                 fakemodel.ReadFile,
 		PermissionRefusal: &fakemodel.PermissionRefusal{
-			Guarded: fakemodel.CatFile,
+			Guarded: fakemodel.TeeFile,
 			Notice:  agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).Notice,
 			Skip:    skipRefusal,
 		},
@@ -761,7 +950,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 					launchEnv["HOME"] = env.Home
 				}
 				return fakemodel.Launch{
-					Config: domain.AgentConfig{TurnTimeoutMS: 300000, ReadTimeoutMS: 30000},
+					Config: domain.AgentConfig{TurnTimeoutMS: realModelTurnTimeoutMS, ReadTimeoutMS: realModelReadTimeoutMS},
 					Env:    launchEnv,
 				}
 			}
@@ -837,5 +1026,36 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("effort_forwarding", func(t *testing.T) {
+		level := os.Getenv("SORTIE_CLIENTPROTOCOL_EFFORT")
+		if level == "" {
+			t.Skip("skipping effort case: SORTIE_CLIENTPROTOCOL_EFFORT must name a reasoning level the runtime offers")
+		}
+		turnExpect = expectCompletedTurn
+
+		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+			Script:   []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 101, Candidates: 7}}},
+			Prompt:   "Reply with the word ok.",
+			Settings: map[string]any{registry.EffortKey: level},
+		})
+
+		assertEffortForwarded(t, run.Streams, level)
+	})
+	t.Run("session_option", func(t *testing.T) {
+		doc := sessionOptionDocumentFromEnv(t)
+		turnExpect = expectCompletedTurn
+		workspace := gitInitWorkspace(t)
+		writeWorkspaceFiles(t, workspace, doc.Files)
+
+		run := fakemodel.RunCustomTurn(t, binding, fakemodel.CustomTurn{
+			Script:    []fakemodel.Response{{Text: "ok", Usage: fakemodel.Usage{Prompt: 101, Candidates: 7}}},
+			Prompt:    "Reply with the word ok.",
+			Settings:  map[string]any{configOptionsKey: map[string]any{doc.Option: doc.Value}},
+			Workspace: workspace,
+		})
+
+		assertSessionOptionApplied(t, run, doc)
 	})
 }

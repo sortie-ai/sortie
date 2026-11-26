@@ -32,7 +32,8 @@ export function HeldItem({ row, now }: HeldItemProps) {
         <ServedText text={row.hold.release_text} />
       </p>
       <div className="col-start-2 row-span-3 row-start-1 flex flex-col items-end justify-between gap-xs max-md:col-start-1 max-md:row-span-1 max-md:row-start-auto max-md:flex-row-reverse max-md:items-center max-md:justify-end">
-        <span className="text-body-sm whitespace-nowrap text-ink-muted tabular-nums">
+        {/* Takes the first line's height, so the age stands on the title's baseline. */}
+        <span className="text-body-sm leading-(--text-body-md--line-height) whitespace-nowrap text-ink-muted tabular-nums">
           {fmtAgo(row.hold.held_since, now)}
         </span>
         {url === null ? undefined : (
@@ -44,7 +45,7 @@ export function HeldItem({ row, now }: HeldItemProps) {
             className={buttonStyles("secondary")}
           >
             <ExternalLinkIcon />
-            Open issue
+            Issue
           </a>
         )}
       </div>

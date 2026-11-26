@@ -4,12 +4,12 @@
     "handshake": "Copilot",
     "acpArg": "--acp",
     "providerEnv": "COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:1",
-    "fixture": "../copilot/quota/testdata/headless_real.txt"
+    "fixture": "usagesource/testdata/headless_real.txt"
   },
   "limits": {
     "executable": "opencode",
     "handshake": "OpenCode",
     "acpArg": "acp",
-    "fixture": "../opencode/usagelimits/testdata/api-limits-signed.json"
+    "fixture": "usagesource/testdata/api-limits-signed.json"
   }
 }

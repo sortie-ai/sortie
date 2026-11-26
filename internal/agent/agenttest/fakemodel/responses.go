@@ -135,6 +135,12 @@ type responsesBody struct {
 	Output []json.RawMessage `json:"output"`
 	Model  string            `json:"model"`
 	Usage  *responsesUsage   `json:"usage,omitempty"`
+
+	IncompleteDetails *responsesIncomplete `json:"incomplete_details,omitempty"`
+}
+
+type responsesIncomplete struct {
+	Reason string `json:"reason"`
 }
 
 type responsesMessageItem struct {
@@ -217,6 +223,9 @@ func (responsesCodec) render(r reply) rendered {
 		started := responsesMessageItem{ID: itemID, Type: "message", Role: "assistant", Status: "in_progress", Content: []responsesPart{}}
 		finished := started
 		finished.Status, finished.Content = "completed", []responsesPart{full}
+		if r.truncated {
+			finished.Status = "incomplete"
+		}
 		final = encodeJSON(finished)
 		events = append(events,
 			responsesEvent{Type: "response.output_item.added", OutputIndex: &index, Item: encodeJSON(started)},
@@ -227,8 +236,13 @@ func (responsesCodec) render(r reply) rendered {
 			responsesEvent{Type: "response.output_item.done", OutputIndex: &index, Item: final},
 		)
 	}
-	completed := responsesBody{ID: responseID, Object: "response", Status: "completed", Output: []json.RawMessage{final}, Model: r.model, Usage: usage}
-	events = append(events, responsesEvent{Type: "response.completed", Response: &completed})
+	closing := responsesEvent{Type: "response.completed", Response: &responsesBody{ID: responseID, Object: "response", Status: "completed", Output: []json.RawMessage{final}, Model: r.model, Usage: usage}}
+	if r.truncated {
+		closing.Type = "response.incomplete"
+		closing.Response.Status = "incomplete"
+		closing.Response.IncompleteDetails = &responsesIncomplete{Reason: "max_output_tokens"}
+	}
+	events = append(events, closing)
 
 	var stream strings.Builder
 	for _, event := range events {

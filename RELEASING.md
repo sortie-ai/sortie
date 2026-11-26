@@ -11,7 +11,8 @@ _Requires write access to `sortie-ai/sortie` and `sortie-ai/docs`, approver righ
 7. Copy the `[X.Y.Z]` section of `CHANGELOG.md` into `sortie-ai/docs/changelog.md` with a `{ #X.Y.Z }` heading anchor, and add its compare link to the footer.
 8. Run the `Release` workflow with `dry_run` unchecked.
 9. Approve the signing request in SignPath within an hour, while the workflow waits on it.
-10. Copy the announcement from the `vX.Y.Z` GitHub release into the `{ #X.Y.Z }` section of `sortie-ai/docs/changelog.md`.
-11. Commit and push `sortie-ai/docs`, then deploy the docs site within two hours of the release. The Discord announcement goes out once the deployed changelog lists the release.
-12. Close the `X.Y.Z` milestone.
-13. Set the next milestone as the default on the Sortie Roadmap board.
+10. Check that the `vX.Y.Z` GitHub release carries an archive and its SBOM for every platform, `checksums.txt`, and `openapi.json`.
+11. Copy the announcement from the `vX.Y.Z` GitHub release into the `{ #X.Y.Z }` section of `sortie-ai/docs/changelog.md`.
+12. Commit and push `sortie-ai/docs`, then deploy the docs site within two hours of the release. The Discord announcement goes out once the deployed changelog lists the release.
+13. Close the `X.Y.Z` milestone.
+14. Set the next milestone as the default on the Sortie Roadmap board.

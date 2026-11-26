@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 export type ButtonVariant = "primary" | "secondary" | "ghost";
 
 const BASE =
-  "inline-flex h-(--size-control) items-center justify-center gap-xs rounded px-sm text-body-md font-medium whitespace-nowrap select-none cursor-pointer transition-colors duration-(--duration-feedback) focus-visible:outline-2 focus-visible:outline-focus-ring data-disabled:cursor-default";
+  "inline-flex h-(--size-control) items-center justify-center gap-xs rounded-lg px-sm text-body-md font-medium whitespace-nowrap select-none cursor-pointer transition-colors duration-(--duration-feedback) focus-visible:outline-2 focus-visible:outline-focus-ring data-disabled:cursor-default";
 
 // Ghost buttons on the dark rail hover with the rail's panel colors: the rail sets
 // --ghost-hover and --ghost-pressed, and everywhere else the fallbacks apply.

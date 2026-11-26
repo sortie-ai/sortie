@@ -147,6 +147,7 @@ const queryTeamStates = `query TeamStates($teamKey: String!) {
     nodes {
       id
       key
+      organization { urlKey }
       states(first: 50) {
         nodes {
           id

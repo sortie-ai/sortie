@@ -215,6 +215,13 @@ type TrackerAdapter interface {
 	SetTrackerStates(current func() TrackerStates)
 }
 
+// ProjectLinker is the optional capability a tracker adapter implements
+// when the project it reads has a web page a person can open.
+type ProjectLinker interface {
+	// ProjectURL returns the web address of the configured project.
+	ProjectURL() string
+}
+
 // BlockerReader is the optional capability a tracker adapter
 // implements when its candidate fetch cannot carry blockers.
 type BlockerReader interface {

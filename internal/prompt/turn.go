@@ -21,7 +21,9 @@ const DefaultContinuationPrompt = "Continue working on this task. Review the cur
 //
 // Continuation turns omit this suffix because the instruction persists
 // in the agent's conversation history from turn 1.
-const RuntimeStatusSuffix = `If you determine that you cannot make further progress on this task without human
+const RuntimeStatusSuffix = `## Report your status
+
+If you determine that you cannot make further progress on this task without human
 intervention, or if your work is complete and requires human review, or if you
 determine that the requested outcome already held and you changed nothing, signal
 the orchestrator by running the following, replacing STATUS with exactly one of

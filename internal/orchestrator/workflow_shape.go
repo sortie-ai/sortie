@@ -2,9 +2,12 @@ package orchestrator
 
 import (
 	"maps"
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -19,10 +22,12 @@ type WorkflowShape struct {
 }
 
 // ShapeTracker reports the tracker kind and project the poll loop's adapter was
-// built with, and the states the workflow acts on.
+// built with, the project's web address when the adapter names one, and the
+// states the workflow acts on.
 type ShapeTracker struct {
 	Kind            string   `json:"kind"`
 	Project         string   `json:"project,omitempty"`
+	ProjectURL      string   `json:"project_url,omitempty"`
 	ActiveStates    []string `json:"active_states"`
 	InProgressState string   `json:"in_progress_state,omitempty"`
 	HandoffState    string   `json:"handoff_state,omitempty"`
@@ -187,6 +192,7 @@ func (o *Orchestrator) WorkflowShape() WorkflowShape {
 		Tracker: ShapeTracker{
 			Kind:            o.trackerKind,
 			Project:         o.trackerProject,
+			ProjectURL:      o.trackerProjectURL(),
 			ActiveStates:    copyStrings(cfg.Tracker.ActiveStates),
 			InProgressState: cfg.Tracker.InProgressState,
 			HandoffState:    cfg.Tracker.HandoffState,
@@ -427,4 +433,33 @@ func positiveOrNil[T int | float64](n T) *T {
 		return nil
 	}
 	return &n
+}
+
+// trackerProjectURL returns the web address of the tracker's project, or ""
+// when the adapter names none or names one that is not an absolute http(s)
+// URL. Credentials, query and fragment never reach the state API, so no
+// adapter has to scrub its own address.
+func (o *Orchestrator) trackerProjectURL() string {
+	linker, ok := o.trackerAdapter.(domain.ProjectLinker)
+	if !ok {
+		return ""
+	}
+	return publicProjectURL(linker.ProjectURL())
+}
+
+// publicProjectURL reduces raw to scheme, host and path, or "" when raw is
+// not an absolute http(s) URL with a host.
+func publicProjectURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
+	return parsed.String()
 }

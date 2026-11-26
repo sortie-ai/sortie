@@ -66,7 +66,7 @@ An existing per-kind entry such as `token_rates.claude-code` keeps precedence ov
 
 ### Price at write
 
-When a run row is written, the orchestrator records its estimated cost, and for each model's share of it the price source (operator, fetched, or embedded) and the version of the rates that priced it: the pinned upstream revision of the embedded table, a digest of a fetched or operator table's content, or a digest of `token_rates` for a share an operator entry priced. A share whose operator entry takes some of its rates from a table records both versions, the `token_rates` digest joined to the table's version by `+`, so both inputs of its price stay auditable. History is no longer priced at read. The dashboard, the JSON API, `GET /api/v1/stats`, and `sortie stats` all read the recorded figures, so the command and the route can no longer disagree after an edit. A running session's figure is the orchestrator's live estimate under the rates in force, and the row written at the session's end fixes it.
+When a run row is written, the orchestrator records its estimated cost, and for each model's share of it the price source (operator, fetched, or embedded) and the version of the rates that priced it: the pinned upstream revision of the embedded table, a digest of a fetched or operator table's content, or a digest of `token_rates` for a share an operator entry priced. A share whose operator entry takes some of its rates from a table records both versions, the `token_rates` digest joined to the table's version by `+`, so both inputs of its price stay auditable. History is no longer priced at read. The dashboard, the JSON API, `GET /api/v1/stats`, and `sortie stats` all read the recorded figures, so for finished runs the command and the route can no longer disagree after an edit. A running session's figure is the orchestrator's live estimate under the rates in force, and the row written at the session's end fixes it.
 
 Rows written before this change carry no recorded cost. The first start that applies the schema change prices them once, under the rates in force at that start, on the run's reported model, else its configured model, and records the result with its source and version. They never change after that.
 
@@ -131,7 +131,7 @@ A money ceiling bounds Sortie's estimate, computed from the input, output, cache
 - Every deployment prices runs with no rate entered by hand, with current prices by default and with embedded prices when offline, and a money ceiling becomes buildable on pricing the orchestrator can reach.
 - A recorded cost never moves, so restarts, upgrades, and table refreshes cannot start or end a hold, and `token_rates` reloads live.
 - Every kind is priced by one rule, per model, so routing work to a cheaper model shows in money as well as in tokens.
-- `sortie stats` and `GET /api/v1/stats` read the same recorded figures and no longer disagree after an edit.
+- `sortie stats` and `GET /api/v1/stats` read the same recorded figures of finished runs and no longer disagree after an edit.
 - The agent's `cost_budget` reading and the orchestrator's refusal share one recorded source.
 
 ### Negative

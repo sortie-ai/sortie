@@ -51,7 +51,7 @@ make ui-fmt-check  # fails on any formatting difference
 make ui-check      # lint, format check, and the build output check
 ```
 
-The response types of the JSON API reach the application through two generated files, `web/src/api/types.gen.ts` and `docs/api.schema.json`. A change to a JSON response type fails `go test ./internal/server` until both are regenerated with `go test ./internal/server -run TestAPIContract -update`. The command needs no Node, and neither file is edited by hand.
+The response types of the JSON API reach the application through generated files: `web/src/api/types.gen.ts` and `docs/openapi.json`, the OpenAPI description of the API. A change to a JSON response type fails `go test ./internal/server` until the files are regenerated with `go test ./internal/server -run TestAPIContract -update`. The same test fails when the mux and the route table in `internal/server/api_routes_test.go` (`apiRoutes`) disagree, and CI runs oasdiff on `docs/openapi.json`. The command needs no Node, and no generated file is edited by hand.
 
 A change under `web/` passes `make ui-check`, which `make check` also runs. `internal/server/ui/dist` is the build output the binary embeds. It comes from `make ui-build`, is committed with the sources it was built from, and is never edited by hand. A conflict in it is resolved by rebuilding. The Dashboard CI job runs on every pull request and fails when the committed output differs from a fresh build.
 

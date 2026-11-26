@@ -49,7 +49,7 @@ jobs:
             guard: SORTIE_CLAUDE_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/claude/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @anthropic-ai/claude-code
             version_cmd: claude --version
@@ -61,7 +61,7 @@ jobs:
             guard: SORTIE_CODEX_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/codex/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g @openai/codex
             version_cmd: codex --version
@@ -73,7 +73,7 @@ jobs:
             guard: SORTIE_COPILOT_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/copilot/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -86,7 +86,7 @@ jobs:
             guard: SORTIE_OPENCODE_TEST
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/opencode/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @opencode/cli@2
             version_cmd: opencode --version
@@ -121,7 +121,7 @@ jobs:
             credential_env: COPILOT_PROVIDER_API_KEY
             run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -136,6 +136,7 @@ jobs:
             clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
             clientprotocol_spend_declaration: Copilot
             clientprotocol_usage_limit_answer: testdata/usage_limit/copilot_rate_limit_answer.json
+            clientprotocol_config_option: testdata/config_option/copilot_agent.json
 
           - name: GitHub Copilot CLI - ACP (default declaration)
             adapter: acp-copilot-default
@@ -144,7 +145,7 @@ jobs:
             credential_env: COPILOT_PROVIDER_API_KEY
             run_filter: '^TestIntegration_ScriptedModel$'
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 600s
+            timeout: 900s
             node: true
             install: npm install -g @github/copilot
             version_cmd: copilot --version
@@ -166,7 +167,7 @@ jobs:
             credential_env: GOOGLE_GENERATIVE_AI_API_KEY
             run_filter: ^TestIntegration_ScriptedModel$
             test_path: ./internal/agent/clientprotocol/...
-            timeout: 300s
+            timeout: 900s
             node: true
             install: npm install -g --ignore-scripts=false @opencode/cli@2
             version_cmd: opencode --version
@@ -182,6 +183,7 @@ jobs:
             clientprotocol_reported_model_prefix: scripted/
             clientprotocol_status_call: '{"name":"execute","arguments":{"code":"return await tools[\"sortie-tools\"].sortie_status()"}}'
             clientprotocol_usage_limit_answer: testdata/usage_limit/opencode_free_limit_answer.json
+            clientprotocol_effort: high
 
           - name: Kiro CLI - ACP (scripted)
             adapter: acp-kiro
@@ -200,7 +202,7 @@ jobs:
             clientprotocol_ssh_install: |
               d=$(mktemp -d)
               curl -fsSL https://prod.download.cli.kiro.dev/stable/latest/kirocli-x86_64-linux.tar.gz | tar -xz -C "$d"
-              Q_INSTALL_GLOBAL=1 Q_SKIP_SETUP=1 "$d/kirocli/install.sh"
+              KIRO_CLI_INSTALL_GLOBAL=1 "$d/kirocli/install.sh"
               rm -rf "$d"
             clientprotocol_http_tools: "1"
             clientprotocol_model_document_path: .kiro/settings/cli.json
@@ -304,7 +306,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -378,9 +380,12 @@ jobs:
           SORTIE_CLIENTPROTOCOL_REPORTED_MODEL_PREFIX: ${{ matrix.clientprotocol_reported_model_prefix }}
           SORTIE_CLIENTPROTOCOL_STATUS_CALL: ${{ matrix.clientprotocol_status_call }}
           SORTIE_CLIENTPROTOCOL_USAGE_LIMIT_ANSWER: ${{ matrix.clientprotocol_usage_limit_answer }}
+          SORTIE_CLIENTPROTOCOL_EFFORT: ${{ matrix.clientprotocol_effort }}
+          SORTIE_CLIENTPROTOCOL_CONFIG_OPTION: ${{ matrix.clientprotocol_config_option }}
           SORTIE_CLIENTPROTOCOL_SSH_COMMAND: ${{ matrix.clientprotocol_ssh_command }}
           SORTIE_CLIENTPROTOCOL_SSH_INSTALL: ${{ matrix.clientprotocol_ssh_install }}
           SORTIE_CLIENTPROTOCOL_HTTP_TOOLS: ${{ matrix.clientprotocol_http_tools }}
+          RUNTIME_ENV: ${{ matrix.runtime_env }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is
@@ -406,6 +411,10 @@ jobs:
             if [ -z "${VER}" ]; then VER="unknown"; fi
           fi
           echo "ADAPTER_VERSION=${VER}" >> "$GITHUB_ENV"
+
+          # Inherited rather than assigned in the command, so Sortie still
+          # merges its own settings into the runtime's variable.
+          if [ -n "${RUNTIME_ENV}" ]; then export "${RUNTIME_ENV}"; fi
 
           # A suite can skip its live cases when the credential is missing,
           # and a shard that ran nothing concludes success, which the
@@ -433,6 +442,10 @@ jobs:
             export "${GUARD%_TEST}_CREDENTIAL_ENV=${CREDENTIAL_ENV}"
           fi
 
+          # Every scripted conformance suite gets the same 900s: the slowest
+          # healthy run plus one hung scenario. The suite's own per-wait
+          # bounds catch a hang and end short of this deadline, so the budget
+          # never decides a verdict.
           TIMEOUT_FLAG=()
           if [ -n "${TIMEOUT}" ]; then TIMEOUT_FLAG=(-timeout "${TIMEOUT}"); fi
           SKIP_FLAG=()
@@ -574,6 +587,23 @@ jobs:
             clientprotocol_command: "gemini --acp --skip-trust --approval-mode yolo"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
 
+          - name: GitHub Copilot CLI - ACP (live)
+            adapter: acp-copilot
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: GH_TOKEN
+            run_filter: Integration
+            skip_filter: ^TestIntegration_ScriptedModel$
+            tier: live
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 900s
+            node: true
+            install: npm install -g @github/copilot
+            version_cmd: copilot --version
+            source: "npm: @github/copilot (unpinned, installs latest)"
+            clientprotocol_command: "copilot --acp --allow-all --model claude-haiku-4.5"
+            clientprotocol_profile: tools/qualify/profiles/copilot-cli.json
+
           - name: Kiro - ACP (live)
             adapter: acp-kiro
             kind: agent
@@ -591,6 +621,24 @@ jobs:
             clientprotocol_command: "kiro-cli acp -a"
             clientprotocol_profile: tools/qualify/profiles/kiro-cli.json
 
+          - name: OpenCode - ACP (live)
+            adapter: acp-opencode
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: OPENROUTER_API_KEY
+            run_filter: Integration
+            skip_filter: ^TestIntegration_ScriptedModel$
+            tier: live
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 900s
+            node: true
+            install: npm install -g --ignore-scripts=false @opencode/cli@2
+            version_cmd: opencode --version
+            source: "npm: @opencode/cli@2 (latest 2.x)"
+            clientprotocol_command: opencode acp
+            runtime_env: 'OPENCODE_CONFIG_CONTENT={"model":"openrouter/openai/gpt-5-nano"}'
+            clientprotocol_profile: tools/qualify/profiles/opencode.json
+
     steps: *integration-steps
 
   hook-stress:
@@ -605,7 +653,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 

@@ -7,7 +7,7 @@
 // Optional environment variables:
 //
 //	SORTIE_COPILOT_COMMAND         override the default "copilot" binary
-//	SORTIE_COPILOT_MODEL           override the default "gpt-5-mini" model
+//	SORTIE_COPILOT_MODEL           override the default "claude-haiku-4.5" model
 //
 // Authentication: the live cases need one of COPILOT_GITHUB_TOKEN, GH_TOKEN or
 // GITHUB_TOKEN, or an authenticated gh CLI; the scripted-model case needs only
@@ -31,7 +31,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
-	"github.com/sortie-ai/sortie/internal/agent/copilot/sessionstate"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/usage"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -46,7 +46,7 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_COPILOT_MODEL")
 	if model == "" {
-		model = "gpt-5-mini"
+		model = "claude-haiku-4.5"
 	}
 	return map[string]any{
 		"max_autopilot_continues": float64(5),
@@ -151,7 +151,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 			// A custom provider gets no usage checkpoint, so the journal settles each turn.
 			Live:              domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
 			Records:           domain.UsageProvenance{Source: usage.SourceJournal, Strategy: usage.StrategyRecords},
-			RecordsAtTurnEnd:  sessionstate.Records.WrittenAtTurnEnd,
+			RecordsAtTurnEnd:  usagesource.CopilotRecords.WrittenAtTurnEnd,
 			CancelEndsProcess: true,
 		},
 		SSH: &fakemodel.SSHVariant{

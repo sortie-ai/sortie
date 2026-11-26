@@ -442,11 +442,13 @@ The ordering of first-turn suffixes is:
 
 This ordering places the protocol instructions at the end, closest to the agent's point of attention, and avoids interleaving with tool documentation.
 
-The injected text SHOULD be concise and imperative. It tells the agent what the file is, when to write it, the exact command to use, and what to write after the value. It does not explain the orchestrator's internal logic.
+The injected text SHOULD be concise and imperative. It tells the agent what the file is, when to write it, the exact command to use, and what to write after the value. It does not explain the orchestrator's internal logic. It opens with its own level-2 heading, `## Report your status`, so it reads as a section of its own instead of continuing the tool advertisement's last tool or the template's last section.
 
 Example injection text:
 
 ```
+## Report your status
+
 If you determine that you cannot make further progress on this task without human
 intervention, or if your work is complete and requires human review, or if you
 determine that the requested outcome already held and you changed nothing, signal

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -87,6 +86,12 @@ type sessionState struct {
 	// absent or not a string. It scopes a refusal's reset to the held model.
 	configuredModel string
 
+	permissions agentcore.PermissionDeclaration
+
+	// configOptions is the config_options setting, nil when unset. It is read
+	// once, when the session opens.
+	configOptions map[string]string
+
 	launchEnv []string
 
 	// launchAddition is what the launch carried for the selected declaration's
@@ -155,6 +160,9 @@ type pumpControl struct {
 	// answerOpen, when non-nil, tells the pump to answer every request still
 	// open; the pump closes it once handleAnswerOpen returns.
 	answerOpen chan struct{}
+
+	// stopping tells the pump that teardown has begun, ahead of answerOpen.
+	stopping bool
 }
 
 // usageObserved is one turn's settled spend. recovered is nil when the ledger
@@ -241,11 +249,30 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	if _, fault := typeutil.StringField(params.Settings, mcpConfigKey); fault != nil {
 		return domain.Session{}, agentcore.SettingsError(fault.Error(), fault)
 	}
+	configuredEnv, settingErr := envSetting(params.Settings)
+	if settingErr != nil {
+		return domain.Session{}, agentcore.SettingsError(settingErr.Error(), settingErr)
+	}
+	permissions, permissionsFault := permissionsSetting(params.Settings)
+	if permissionsFault != nil {
+		return domain.Session{}, agentcore.SettingsError(permissionsFault.Error(), permissionsFault)
+	}
+
+	configOptions, configOptionsFault := configOptionsSetting(params.Settings)
+	if configOptionsFault != nil {
+		return domain.Session{}, agentcore.SettingsError(configOptionsFault.Error(), configOptionsFault)
+	}
+
+	if _, effortFault := registry.EffortSetting(params.Settings); effortFault != nil {
+		return domain.Session{}, agentcore.SettingsError(effortFault.Error(), effortFault)
+	}
 
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}
+	target.ConfiguredEnv = configuredEnv
+	launchBase := target.Environ()
 
 	remote := target.RemoteCommand != ""
 
@@ -262,7 +289,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	var verification usagesource.VerificationAddition
 	var verificationSwitches usagesource.VerificationSwitches
 	if params.ReducedVerificationContext() {
-		verification, verificationSwitches, _ = usagesource.ClaimVerification(target, os.Environ())
+		verification, verificationSwitches, _ = usagesource.ClaimVerification(target, launchBase)
 	}
 
 	launchChoice := chooseDeclaration(declarations, nil, target).declaration
@@ -298,6 +325,8 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		tools:                  tools,
 		initializeMeta:         launchChoice.InitializeMeta,
 		configuredModel:        configuredModel,
+		permissions:            permissions,
+		configOptions:          configOptions,
 	}
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -308,11 +337,14 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	var cmd *exec.Cmd
 	var launch sshutil.SSHLaunch
 	if remote {
-		var settings []sshutil.EnvVar
+		settings := envVars(verificationSwitches.Env)
 		if addition.Merge != nil {
-			current, set := target.RuntimeEnv(os.Environ(), addition.Name)
+			current, set := settingValue(settings, addition.Name)
+			if !set {
+				current, set = target.RuntimeEnv(launchBase, addition.Name)
+			}
 			value, _ := addition.Merge(current, set)
-			settings = append(settings, sshutil.EnvVar{Name: addition.Name, Value: value})
+			settings = setEnvVar(settings, sshutil.EnvVar{Name: addition.Name, Value: value})
 		}
 		opts := target.SSHOptions(settings...)
 		if addition.Merge != nil {
@@ -321,14 +353,17 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		opts.Forward = tools.Forward(nil)
 		launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, opts)
 		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
+		// The local ssh process gets Sortie's environment only: the configured
+		// and verification values travel on the standard-input preamble.
+		cmd.Env = os.Environ()
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, slices.Concat(target.Args, verificationSwitches.Args)...) //nolint:gosec // args are constructed programmatically
-	}
-	cmd.Env = slices.Concat(os.Environ(), verificationSwitches.Env)
-	if !remote && addition.Merge != nil {
-		cmd.Env = mergeAdditionInto(target, cmd.Env, addition)
-		value, set := target.RuntimeEnv(cmd.Env, addition.Name)
-		state.launchAddition = carriedValue{name: addition.Name, value: value, set: set}
+		cmd.Env = slices.Concat(launchBase, verificationSwitches.Env)
+		if addition.Merge != nil {
+			cmd.Env = mergeAdditionInto(target, cmd.Env, addition)
+			value, set := target.RuntimeEnv(cmd.Env, addition.Name)
+			state.launchAddition = carriedValue{name: addition.Name, value: value, set: set}
+		}
 	}
 	state.launchEnv = cmd.Env
 	if !remote {
@@ -363,7 +398,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		case procutil.StageStderrPipe:
 			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
-		default: // procutil.StageProcessStart, procutil.StageProcessResume
+		default:
 			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
 		}
 	}
@@ -455,6 +490,18 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 	if startErr == nil && !start.CarriedHistory() {
 		sessionID, session, newErr = createNewSession(ctx, state, target.WorkspacePath, wired)
 	}
+	if startErr == nil && newErr == nil {
+		switch {
+		case params.CredentialVerification && advertisesSessionDelete(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionDelete
+		case advertisesSessionClose(caps):
+			state.closeSessionID = sessionID
+			state.closeMethod = methodSessionClose
+		}
+		effort, _ := registry.EffortSetting(params.Settings) // startSession refused a non-string level before launch
+		newErr = applySessionOptions(ctx, state, effort, sessionId(sessionID), session, start.CarriedHistory())
+	}
 	if startErr != nil || newErr != nil {
 		teardownWithinStopGrace(ctx, state)
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
@@ -465,14 +512,6 @@ func finishSession(ctx context.Context, state *sessionState, params domain.Start
 			return domain.Session{}, report
 		}
 		return domain.Session{}, newErr
-	}
-	switch {
-	case params.CredentialVerification && advertisesSessionDelete(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionDelete
-	case advertisesSessionClose(caps):
-		state.closeSessionID = sessionID
-		state.closeMethod = methodSessionClose
 	}
 
 	choice := chooseDeclaration(declarations, initResp.AgentInfo, target)
@@ -549,6 +588,36 @@ type carriedValue struct {
 	set   bool
 }
 
+func envVars(entries []string) []sshutil.EnvVar {
+	vars := make([]sshutil.EnvVar, 0, len(entries))
+	for _, entry := range entries {
+		name, value, _ := strings.Cut(entry, "=")
+		vars = append(vars, sshutil.EnvVar{Name: name, Value: value})
+	}
+	return vars
+}
+
+func settingValue(settings []sshutil.EnvVar, name string) (string, bool) {
+	for _, entry := range settings {
+		if entry.Name == name {
+			return entry.Value, true
+		}
+	}
+	return "", false
+}
+
+// setEnvVar returns settings with entry replacing the one of its name, else
+// appended, so SSHOptions sees one setting per name.
+func setEnvVar(settings []sshutil.EnvVar, entry sshutil.EnvVar) []sshutil.EnvVar {
+	for i := range settings {
+		if settings[i].Name == entry.Name {
+			settings[i] = entry
+			return settings
+		}
+	}
+	return append(settings, entry)
+}
+
 // carriedIn returns what the SSH options carry for name.
 func carriedIn(carried []sshutil.EnvVar, name string) carriedValue {
 	for _, entry := range carried {
@@ -569,19 +638,9 @@ func mergeAdditionInto(target agentcore.LaunchTarget, env []string, addition usa
 		return env
 	}
 	kept := slices.DeleteFunc(slices.Clone(env), func(entry string) bool {
-		return isEnvEntryNamed(entry, addition.Name)
+		return agentcore.IsEnvEntryNamed(entry, addition.Name)
 	})
 	return append(kept, addition.Name+"="+value)
-}
-
-// isEnvEntryNamed reports whether entry assigns name, which Windows compares
-// without regard to case.
-func isEnvEntryNamed(entry, name string) bool {
-	key, _, found := strings.Cut(entry, "=")
-	if runtime.GOOS == "windows" {
-		return found && strings.EqualFold(key, name)
-	}
-	return found && key == name
 }
 
 // carried returns the value the launch carries for name.
@@ -598,6 +657,9 @@ func (s *sessionState) carried(name string) (string, bool) {
 func additionInEffect(state *sessionState, addition usagesource.LaunchAddition) bool {
 	if addition.Merge == nil {
 		return true
+	}
+	if usagesource.CommandAssigns(state.target, addition.Name) {
+		return false
 	}
 	current, set := state.carried(addition.Name)
 	merged, inEffect := addition.Merge(current, set)
@@ -971,14 +1033,15 @@ func runTeardown(state *sessionState, steps []teardownStep) {
 	}
 }
 
-// signalAnswerOpen puts the answerOpen control message and returns the channel
-// the pump closes once every open request is answered, or nil without an inbox.
-// [awaitAnswerOpen] does the waiting.
+// signalAnswerOpen puts the stopping and answerOpen control messages and returns
+// the channel the pump closes once every open request is answered, or nil
+// without an inbox. [awaitAnswerOpen] does the waiting.
 func signalAnswerOpen(state *sessionState) chan struct{} {
 	if state.inbox == nil {
 		return nil
 	}
 	done := make(chan struct{})
+	state.inbox.Put(pumpItem{control: &pumpControl{stopping: true}})
 	state.inbox.Put(pumpItem{control: &pumpControl{answerOpen: done}})
 	return done
 }

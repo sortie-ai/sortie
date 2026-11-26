@@ -1,3 +1,4 @@
+import { MONO } from "@/components/ui/mono";
 import { fmtCount } from "@/lib/format";
 import { Panel } from "@/components/Panel";
 import {
@@ -121,7 +122,7 @@ export function ReactionsSection({ reactions, handoffState }: ReactionsSectionPr
             {rows.map((row) => (
               <TableRow key={row.kind}>
                 <TableCell>
-                  <span className="font-mono">{row.kind}</span>
+                  <span className={MONO}>{row.kind}</span>
                 </TableCell>
                 <TableCell>{row.limit}</TableCell>
                 <TableCell>{row.escalation}</TableCell>

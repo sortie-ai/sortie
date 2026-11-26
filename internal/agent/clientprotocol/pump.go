@@ -34,6 +34,7 @@ const (
 	elicitationDetail                = "an answer to a question"
 	turnAlreadyInFlightMessage       = "a turn is already in flight for this session"
 	sessionEndedBeforeTurnMessage    = "the agent connection ended before this turn could start"
+	sessionStoppedMessage            = "the session was stopped before the turn ended"
 	toolDeliveryUncallableNotice     = "this session delivered tool servers and the agent runtime asked for consent before running a tool; an unattended run grants no consent, so any delivered tool the runtime gates the same way cannot be called unless that runtime's own configuration allows it"
 	toolDeliveryUncallableLog        = "a tool call was gated by consent in a session that delivered tool servers"
 )
@@ -46,6 +47,7 @@ const (
 	turnEndNone turnEndKind = iota
 	turnEndCancelled
 	turnEndHumanInput
+	turnEndStopped
 )
 
 // activeTurn is the pump's bookkeeping for the one turn that may be in flight at
@@ -198,6 +200,12 @@ func (t *activeTurn) disposition(ev agentcore.TurnEvidence) agentcore.TurnEviden
 		return agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
 	case turnEndHumanInput:
 		return agentcore.HumanInputEvidence(t.pendingDetail)
+	case turnEndStopped:
+		return agentcore.TurnEvidence{
+			Terminal:          agentcore.TerminalFailure,
+			TerminalErrorKind: domain.ErrPortExit,
+			TerminalMessage:   sessionStoppedMessage,
+		}
 	}
 	return ev
 }
@@ -444,6 +452,18 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 	case ctrl.answerOpen != nil:
 		p.handleAnswerOpen()
 		close(ctrl.answerOpen)
+
+	case ctrl.stopping:
+		p.markTurnStopped()
+	}
+}
+
+// markTurnStopped ends the active turn as stopped whatever its prompt response
+// reports, since a runtime may answer the prompt session/close interrupts with
+// a stop reason claiming the turn completed.
+func (p *pumpState) markTurnStopped() {
+	if turn := p.activeTurn; turn != nil && turn.pendingEnd == turnEndNone {
+		turn.pendingEnd = turnEndStopped
 	}
 }
 
@@ -867,6 +887,16 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 	}
 
+	p.readRecords(turn, 0)
+}
+
+// recordsRereadInterval is the pause before reading again the records of a
+// cancelled turn that replied before its runtime wrote them.
+const recordsRereadInterval = 50 * time.Millisecond
+
+// readRecords reads the runtime's records for turn on its own goroutine once
+// delay has passed, and returns the result through the inbox.
+func (p *pumpState) readRecords(turn *activeTurn, delay time.Duration) {
 	state := p.state
 	declaration := p.declaration
 	children := slices.Clone(turn.children.sessions)
@@ -877,16 +907,31 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		ctx, cancel := contextUntilStop(loopDone)
 		defer cancel()
 
+		if delay > 0 {
+			pause := time.NewTimer(delay)
+			defer pause.Stop()
+			select {
+			case <-pause.C:
+			case <-ctx.Done():
+				return
+			}
+		}
 		read, refusal := readTurnRecords(ctx, state, declaration, children)
 		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read, refusal: refusal}}})
 	}()
 }
 
 // handleRecordsRead settles the turn a records read was started for, discarding
-// the result of a turn that already ended or was settled without it.
+// the result of a turn that already ended or was settled without it. A read
+// that predates the turn's records is made again; the turn's deadline bounds
+// the repeats.
 func (p *pumpState) handleRecordsRead(result *recordsResult) {
 	turn := p.activeTurn
 	if turn == nil || turn != result.turn || !turn.recordsPending {
+		return
+	}
+	if p.ledger.RecordsBehind(turn.spendEnd, turn.spendLive, result.read) {
+		p.readRecords(turn, recordsRereadInterval)
 		return
 	}
 	applyRecordedReset(turn, result.refusal)
@@ -1199,22 +1244,33 @@ func (p *pumpState) flushAgentMessage() {
 
 // observeModelReached records that the active turn reached the model. A thought
 // chunk counts, since reasoning tokens are billed; a replayed user chunk does
-// not, being this session's own prompt echoed back. Under a declaration that
-// sends a usage_update before each model request, an agent message chunk ahead
-// of the turn's first one is the runtime's own text and does not count.
+// not, being this session's own prompt echoed back, and neither does agent
+// message text the runtime writes of its own.
 func (p *pumpState) observeModelReached(kind sessionUpdateKind) {
 	if p.activeTurn == nil {
 		return
 	}
 	switch kind {
 	case updateAgentMessageChunk:
-		if p.declaration.UsageUpdateBeforeRequest && !p.activeTurn.usageUpdateSeen {
+		if p.isRuntimeText() {
 			return
 		}
 		p.activeTurn.spend.MarkModelReached()
 	case updateAgentThoughtChunk, updateToolCall:
 		p.activeTurn.spend.MarkModelReached()
 	}
+}
+
+// isRuntimeText reports whether agent message text arriving now is the runtime's
+// own: text after the client began ending the turn, which a runtime may write to
+// announce the cancellation, and under a declaration that sends a usage_update
+// before each model request, text ahead of the turn's first one.
+func (p *pumpState) isRuntimeText() bool {
+	turn := p.activeTurn
+	if turn.pendingEnd != turnEndNone {
+		return true
+	}
+	return p.declaration.UsageUpdateBeforeRequest && !turn.usageUpdateSeen
 }
 
 // emitOrQueue completes any agent message still being accumulated before
@@ -1455,8 +1511,10 @@ func (p *pumpState) finalizeActiveTurnOnDeadline() {
 	p.finalizeTurnWithUsage(ev, p.settleSpend(turn, end, nil, usage.RecordsRead{}))
 }
 
-// handlePermissionRequest answers a session/request_permission request and, when
-// the shared posture ends the attempt, latches or begins that end.
+// handlePermissionRequest answers a session/request_permission request with the
+// once-only allowing option when the operator declared approval and the offer
+// holds exactly one, and otherwise by the shared refusal posture, which may end
+// the attempt by latching or beginning that end.
 func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 	if !msg.ID.Present() {
 		return
@@ -1474,8 +1532,14 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 		params = requestPermissionRequest{}
 	}
 
+	approveID, approvable := selectApprovingOption(params.Options)
 	optionID, found := selectRefusingOption(params.Options)
-	posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, found, agentcore.AnswerPending)
+	posture := agentcore.DecidePermissionRequest(p.state.permissions, approvable, found)
+
+	if posture.Approve {
+		p.respondSelected(msg.ID, approveID)
+		return
+	}
 
 	if posture.Notice != "" {
 		agentcore.EmitNotification(p.emitOrQueue, posture.NoticeWithDetail(""))

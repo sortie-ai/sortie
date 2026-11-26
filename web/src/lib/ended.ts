@@ -1,4 +1,4 @@
-import { fmtClock, parseInstant, upperFirst } from "@/lib/format";
+import { fmtClock, parseInstant } from "@/lib/format";
 
 import type {
   IssueDetailResponse,
@@ -9,16 +9,14 @@ import type {
   StateResponse,
 } from "@/api/types.gen";
 
-/** The tracker state the issue reached, as the operator configured it with a capital first letter, or Merged. */
+/** The tracker state the issue reached, exactly as the operator configured it, or Merged. */
 export function endingWord(outcome: IssueOutcomeResponse): string {
   switch (outcome.kind) {
     case "merged":
       return "Merged";
     case "handed_off":
     case "terminal":
-      return outcome.state === undefined || outcome.state === ""
-        ? "Ended"
-        : upperFirst(outcome.state);
+      return outcome.state === undefined || outcome.state === "" ? "Ended" : outcome.state;
     default:
       return "Ended";
   }

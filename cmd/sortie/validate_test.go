@@ -19,11 +19,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// errWriter is a test double that always returns a fixed error from Write.
 type errWriter struct{ err error }
 
-// unknownTrackerKindWorkflow is a minimal workflow with an unregistered
-// tracker kind, used to trigger the tracker_adapter preflight check.
 func unknownTrackerKindWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -41,10 +38,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// jiraEmptyAPIKeyWorkflow returns a workflow using the jira tracker with
-// an api_key referencing SORTIE_TEST_NONEXISTENT_VAR_198, which must be
-// unset (or empty) when the test runs. The jira adapter requires an API
-// key, so os.ExpandEnv resolving to "" triggers tracker.api_key preflight.
 func jiraEmptyAPIKeyWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -74,11 +67,9 @@ func TestValidateValidWorkflow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	// The fixture's agent.kind is "mock", which has no tool execution
-	// channel by design, so the one expected warning is that one.
-	const wantWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
-	if stderr.String() != wantWarning {
-		t.Errorf("stderr = %q, want %q", stderr.String(), wantWarning)
+	const wantMockNoToolChannelWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
+	if stderr.String() != wantMockNoToolChannelWarning {
+		t.Errorf("stderr = %q, want %q", stderr.String(), wantMockNoToolChannelWarning)
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty (text format produces no output on success)", stdout.String())
@@ -110,27 +101,22 @@ func TestValidateValidWorkflowJSON(t *testing.T) {
 		t.Errorf("validateOutput.Errors = %v, want empty slice", out.Errors)
 	}
 
-	// Verify the raw JSON contains "errors":[] not "errors":null.
 	raw := stdout.String()
 	if !strings.Contains(raw, `"errors":[]`) {
 		t.Errorf("JSON output = %q, want to contain %q", raw, `"errors":[]`)
 	}
 
-	// The fixture's agent.kind is "mock", which has no tool execution
-	// channel by design, so the one expected warning is that one.
 	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
 		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
 }
 
 func TestValidateDefaultPath(t *testing.T) {
-	// setupRunDir sets cwd to a temp dir that contains WORKFLOW.md.
 	setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// No explicit path; resolveWorkflowPath defaults to ./WORKFLOW.md.
 	code := run(ctx, []string{"validate"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
@@ -273,11 +259,9 @@ func TestValidateExplicitTextFormat(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate --format text) = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	// The fixture's agent.kind is "mock", which has no tool execution
-	// channel by design, so the one expected warning is that one.
-	const wantWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
-	if stderr.String() != wantWarning {
-		t.Errorf("stderr = %q, want %q", stderr.String(), wantWarning)
+	const wantMockNoToolChannelWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
+	if stderr.String() != wantMockNoToolChannelWarning {
+		t.Errorf("stderr = %q, want %q", stderr.String(), wantMockNoToolChannelWarning)
 	}
 }
 
@@ -287,7 +271,6 @@ func TestValidateHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// --help must exit 0; it is not a failure.
 	code := run(ctx, []string{"validate", "--help"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(validate --help) = %d, want 0", code)
@@ -303,9 +286,6 @@ func TestValidateUnknownFlagText(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// An unknown flag in text mode must be routed through emitDiags, not
-	// printed directly by the flag package. stderr must contain the
-	// "args: " prefix that emitDiags emits, and stdout must be empty.
 	code := run(ctx, []string{"validate", "--unknown-flag-xyz"}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("run(validate --unknown-flag-xyz) = %d, want 1", code)
@@ -324,9 +304,6 @@ func TestValidateUnknownFlagJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// --format is parsed before --unknown-flag-xyz, so *format is "json"
-	// when the parse error is returned. emitDiags must write structured
-	// JSON to stdout; stderr must remain empty.
 	code := run(ctx, []string{"validate", "--format", "json", "--unknown-flag-xyz"}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("run(validate --format json --unknown-flag-xyz) = %d, want 1", code)
@@ -366,12 +343,6 @@ func TestValidateTooManyArgs(t *testing.T) {
 }
 
 func TestValidateUnresolvedEnvVar(t *testing.T) {
-	// t.Parallel omitted: t.Setenv requires a sequential test.
-
-	// Ensure the test env var expands to empty string. Using t.Setenv
-	// with "" has the same expansion result as the var being unset; both
-	// cause os.ExpandEnv to produce "". t.Setenv restores the original
-	// value after the test.
 	t.Setenv("SORTIE_TEST_NONEXISTENT_VAR_198", "")
 
 	dir := t.TempDir()
@@ -384,8 +355,6 @@ func TestValidateUnresolvedEnvVar(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
 	}
-	// os.ExpandEnv produces "" for the unset var, and the empty
-	// tracker.api_key preflight then catches it for the jira adapter.
 	if !strings.Contains(stderr.String(), "tracker.api_key") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker.api_key")
 	}
@@ -403,7 +372,6 @@ func TestValidateDoesNotCreateDB(t *testing.T) {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
 	}
 
-	// The validate subcommand must not open the database.
 	dbPath := filepath.Join(wfDir, ".sortie.db")
 	if _, err := os.Stat(dbPath); err == nil {
 		t.Errorf("database file %s must not be created by validate subcommand", dbPath)
@@ -422,8 +390,6 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 	}
 }
 
-// typoTopLevelKeyWorkflow returns a workflow with the "trackers" typo at the
-// top level (unknown_key warning) and a valid tracker.kind so preflight passes.
 func typoTopLevelKeyWorkflow() []byte {
 	return []byte(`---
 trackers:
@@ -441,11 +407,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// typoSubKeyWorkflow returns a workflow with an unknown sub-key inside the
-// tracker section (unknown_sub_key warning). Preflight passes.
-
-// typoSubKeyWorkflow returns a workflow with an unknown sub-key inside the
-// tracker section (unknown_sub_key warning). Preflight passes.
 func typoSubKeyWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -462,11 +423,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// typeMismatchWorkflow returns a workflow where hooks.timeout_ms is a
-// non-numeric string (type_mismatch warning). Preflight passes.
-
-// typeMismatchWorkflow returns a workflow where hooks.timeout_ms is a
-// non-numeric string (type_mismatch warning). Preflight passes.
 func typeMismatchWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -484,11 +440,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// nonPositiveHooksTimeoutWorkflow returns a workflow where hooks.timeout_ms
-// is -1 (semantic type_mismatch warning: non-positive). Preflight passes.
-
-// nonPositiveHooksTimeoutWorkflow returns a workflow where hooks.timeout_ms
-// is -1 (semantic type_mismatch warning: non-positive). Preflight passes.
 func nonPositiveHooksTimeoutWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -561,13 +512,6 @@ func TestValidateWarningTypoTopLevelKeyText(t *testing.T) {
 	}
 }
 
-// TestValidateWarningTypoTopLevelKeyJSON asserts that a typo top-level key
-// in JSON mode produces exit 0, valid=true, empty errors slice, and a single
-// warning diagnostic with the expected fields.
-
-// TestValidateWarningTypoTopLevelKeyJSON asserts that a typo top-level key
-// in JSON mode produces exit 0, valid=true, empty errors slice, and a single
-// warning diagnostic with the expected fields.
 func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
 	t.Parallel()
 
@@ -595,10 +539,9 @@ func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
 	if len(out.Errors) != 0 {
 		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
 	}
-	// agent.kind "mock" always draws a second, unrelated warning
-	// (no-tool-channel), so this fixture produces two.
-	if len(out.Warnings) != 2 {
-		t.Fatalf("validateOutput.Warnings = %v (len %d), want 2", out.Warnings, len(out.Warnings))
+	const wantTypoAndMockNoToolChannel = 2
+	if len(out.Warnings) != wantTypoAndMockNoToolChannel {
+		t.Fatalf("validateOutput.Warnings = %v (len %d), want %d", out.Warnings, len(out.Warnings), wantTypoAndMockNoToolChannel)
 	}
 	if out.Warnings[0].Severity != "warning" {
 		t.Errorf("warnings[0].Severity = %q, want %q", out.Warnings[0].Severity, "warning")
@@ -614,11 +557,6 @@ func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
 	}
 }
 
-// TestValidateWarningTypoSubKeyText asserts that an unknown sub-key inside
-// a known section produces exit 0 and a warning on stderr.
-
-// TestValidateWarningTypoSubKeyText asserts that an unknown sub-key inside
-// a known section produces exit 0 and a warning on stderr.
 func TestValidateWarningTypoSubKeyText(t *testing.T) {
 	t.Parallel()
 
@@ -640,11 +578,6 @@ func TestValidateWarningTypoSubKeyText(t *testing.T) {
 	}
 }
 
-// TestValidateWarningTypeMismatchText asserts that a type-mismatched field
-// produces exit 0 and a warning on stderr.
-
-// TestValidateWarningTypeMismatchText asserts that a type-mismatched field
-// produces exit 0 and a warning on stderr.
 func TestValidateWarningTypeMismatchText(t *testing.T) {
 	t.Parallel()
 
@@ -666,11 +599,6 @@ func TestValidateWarningTypeMismatchText(t *testing.T) {
 	}
 }
 
-// TestValidateWarningNonPositiveHooksTimeout asserts that a non-positive
-// hooks.timeout_ms produces exit 0 and a semantic warning on stderr.
-
-// TestValidateWarningNonPositiveHooksTimeout asserts that a non-positive
-// hooks.timeout_ms produces exit 0 and a semantic warning on stderr.
 func TestValidateWarningNonPositiveHooksTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -794,7 +722,6 @@ func TestValidateErrorAndWarningsTogether(t *testing.T) {
 	if len(out.Warnings) == 0 {
 		t.Errorf("validateOutput.Warnings is empty, want at least one warning diagnostic")
 	}
-	// The error must be a preflight "tracker.kind" check.
 	foundTrackerKind := false
 	for _, d := range out.Errors {
 		if d.Check == "tracker.kind" {
@@ -807,7 +734,6 @@ func TestValidateErrorAndWarningsTogether(t *testing.T) {
 	if !foundTrackerKind {
 		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "tracker.kind")
 	}
-	// The warning must be an "unknown_key" for "trackers".
 	foundTrackers := false
 	for _, w := range out.Warnings {
 		if w.Check == "unknown_key" && strings.Contains(w.Message, "trackers") {
@@ -867,11 +793,6 @@ agent:
 `)
 }
 
-// multipleTemplateWarningWorkflow returns a workflow whose prompt triggers
-// both WarnDotContext (.issue.title inside range) and WarnUnknownVar ($.config).
-
-// multipleTemplateWarningWorkflow returns a workflow whose prompt triggers
-// both WarnDotContext (.issue.title inside range) and WarnUnknownVar ($.config).
 func multipleTemplateWarningWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -886,9 +807,6 @@ agent:
 {{ range .issue.labels }}{{ .issue.title }}{{ $.config }}{{ end }}
 `)
 }
-
-// TestValidateTemplateDotContextText verifies that a dot-context misuse
-// produces exit 0, empty stdout, and a "dot_context" warning on stderr.
 
 func TestValidateTemplateWarnings(t *testing.T) {
 	t.Parallel()
@@ -925,11 +843,6 @@ func TestValidateTemplateWarnings(t *testing.T) {
 	}
 }
 
-// TestValidateTemplateMultipleWarnings verifies that a prompt triggering
-// multiple warning classes reports all of them without changing the exit code.
-
-// TestValidateTemplateMultipleWarnings verifies that a prompt triggering
-// multiple warning classes reports all of them without changing the exit code.
 func TestValidateTemplateMultipleWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -970,11 +883,6 @@ func TestValidateTemplateMultipleWarnings(t *testing.T) {
 	}
 }
 
-// TestValidateTemplateCleanNoWarnings verifies that a well-formed workflow
-// produces no template warnings.
-
-// TestValidateTemplateCleanNoWarnings verifies that a well-formed workflow
-// produces no template warnings.
 func TestValidateTemplateCleanNoWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -995,13 +903,6 @@ func TestValidateTemplateCleanNoWarnings(t *testing.T) {
 	}
 }
 
-// allContinuationKeysWorkflow returns a workflow whose prompt references all
-// six reaction continuation keys under top-level {{ if }} guards, one
-// documented sub-field of each of the four map-shaped keys, one element
-// field of each of the two list-shaped keys inside {{ range }}, and exactly
-// one unrecognized name, .not_a_reaction. The front matter configures no
-// reaction block, so a clean result here also demonstrates that the
-// recognized set does not depend on which reactions are configured.
 func allContinuationKeysWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -1099,8 +1000,6 @@ func TestWriteJSON(t *testing.T) {
 func TestEmitDiagsJSONFallback(t *testing.T) {
 	t.Parallel()
 
-	// When stdout fails to accept JSON, emitDiags must fall back to
-	// plain-text diagnostics on stderr so the caller still sees the error.
 	diags := []validateDiag{
 		{Severity: "error", Check: "tracker.kind", Message: "tracker kind is required"},
 	}
@@ -1117,15 +1016,7 @@ func TestEmitDiagsJSONFallback(t *testing.T) {
 }
 
 func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
-	// No t.Parallel: t.Chdir below.
-	//
-	// When the success-path JSON write fails and there are no errors or
-	// warnings to fall back on, emitDiags has nothing to print to stderr.
-	// runValidate still returns 0 (the workflow is valid; the I/O failure
-	// is best-effort output delivery). The shared minimal fixture's
-	// agent.kind ("mock") always draws the no-tool-channel warning by
-	// design, so this test selects claude-code instead to keep the
-	// "no diagnostics" premise true.
+	// claude-code rather than mock: mock always draws a no-tool-channel warning, which would give emitDiags something to print.
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeIssuesFixture(t, dir)
@@ -1156,21 +1047,11 @@ Do {{ .issue.title }}.
 		t.Fatalf("run(validate --format json) with failing stdout = %d, want 0; stderr: %s",
 			code, stderr.String())
 	}
-	// No per-diag fallback lines when there are no errors or warnings.
 	if stderr.Len() != 0 {
 		t.Errorf("stderr = %q, want empty (no diags to fall back on)", stderr.String())
 	}
 }
 
-// TestRunSIGINTCleanShutdown verifies that run() returns 0 when the process
-// receives SIGINT via signal.NotifyContext. Uses the helper-subprocess
-// pattern to avoid delivering OS signals to the test runner's own process.
-//
-// Subprocess mode is activated by SORTIE_TEST_SIGINT_HELPER=1.
-
-// githubInvalidProjectWorkflow is a minimal GitHub workflow where
-// tracker.project is not in owner/repo format (no slash), used to
-// trigger the tracker.project.format preflight diagnostic.
 func githubInvalidProjectWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1190,13 +1071,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// githubStateOverlapWorkflow is a minimal GitHub workflow where
-// active_states and terminal_states overlap on "done", used to
-// trigger the tracker.states.overlap warning.
-
-// githubStateOverlapWorkflow is a minimal GitHub workflow where
-// active_states and terminal_states overlap on "done", used to
-// trigger the tracker.states.overlap warning.
 func githubStateOverlapWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1217,15 +1091,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// githubMissingAPIKeyWorkflow is a minimal GitHub workflow where
-// tracker.api_key references an unset environment variable so it
-// resolves to empty, used to trigger the api_key preflight error and
-// the tracker.api_key.github_token_hint warning.
-
-// githubMissingAPIKeyWorkflow is a minimal GitHub workflow where
-// tracker.api_key references an unset environment variable so it
-// resolves to empty, used to trigger the api_key preflight error and
-// the tracker.api_key.github_token_hint warning.
 func githubMissingAPIKeyWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1245,13 +1110,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateGitHubInvalidProject verifies that sortie validate exits 1
-// and emits a tracker.project.format error when tracker.project is not
-// in owner/repo format.
-
-// TestValidateGitHubInvalidProject verifies that sortie validate exits 1
-// and emits a tracker.project.format error when tracker.project is not
-// in owner/repo format.
 func TestValidateGitHubInvalidProject(t *testing.T) {
 	t.Parallel()
 
@@ -1305,13 +1163,6 @@ func TestValidateGitHubInvalidProject(t *testing.T) {
 	})
 }
 
-// TestValidateGitHubStateOverlapWarning verifies that sortie validate exits 0
-// with a tracker.states.overlap warning when active_states and terminal_states
-// share a label.
-
-// TestValidateGitHubStateOverlapWarning verifies that sortie validate exits 0
-// with a tracker.states.overlap warning when active_states and terminal_states
-// share a label.
 func TestValidateGitHubStateOverlapWarning(t *testing.T) {
 	t.Parallel()
 
@@ -1368,15 +1219,7 @@ func TestValidateGitHubStateOverlapWarning(t *testing.T) {
 	})
 }
 
-// TestValidateGitHubTokenHintWarning verifies that sortie validate exits 1
-// (generic tracker.api_key error) and also emits the
-// tracker.api_key.github_token_hint advisory warning when GITHUB_TOKEN is set.
-
-// TestValidateGitHubTokenHintWarning verifies that sortie validate exits 1
-// (generic tracker.api_key error) and also emits the
-// tracker.api_key.github_token_hint advisory warning when GITHUB_TOKEN is set.
 func TestValidateGitHubTokenHintWarning(t *testing.T) {
-	// No t.Parallel(): uses t.Setenv to control GITHUB_TOKEN.
 	t.Setenv("GITHUB_TOKEN", "ghp_test_token_validate_hint")
 
 	dir := t.TempDir()
@@ -1398,7 +1241,6 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 		t.Errorf("validateOutput.Valid = true, want false")
 	}
 
-	// Generic tracker.api_key error must be present.
 	foundErr := false
 	for _, e := range out.Errors {
 		if e.Check == "tracker.api_key" {
@@ -1410,7 +1252,6 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "tracker.api_key")
 	}
 
-	// GITHUB_TOKEN hint warning must also be present.
 	foundWarn := false
 	for _, w := range out.Warnings {
 		if w.Check == "tracker.api_key.github_token_hint" {
@@ -1423,10 +1264,6 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 	}
 }
 
-// codexInteractiveApprovalPolicyWorkflow returns a workflow selecting the
-// codex agent with an approval_policy value that lets the agent stop and
-// ask for approval, used to trigger the agent-side offline verdict
-// without constructing any adapter.
 func codexInteractiveApprovalPolicyWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1449,13 +1286,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentConfigOfflineVerdict drives the offline sortie validate
-// path against a workflow whose codex.approval_policy is set to an
-// interactive value, asserting valid: false, exit code 1, and the check
-// name codex.approval_policy.interactive, without constructing any
-// adapter (the offline path never calls a constructor). This exercises
-// one leg of the shared verdict channel; the startup and reload legs are
-// exercised elsewhere.
 func TestValidateAgentConfigOfflineVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -1490,9 +1320,6 @@ func TestValidateAgentConfigOfflineVerdict(t *testing.T) {
 	}
 }
 
-// copilotToolScopingWorkflow returns a workflow selecting the copilot-cli
-// agent with allowed_tools configured, used to trigger the agent-side
-// offline verdict without constructing any adapter.
 func copilotToolScopingWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1515,17 +1342,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentConfigOfflineVerdict_CopilotToolScoping drives the
-// offline sortie validate path against a workflow whose copilot-cli
-// configuration sets allowed_tools, the one key that displaces
-// --allow-all, asserting valid: true (a warning does not fail
-// validation), exit code 0, and the check name
-// copilot-cli.allowed_tools.auto_deny, without constructing any adapter
-// (the offline path never calls a constructor). This exercises the same
-// verdict channel already established for codex, following the pattern
-// this project's validators report through: a warning-severity check
-// reports identically whether observed via sortie validate, at startup, or
-// on reload.
 func TestValidateAgentConfigOfflineVerdict_CopilotToolScoping(t *testing.T) {
 	t.Parallel()
 
@@ -1560,10 +1376,6 @@ func TestValidateAgentConfigOfflineVerdict_CopilotToolScoping(t *testing.T) {
 	}
 }
 
-// opencodeToolOverlapWorkflow returns a workflow selecting the opencode
-// agent with allowed_tools and denied_tools naming the same tool, used to
-// trigger the agent-side offline verdict without constructing any
-// adapter.
 func opencodeToolOverlapWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1589,16 +1401,7 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentConfigOfflineVerdict_OpenCodeToolOverlap drives the
-// offline sortie validate path against a workflow whose opencode
-// configuration names the same tool in both allowed_tools and
-// denied_tools, asserting valid: false, exit code 1, and the check name
-// opencode.allowed_tools.overlap, without constructing any adapter (the
-// offline path never calls a constructor). This is the regression guard
-// for a defect where opencode's agent registration omitted its
-// ValidateAgentConfig hook entirely: validateConfig was unit-tested and
-// passed because a direct call bypasses registration, but sortie validate
-// reached no diagnostic at all until the hook was wired in.
+// Regression guard: opencode registration once omitted its ValidateAgentConfig hook, which a direct validateConfig call cannot reveal.
 func TestValidateAgentConfigOfflineVerdict_OpenCodeToolOverlap(t *testing.T) {
 	t.Parallel()
 
@@ -1673,9 +1476,9 @@ func TestValidateEffortNotForwarded(t *testing.T) {
 		effortBlock string
 		wantWarning bool
 	}{
-		{name: "agent-client-protocol with effort", kind: "agent-client-protocol", effortBlock: "agent-client-protocol:\n  " + registry.EffortKey + ": high\n", wantWarning: true},
 		{name: "mock with effort", kind: "mock", effortBlock: "mock:\n  " + registry.EffortKey + ": high\n", wantWarning: true},
 		{name: "claude-code with effort forwards it", kind: "claude-code", effortBlock: "claude-code:\n  " + registry.EffortKey + ": high\n"},
+		{name: "agent-client-protocol with effort forwards it", kind: "agent-client-protocol", effortBlock: "agent-client-protocol:\n  " + registry.EffortKey + ": high\n"},
 	}
 
 	for _, tt := range tests {
@@ -1714,7 +1517,7 @@ func TestValidateEffortNotForwarded(t *testing.T) {
 func TestValidateEffortNotForwardedText(t *testing.T) {
 	t.Parallel()
 
-	wfPath := writeCustomWorkflowFile(t, t.TempDir(), effortWorkflow("agent-client-protocol", "agent-client-protocol:\n  "+registry.EffortKey+": high\n"))
+	wfPath := writeCustomWorkflowFile(t, t.TempDir(), effortWorkflow("mock", "mock:\n  "+registry.EffortKey+": high\n"))
 
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
@@ -1763,10 +1566,6 @@ func TestWorkflowAdvisories_EffortAdvisoryFollowsDeprecations(t *testing.T) {
 	}
 }
 
-// claudeCodeInteractivePermissionModeWorkflow returns a workflow selecting
-// the claude-code agent with a permission_mode value outside the
-// non-asking allowlist, used to trigger the agent-side offline verdict
-// without constructing any adapter.
 func claudeCodeInteractivePermissionModeWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1789,15 +1588,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode drives
-// the offline sortie validate path against a workflow whose claude-code
-// permission_mode lets the agent stop and ask for approval, asserting
-// valid: false, exit code 1, and the check name
-// claude-code.permission_mode.interactive, without constructing any
-// adapter (the offline path never calls a constructor). This confirms
-// claude-code's validator is wired into agent registration and its
-// diagnostic actually reaches sortie validate, not only validateConfig
-// called directly.
 func TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode(t *testing.T) {
 	t.Parallel()
 
@@ -1832,19 +1622,10 @@ func TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode(t *testing.T
 	}
 }
 
-// wantSessionResumeMessage is the rendered message the agent.kind.session_resume
-// diagnostic must match exactly for kind "claude-code" and key
-// "session_persistence".
 const wantSessionResumeMessage = "claude-code.session_persistence stops this agent kind from resuming a session across separate agent launches, " +
 	"but Sortie resumes an issue's earlier session on a continuation, including one queued before a restart, on the retry after a stall while Sortie keeps running, and on the first run after a person releases a park, " +
 	"and every such turn fails. Change claude-code.session_persistence, or use an agent kind that can resume a session."
 
-// claudeCodeSessionResumeWorkflow returns a workflow selecting the
-// claude-code agent with a non-empty command, an optional agent.max_turns
-// value, and an optional claude-code.session_persistence value, used to
-// drive the agent.kind.session_resume offline verdict without
-// constructing any adapter. An empty maxTurns or sessionPersistence
-// omits that line from the fixture entirely.
 func claudeCodeSessionResumeWorkflow(maxTurns, sessionPersistence string) []byte {
 	agentBlock := "agent:\n  kind: claude-code\n  command: /usr/bin/true\n"
 	if maxTurns != "" {
@@ -1863,12 +1644,6 @@ func claudeCodeSessionResumeWorkflow(maxTurns, sessionPersistence string) []byte
 		"---\nDo {{ .issue.title }}.\n")
 }
 
-// TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResume drives the
-// offline sortie validate path against a workflow whose claude-code block
-// sets session_persistence: false, asserting exit 1, valid: false, and
-// exactly one error whose Check is agent.kind.session_resume and whose
-// Message matches the core-owned template exactly, in both text and JSON
-// output, without constructing any adapter.
 func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResume(t *testing.T) {
 	t.Parallel()
 
@@ -1929,14 +1704,6 @@ func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResume(t *testing.T)
 	})
 }
 
-// TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResumeFalsifiers
-// covers the three properties that keep the verdict tied to
-// session_persistence alone: max_turns absent draws nothing while
-// max_turns present with session_persistence: false still draws it;
-// the diagnostic is emitted identically across a range of agent.max_turns
-// values; and a string-typed "false" is read as the wrong-typed value
-// typeutil.BoolFrom treats as true, drawing nothing, matching the
-// adapter's own parse.
 func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResumeFalsifiers(t *testing.T) {
 	t.Parallel()
 
@@ -2046,11 +1813,6 @@ func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResumeFalsifiers(t *
 	})
 }
 
-// TestValidateAgentConfigOfflineVerdict_MockKindSessionResume drives the
-// offline sortie validate path against a workflow whose default
-// agent.kind is mock, which declares no session-resume blocker at all,
-// asserting no agent.kind.session_resume diagnostic is ever produced and
-// the kind's existing agent.kind.no_tool_channel warning is unchanged.
 func TestValidateAgentConfigOfflineVerdict_MockKindSessionResume(t *testing.T) {
 	t.Parallel()
 
@@ -2120,11 +1882,6 @@ func TestValidateShortHelp(t *testing.T) {
 	}
 }
 
-// makeDispatchWorkflow writes a WORKFLOW.md to dir with the given dispatch
-// section content and returns the absolute path to the workflow file.
-// The workflow includes the minimum required fields so that
-// ValidateConfigForPromotion and the preflight checks are satisfied:
-// tracker.kind, tracker.active_states, tracker.terminal_states, and agent.kind.
 func makeDispatchWorkflow(t *testing.T, dir string, dispatchYAML string) string {
 	t.Helper()
 	content := []byte("---\n" +
@@ -2180,7 +1937,6 @@ func TestValidateDispatch_UnreachableRule(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Write a prompt file so the template path validation passes.
 	if err := os.WriteFile(filepath.Join(dir, "catch.md"), []byte("catch all"), 0o644); err != nil {
 		t.Fatalf("write catch.md: %v", err)
 	}
@@ -2255,8 +2011,7 @@ func TestValidateTemplateAndPartialFaults(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Diagnostics carry symlink-resolved paths; on Windows that also
-			// expands 8.3 short names such as RUNNER~1.
+			// Diagnostics carry symlink-resolved paths (8.3 short names on Windows).
 			dir, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
@@ -2327,11 +2082,6 @@ func TestValidateDispatch_ValidRulesPassThrough(t *testing.T) {
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysOutOfRange asserts that an
-// out-of-range workspace.retention_days value is reported as an error
-// diagnostic with
-// check name config.workspace.retention_days, offline (the file tracker
-// makes no network call).
 func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
 	t.Parallel()
 
@@ -2373,9 +2123,6 @@ func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
 	}
 }
 
-// nonPositiveTurnTimeoutWorkflow returns workflow content with a
-// non-positive agent.turn_timeout_ms and otherwise valid tracker/agent
-// fields, offline (the file tracker makes no network call).
 func nonPositiveTurnTimeoutWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -2396,10 +2143,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateNonPositiveTurnTimeoutMSJSON verifies that a non-positive
-// agent.turn_timeout_ms is reported as an error diagnostic with check
-// name config.agent.turn_timeout_ms, offline (the file tracker makes no
-// network call).
 func TestValidateNonPositiveTurnTimeoutMSJSON(t *testing.T) {
 	t.Parallel()
 
@@ -2437,11 +2180,6 @@ func TestValidateNonPositiveTurnTimeoutMSJSON(t *testing.T) {
 	}
 }
 
-// outOfRangeTurnTimeoutWorkflow returns workflow content with
-// agent.turn_timeout_ms set to numeral, an unquoted YAML integer
-// literal too large for the platform int type to hold, and otherwise
-// valid tracker/agent fields, offline (the file tracker makes no
-// network call).
 func outOfRangeTurnTimeoutWorkflow(numeral string) []byte {
 	return []byte(`---
 polling:
@@ -2462,11 +2200,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentTurnTimeoutMSOutOfRange covers an agent.turn_timeout_ms
-// numeral beyond the unsigned 64-bit range (gopkg.in/yaml.v3 decodes it as
-// float64) and one exactly at 2^63 (decoded as uint64); both exit 1 with a
-// single stderr line naming the field and the range an integer setting
-// accepts.
 func TestValidateAgentTurnTimeoutMSOutOfRange(t *testing.T) {
 	t.Parallel()
 
@@ -2506,10 +2239,6 @@ func TestValidateAgentTurnTimeoutMSOutOfRange(t *testing.T) {
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysValid asserts that an in-range
-// workspace.retention_days value in the front matter is recognized by
-// the schema and produces no warnings, offline (the file tracker makes
-// no network call).
 func TestValidateWorkspaceRetentionDaysValid(t *testing.T) {
 	t.Parallel()
 
@@ -2538,20 +2267,11 @@ func TestValidateWorkspaceRetentionDaysValid(t *testing.T) {
 	if !out.Valid {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 	}
-	// agent.kind "mock" always draws the no-tool-channel warning by
-	// design; retention_days itself must add no warning beyond it.
 	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
 		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysFromEnvOverride asserts that a
-// workspace.retention_days value supplied only through
-// SORTIE_WORKSPACE_RETENTION_DAYS, with no retention_days line in the
-// front matter, is recognized by the schema and produces no warnings.
-//
-// t.Setenv panics when called from a parallel test, so this test does
-// not call t.Parallel.
 func TestValidateWorkspaceRetentionDaysFromEnvOverride(t *testing.T) {
 	t.Setenv("SORTIE_WORKSPACE_RETENTION_DAYS", "30")
 
@@ -2579,8 +2299,6 @@ func TestValidateWorkspaceRetentionDaysFromEnvOverride(t *testing.T) {
 	if !out.Valid {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 	}
-	// agent.kind "mock" always draws the no-tool-channel warning by
-	// design; retention_days itself must add no warning beyond it.
 	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
 		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
@@ -2612,7 +2330,6 @@ func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 		t.Errorf("validateOutput.Valid = true, want false")
 	}
 
-	// mapManagerError routes *ConfigError to check "config." + Field.
 	found := false
 	for _, d := range out.Errors {
 		if strings.HasPrefix(d.Check, "config.dispatch") {
@@ -2931,8 +2648,6 @@ func TestValidateDispatch_StageCollisions(t *testing.T) {
 	}
 }
 
-// unresolvedExtVarWorkflow returns a workflow YAML containing an extension block
-// whose api_key references varName, which must be unset when the test runs.
 func unresolvedExtVarWorkflow(varName string) []byte {
 	return []byte("---\n" +
 		"tracker:\n  kind: file\n  active_states:\n    - To Do\n  terminal_states:\n    - Done\n" +
@@ -2941,14 +2656,10 @@ func unresolvedExtVarWorkflow(varName string) []byte {
 		"---\nDo {{ .issue.title }}.\n")
 }
 
-// TestValidateUnresolvedExtensionVar covers the unresolved_extension_var warning end-to-end.
 func TestValidateUnresolvedExtensionVar(t *testing.T) {
-	// The variable must resolve to empty. Use a name that is unique to this
-	// test suite; explicitly clear it so the resolved value is "".
 	const missingVar = "SORTIE_TEST_512_E2E_MISSING"
 
 	t.Run("TextMode", func(t *testing.T) {
-		// No t.Parallel: uses t.Setenv.
 		t.Setenv(missingVar, "")
 
 		dir := t.TempDir()
@@ -2959,34 +2670,28 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 
 		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
 
-		// Exit code must be 0 (advisory warning).
 		if code != 0 {
 			t.Fatalf("run(validate) = %d, want 0 (warning is advisory); stderr: %s", code, stderr.String())
 		}
-		// Text mode: no output on stdout.
 		if stdout.Len() != 0 {
 			t.Errorf("stdout = %q, want empty (text mode)", stdout.String())
 		}
 		got := stderr.String()
-		// Text mode: warning must appear on stderr.
 		if !strings.Contains(got, "warning:") {
 			t.Errorf("stderr = %q, want to contain %q", got, "warning:")
 		}
 		if !strings.Contains(got, "unresolved_extension_var") {
 			t.Errorf("stderr = %q, want to contain %q", got, "unresolved_extension_var")
 		}
-		// Field path must appear (prefixed onto the message by emitDiags).
 		if !strings.Contains(got, "myext.api_key") {
 			t.Errorf("stderr = %q, want to contain field path %q", got, "myext.api_key")
 		}
-		// Variable name must appear, resolved value (empty) must not add noise.
 		if !strings.Contains(got, missingVar) {
 			t.Errorf("stderr = %q, want to contain variable name %q", got, missingVar)
 		}
 	})
 
 	t.Run("JSONMode", func(t *testing.T) {
-		// No t.Parallel: uses t.Setenv.
 		t.Setenv(missingVar, "")
 
 		dir := t.TempDir()
@@ -2997,11 +2702,9 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 
 		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
 
-		// Exit code 0.
 		if code != 0 {
 			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
 		}
-		// JSON mode: stderr must be empty.
 		if stderr.Len() != 0 {
 			t.Errorf("stderr = %q, want empty (JSON mode)", stderr.String())
 		}
@@ -3010,16 +2713,13 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
 		}
-		// Valid must be true.
 		if !out.Valid {
 			t.Errorf("validateOutput.Valid = false, want true")
 		}
-		// No errors.
 		if len(out.Errors) != 0 {
 			t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
 		}
 
-		// JSON mode: the warnings array must contain the unresolved_extension_var entry.
 		var found *validateDiag
 		for i := range out.Warnings {
 			if out.Warnings[i].Check == "unresolved_extension_var" {
@@ -3033,23 +2733,15 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		if found.Severity != "warning" {
 			t.Errorf("warning.Severity = %q, want %q", found.Severity, "warning")
 		}
-		// Field path must be prefixed in the message.
 		if !strings.Contains(found.Message, "myext.api_key") {
 			t.Errorf("warning.Message = %q, want field path %q", found.Message, "myext.api_key")
 		}
-		// Variable name appears in the message.
 		if !strings.Contains(found.Message, missingVar) {
 			t.Errorf("warning.Message = %q, want variable name %q", found.Message, missingVar)
 		}
-		// Resolved value (empty string "") must not appear as a meaningful token.
-		// The message must not contain any resolved credential value; since the value is
-		// empty here the key assertion is that the variable name (not the value) is shown.
 	})
 
 	t.Run("ValidTrueExitZero", func(t *testing.T) {
-		// No t.Parallel: uses t.Setenv.
-		// Extra confirmation that valid:true and exit code 0 hold even when
-		// the only warning present is an unresolved extension variable.
 		t.Setenv(missingVar, "")
 
 		dir := t.TempDir()
@@ -3073,9 +2765,6 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 	})
 }
 
-// labelCommandsBothLabelsEmptyWorkflow returns a workflow with an active
-// label_commands provider and both command labels explicitly disabled,
-// which buildLabelCommandsConfig rejects as a loud misconfiguration.
 func labelCommandsBothLabelsEmptyWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -3100,10 +2789,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// labelCommandsUnregisteredProviderWorkflow returns a workflow whose
-// label_commands.provider names an SCM adapter that is not registered.
-// activationChecks reports this offline as an scm_adapter error, the
-// same registry lookup failure that already blocks construction.
 func labelCommandsUnregisteredProviderWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -3126,10 +2811,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestRunValidate_LabelCommandsBothLabelsEmpty covers the offline path of
-// the both-labels-empty validation rule: an active provider with both
-// command labels explicitly empty is a config-shape error surfaced by
-// sortie validate, not a silently inert block.
 func TestRunValidate_LabelCommandsBothLabelsEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -3165,10 +2846,6 @@ func TestRunValidate_LabelCommandsBothLabelsEmpty(t *testing.T) {
 	}
 }
 
-// TestRunValidate_LabelCommandsUnregisteredProviderRejected is the
-// companion case: an unregistered provider value named by an active
-// label_commands reaction is a validate-time scm_adapter error, the
-// same registry lookup failure that already blocks construction.
 func TestRunValidate_LabelCommandsUnregisteredProviderRejected(t *testing.T) {
 	t.Parallel()
 
@@ -3196,10 +2873,6 @@ func TestRunValidate_LabelCommandsUnregisteredProviderRejected(t *testing.T) {
 	}
 }
 
-// labelCommandsFixOnlyWorkflow returns a workflow with an active
-// label_commands provider, an explicitly empty review_label, and a
-// non-empty fix_label: a fix-only configuration that buildLabelCommandsConfig
-// accepts because at least one command label is non-empty.
 func labelCommandsFixOnlyWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -3224,11 +2897,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestRunValidate_LabelCommandsFixOnlyValid covers the fix-only
-// activation shape offline: a provider with review_label explicitly
-// disabled and fix_label set is a valid block, not the
-// both-labels-empty error (companion to
-// TestRunValidate_LabelCommandsBothLabelsEmpty).
 func TestRunValidate_LabelCommandsFixOnlyValid(t *testing.T) {
 	t.Parallel()
 
@@ -3253,8 +2921,6 @@ func TestRunValidate_LabelCommandsFixOnlyValid(t *testing.T) {
 	}
 }
 
-// diagWithCheck returns a pointer to the first diag in diags whose Check
-// matches want, or nil if none match.
 func diagWithCheck(diags []validateDiag, want string) *validateDiag {
 	for i := range diags {
 		if diags[i].Check == want {
@@ -3264,8 +2930,6 @@ func diagWithCheck(diags []validateDiag, want string) *validateDiag {
 	return nil
 }
 
-// forgeCheckKeys lists every check key this feature can emit: the reaction-
-// config diagnostics plus the three activation diagnostics.
 var forgeCheckKeys = []string{
 	"reactions.review_comments",
 	"reactions.bot_review",
@@ -3294,9 +2958,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// forgeFaultWorkflow returns a WORKFLOW.md with a minimal valid tracker
-// (file) and agent, so ValidateDispatchConfig passes cleanly, with
-// extraYAML appended to introduce exactly one forge-only fault.
 func forgeFaultWorkflow(extraYAML string) []byte {
 	return []byte(`---
 tracker:
@@ -3312,8 +2973,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestActivationChecks covers activationChecks directly with hand-built
-// config.ServiceConfig literals, bypassing config.NewServiceConfig.
 func TestActivationChecks(t *testing.T) {
 	t.Parallel()
 
@@ -3377,12 +3036,7 @@ func TestActivationChecks(t *testing.T) {
 			wantChecks: nil,
 		},
 		{
-			// A configuration with no merge_completion block must leave the
-			// pre-existing diagnostic set unchanged: a single active
-			// reaction on one provider produces no diagnostic. This is the
-			// regression an implementer who wires merge_completion into
-			// activeSCMKinds unconditionally (ignoring its empty provider)
-			// would introduce as a spurious provider-conflict diagnostic.
+			// Guards against merge_completion joining activeSCMKinds despite an empty provider.
 			name: "no merge_completion block leaves a single active reaction clean",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
@@ -3442,10 +3096,6 @@ func TestActivationChecks(t *testing.T) {
 	}
 }
 
-// mergeCompletionFaultWorkflow returns a WORKFLOW.md with a minimal valid
-// tracker (file) and agent plus a handoff_state, so ValidateDispatchConfig
-// passes cleanly, with a reactions.merge_completion block whose
-// target_state names an active rather than a terminal state.
 func mergeCompletionFaultWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -3466,11 +3116,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateMergeCompletionNonTerminalTargetState verifies that
-// "sortie validate --format json" on a workflow whose merge_completion
-// block sets a non-terminal target_state reports valid: false with an
-// error diagnostic whose check is reactions.merge_completion, and exits
-// 1, with no network access (the tracker is the offline file adapter).
 func TestValidateMergeCompletionNonTerminalTargetState(t *testing.T) {
 	t.Parallel()
 
@@ -3497,9 +3142,6 @@ func TestValidateMergeCompletionNonTerminalTargetState(t *testing.T) {
 	}
 }
 
-// TestValidateReviewAndMergeConflictReactionConfigs verifies that validate
-// runs every kind-specific numeric rule for review_comments and
-// merge_conflicts without constructing an adapter or making a network call.
 func TestValidateReviewAndMergeConflictReactionConfigs(t *testing.T) {
 	t.Parallel()
 
@@ -3614,14 +3256,7 @@ func TestValidateReviewAndMergeConflictReactionConfigs(t *testing.T) {
 	}
 }
 
-// TestValidateWatchWindowMSAcrossKinds covers every reaction kind that
-// carries watch_window_ms with a value above the shared ceiling. The
-// ci_failure kind is rejected during config.NewServiceConfig and surfaces
-// under a "config."-prefixed check produced by mapManagerError, while the
-// other four kinds pass config construction and are rejected by
-// ValidateReactionConfigs under a bare "reactions.<kind>" check, so each
-// row needs its own single-fault fixture: a ci_failure rejection would
-// otherwise fail NewServiceConfig and suppress every later diagnostic.
+// Each row needs a single-fault fixture: a ci_failure rejection fails NewServiceConfig and suppresses every later diagnostic.
 func TestValidateWatchWindowMSAcrossKinds(t *testing.T) {
 	t.Parallel()
 
@@ -3895,9 +3530,6 @@ func TestValidateGiteaForge(t *testing.T) {
 	})
 }
 
-// TestValidateForgeFoldPointJSON guards the fold point: a forge-only
-// error with no preflight error must not be masked by an otherwise
-// passing preflight, in both JSON and text output modes.
 func TestValidateForgeFoldPointJSON(t *testing.T) {
 	t.Parallel()
 
@@ -3969,10 +3601,6 @@ func TestValidateForgeFoldPointJSON(t *testing.T) {
 	})
 }
 
-// giteaShadowedEscalationWorkflow returns a WORKFLOW.md whose bot_review
-// reaction sets an invalid escalation value. buildReactionsConfig rejects
-// this at the config layer before orchestrator.ValidateReactionConfigs
-// ever runs.
 func giteaShadowedEscalationWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -3992,10 +3620,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateShadowedEscalation proves that a malformed reaction
-// escalation is reported and exits before ValidateReactionConfigs runs,
-// so no reactions.bot_review or reactions.auto_merge diagnostic ever
-// appears end-to-end for this fault.
 func TestValidateShadowedEscalation(t *testing.T) {
 	t.Parallel()
 
@@ -4028,10 +3652,6 @@ func TestValidateShadowedEscalation(t *testing.T) {
 	}
 }
 
-// handoffStateWorkflow renders a minimal workflow for the given tracker
-// kind. Credentials and project are omitted deliberately: the state
-// collision is rejected by the config loader, which runs before any
-// adapter or preflight check, so validate never reaches those fields.
 func handoffStateWorkflow(kind, handoff string) []byte {
 	return fmt.Appendf(nil, `---
 polling:
@@ -4092,13 +3712,6 @@ Do {{ .issue.title }}.
 	}
 }
 
-// TestValidateHandoffStateCollisionEveryTrackerKind verifies that a
-// handoff_state colliding with active_states or terminal_states is a hard
-// error for every registered tracker kind. The rule is enforced by the
-// config loader rather than by adapter validation hooks, so no adapter can
-// opt out of it or downgrade it to a warning. The kind list comes from the
-// registry so a newly registered adapter is covered without editing this
-// test.
 func TestValidateHandoffStateCollisionEveryTrackerKind(t *testing.T) {
 	t.Parallel()
 
@@ -4155,9 +3768,7 @@ func TestValidateHandoffStateCollisionEveryTrackerKind(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
 
-			// The exit code is unconstrained: kinds that require an api_key or
-			// project still fail preflight on this minimal workflow. What must
-			// not appear is the collision diagnostic.
+			// Exit code is unconstrained: some kinds fail preflight on missing credentials.
 			if strings.Contains(stderr.String(), "config.tracker.handoff_state") {
 				t.Errorf("stderr = %q, want no handoff_state diagnostic for a non-colliding state", stderr.String())
 			}
@@ -4174,11 +3785,6 @@ func runValidateWorkflow(t *testing.T, content []byte) (int, string) {
 	return code, stderr.String()
 }
 
-// TestValidateNoChangeStateRejectionsAreOffline verifies that every
-// tracker.no_change_state value rule is reported by sortie validate with
-// no tracker call: the file tracker kind never talks to a network, so a
-// diagnostic surfacing here proves the check ran before any adapter
-// construction that could reach one.
 func TestValidateNoChangeStateRejectionsAreOffline(t *testing.T) {
 	t.Parallel()
 
@@ -4254,8 +3860,6 @@ func TestValidateNoChangeStateRejectionsAreOffline(t *testing.T) {
 	}
 }
 
-// nonEmptyLines splits s on newlines and drops empty lines, so a
-// trailing newline in captured output does not inflate the count.
 func nonEmptyLines(s string) []string {
 	var lines []string
 	for line := range strings.SplitSeq(s, "\n") {
@@ -4266,11 +3870,6 @@ func nonEmptyLines(s string) []string {
 	return lines
 }
 
-// TestValidateDispatch_MissingAgentBlock exercises the CLI surface of
-// the "dispatch.agent.missing_block" check end to end: a workflow whose
-// only fault is a dispatch-routed kind carrying no settings block must
-// fail validate with exactly that one diagnostic, in both output
-// formats.
 func TestValidateDispatch_MissingAgentBlock(t *testing.T) {
 	t.Parallel()
 
@@ -4330,12 +3929,7 @@ func TestValidateDispatch_MissingAgentBlock(t *testing.T) {
 	})
 }
 
-// TestAgentRegistryKindsDisjointFromOtherFamilies asserts that no agent
-// kind name collides with a tracker, SCM, CI-provider, or notifier kind
-// name, so a future name collision fails a test rather than reaching an
-// operator. cmd/sortie is the only package whose blank imports populate
-// every one of these registries; the same assertion in
-// internal/orchestrator would read empty rosters and pass vacuously.
+// Lives in cmd/sortie because only its blank imports populate every registry; elsewhere the check would pass vacuously.
 func TestAgentRegistryKindsDisjointFromOtherFamilies(t *testing.T) {
 	t.Parallel()
 
@@ -4365,8 +3959,6 @@ func TestAgentRegistryKindsDisjointFromOtherFamilies(t *testing.T) {
 	}
 }
 
-// triageUnsupportedKeyWorkflow embeds a triage block under auto_merge, a
-// reaction kind config.TriageSupportedReactionKeys does not include.
 func triageUnsupportedKeyWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -4392,9 +3984,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// triageBlankScriptWorkflow embeds a triage block whose script is blank
-// after whitespace trimming, under a reaction kind that does support
-// the block.
 func triageBlankScriptWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -4420,8 +4009,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// triageTimeoutOutOfRangeWorkflow embeds a triage block whose
-// timeout_ms exceeds the 600000 ceiling.
 func triageTimeoutOutOfRangeWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -4448,15 +4035,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateTriageConfigErrors verifies that sortie validate reports
-// every triage configuration error offline, using only the file
-// tracker and the mock agent kind, neither of which
-// makes a network call or requires credentials. Because
-// buildReactionsConfig raises these errors during WORKFLOW.md parsing,
-// before any adapter is constructed, no request-scoped double is
-// needed to prove the offline property; the fixture's tracker and
-// agent kinds are already the ones the project's other offline
-// validate tests use for exactly that reason.
 func TestValidateTriageConfigErrors(t *testing.T) {
 	t.Parallel()
 

@@ -66,7 +66,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	cfg, err := config.NewServiceConfig(wf.Config)
+	cfg, err := config.NewServiceConfig(wf.Config, config.WithLiteralSettings(registry.LiteralSettingsOf))
 	if err != nil {
 		emitDiags(stdout, stderr, *format, mapManagerError(err), nil)
 		return 1
@@ -92,6 +92,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		workflow.WithValidateFunc(workflowValidate),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
 		workflow.WithRetiredAgents(registry.RetiredAgentOf),
+		workflow.WithLiteralSettings(registry.LiteralSettingsOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))
 	if err != nil {
 		emitDiags(stdout, stderr, *format, mapManagerError(err), warningDiags)

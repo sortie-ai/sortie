@@ -175,8 +175,8 @@ func newShapeHarness(t *testing.T, frontMatter string) *shapeHarness {
 	orch := orchestrator.NewOrchestrator(params)
 
 	srv := New(Params{
-		SnapshotFn: func() (orchestrator.RuntimeSnapshotResult, error) {
-			return orchestrator.RuntimeSnapshotResult{Rates: mgr.Rates()}, nil
+		SnapshotFn: func() orchestrator.RuntimeSnapshotResult {
+			return orchestrator.RuntimeSnapshotResult{Rates: mgr.Rates()}
 		},
 		RefreshFn:       func() bool { return true },
 		Logger:          logger,

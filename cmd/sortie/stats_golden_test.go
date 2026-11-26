@@ -208,7 +208,7 @@ func TestStatsRouteEqualsCLIReport(t *testing.T) {
 			dbPath := filepath.Join(dir, ".sortie.db")
 			createStatsDB(t, dbPath, tt.runs...)
 			srv := server.New(server.Params{
-				SnapshotFn: func() (orchestrator.RuntimeSnapshotResult, error) { return orchestrator.RuntimeSnapshotResult{}, nil },
+				SnapshotFn: func() orchestrator.RuntimeSnapshotResult { return orchestrator.RuntimeSnapshotResult{} },
 				RefreshFn:  func() bool { return true },
 				Stats:      statsSource{dbPath: dbPath, workflowPath: wfPath}.report,
 			})

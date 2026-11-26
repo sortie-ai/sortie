@@ -1,3 +1,4 @@
+import { Panel } from "@/components/Panel";
 import { ServedText } from "@/components/ServedText";
 import { StatusMark } from "@/components/StatusMark";
 
@@ -7,14 +8,19 @@ export interface StallNoticeProps {
   isStalled: boolean;
 }
 
+/** The notice for a stalled run, set as a section of its screen. */
 export function StallNotice({ text, isStalled }: StallNoticeProps) {
   return (
-    <p className="mb-lg rounded-xl border border-solid border-line-strong bg-surface px-md py-sm text-body-md text-ink-body">
-      {isStalled ? (
-        <StatusMark mark="stalled" label={<ServedText text={text} />} />
-      ) : (
-        <ServedText text={text} />
-      )}
-    </p>
+    <div className="mb-xl">
+      <Panel title={isStalled ? "Stalled" : "Stall detection"}>
+        <p className="rounded-xl border border-line bg-canvas px-md py-sm text-body-md text-ink-body">
+          {isStalled ? (
+            <StatusMark mark="stalled" label={<ServedText text={text} />} />
+          ) : (
+            <ServedText text={text} />
+          )}
+        </p>
+      </Panel>
+    </div>
   );
 }

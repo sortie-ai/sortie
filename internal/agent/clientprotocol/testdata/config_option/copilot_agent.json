@@ -1,0 +1,6 @@
+{
+  "option": "agent",
+  "value": "sortie-probe",
+  "files": {".github/agents/sortie-probe.agent.md": "---\nname: sortie-probe\ndescription: Sortie session option probe\n---\nEnd every reply with the word SORTIE_AGENT_MARKER.\n"},
+  "marker": "SORTIE_AGENT_MARKER"
+}
