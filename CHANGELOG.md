@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard: clicking the Issue or PR button of a needs-attention item on Overview, with or without Cmd or Ctrl held, now opens one tab instead of two. ([#1684](https://github.com/sortie-ai/sortie/issues/1684))
 - When adding the parking label to a parked issue fails, Sortie now adds it again on later polls, waiting longer between tries up to an hour, until the label shows on the issue, instead of holding the issue out of dispatch with no label to say why or to remove. ([#1697](https://github.com/sortie-ai/sortie/pull/1697))
 - When the tracker read that puts pull requests in the handoff state back under their watches fails at startup, Sortie now tries it again on later polls, waiting longer between tries up to five minutes, until it succeeds, instead of leaving those pull requests unwatched until the next restart. ([#1691](https://github.com/sortie-ai/sortie/issues/1691))
-- A Copilot turn cancelled over the Agent Client Protocol now always takes its token count from Copilot's saved session files, instead of sometimes from the figure Copilot sends when it cancels.
+- A Copilot turn cancelled over the Agent Client Protocol now always takes its token count from Copilot's saved session files, instead of sometimes from the figure Copilot sends when it cancels. ([#1702](https://github.com/sortie-ai/sortie/pull/1702))
 
 ## [1.32.0] - 2026-11-09
 
