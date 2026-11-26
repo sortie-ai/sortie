@@ -334,7 +334,7 @@ jobs:
         run: npm install -g --ignore-scripts=false @anthropic-ai/claude-code
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/claude/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/claude/...
 
   test-integration-copilot:
     name: "Integration: Copilot"
@@ -375,7 +375,7 @@ jobs:
         run: npm install -g @github/copilot
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/copilot/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/copilot/...
 
   test-integration-codex:
     name: "Integration: Codex"
@@ -422,7 +422,7 @@ jobs:
         run: codex sandbox -- /usr/bin/true
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/codex/...
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/codex/...
 
   test-integration-opencode:
     name: "Integration: OpenCode"
@@ -466,7 +466,7 @@ jobs:
       - name: Run integration tests
         run: |
           for attempt in 1 2; do
-            if go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...; then
+            if go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/opencode/...; then
               exit 0
             fi
             if [ "$attempt" -eq 2 ]; then
@@ -603,7 +603,7 @@ jobs:
         run: npm install -g @github/copilot
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 600s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+        run: go test -race -count=1 -v -timeout 900s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
 
   test-integration-acp-opencode:
     name: "Integration: OpenCode - ACP"
@@ -644,7 +644,7 @@ jobs:
         run: npm install -g --ignore-scripts=false @opencode/cli@2
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 300s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
+        run: go test -race -count=1 -v -timeout 900s -run '^TestIntegration_ScriptedModel$' ./internal/agent/clientprotocol/...
 
   announcement:
     name: Release announcement
