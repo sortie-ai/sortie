@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -269,7 +270,11 @@ func (f *httpForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close() //nolint:errcheck // the body is read in full right after, so a close error adds nothing
+	defer resp.Body.Close() //nolint:errcheck // the body is read to its end before the close, so a close error adds nothing
+	if isEventStream(resp.Header) {
+		f.relayEvents(w, resp, relayRecord{Dir: relayToClient, Req: req, Accept: &accept})
+		return
+	}
 	answer, err := io.ReadAll(resp.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -283,6 +288,62 @@ func (f *httpForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(answer)
+}
+
+func isEventStream(header http.Header) bool {
+	mediaType, _, err := mime.ParseMediaType(header.Get("Content-Type"))
+	return err == nil && mediaType == "text/event-stream"
+}
+
+// relayEvents forwards an event stream one event at a time, recording each
+// event's data before forwarding it. A stream may stay open for the whole
+// session, and its client waits on the first event, so the stream is never
+// buffered to its end.
+func (f *httpForwarder) relayEvents(w http.ResponseWriter, resp *http.Response, rec relayRecord) {
+	maps.Copy(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	flusher := http.NewResponseController(w)
+	events := bufio.NewReader(resp.Body)
+	for {
+		event, readErr := readEvent(events)
+		if len(event) > 0 {
+			if err := f.rec.addRecord(rec, eventData(event)); err != nil {
+				return
+			}
+			if _, err := w.Write(event); err != nil {
+				return
+			}
+			if err := flusher.Flush(); err != nil {
+				return
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
+// readEvent returns the lines of one event through the blank line that ends
+// it, or what is left of the stream along with the read error.
+func readEvent(r *bufio.Reader) ([]byte, error) {
+	var event []byte
+	for {
+		line, err := r.ReadBytes('\n')
+		event = append(event, line...)
+		if err != nil || len(bytes.TrimRight(line, "\r\n")) == 0 {
+			return event, err
+		}
+	}
+}
+
+func eventData(event []byte) []byte {
+	var data [][]byte
+	for line := range bytes.Lines(event) {
+		if payload, ok := bytes.CutPrefix(bytes.TrimRight(line, "\r\n"), []byte("data:")); ok {
+			data = append(data, bytes.TrimPrefix(payload, []byte(" ")))
+		}
+	}
+	return bytes.Join(data, []byte("\n"))
 }
 
 // RecordingMCPRelay is an MCP server command that forwards to the real
