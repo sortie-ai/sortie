@@ -305,19 +305,19 @@ func (f *httpForwarder) relayEvents(w http.ResponseWriter, resp *http.Response, 
 	flusher := http.NewResponseController(w)
 	events := bufio.NewReader(resp.Body)
 	for {
-		event, readErr := readEvent(events)
-		if len(event) > 0 {
-			if err := f.rec.addRecord(rec, eventData(event)); err != nil {
-				return
-			}
-			if _, err := w.Write(event); err != nil {
-				return
-			}
-			if err := flusher.Flush(); err != nil {
-				return
-			}
+		// An event the stream ends before its blank line is never dispatched,
+		// so it is neither recorded nor forwarded.
+		event, err := readEvent(events)
+		if err != nil {
+			return
 		}
-		if readErr != nil {
+		if err := f.rec.addRecord(rec, eventData(event)); err != nil {
+			return
+		}
+		if _, err := w.Write(event); err != nil {
+			return
+		}
+		if err := flusher.Flush(); err != nil {
 			return
 		}
 	}
