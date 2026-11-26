@@ -98,7 +98,7 @@ Additional normalization details:
 
 - `labels` -> lowercase strings, holding every label the issue carries
 - `blocked_by` -> derived from inverse relations where relation type is `blocks`
-- `priority` -> integer only (non-integers become null)
+- `priority` -> integer only (non-integers become null). Gitea, GitHub, and GitLab derive it only from an explicit `tracker.priority_labels` map, using the same shared helper in `internal/issuekit`: exact matches against the normalized lowercase labels, smallest mapped value wins, no match remains null. This uses the existing domain priority for dispatch sorting and priority predicates without adding a tracker field. Gitea and GitLab include these names in their advisory construction-time catalog checks, ignoring letter case; catalog diagnostic failures warn and do not block construction.
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
 - comments -> oldest first, whether they arrive with `fetch_issue_by_id` or through `fetch_issue_comments` or `fetch_issue_comment_changes`; each comment's `created_at` passes through as the tracker's text and MUST be RFC 3339 (fractional seconds optional, `Z` or `±hh:mm` offset) or the same form with a `±hhmm` offset, because the window of comments handed to the first run after a park release is computed from it. `author_id` passes through the tracker's account identity, a login or an account ID and never a display name, and is empty when the tracker reports no author; the file adapter, which has no account system, reports the fixture's author string. `author_kind` is `person`, `bot`, `app`, `external`, or empty, mapped from the tracker's own account metadata and never from a username pattern; it is empty when the read cannot tell. `updated_at` passes through the tracker's last-update timestamp text in the forms `created_at` accepts, and is empty when the tracker reports none.
 
@@ -238,7 +238,7 @@ The Gitea adapter targets the REST API v1 of a self-hosted Gitea instance, built
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
 - `id` and `identifier` are both the repository-scoped index as a string; Gitea's global issue id is never read.
-- `priority` is always null, because Gitea issues carry no priority field.
+- `priority` is null unless a label matches the operator-declared `tracker.priority_labels` map; Gitea has no native issue priority field.
 - `parent` is always null, because Gitea has no sub-issue relationship, and no parent request is issued.
 - `blocked_by` is not read on the candidate path: `giteaIssue` carries no dependency field, so every candidate is marked `blockers_unresolved` and the shared resolution layer reads the issue dependencies route (`/issues/{index}/dependencies`), the Gitea form of the inverse `blocks` relation described in Section 11.3, per candidate after the cheaper eligibility gates pass. The by-ID read (`fetch_issue_by_id`) still reads the same route directly and clears the flag.
 - `branch_name` comes from the issue `ref` field and is stored as an opaque string.
@@ -274,7 +274,7 @@ Label names are case-sensitive on GitLab, and attaching a name that matches no l
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
 - `id` and `identifier` are both the project-scoped `iid` as a string; the instance-global issue id is never read, because the project-scoped routes do not accept it and the route that does is closed to a non-administrator.
-- `priority` is always null. GitLab issues carry no priority field, and label priority is a project-level ordering rather than a per-issue integer.
+- `priority` is null unless a label matches the operator-declared `tracker.priority_labels` map. GitLab's own label priority is a project-level ordering and is never used to infer the per-issue integer.
 - `parent` is always null, because the issue route exposes no sub-issue relationship, and no parent request is issued.
 - `blocked_by` is always a non-nil empty slice. The issue-links route exists on Community Edition but accepts only the `relates_to` link type, so no `blocks` relation exists to invert as Section 11.3 describes, and no links request is issued. The adapter declares this capability limit at registration rather than leaving it to be inferred from the normalization code.
 - `branch_name` is always empty, because GitLab derives branch names in the UI rather than storing one on the issue.
@@ -311,7 +311,7 @@ The GitHub adapter targets the REST API (plus the search endpoint) at `tracker.e
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
 - `id` and `identifier` are both the repository-scoped issue number as a string; GitHub's global issue id is never read.
-- `priority` is always null, because GitHub issues carry no priority field.
+- `priority` is null unless a label matches the operator-declared `tracker.priority_labels` map; GitHub has no native issue priority field.
 - `blocked_by` is not read on the candidate path: every candidate is marked `blockers_unresolved` by default, and the shared resolution layer reads the issue dependencies route (`/issues/{number}/dependencies/blocked_by`), the GitHub form of the inverse `blocks` relation described in Section 11.3, per candidate after the cheaper eligibility gates pass. A candidate whose payload carries a dependency summary proving it has no dependencies at all clears the flag without a read. The by-ID read (`fetch_issue_by_id`) still reads the same route directly and clears the flag.
 - `parent` comes from the issue's parent route; a missing parent (HTTP 404) normalizes to nil rather than an error.
 - `assignee` is the first entry of the issue's assignee list.

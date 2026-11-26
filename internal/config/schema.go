@@ -52,6 +52,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "active_states", Type: FieldStringList},
 			{Name: "terminal_states", Type: FieldStringList},
 			{Name: "query_filter", Type: FieldString},
+			{Name: "priority_labels", Type: FieldMap},
 			{Name: "handoff_state", Type: FieldString},
 			{Name: "handoff_evidence", Type: FieldString},
 			{Name: "no_change_state", Type: FieldString},

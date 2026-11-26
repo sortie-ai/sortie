@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/gitea`: the design decisions behind it, the places Gitea's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-08-23
+Last updated: 2026-11-03
 
 ## Shape of the package
 
@@ -20,7 +20,9 @@ Gitea serves no GraphQL. The REST surface is the whole contract, so anything the
 
 **The user's type is not always rendered.** Newer Gitea renders the user's type on a comment's author (`User`, `Organization`, or `Bot`), and the adapter reads `User` as a person and `Bot` as a bot. Forgejo and older Gitea render no type, and the kind is empty there, never a person: a bot on those servers cannot be told from a human by the payload, and no username pattern stands in for it.
 
-**No priority, no issue type, no parent.** None of these concepts exist. The corresponding domain fields are always empty. Do not add a synthetic mapping for them.
+**Priority from declared labels.** This tracker has no native issue priority field, but operators already express priority with labels. `tracker.priority_labels` declares their integer meaning explicitly. Keys match the normalized lowercase labels exactly, ignoring letter case and without globs; the smallest mapped value wins and no match leaves priority unset. This is operator configuration rather than a synthetic mapping: nothing is guessed from label names. It populates the existing domain priority, enabling the ordinary dispatch sort and `match.priority` with no new tracker field. The map requires a restart and cannot reuse a workflow state label. Construction warns about mapped names absent from the repository label catalog, ignoring letter case, through the same advisory read used for `query_filter`.
+
+**No issue type, no parent.** These concepts do not exist. Their domain fields stay empty; do not add a synthetic mapping for them.
 
 **Two issue numbers, one usable.** Every issue carries a repo-scoped index and an instance-global id. Only the index is accepted by any per-issue route, and the same entity read through the pull route and the issue route reports two different global ids. Store the index; treat the global id as a trap. The adapter maps both `ID` and `Identifier` to the index and qualifies `DisplayID` to `owner/repo#N` so a bare index is never ambiguous across repositories.
 

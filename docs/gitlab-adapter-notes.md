@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/gitlab`: the design decisions behind it, the places GitLab's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-10-10
+Last updated: 2026-11-03
 
 ## Shape of the package
 
@@ -93,6 +93,8 @@ The mitigation is normative and lives at construction: **resolve the canonical s
 **`remove_labels` matches names exactly.** A stored `Sortie:Review` is not removed by `sortie:review`, and a project holding both spellings needs both named. Removal reads the issue's labels, selects every spelling that names the requested label regardless of letter case, and sends them together in one `remove_labels` update. The merge request label command uses the same constructor on the merge request route, and trims its label first.
 
 **A label with only white space is refused.** The add trims the label before it looks up the stored casing, so a label with surrounding white space attaches its trimmed spelling and then fails the confirmation, which compares the label as given. A label with nothing but white space returns `tracker_payload_error` without sending a request.
+
+**Priority from declared labels.** This tracker has no native issue priority field, but operators already express priority with labels. `tracker.priority_labels` declares their integer meaning explicitly. Keys match the normalized lowercase labels exactly, ignoring letter case and without globs; the smallest mapped value wins and no match leaves priority unset. This is operator configuration rather than a synthetic mapping: nothing is guessed from label names. It populates the existing domain priority, enabling the ordinary dispatch sort and `match.priority` with no new tracker field. The map requires a restart and cannot reuse a workflow state label. GitLab's project-level label ordering is never consulted. Construction warns about declared priority labels absent from the project and inherited group label catalog, ignoring letter case, through the same advisory read used for `query_filter`.
 
 ## Blockers are structurally unavailable on the floor
 

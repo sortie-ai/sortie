@@ -1185,3 +1185,12 @@ func TestResolveLogFormat(t *testing.T) {
 
 // minimalWorkflowWithLogFormat returns a WORKFLOW.md with the given format
 // set in the logging.format extension key.
+
+func TestTrackerConfigMapPriorityLabels(t *testing.T) {
+	t.Parallel()
+	priorities := map[string]int{"priority/high": 2}
+	got := trackerConfigMap(config.TrackerConfig{PriorityLabels: priorities})["priority_labels"]
+	if !reflect.DeepEqual(got, priorities) {
+		t.Errorf("trackerConfigMap().priority_labels = %v, want %v", got, priorities)
+	}
+}

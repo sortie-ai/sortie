@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Every GitHub release now carries the OpenAPI description of the JSON API as `openapi.json`, so a client can fetch the description of the newest release from `https://github.com/sortie-ai/sortie/releases/latest/download/openapi.json` and that of any release from `https://github.com/sortie-ai/sortie/releases/download/<tag>/openapi.json`. ([#1669](https://github.com/sortie-ai/sortie/issues/1669))
+- Gitea, GitHub, and GitLab workflows can declare `tracker.priority_labels`, mapping label names to numeric priorities so the existing dispatch order and `match.priority` rules use the operator's priorities.
 
 ### Changed
 

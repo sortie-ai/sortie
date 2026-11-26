@@ -60,15 +60,16 @@ const maxPages = 200
 // REST API. Safe for concurrent use.
 type GitHubAdapter struct {
 	*issuekit.StateSource
-	client      *httpkit.Client
-	owner       string
-	repo        string
-	queryFilter string
-	projectURL  string
-	metrics     domain.Metrics
-	etagCache   *etagCache
-	model       *issuekit.LabelStateModel
-	access      *scmcore.WriteAccessCache
+	priorityLabels map[string]int
+	client         *httpkit.Client
+	owner          string
+	repo           string
+	queryFilter    string
+	projectURL     string
+	metrics        domain.Metrics
+	etagCache      *etagCache
+	model          *issuekit.LabelStateModel
+	access         *scmcore.WriteAccessCache
 }
 
 // NewGitHubAdapter creates a [GitHubAdapter] from adapter configuration.
@@ -80,7 +81,8 @@ type GitHubAdapter struct {
 // "handoff_state" (single state name recognized as a valid transition
 // target and state label), "in_progress_state"; these set the initial
 // state vocabulary, with no default, until SetTrackerStates installs the
-// workflow's live one. Also optional: "query_filter", "user_agent",
+// workflow's live one. Also optional: "priority_labels" (label-to-integer
+// map), "query_filter", "user_agent",
 // "etag_cache_size" (int, default 1000; set to 0 to disable conditional
 // requests, state reads and the comment change read alike).
 func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
@@ -126,6 +128,11 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
+	priorityLabels, err := issuekit.ParsePriorityLabels(config["priority_labels"])
+	if err != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: err.Error()}
+	}
+
 	states, err := issuekit.TrackerStatesFromConfig(config)
 	if err != nil {
 		return nil, err
@@ -160,14 +167,15 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	adapter := &GitHubAdapter{
-		StateSource: source,
-		client:      newGitHubClient(endpoint, apiKey, userAgent),
-		owner:       owner,
-		repo:        repo,
-		queryFilter: queryFilter,
-		projectURL:  webBase(endpoint) + "/" + owner + "/" + repo,
-		etagCache:   newETagCache(etagCacheSize),
-		model:       issuekit.NewLabelStateModel(source, slog.Default()),
+		StateSource:    source,
+		priorityLabels: priorityLabels,
+		client:         newGitHubClient(endpoint, apiKey, userAgent),
+		owner:          owner,
+		repo:           repo,
+		queryFilter:    queryFilter,
+		projectURL:     webBase(endpoint) + "/" + owner + "/" + repo,
+		etagCache:      newETagCache(etagCacheSize),
+		model:          issuekit.NewLabelStateModel(source, slog.Default()),
 	}
 	adapter.access = scmcore.NewWriteAccessCache(adapter.lookupWriteAccess)
 	return adapter, nil
@@ -231,7 +239,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context, states iss
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.model, states)
+			issue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 			a.qualifyDisplayID(&issue)
 			issue.Comments = nil
 			issues = append(issues, issue)
@@ -281,7 +289,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context, states iss
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.model, states)
+			issue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 			a.qualifyDisplayID(&issue)
 			issue.Comments = nil
 			issues = append(issues, issue)
@@ -338,7 +346,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 			}
 		}
 
-		fetchedIssue := normalizeIssue(gi, a.model, states)
+		fetchedIssue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 		a.qualifyDisplayID(&fetchedIssue)
 
 		fetchedIssue.BlockedBy, err = a.fetchBlockers(ctx, issueID, states)
@@ -520,7 +528,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.model, states)
+			issue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 			a.qualifyDisplayID(&issue)
 			if _, ok := stateSet[issue.State]; !ok {
 				continue
@@ -574,7 +582,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.model, states)
+			issue := normalizeIssue(gi, a.model, states, a.priorityLabels)
 			a.qualifyDisplayID(&issue)
 			if _, dup := seen[issue.Identifier]; dup {
 				continue

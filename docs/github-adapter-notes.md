@@ -2,7 +2,7 @@
 
 What to know before you change `internal/scm/github`: the design decisions behind it, the places GitHub's model does not line up with ours, and the traps that cost someone a day.
 
-Last updated: 2026-11-01
+Last updated: 2026-11-03
 
 ## Shape of the package
 
@@ -28,7 +28,7 @@ One consequence: the pull request payload under the current pin carries no merge
 
 **The adapter creates no labels.** The repository is expected to carry the state labels before Sortie starts. Creating them would need broader permissions and would write into a namespace the repository's own conventions own. This is the opposite of the Gitea adapter's choice, and the difference is not arbitrary: GitHub's label-add route fails loudly on a name it will not accept, so an operator sees the failure. Gitea's does not, which is why that adapter creates on demand instead.
 
-**No priority field.** Priority labels reach the domain through the label list like any other label; the numeric priority field stays unset, which the domain reads as "no numeric priority".
+**Priority from declared labels.** This tracker has no native issue priority field, but operators already express priority with labels. `tracker.priority_labels` declares their integer meaning explicitly. Keys match the normalized lowercase labels exactly, ignoring letter case and without globs; the smallest mapped value wins and no match leaves priority unset. This is operator configuration rather than a synthetic mapping: nothing is guessed from label names. It populates the existing domain priority, enabling the ordinary dispatch sort and `match.priority` with no new tracker field. The map requires a restart and cannot reuse a workflow state label. There is no construction-time catalog check, consistent with this adapter's existing preflight policy.
 
 **Issue types exist but only for organizations.** Personal repositories, and organizations that have not configured them, return nothing, and the field normalizes to empty. Do not build anything that assumes it is populated.
 
