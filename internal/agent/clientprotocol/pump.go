@@ -887,6 +887,16 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		turn.deadlineC = time.After(agentcore.ReadTimeout(p.state.agentConfig))
 	}
 
+	p.readRecords(turn, 0)
+}
+
+// recordsRereadInterval is the pause before reading again the records of a
+// cancelled turn that replied before its runtime wrote them.
+const recordsRereadInterval = 50 * time.Millisecond
+
+// readRecords reads the runtime's records for turn on its own goroutine once
+// delay has passed, and returns the result through the inbox.
+func (p *pumpState) readRecords(turn *activeTurn, delay time.Duration) {
 	state := p.state
 	declaration := p.declaration
 	children := slices.Clone(turn.children.sessions)
@@ -897,16 +907,31 @@ func (p *pumpState) startRecordsRead(turn *activeTurn, evidence agentcore.TurnEv
 		ctx, cancel := contextUntilStop(loopDone)
 		defer cancel()
 
+		if delay > 0 {
+			pause := time.NewTimer(delay)
+			defer pause.Stop()
+			select {
+			case <-pause.C:
+			case <-ctx.Done():
+				return
+			}
+		}
 		read, refusal := readTurnRecords(ctx, state, declaration, children)
 		inbox.Put(pumpItem{control: &pumpControl{records: &recordsResult{turn: turn, read: read, refusal: refusal}}})
 	}()
 }
 
 // handleRecordsRead settles the turn a records read was started for, discarding
-// the result of a turn that already ended or was settled without it.
+// the result of a turn that already ended or was settled without it. A read
+// that predates the turn's records is made again; the turn's deadline bounds
+// the repeats.
 func (p *pumpState) handleRecordsRead(result *recordsResult) {
 	turn := p.activeTurn
 	if turn == nil || turn != result.turn || !turn.recordsPending {
+		return
+	}
+	if p.ledger.RecordsBehind(turn.spendEnd, turn.spendLive, result.read) {
+		p.readRecords(turn, recordsRereadInterval)
 		return
 	}
 	applyRecordedReset(turn, result.refusal)

@@ -672,6 +672,50 @@ func TestLedger(t *testing.T) {
 	}
 }
 
+func TestLedger_RecordsBehind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		late bool
+		end  usage.TurnEnd
+		live *usage.SpendReading
+		read usage.RecordsRead
+		want bool
+	}{
+		{"cancelled reply before its records", true, cancelled, live(30, 4), recs(hist), true},
+		{"cancelled reply with its records", true, cancelled, live(30, 4), recs(hist, ra), false},
+		{"cancelled reply that spent nothing", true, cancelled, live(0, 0), recs(hist), false},
+		{"completed turn", true, replied, live(30, 4), recs(hist), false},
+		{"failed read", true, cancelled, live(30, 4), unread, false},
+		{"records written as each request completes", false, cancelled, live(30, 4), recs(hist), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l, err := usage.NewLedger(usage.Source{
+				Category: usage.SourceProtocol,
+				Strategy: usage.StrategyLive,
+				Spend:    usage.SpendDeclaration{Shape: usage.SpendProcessCumulative, CacheInInput: true, ReasoningInOutput: true},
+			}, usage.Source{
+				Category:         usage.SourceJournal,
+				Strategy:         usage.StrategyRecords,
+				Spend:            usage.SpendDeclaration{Shape: usage.SpendPerRequest, CacheInInput: true, ReasoningInOutput: true},
+				WrittenAtTurnEnd: tt.late,
+			})
+			if err != nil {
+				t.Fatalf("NewLedger() = %v, want nil", err)
+			}
+			l.Boundary(recs(hist))
+
+			if got := l.RecordsBehind(tt.end, tt.live, tt.read); got != tt.want {
+				t.Errorf("RecordsBehind() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func newObservingLedger(t *testing.T, duringTurn bool) *usage.Ledger {
 	t.Helper()
 
