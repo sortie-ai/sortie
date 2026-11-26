@@ -215,6 +215,8 @@ type Ledger struct {
 	records SpendDeclaration
 	hasRecs bool
 
+	recordsLate bool // the records source writes a turn's records when the turn ends, which can follow its reply
+
 	liveProvenance    domain.UsageProvenance
 	recordsProvenance domain.UsageProvenance
 
@@ -286,6 +288,7 @@ func NewLedger(live, records Source) (*Ledger, error) {
 		return nil, fmt.Errorf("records source amounts: %w: %w", ErrSpendUnsupported, err)
 	}
 	l.records, l.hasRecs, l.recordsProvenance = records.Spend, true, provenanceOf(records)
+	l.recordsLate = records.WrittenAtTurnEnd
 	return l, nil
 }
 
@@ -428,6 +431,23 @@ func (l *Ledger) NeedsRecords(end TurnEnd, live *SpendReading) bool {
 		return true
 	}
 	return !l.boundaryKnown || (!l.live.ServedModel && l.records.ServedModel)
+}
+
+// RecordsBehind reports whether read predates the records of a turn the
+// runtime replied to as cancelled: the records source writes a turn's records
+// when the turn ends, which can follow the reply, the live reading shows the
+// turn spent tokens, and read holds none the ledger has not counted. The
+// caller reads the records again until it reports false or the read's bound
+// ends.
+func (l *Ledger) RecordsBehind(end TurnEnd, live *SpendReading, read RecordsRead) bool {
+	if !l.recordsLate || !end.Replied || !end.Cancelled || !end.ModelReached {
+		return false
+	}
+	if arm := l.evalLive(end, live); !arm.normalized || arm.delta.InputTokens+arm.delta.OutputTokens == 0 {
+		return false
+	}
+	recs := l.recordsView(read)
+	return recs.usable && !l.hasUncounted(recs)
 }
 
 // ObserveRequest holds the largest reading per request identity that the

@@ -921,7 +921,7 @@ func TestIntegration_ScriptedModel(t *testing.T) {
 		VerificationContext:  claimedVerificationContext(os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND")),
 		Read:                 fakemodel.ReadFile,
 		PermissionRefusal: &fakemodel.PermissionRefusal{
-			Guarded: fakemodel.CatFile,
+			Guarded: fakemodel.TeeFile,
 			Notice:  agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).Notice,
 			Skip:    skipRefusal,
 		},

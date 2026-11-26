@@ -149,6 +149,27 @@ func TestWrappers(t *testing.T) {
 	})
 }
 
+func TestWithinLeavesReserveBeforeDeadline(t *testing.T) {
+	deadline, ok := t.Deadline()
+	if !ok {
+		if got := waittest.Within(t, time.Minute, time.Second); got != time.Minute {
+			t.Fatalf("Within() without a deadline = %v, want the bound %v", got, time.Minute)
+		}
+		return
+	}
+	remaining := time.Until(deadline)
+
+	if got := waittest.Within(t, remaining+time.Hour, time.Second); got > remaining-time.Second {
+		t.Errorf("Within() = %v, want at most %v, the time left less the reserve", got, remaining-time.Second)
+	}
+	if got := waittest.Within(t, time.Second, 0); got != time.Second {
+		t.Errorf("Within() = %v, want the bound %v when the deadline leaves more", got, time.Second)
+	}
+	if got := waittest.Within(t, time.Second, remaining+time.Hour); got != time.Millisecond {
+		t.Errorf("Within() = %v, want %v when the reserve exceeds the time left", got, time.Millisecond)
+	}
+}
+
 func TestContextsEndAtHangGuard(t *testing.T) {
 	bubbles(t, map[string]func(tb testing.TB) context.Context{
 		"Context":        waittest.Context,

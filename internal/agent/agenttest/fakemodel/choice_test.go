@@ -270,6 +270,22 @@ func TestCatFile(t *testing.T) {
 	}
 }
 
+func TestTeeFile(t *testing.T) {
+	t.Parallel()
+
+	declared := []fakemodel.Tool{{Name: "exec", Parameters: singleRequired("command", `"string"`)}}
+
+	call, err := fakemodel.TeeFile("/workspace/it's.txt")(declared)
+	if err != nil {
+		t.Fatalf("TeeFile(...) error = %v, want nil", err)
+	}
+
+	want := map[string]string{"command": `'cat' '/workspace/it'\''s.txt' | 'tee' '/workspace/it'\''s.txt.copy'`}
+	if got := decodeArguments(t, call); !reflect.DeepEqual(got, want) {
+		t.Errorf("TeeFile(...).Arguments = %v, want %v", got, want)
+	}
+}
+
 func TestCatFileRejectsIneligibleTools(t *testing.T) {
 	t.Parallel()
 
