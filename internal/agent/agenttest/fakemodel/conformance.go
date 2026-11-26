@@ -1503,6 +1503,8 @@ func awaitGone(pids []int, remaining func(pid int) string, launches []func() (bo
 }
 
 func awaitRemoteGone(ctx context.Context, lab agenttest.SSHLab, deadline time.Time) []string {
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	var left []string
 	_ = waittest.UntilWithin(max(time.Until(deadline), time.Nanosecond), livenessPoll, func() error {
 		procs, err := lab.Processes(ctx)
